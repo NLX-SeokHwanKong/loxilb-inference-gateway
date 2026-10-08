@@ -137,6 +137,7 @@ Set with `docker run -e …`; all read once at startup.
 | `LLB_PD_QUEUE_DEPTH_PER_EP` | 0 (off) | n>0 (clamped 64) | Admission: park queue depth (hold-don't-drop) |
 | `LLB_PD_MAX_PARK_SEC` | 0 (→ prefill timeout) | 0<n<100000 | Admission: parked-request reap deadline (504) |
 | `LLB_PD_MAX_TOTAL_INFLIGHT` | 0 (off) | n>0 | Admission: global valve — refuse accept() beyond this |
+| `LLB_PROXY_WORKERS` | 4 | 1..32 | Relay worker threads of the fullproxy data plane (one epoll shard each; both legs of a connection stay on one worker). Size to the cores you give the gateway: 4 is right up to ~8 cores; on a 16–32 core box set it to the core count minus what the Go control plane and the engines on the same node need. Read once at start; out of range keeps 4 with a log line. `make -C loxilb-ebpf/common bench_notify_scale` measures the shard scaling curve on a given machine |
 
 ### 3.3 vLLM side — the parity triad (must match or Tier 1.5 silently degrades to Tier 2)
 
