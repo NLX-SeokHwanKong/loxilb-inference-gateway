@@ -135,7 +135,7 @@ func TestKvExactCollectorSeries(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]int{
-		"loxilb_kv_exact_stage_seconds":  kvStages * kvOutcomes,
+		"loxilb_kv_exact_stage_seconds":  kvExportedStages * kvOutcomes,
 		"loxilb_kv_exact_prompt_blocks":  1,
 		"loxilb_kv_exact_overlap_blocks": 1,
 	}
@@ -173,6 +173,13 @@ func TestKvExactCollectorSeries(t *testing.T) {
 		t.Fatalf("%s%v not found", name, lv)
 		return nil
 	}
+	// the reserved SCAN slot is never published (O-PRIO-1): pd_kv_exact_select
+	// does not measure it, so a stage="scan" series could only ever read 0
+	for _, m := range byName["loxilb_kv_exact_stage_seconds"].GetMetric() {
+		if labels(m)["stage"] == "scan" {
+			t.Errorf("reserved stage %q exported: %v", "scan", labels(m))
+		}
+	}
 	h := find("loxilb_kv_exact_stage_seconds",
 		map[string]string{"stage": "tokenize", "outcome": "hit"}).GetHistogram()
 	if h.GetSampleCount() != 4 || h.GetSampleSum() != 0.0123 {
@@ -191,6 +198,23 @@ func TestKvExactCollectorSeries(t *testing.T) {
 	for _, b := range ov.GetBucket() {
 		if b.GetUpperBound() == 1 && b.GetCumulativeCount() != 1 {
 			t.Errorf("overlap le=1 holds %d, want 1 (the no_worker miss)", b.GetCumulativeCount())
+		}
+	}
+}
+
+// TestKvExactScanSlotReserved pins the contract behind kvExportedStages: the
+// C enum keeps a 4th, reserved slot named scan (sockproxy_kv_exact.h), the
+// snapshot mirrors that layout, and the export stops right before it.
+func TestKvExactScanSlotReserved(t *testing.T) {
+	if kvExportedStages+1 != kvStages {
+		t.Fatalf("kvExportedStages %d + 1 != kvStages %d: the reserved slot moved", kvExportedStages, kvStages)
+	}
+	if kvStageLabels[kvExportedStages] != "scan" {
+		t.Fatalf("slot %d is %q, want the reserved scan slot", kvExportedStages, kvStageLabels[kvExportedStages])
+	}
+	for _, l := range kvStageLabels[:kvExportedStages] {
+		if l == "scan" {
+			t.Fatalf("scan among the exported stages: %v", kvStageLabels[:kvExportedStages])
 		}
 	}
 }
