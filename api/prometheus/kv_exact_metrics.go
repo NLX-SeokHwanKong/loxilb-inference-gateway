@@ -50,13 +50,20 @@ import (
 // scrape. The label values below are the C enums' order in
 // sockproxy_kv_exact.h; the snapshot dimensions are fixed there and mirrored
 // in the cgo preamble.
+//
+// KV_STAGE_SCAN (slot 3) is reserved in that header: pd_kv_exact_select
+// measures tokenize, hash and cgo only (the inventory scan is folded into
+// the cgo crossing), so the 4th slot can never move. The snapshot keeps it
+// (the C layout), the export leaves it out — a series that cannot move is
+// not published (bed 2026-10-10, O-PRIO-1).
 // ============================================================================
 
 const (
-	kvStages     = 4  // enum kv_stage
-	kvOutcomes   = 2  // miss, hit
-	kvBlockKinds = 2  // prompt, overlap
-	kvBounds     = 12 // finite bucket bounds of every histogram here
+	kvStages         = 4  // enum kv_stage (the C layout, incl. the reserved SCAN slot)
+	kvExportedStages = 3  // tokenize, hash, cgo — the stages pd_kv_exact_select measures
+	kvOutcomes       = 2  // miss, hit
+	kvBlockKinds     = 2  // prompt, overlap
+	kvBounds         = 12 // finite bucket bounds of every histogram here
 )
 
 var (
@@ -195,7 +202,7 @@ func (kvExactCollector) Collect(ch chan<- prometheus.Metric) {
 	s := kvExactStore
 	kvExactStoreMutex.Unlock()
 
-	for st := 0; st < kvStages; st++ {
+	for st := 0; st < kvExportedStages; st++ {
 		for o := 0; o < kvOutcomes; o++ {
 			h := s.stage[st][o]
 			ch <- prometheus.MustNewConstHistogram(kvExactStageDesc, h.count, h.sum,
