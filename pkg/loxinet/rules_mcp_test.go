@@ -29,6 +29,36 @@ func TestMCPAdmissionBeforeStateAccess(t *testing.T) {
 		}
 	}
 }
+
+func TestMCPUnsupportedCombinationsBeforeStateAccess(t *testing.T) {
+	for _, backend := range []string{"http2", "both"} {
+		serv := cmn.LbServiceArg{MCPProtocolVersion: cmn.MCPStatelessProtocolVersion, Mode: cmn.LBModeFullProxy, Proto: "tcp", BackendProtocol: backend}
+		var rules *RuleH
+		code, err := rules.AddLbRule(serv, nil, nil, nil, nil)
+		var argumentError *cmn.RuleArgumentError
+		if code != RuleArgsErr || !errors.As(err, &argumentError) {
+			t.Fatalf("backend=%q: want typed pre-mutation refusal, got %d %v", backend, code, err)
+		}
+	}
+	serv := cmn.LbServiceArg{MCPProtocolVersion: cmn.MCPStatelessProtocolVersion, Mode: cmn.LBModeFullProxy, Proto: "tcp", Egress: true}
+	var rules *RuleH
+	code, err := rules.AddLbRule(serv, nil, nil, nil, nil)
+	var argumentError *cmn.RuleArgumentError
+	if code != RuleArgsErr || !errors.As(err, &argumentError) {
+		t.Fatalf("egress: want typed pre-mutation refusal, got %d %v", code, err)
+	}
+	// Replacement resolves an omitted declaration before validating the combination.
+	existing := &ruleEnt{mcpProtocolVersion: cmn.MCPStatelessProtocolVersion}
+	for _, backend := range []string{"http2", "both"} {
+		omitted := cmn.LbServiceArg{Mode: cmn.LBModeFullProxy, Proto: "tcp", BackendProtocol: backend}
+		if err := resolveMCPService(&omitted, existing); err == nil || !strings.Contains(err.Error(), "backend_protocol") {
+			t.Fatalf("omission bypassed backend guard: %v", err)
+		}
+	}
+	if existing.mcpProtocolVersion != cmn.MCPStatelessProtocolVersion {
+		t.Fatal("refusal mutated existing rule")
+	}
+}
 func TestMCPReplacePreservesAndRejectsUnsafeTransitions(t *testing.T) {
 	valid := func() cmn.LbServiceArg {
 		return cmn.LbServiceArg{Mode: cmn.LBModeFullProxy, Proto: "tcp", Sel: cmn.LbSelRr}

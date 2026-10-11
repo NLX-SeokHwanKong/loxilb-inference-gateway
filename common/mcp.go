@@ -32,6 +32,12 @@ func ValidateMCPService(serv *LbServiceArg) error {
 	if serv.Mode != LBModeFullProxy || serv.Proto != "tcp" {
 		return fmt.Errorf("mcp_protocol_version requires mode=fullproxy (4) and protocol=tcp")
 	}
+	if serv.BackendProtocol != "" && serv.BackendProtocol != "http1" {
+		return fmt.Errorf("mcp_protocol_version requires backend_protocol=http1 (or omitted); frontend HTTP/2 uses the HTTP/1.1 backend bridge")
+	}
+	if serv.Egress {
+		return fmt.Errorf("mcp_protocol_version does not support egress=true")
+	}
 	if serv.Sel != LbSelRr && serv.Sel != LbSelPrio {
 		return fmt.Errorf("mcp_protocol_version requires round-robin (sel=0) or weighted round-robin (sel=2)")
 	}

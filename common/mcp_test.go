@@ -31,6 +31,10 @@ func TestMCPServiceRefusesIncompatibleSettings(t *testing.T) {
 		{"nul-version", "mcp_protocol_version", func(s *LbServiceArg) { s.MCPProtocolVersion = MCPStatelessProtocolVersion + "\x00" }},
 		{"nat", "fullproxy", func(s *LbServiceArg) { s.Mode = LBModeFullNAT }},
 		{"udp", "tcp", func(s *LbServiceArg) { s.Proto = "udp" }},
+		{"backend-h2", "backend_protocol", func(s *LbServiceArg) { s.BackendProtocol = "http2" }},
+		{"backend-both", "backend_protocol", func(s *LbServiceArg) { s.BackendProtocol = "both" }},
+		{"backend-unknown", "backend_protocol", func(s *LbServiceArg) { s.BackendProtocol = "future" }},
+		{"egress", "egress", func(s *LbServiceArg) { s.Egress = true }},
 		{"persist", "sel=0", func(s *LbServiceArg) { s.Sel = LbSelRrPersist }},
 		{"hash", "sel=0", func(s *LbServiceArg) { s.Sel = LbSelHash }},
 		{"session", "session_header_name", func(s *LbServiceArg) { s.SessionHeaderName = "mcp-session-id" }},
@@ -60,6 +64,7 @@ func TestMCPServiceRefusesIncompatibleSettings(t *testing.T) {
 }
 func TestMCPServiceAllowsLegacyAndStatelessSelectors(t *testing.T) {
 	legacy := LbServiceArg{Mode: LBModeFullNAT, Proto: "udp", Sel: LbSelRrPersist, SessionHeaderName: "legacy-session"}
+	legacy.BackendProtocol, legacy.Egress = "both", true
 	if err := ValidateMCPService(&legacy); err != nil {
 		t.Fatal(err)
 	}
@@ -67,6 +72,7 @@ func TestMCPServiceAllowsLegacyAndStatelessSelectors(t *testing.T) {
 		s := mcpTestService()
 		s.Sel = sel
 		s.SockMapMode = SockMapModeOff
+		s.BackendProtocol = "http1"
 		if err := ValidateMCPService(&s); err != nil {
 			t.Fatal(err)
 		}

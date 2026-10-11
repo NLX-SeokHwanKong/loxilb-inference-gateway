@@ -32,6 +32,18 @@ def replay(api, template, port):
     if status != 200:
         raise AssertionError('Missing created rule readback')
     report = []
+    for case, field, value in [('backend-http2', 'backend_protocol', 'http2'),
+                               ('backend-both', 'backend_protocol', 'both'),
+                               ('egress', 'egress', True)]:
+        # Omission must preserve modern mode on replacement and still enforce its guards.
+        changed = copy.deepcopy(document)
+        changed['serviceArguments'].pop('mcp_protocol_version', None)
+        changed['serviceArguments'][field] = value
+        status, result = request(api + '/config/loadbalancer', 'POST', changed)
+        current_status, current = request(api + key)
+        if status != 400 or current_status != 200 or current != baseline:
+            raise AssertionError(case + ': must reject 400 and preserve exact rule readback: ' + str((status, result)))
+        report.append({'case': case, 'status': status, 'error': result, 'readback_unchanged': True})
     for case, changed in [('immutable-mode', copy.deepcopy(document)), ('mixed-listener-alias', copy.deepcopy(document))]:
         changed['serviceArguments']['mcp_protocol_version'] = ''
         if case == 'mixed-listener-alias':
