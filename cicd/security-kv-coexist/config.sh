@@ -65,7 +65,11 @@ fi
 # Record the arm options for validation.sh / validation-ddos.sh (C10 native branch, D8 holder
 # count, D9): the validation scripts are usually started without the caller's env.
 printf 'XDP_NATIVE=%s\nTOTAL_INFLIGHT=%s\n' "${XDP_NATIVE:-}" "${TOTAL_INFLIGHT:-}" >"${CFGDIR}/.arm-env"
-spawn_docker_host --dock-type loxilb --dock-name llb1 --docker-args "-e LLB_KV_NONE_HASH_SEED=0 -e LLB_KV_HASH_DEBUG=1 ${LLB_VALVE_ENV}" --extra-args "${LLB_PROM_ARGS} ${LLB_XDP_ARGS}"
+# Every routing oracle below expects the published EP-A specifically. Disable
+# cold seeding here: its default every-16th-hit diversion can correctly serve
+# through a cold EP while leaving EP-A's counter unchanged. This pins only the
+# security/KV coexistence fixture, not the product's default routing policy.
+spawn_docker_host --dock-type loxilb --dock-name llb1 --docker-args "-e LLB_KV_NONE_HASH_SEED=0 -e LLB_KV_HASH_DEBUG=1 -e LOXILB_KV_COLDSTART_SEED_N=0 ${LLB_VALVE_ENV}" --extra-args "${LLB_PROM_ARGS} ${LLB_XDP_ARGS}"
 spawn_docker_host --dock-type host   --dock-name l3h1
 spawn_docker_host --dock-type host   --dock-name l3h2
 spawn_docker_host --dock-type reflect-echo --dock-name l3ep1 --docker-args "-e ECHO_NAME=serverP0"
