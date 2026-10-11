@@ -142,6 +142,7 @@ def campaign(image, folder, subnet, require_h2, require_weighted=False, require_
               'image': image, 'owner': owner, 'subnet': str(net), 'checks': {}, 'cleanup': 'pending'}
     if folder.exists() and any(folder.iterdir()):
         raise RuntimeError('Evidence directory is nonempty; preserve prior campaign evidence and use a fresh directory')
+    report['cpu_affinity'] = sorted(os.sched_getaffinity(0))
     report['client_versions'] = {'python': platform.python_version(),
                                  'curl': subprocess.check_output(['curl', '--version'], text=True).splitlines()[0]}
     if require_h2:
@@ -202,6 +203,7 @@ def campaign(image, folder, subnet, require_h2, require_weighted=False, require_
             name = owner + '-gw'
             resources.container = name
             checked(['docker', 'run', '-d', '--name', name, '--label', 'uc8.owner=' + owner, '--privileged',
+                     '--cpuset-cpus', ','.join(str(cpu) for cpu in sorted(os.sched_getaffinity(0))),
                      '--network', network, '--ip', gateway, '-v', str(cert) + ':/opt/loxilb/cert:ro',
                      '-v', str(config) + ':/etc/loxilb', image, '-p'], log)
         api = 'http://' + gateway + ':11111/netlox/v1'
@@ -378,6 +380,7 @@ def campaign(image, folder, subnet, require_h2, require_weighted=False, require_
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--image', required=True)
+    parser.add_argument('--cpu', type=int, help='Pin the runner, its backend/client children and Gateway container to this available CPU')
     parser.add_argument('--subnet', default='172.30.99.0/24')
     parser.add_argument('--evidence-dir', type=Path)
     parser.add_argument('--require-sdk',action='store_true')
@@ -387,5 +390,9 @@ if __name__ == '__main__':
     parser.add_argument('--require-fc-warmup', action='store_true')
     parser.add_argument('--require-cb', action='store_true')
     args = parser.parse_args()
+    if args.cpu is not None:
+        if args.cpu not in os.sched_getaffinity(0):
+            parser.error('--cpu must name an available CPU')
+        os.sched_setaffinity(0, {args.cpu})
     evidence = args.evidence_dir or Path(tempfile.mkdtemp(prefix='uc8-mcp-evidence-'))
     print(json.dumps(campaign(args.image, evidence.resolve(), args.subnet, args.require_h2, args.require_weighted, args.require_fc, args.require_fc_warmup, args.require_cb, args.require_sdk), indent=2))

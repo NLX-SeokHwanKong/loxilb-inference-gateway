@@ -1,5 +1,9 @@
 # MCP 2026-07-28 stateless regression fixture
 
+For a container-only Gateway/backend/client lab on one CPU core, see
+[the Docker provisioning guide](CONTAINER-LAB.md). Full regression automation
+also accepts `--cpu` to restrict all participants to one available core.
+
 This CPU-only Python standard-library fixture exercises the modern MCP wire contract independently of the legacy FastMCP examples under `cicd/common/mcp`. It is a bounded test backend, **not a complete MCP SDK or production server**. It supports discovery, tool/resource/prompt listing, `tools/call` (`echo`), `resources/read` (`fixture://status`) and `prompts/get` (`welcome`). MRTR, subscriptions, OAuth, schema cache validation, production concurrency limits and arbitrary tool-schema reflection are outside this fixture's scope.
 
 The fixture accepts independent POST requests without `initialize`, carries capabilities/version on every request, emits `resultType: complete`, ignores legacy session/resumption headers and rejects GET/DELETE with 405. HTTP headers and their body mirrors are checked before execution. Content-Length and chunked request bodies are accepted within a 1 MiB fixture bound; ambiguous Content-Length/Transfer-Encoding and all request trailers are rejected. The Gateway independently enforces its smaller 768 KiB capture bound. The echo tool annotates its optional string `region` argument with `x-mcp-header: Region`; the server validates its mirrored value after Base64 sentinel decoding. Unknown custom headers are ignored. Invalid origin is 403; invalid mirrored headers are 400/-32020; unsupported version is 400/-32022; missing required per-request metadata is 400/-32602.
