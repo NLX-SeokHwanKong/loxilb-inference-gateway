@@ -161,6 +161,25 @@ typedef struct proxy_metrics_snapshot {
     uint64_t hold_empty_out;
     uint64_t hold_accel_skipped;
     uint64_t hold_default_mode;
+
+    // Tier-1.5 routing cost and match depth. TAIL-APPEND ONLY — twin-declared
+    // in loxilb-ebpf/common/sockproxy_metrics.h and proxy_metrics_stub.c;
+    // keep ALL THREE in lockstep, same commit.
+    uint64_t kv_stage_bucket[4][2][12];
+    uint64_t kv_stage_sum_us[4][2];
+    uint64_t kv_stage_count[4][2];
+    uint64_t kv_blocks_bucket[2][12];
+    uint64_t kv_blocks_sum[2];
+    uint64_t kv_blocks_count[2];
+
+    // Streams that ended before their terminator. TAIL-APPEND ONLY —
+    // twin-declared in loxilb-ebpf/common/sockproxy_metrics.h and
+    // proxy_metrics_stub.c; keep ALL THREE in lockstep, same commit.
+    uint64_t stream_abandon_total[3];
+    uint64_t stream_abandon_age_bucket[3][12];
+    uint64_t stream_abandon_age_sum_s[3];
+    uint64_t stream_abandon_age_count[3];
+    uint64_t stream_stall_abort_sec;
 } proxy_metrics_snapshot_t;
 
 // C function from sockproxy.c
@@ -1049,6 +1068,49 @@ func halfCloseFromC(m *C.proxy_metrics_snapshot_t) halfCloseSnapshot {
 	return s
 }
 
+// kvExactFromC copies the Tier-1.5 cost and match-depth histograms out of a
+// snapshot; the rest is in kv_exact_metrics.go.
+func kvExactFromC(m *C.proxy_metrics_snapshot_t) kvExactSnapshot {
+	var s kvExactSnapshot
+	for st := 0; st < kvStages; st++ {
+		for o := 0; o < kvOutcomes; o++ {
+			s.stage[st][o] = kvHistFromC(&m.kv_stage_bucket[st][o],
+				m.kv_stage_sum_us[st][o], m.kv_stage_count[st][o], 1e-6)
+		}
+	}
+	for k := 0; k < kvBlockKinds; k++ {
+		s.blocks[k] = kvHistFromC(&m.kv_blocks_bucket[k], m.kv_blocks_sum[k],
+			m.kv_blocks_count[k], 1)
+	}
+	return s
+}
+
+// kvHistFromC reads one 12-bound cumulative histogram out of the snapshot;
+// scale converts the C sum into the exported unit (1e-6 for µs → s, 1 for
+// blocks).
+func kvHistFromC(buckets *[kvBounds]C.uint64_t, sum, count C.uint64_t, scale float64) kvHist {
+	var h kvHist
+	for i := range h.buckets {
+		h.buckets[i] = uint64(buckets[i])
+	}
+	h.count = uint64(count)
+	h.sum = float64(sum) * scale
+	return h
+}
+
+// streamAbandonFromC copies the unfinished-stream state out of a snapshot;
+// the rest is in stream_abandon_metrics.go.
+func streamAbandonFromC(m *C.proxy_metrics_snapshot_t) streamAbandonSnapshot {
+	var s streamAbandonSnapshot
+	for r := 0; r < abandonReasons; r++ {
+		s.total[r] = uint64(m.stream_abandon_total[r])
+		s.age[r] = kvHistFromC(&m.stream_abandon_age_bucket[r], m.stream_abandon_age_sum_s[r],
+			m.stream_abandon_age_count[r], 1)
+	}
+	s.stallAbortSec = uint64(m.stream_stall_abort_sec)
+	return s
+}
+
 // holdFromC copies the half-close hold state out of a snapshot; the rest is
 // in halfclose_hold_metrics.go.
 func holdFromC(m *C.proxy_metrics_snapshot_t) holdSnapshot {
@@ -1185,6 +1247,10 @@ func RunSockproxyMetrics(ctx context.Context) {
 		// Half-close observation: cumulative C-side state for
 		// halfCloseCollector, merged the same way.
 		updateHalfCloseStore(halfCloseFromC(&current))
+		// Tier-1.5 cost and match-depth histograms → kvExactCollector.
+		updateKvExactStore(kvExactFromC(&current))
+		// Unfinished streams by reason → streamAbandonCollector.
+		updateStreamAbandonStore(streamAbandonFromC(&current))
 		updateHoldStore(holdFromC(&current))
 
 		// 3c. P/D buffer overflow counter
