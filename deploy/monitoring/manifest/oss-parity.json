@@ -1,17 +1,17 @@
 {
  "schema_version": 1,
  "provenance": {
-  "generated_at": "2026-10-11T00:31:40+00:00",
-  "source_revision": "ddf5de65ce66796cb7b58bcd58596d4f4d65dbcf",
+  "generated_at": "2026-10-11T08:33:07+00:00",
+  "source_revision": "bfe24cf852a2a612262bcb1cedd15a86a54e061b",
   "upstream_repository": "https://github.com/loxilb-io/loxilb",
   "upstream_revision": "98487453eaf1853690de5928eab95a51817ba5d7"
  },
  "contract": {
-  "gateway_families": 319,
+  "gateway_families": 322,
   "upstream_families": 60,
   "present_identical": 35,
   "present_divergent": 0,
-  "absent": 284,
+  "absent": 287,
   "upstream_only": 25
  },
  "upstream_only": [
@@ -2116,6 +2116,42 @@
    "gateway": {
     "type": "counter",
     "labels": []
+   }
+  },
+  {
+   "name": "loxilb_kv_exact_overlap_blocks",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "histogram",
+    "labels": []
+   }
+  },
+  {
+   "name": "loxilb_kv_exact_prompt_blocks",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "histogram",
+    "labels": []
+   }
+  },
+  {
+   "name": "loxilb_kv_exact_stage_seconds",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "histogram",
+    "labels": [
+     "outcome",
+     "stage"
+    ]
    }
   },
   {
