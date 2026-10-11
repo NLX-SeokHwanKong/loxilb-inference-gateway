@@ -96,6 +96,62 @@ def code_only(text: str) -> str:
     return re.sub(r"//[^\n]*", "", text)
 
 
+def h1_denial_branch(text: str) -> tuple[str, int, int]:
+    """Return the whole read function and its denial block's code offsets.
+
+    Ignore comments and quoted literals before balancing braces: neither prose
+    nor a JSON/log string can supply a dispatch call or terminating return.
+    """
+    lexical = re.sub(
+        r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|/\*.*?\*/|//[^\n]*',
+        lambda match: " " * len(match.group()), text, flags=re.S,
+    )
+    body = function_body(lexical, "handle_client_data")
+    marker = re.search(r"\belse\s+if\s*\(\s*pfe->ai_gw_denied\s*\)\s*\{", body)
+    if marker is None:
+        raise AssertionError("HTTP/1 denial marker branch is missing")
+    begin = marker.end()
+    depth = 1
+    for end in range(begin, len(body)):
+        depth += (body[end] == "{") - (body[end] == "}")
+        if depth == 0:
+            return body, begin, end
+    raise AssertionError("HTTP/1 denial branch has no closing brace")
+
+
+def check_h1_denial_escape(text: str) -> None:
+    body, begin, end = h1_denial_branch(text)
+    denial = body[begin:end]
+    if call_site(denial, "setup_proxy_path") >= 0 or call_site(denial, "pd_setup_and_forward") >= 0:
+        raise AssertionError("HTTP/1 denial branch dispatches a refused request")
+    if not re.search(r"(?:^|[;}])\s*return\s+-1\s*;\s*$", denial):
+        raise AssertionError("HTTP/1 denial branch must unconditionally terminate with return -1")
+    if call_site(body[end + 1:], "setup_proxy_path") < 0:
+        raise AssertionError("HTTP/1 compatibility dispatch after the denial branch is missing")
+
+
+def self_test_h1_denial_escape(text: str) -> None:
+    """Actual-source mutations keep this static gate from silently weakening."""
+    body, begin, end = h1_denial_branch(text)
+    wrapper = "\nhandle_client_data(void)"
+    # The malformed-HTTP compatibility branch may grow without changing the
+    # security decision. No fixed character window is part of the contract.
+    padded = wrapper + body[:end + 1] + ("\n/* harmless padding */\n" * 1000) + body[end + 1:]
+    check_h1_denial_escape(padded)
+    without_return = re.sub(r"\breturn\s+-1\s*;\s*$", "", body[begin:end])
+    mutants = [
+        wrapper + body[:begin] + without_return + body[end:],
+        wrapper + body[:begin] + "setup_proxy_path();" + body[begin:],
+        wrapper + body[:begin] + "pd_setup_and_forward();" + body[begin:],
+    ]
+    for mutant in mutants:
+        try:
+            check_h1_denial_escape(mutant)
+        except AssertionError:
+            continue
+        raise AssertionError("HTTP/1 denial checker accepted a security-breaking source mutation")
+
+
 def main() -> int:
     h2 = H2.read_text(encoding="utf-8")
     h1 = H1.read_text(encoding="utf-8")
@@ -147,11 +203,8 @@ def main() -> int:
 
     # The H1 parser callback marks ai_gw_denied; the read loop must consume the
     # marker and return before its malformed-HTTP compatibility dispatch.
-    denied = h1.find("else if (pfe->ai_gw_denied)")
-    if denied < 0:
-        raise AssertionError("HTTP/1 denial marker branch is missing")
-    tail = code_only(h1[denied : denied + 5000])
-    ordered(tail, "return -1", "setup_proxy_path")
+    check_h1_denial_escape(h1)
+    self_test_h1_denial_escape(h1)
 
     print("PASS: mandatory admission order and policy-owned H1/H2 credential stripping")
     return 0
