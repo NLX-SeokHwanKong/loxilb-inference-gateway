@@ -156,7 +156,7 @@ typedef struct proxy_metrics_snapshot {
     uint64_t kv_blocks_sum[2];
     uint64_t kv_blocks_count[2];
 
-    // Stream termination counters: keep the by-value C ABI in lockstep.
+    /* Streams that ended before their terminator. TAIL-APPEND ONLY — same three-way lockstep. */
     uint64_t stream_abandon_total[3];
     uint64_t stream_abandon_age_bucket[3][12];
     uint64_t stream_abandon_age_sum_s[3];

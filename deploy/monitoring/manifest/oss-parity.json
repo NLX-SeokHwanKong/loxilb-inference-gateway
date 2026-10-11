@@ -1,17 +1,17 @@
 {
  "schema_version": 1,
  "provenance": {
-  "generated_at": "2026-10-11T08:33:07+00:00",
-  "source_revision": "bfe24cf852a2a612262bcb1cedd15a86a54e061b",
+  "generated_at": "2026-10-11T09:21:18+00:00",
+  "source_revision": "25fd81eb05a966ed11c4846088e373b35718b898",
   "upstream_repository": "https://github.com/loxilb-io/loxilb",
   "upstream_revision": "98487453eaf1853690de5928eab95a51817ba5d7"
  },
  "contract": {
-  "gateway_families": 322,
+  "gateway_families": 325,
   "upstream_families": 60,
   "present_identical": 35,
   "present_divergent": 0,
-  "absent": 287,
+  "absent": 290,
   "upstream_only": 25
  },
  "upstream_only": [
@@ -3688,6 +3688,43 @@
     "type": "histogram",
     "labels": [
      "stream"
+    ]
+   }
+  },
+  {
+   "name": "loxilb_proxy_sse_stall_abort_seconds",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "gauge",
+    "labels": []
+   }
+  },
+  {
+   "name": "loxilb_proxy_stream_abandon_age_seconds",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "histogram",
+    "labels": [
+     "reason"
+    ]
+   }
+  },
+  {
+   "name": "loxilb_proxy_stream_abandoned_total",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "counter",
+    "labels": [
+     "reason"
     ]
    }
   },
