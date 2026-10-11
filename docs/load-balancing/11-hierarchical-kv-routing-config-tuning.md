@@ -137,6 +137,7 @@ Set with `docker run -e …`; all read once at startup.
 | `LLB_PD_QUEUE_DEPTH_PER_EP` | 0 (off) | n>0 (clamped 64) | Admission: park queue depth (hold-don't-drop) |
 | `LLB_PD_MAX_PARK_SEC` | 0 (→ prefill timeout) | 0<n<100000 | Admission: parked-request reap deadline (504) |
 | `LLB_PD_MAX_TOTAL_INFLIGHT` | 0 (off) | n>0 | Admission: global valve — refuse accept() beyond this |
+| `LLB_SSE_STALL_ABORT_SEC` | 0 (off) | 1..86400 | End a streamed response whose client has stopped reading: once its relay cache has sat at the high-water mark for this long, the gateway sends `data: {"error":"client_stalled"}` and shuts both legs, so the engine aborts instead of generating the rest of the stream into a buffer nobody drains. Counted in `loxilb_proxy_stream_abandoned_total{reason="stall_abort"}`. A client that merely reads slowly is not affected until the cache (12 MiB, 768 KiB for chunked) is full |
 
 ### 3.3 vLLM side — the parity triad (must match or Tier 1.5 silently degrades to Tier 2)
 
