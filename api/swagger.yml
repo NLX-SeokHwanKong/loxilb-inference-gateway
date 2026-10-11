@@ -11268,6 +11268,17 @@ definitions:
               A nonzero declaration requires both
               pd_disagg_mode=true and kvEngineType=sglang; it is rejected on
               other shapes. Zero is accepted on other shapes but has no effect.
+          mcp_protocol_version:
+            type: string
+            x-nullable: false
+            enum: ["", "2026-07-28"]
+            description: >-
+              Explicit stateless MCP transport mode. Omitted or empty on create preserves
+              legacy behavior. Omitted replace preserves the existing value; changing it
+              requires delete and recreate. Requires TCP FullProxy (mode=4), round-robin
+              (sel=0) or weighted round-robin (sel=2), and sockMapMode=off. Session affinity,
+              model routing, P/D disaggregation and KV routing are rejected. Configuration
+              readback does not prove request validation or backend delivery.
           session_header_name:
             type: string
             description: >-

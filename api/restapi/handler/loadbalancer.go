@@ -63,6 +63,9 @@ func ConfigPostLoadbalancer(params operations.PostConfigLoadbalancerParams, prin
 	if err != nil {
 		return errorResponseWithCode(http.StatusBadRequest, "malformed load-balancer body")
 	}
+	if pres.svcIsNull("mcp_protocol_version") {
+		return errorResponseWithCode(http.StatusBadRequest, "mcp_protocol_version must not be null")
+	}
 	if err := pres.validatePDThresholds(); err != nil {
 		return errorResponseWithCode(http.StatusBadRequest, err.Error())
 	}
@@ -214,6 +217,10 @@ func ConfigPostLoadbalancer(params operations.PostConfigLoadbalancerParams, prin
 	lbRules.Serv.PDBootstrapPort = uint16(params.Attr.ServiceArguments.PdBootstrapPort)
 
 	// Custom session header configuration - supports both RR and Persist modes
+	if params.Attr.ServiceArguments.McpProtocolVersion != nil {
+		lbRules.Serv.MCPProtocolVersion = cmn.MCPVersion(*params.Attr.ServiceArguments.McpProtocolVersion)
+		lbRules.Serv.MCPProtocolVersionPresent = true
+	}
 	lbRules.Serv.SessionHeaderName = params.Attr.ServiceArguments.SessionHeaderName
 	if (lbRules.Serv.Sel == cmn.LbSelRr || lbRules.Serv.Sel == cmn.LbSelRrPersist) && lbRules.Serv.SessionHeaderName != "" {
 		tk.LogIt(tk.LogInfo, "api: lb-rule %s:%v session header: %s (mode: %s)\n",
@@ -642,6 +649,11 @@ func serializeLBRule(lb cmn.LbRuleMod) *models.LoadbalanceEntry {
 	// AI model name for pool selection
 	if lb.Serv.ModelName != "" {
 		tmpSvc.ModelName = lb.Serv.ModelName
+	}
+
+	if lb.Serv.MCPProtocolVersion != "" {
+		version := string(lb.Serv.MCPProtocolVersion)
+		tmpSvc.McpProtocolVersion = &version
 	}
 
 	// Custom session header name - supports both RR and Persist modes

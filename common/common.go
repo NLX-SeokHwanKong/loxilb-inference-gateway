@@ -1262,6 +1262,10 @@ type LbServiceArg struct {
 	// e.g., "mcp-session-id", "x-session-token", "authorization"
 	// If empty and sel=3, falls back to IP-based persistence
 	SessionHeaderName string `json:"session_header_name,omitempty"`
+	// MCPProtocolVersion opts this rule into stateless MCP validation and per-request selection.
+	// Empty preserves legacy transport. Immutable after create; omission preserves on replace.
+	MCPProtocolVersion        MCPVersion `json:"mcp_protocol_version,omitempty"`
+	MCPProtocolVersionPresent bool       `json:"-"`
 	// ModelName - LB endpoint pool selection key for AI model routing
 	// e.g. "llama-70b", "mistral-7b"; empty = wildcard pool (backward compatible)
 	ModelName string `json:"model_name,omitempty"`

@@ -149,7 +149,7 @@ func TestHalfCloseLabelsMatchDatapathEnums(t *testing.T) {
 // The snapshot struct is declared three times; a field added to one only
 // shifts every field after it in the others.
 func TestProxyMetricsSnapshotLockstep(t *testing.T) {
-	fieldRe := regexp.MustCompile(`\b(?:uint64_t|uint32_t|float|double|int)\s+(\w+(?:\[[^\]]*\])*)\s*;`)
+	fieldRe := regexp.MustCompile(`\b(uint64_t|uint32_t|float|double|int)\s+(\w+(?:\[[^\]]*\])*)\s*;`)
 	fields := func(path string) []string {
 		b, err := os.ReadFile(path)
 		if err != nil {
@@ -161,12 +161,15 @@ func TestProxyMetricsSnapshotLockstep(t *testing.T) {
 			t.Fatalf("%s: no proxy_metrics_snapshot", path)
 		}
 		j := strings.Index(s[i:], "} proxy_metrics_snapshot_t;")
-		body := s[i : i+j]
+		if j < 0 {
+            t.Fatalf("%s: unterminated proxy_metrics_snapshot", path)
+        }
+        body := s[i : i+j]
 		body = regexp.MustCompile(`(?s)/\*.*?\*/`).ReplaceAllString(body, "")
 		body = regexp.MustCompile(`//[^\n]*`).ReplaceAllString(body, "")
 		var out []string
 		for _, m := range fieldRe.FindAllStringSubmatch(body, -1) {
-			out = append(out, m[1])
+			out = append(out, m[1]+" "+m[2])
 		}
 		return out
 	}

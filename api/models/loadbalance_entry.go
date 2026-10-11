@@ -977,6 +977,9 @@ type LoadbalanceEntryServiceArguments struct {
 
 	// Session-key extraction setting for proxy affinity. Use a header name such as X-Session-ID, cookie:NAME for one cookie, query:NAME for one query parameter, or basic-auth for the Basic Authorization username. RR (sel=0) and persistence (sel=3) paths contain handling; a missing usable key follows their RR or IP-based fallback respectively. This setting is not authentication. GET includes it only for those selectors. The server accepts at most 127 UTF-8 bytes and rejects embedded NUL or invalid UTF-8 before changing rule state. This byte limit reserves the terminator in the 128-byte data-plane field; UI validation must count encoded bytes rather than characters. Cross-mode interaction with L7 HTTP_COOKIE remains unresolved.
 	SessionHeaderName string `json:"session_header_name,omitempty"`
+	// Explicit stateless MCP protocol mode. Omitted replace preserves the current mode.
+	// Empty is legacy. Changing an existing rule requires delete and recreate.
+	McpProtocolVersion *string `json:"mcp_protocol_version,omitempty"`
 
 	// SNAT rule indicator on domain readback. Implementation gap - this REST POST does not copy the property and PATCH does not overlay it, so setting it here does not create a SNAT rule.
 	Snat bool `json:"snat,omitempty"`
@@ -1013,6 +1016,12 @@ type LoadbalanceEntryServiceArguments struct {
 // Validate validates this loadbalance entry service arguments
 func (m *LoadbalanceEntryServiceArguments) Validate(formats strfmt.Registry) error {
 	var res []error
+
+	if m.McpProtocolVersion != nil {
+		if err := validate.EnumCase("serviceArguments.mcp_protocol_version", "body", *m.McpProtocolVersion, []interface{}{"", "2026-07-28"}, true); err != nil {
+			res = append(res, err)
+		}
+	}
 
 	if err := m.validateAPIKeyAuth(formats); err != nil {
 		res = append(res, err)
@@ -2756,7 +2765,7 @@ func (m *LoadbalanceEntryServiceArgumentsBackendTLSEffective) UnmarshalBinary(b 
 	return nil
 }
 
-// LoadbalanceEntryServiceArgumentsFcEffective The capacity admission gate's resolved state on this rule's model pool, read from the data plane. Present on GET for AI-gateway services (sse_mode, pd_disagg_mode or an api-key policy); ignored on input. mode is off, observe or enforce; the ceilings are the values in force, the process defaults where the rule declared nothing; inflight and queued are live counts; queue_memory_bound_mib is the memory the full queue may park (queue_depth x 1 MiB); telemetry_stale_ms is the P/D scorers' trust window; source names where each value in force came from (rule, env or default); effective_max_outstanding is the service ceiling in force now (the adaptive one while the pool adapts), adapt_state and adapt_reason say where it stands and why, warming_endpoints counts endpoints inside their warm-up window.
+// LoadbalanceEntryServiceArgumentsFcEffective The capacity admission gate's resolved state on this rule's model pool, read from the data plane. Present on GET for installed AI-gateway and modern MCP services; absent when no pool was read. Every numeric value is explicit, including zero. Ignored on input. mode is off, observe or enforce; the ceilings are the values in force, the process defaults where the rule declared nothing; inflight and queued are live counts; queue_memory_bound_mib is the memory the full queue may park (queue_depth x 1 MiB); telemetry_stale_ms is the P/D scorers' trust window; source names where each value in force came from (rule, env or default); effective_max_outstanding is the service ceiling in force now (the adaptive one while the pool adapts), adapt_state and adapt_reason say where it stands and why, warming_endpoints counts endpoints inside their warm-up window.
 //
 // swagger:model LoadbalanceEntryServiceArgumentsFcEffective
 type LoadbalanceEntryServiceArgumentsFcEffective struct {
@@ -2774,62 +2783,62 @@ type LoadbalanceEntryServiceArgumentsFcEffective struct {
 	Adaptive string `json:"adaptive,omitempty"`
 
 	// Per-endpoint ceiling for decode legs; 0 is unlimited.
-	DecodeMaxInflight int32 `json:"decode_max_inflight,omitempty"`
+	DecodeMaxInflight int32 `json:"decode_max_inflight"`
 
 	// The service ceiling in force now; below max_outstanding while an adaptive pool is tightened.
-	EffectiveMaxOutstanding int32 `json:"effective_max_outstanding,omitempty"`
+	EffectiveMaxOutstanding int32 `json:"effective_max_outstanding"`
 
 	// Per-endpoint ceiling for the normal role; 0 is unlimited.
-	EpMaxInflight int32 `json:"ep_max_inflight,omitempty"`
+	EpMaxInflight int32 `json:"ep_max_inflight"`
 
 	// Whether admitted responses carry the admission headers.
 	// Enum: [on off]
 	ExposeHeaders string `json:"expose_headers,omitempty"`
 
 	// Inference requests executing on the pool right now.
-	Inflight int32 `json:"inflight,omitempty"`
+	Inflight int32 `json:"inflight"`
 
 	// Pool-wide ceiling on executing inference requests; 0 is unlimited.
-	MaxOutstanding int32 `json:"max_outstanding,omitempty"`
+	MaxOutstanding int32 `json:"max_outstanding"`
 
 	// The gate mode in force on the pool (off, observe or enforce).
 	Mode string `json:"mode,omitempty"`
 
 	// Per-endpoint ceiling for prefill legs; 0 is unlimited.
-	PrefillMaxInflight int32 `json:"prefill_max_inflight,omitempty"`
+	PrefillMaxInflight int32 `json:"prefill_max_inflight"`
 
 	// Requests that may wait for a unit; 0 means over a ceiling is refused.
-	QueueDepth int32 `json:"queue_depth,omitempty"`
+	QueueDepth int32 `json:"queue_depth"`
 
 	// Memory the full queue may park, in MiB (queue_depth x 1 MiB, one parked client connection per waiting request).
-	QueueMemoryBoundMib int64 `json:"queue_memory_bound_mib,omitempty"`
+	QueueMemoryBoundMib int64 `json:"queue_memory_bound_mib"`
 
 	// The wait window in force for a queued request, in milliseconds.
-	QueueWaitMs int32 `json:"queue_wait_ms,omitempty"`
+	QueueWaitMs int32 `json:"queue_wait_ms"`
 
 	// Inference requests waiting for a unit right now.
-	Queued int32 `json:"queued,omitempty"`
+	Queued int32 `json:"queued"`
 
 	// source
 	Source *LoadbalanceEntryServiceArgumentsFcEffectiveSource `json:"source,omitempty"`
 
 	// The P/D scorers' trust window for scraped queue depth, in milliseconds.
-	TelemetryStaleMs int32 `json:"telemetry_stale_ms,omitempty"`
+	TelemetryStaleMs int32 `json:"telemetry_stale_ms"`
 
 	// The tenant share in force, in percent; 0 or 100 is no share.
-	TenantMaxSharePct int32 `json:"tenant_max_share_pct,omitempty"`
+	TenantMaxSharePct int32 `json:"tenant_max_share_pct"`
 
 	// Tenants holding a unit or waiting on the pool now, while it holds tenants to a share.
-	TenantsActive int32 `json:"tenants_active,omitempty"`
+	TenantsActive int32 `json:"tenants_active"`
 
 	// ttft target ms
-	TtftTargetMs int32 `json:"ttft_target_ms,omitempty"`
+	TtftTargetMs int32 `json:"ttft_target_ms"`
 
 	// Endpoints inside their warm-up window.
-	WarmingEndpoints int32 `json:"warming_endpoints,omitempty"`
+	WarmingEndpoints int32 `json:"warming_endpoints"`
 
 	// warmup ms
-	WarmupMs int32 `json:"warmup_ms,omitempty"`
+	WarmupMs int32 `json:"warmup_ms"`
 }
 
 // Validate validates this loadbalance entry service arguments fc effective

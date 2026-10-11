@@ -1519,6 +1519,23 @@ func copyLBFixedCString(dst []C.uchar, src string) bool {
 
 // DpLBRuleMod - routine to work on a ebpf lb change request
 func DpLBRuleMod(w *LBDpWorkQ) int {
+	if w.MCPProtocolVersion != "" {
+		serv := cmn.LbServiceArg{MCPProtocolVersion: cmn.MCPVersion(w.MCPProtocolVersion),
+			SessionHeaderName: w.SessionHeaderName, ModelName: w.ModelName,
+			PDDisaggMode: w.PDDisaggMode, PDCacheAwareMode: w.PDCacheAwareMode,
+			KvExactMode: w.KvExactMode, SockMapMode: cmn.SockMapCodeToMode(w.SockMapMode),
+			Sel: cmn.EpSelect(w.EpSel - 1)}
+		if w.NatType == DpFullProxy {
+			serv.Mode = cmn.LBModeFullProxy
+		}
+		if w.Proto == 6 {
+			serv.Proto = "tcp"
+		}
+		if err := cmn.ValidateMCPService(&serv); err != nil {
+			tk.LogIt(tk.LogError, "[DP] refusing invalid MCP transport settings: %v\n", err)
+			return EbpfErrNat4Add
+		}
+	}
 	// AddLbRule performs the primary pre-mutation admission check. Repeat it at
 	// the Go-to-C boundary because DpLBRuleMod is also callable independently.
 	if err := validateLBFixedCStringFields(cmn.LbServiceArg{
@@ -1719,6 +1736,14 @@ func DpLBRuleMod(w *LBDpWorkQ) int {
 		dat.sockmap_en = C.uchar(w.SockMapMode)
 	} else {
 		dat.sockmap_en = 0
+	}
+
+	if w.MCPProtocolVersion != "" && w.MCPProtocolVersion != cmn.MCPStatelessProtocolVersion {
+		tk.LogIt(tk.LogError, "[DP] refusing unsupported MCP protocol version\n")
+		return EbpfErrNat4Add
+	}
+	if w.MCPProtocolVersion == cmn.MCPStatelessProtocolVersion {
+		dat.mcp_stateless = 1
 	}
 
 	// Custom session header - supports both RR and Persist modes
@@ -2254,7 +2279,7 @@ func DpKvComputeChallengeHashes(hashAlgo string, blockSize uint32, tokens []uint
 //   - hostState: GPU state ("red"|"yellow"|"green")
 //
 // Returns: 0 on success, -1 on error
-func (e *DpEbpfH) DpLBEndpointHostStateUpdate(svcIP net.IP, svcPort uint16, proto uint8, epIP net.IP, hostState string) int {
+func (e *DpEbpfH) DpLBEndpointHostStateUpdate(svcIP net.IP, svcPort uint16, proto uint8, epIP net.IP, epPort uint16, hostState string) int {
 	// Build proxy key for sockproxy lookup
 	var proxyKey C.struct_proxy_ent
 
@@ -2296,7 +2321,9 @@ func (e *DpEbpfH) DpLBEndpointHostStateUpdate(svcIP net.IP, svcPort uint16, prot
 	epIPUint := C.uint(tk.IPtonl(epIP))
 
 	// Call C helper to find endpoint index and update state
-	ret := C.proxy_update_ep_health_by_ip(&proxyKey, epIPUint, inact)
+	// A supplied port scopes the signal to that listener; zero retains the
+	// host-wide contract. Both endpoint ports and the C matcher use network order.
+	ret := C.proxy_update_ep_health_by_addr(&proxyKey, epIPUint, C.ushort(tk.Htons(epPort)), inact)
 	if ret < 0 {
 		tk.LogIt(tk.LogError, "[DP] P2 GPU: Failed to update sockproxy GPU state - VIP=%v, port=%v, epIP=%v, state=%s\n",
 			svcIP, svcPort, epIP, hostState)

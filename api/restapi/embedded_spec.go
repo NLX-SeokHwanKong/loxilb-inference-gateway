@@ -2021,15 +2021,28 @@ func init() {
       "type": "object"
     },
     "EndPointHostState": {
-      "description": "Explicit host-state input. Supply both nonzero epPort and epProto for generated-key targeting, or omit both for host-wide targeting. Custom monitor names cannot be selected by the specific tuple path. Host-wide requests can succeed without matches. epPort narrows to uint16 without full validation; immediate dependent updates are implemented for fullproxy rules, not universally.",
+      "description": "Explicit host-state input. Supply both nonzero epPort and epProto for generated-key targeting, or omit both for host-wide targeting. epPort is validated in 0..65535 before conversion. Fullproxy dataplane updates respect the selected endpoint port; zero retains all ports on the host. Custom monitor names cannot be selected by the specific tuple path. Host-wide requests can succeed without matches. Immediate dependent updates are implemented for fullproxy rules, not universally.",
       "properties": {
         "epPort": {
-          "description": "Nonzero port requires epProto; zero or omission requires epProto empty for host-wide targeting. Conversion to uint16 is not fully validated.",
-          "type": "integer"
+          "description": "Nonzero port in 1..65535 requires epProto; zero or omission requires epProto empty for host-wide targeting.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
         },
         "epProto": {
-          "description": "Generated monitor-key probe type; supply together with nonzero epPort or omit both. This selector cannot resolve a custom monitor name and is not a universal transport-protocol selector.",
-          "type": "string"
+          "description": "Generated monitor-key probe type: tcp, udp, sctp, http, https, ping, tls-hello or none. Supply together with nonzero epPort or omit both. This selector cannot resolve a custom monitor name and is not a universal transport-protocol selector.",
+          "type": "string",
+          "enum": [
+            "",
+            "tcp",
+            "udp",
+            "sctp",
+            "http",
+            "https",
+            "ping",
+            "tls-hello",
+            "none"
+          ]
         },
         "hostName": {
           "description": "Literal endpoint host IP used for monitor matching, not a hostname or CIDR.",
@@ -4923,7 +4936,7 @@ func init() {
               "x-nullable": false
             },
             "fc_effective": {
-              "description": "The capacity admission gate's resolved state on this rule's model pool, read from the data plane. Present on GET for AI-gateway services (sse_mode, pd_disagg_mode or an api-key policy); ignored on input. mode is off, observe or enforce; the ceilings are the values in force, the process defaults where the rule declared nothing; inflight and queued are live counts; queue_memory_bound_mib is the memory the full queue may park (queue_depth x 1 MiB); telemetry_stale_ms is the P/D scorers' trust window; source names where each value in force came from (rule, env or default); effective_max_outstanding is the service ceiling in force now (the adaptive one while the pool adapts), adapt_state and adapt_reason say where it stands and why, warming_endpoints counts endpoints inside their warm-up window.",
+              "description": "The capacity admission gate's resolved state on this rule's model pool, read from the data plane. Present on GET for installed AI-gateway and modern MCP services; absent when no pool was read. Every numeric value is explicit, including zero. Ignored on input. mode is off, observe or enforce; the ceilings are the values in force, the process defaults where the rule declared nothing; inflight and queued are live counts; queue_memory_bound_mib is the memory the full queue may park (queue_depth x 1 MiB); telemetry_stale_ms is the P/D scorers' trust window; source names where each value in force came from (rule, env or default); effective_max_outstanding is the service ceiling in force now (the adaptive one while the pool adapts), adapt_state and adapt_reason say where it stands and why, warming_endpoints counts endpoints inside their warm-up window.",
               "properties": {
                 "adapt_reason": {
                   "description": "Why the adaptive ceiling last moved, or why it holds.",
@@ -4956,17 +4969,20 @@ func init() {
                 "decode_max_inflight": {
                   "description": "Per-endpoint ceiling for decode legs; 0 is unlimited.",
                   "format": "int32",
-                  "type": "integer"
+                  "type": "integer",
+                  "x-omitempty": false
                 },
                 "effective_max_outstanding": {
                   "description": "The service ceiling in force now; below max_outstanding while an adaptive pool is tightened.",
                   "format": "int32",
-                  "type": "integer"
+                  "type": "integer",
+                  "x-omitempty": false
                 },
                 "ep_max_inflight": {
                   "description": "Per-endpoint ceiling for the normal role; 0 is unlimited.",
                   "format": "int32",
-                  "type": "integer"
+                  "type": "integer",
+                  "x-omitempty": false
                 },
                 "expose_headers": {
                   "description": "Whether admitted responses carry the admission headers.",
@@ -4979,12 +4995,14 @@ func init() {
                 "inflight": {
                   "description": "Inference requests executing on the pool right now.",
                   "format": "int32",
-                  "type": "integer"
+                  "type": "integer",
+                  "x-omitempty": false
                 },
                 "max_outstanding": {
                   "description": "Pool-wide ceiling on executing inference requests; 0 is unlimited.",
                   "format": "int32",
-                  "type": "integer"
+                  "type": "integer",
+                  "x-omitempty": false
                 },
                 "mode": {
                   "description": "The gate mode in force on the pool (off, observe or enforce).",
@@ -4993,27 +5011,32 @@ func init() {
                 "prefill_max_inflight": {
                   "description": "Per-endpoint ceiling for prefill legs; 0 is unlimited.",
                   "format": "int32",
-                  "type": "integer"
+                  "type": "integer",
+                  "x-omitempty": false
                 },
                 "queue_depth": {
                   "description": "Requests that may wait for a unit; 0 means over a ceiling is refused.",
                   "format": "int32",
-                  "type": "integer"
+                  "type": "integer",
+                  "x-omitempty": false
                 },
                 "queue_memory_bound_mib": {
                   "description": "Memory the full queue may park, in MiB (queue_depth x 1 MiB, one parked client connection per waiting request).",
                   "format": "int64",
-                  "type": "integer"
+                  "type": "integer",
+                  "x-omitempty": false
                 },
                 "queue_wait_ms": {
                   "description": "The wait window in force for a queued request, in milliseconds.",
                   "format": "int32",
-                  "type": "integer"
+                  "type": "integer",
+                  "x-omitempty": false
                 },
                 "queued": {
                   "description": "Inference requests waiting for a unit right now.",
                   "format": "int32",
-                  "type": "integer"
+                  "type": "integer",
+                  "x-omitempty": false
                 },
                 "source": {
                   "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default).",
@@ -5128,30 +5151,36 @@ func init() {
                 "telemetry_stale_ms": {
                   "description": "The P/D scorers' trust window for scraped queue depth, in milliseconds.",
                   "format": "int32",
-                  "type": "integer"
+                  "type": "integer",
+                  "x-omitempty": false
                 },
                 "tenant_max_share_pct": {
                   "description": "The tenant share in force, in percent; 0 or 100 is no share.",
                   "format": "int32",
-                  "type": "integer"
+                  "type": "integer",
+                  "x-omitempty": false
                 },
                 "tenants_active": {
                   "description": "Tenants holding a unit or waiting on the pool now, while it holds tenants to a share.",
                   "format": "int32",
-                  "type": "integer"
+                  "type": "integer",
+                  "x-omitempty": false
                 },
                 "ttft_target_ms": {
                   "format": "int32",
-                  "type": "integer"
+                  "type": "integer",
+                  "x-omitempty": false
                 },
                 "warming_endpoints": {
                   "description": "Endpoints inside their warm-up window.",
                   "format": "int32",
-                  "type": "integer"
+                  "type": "integer",
+                  "x-omitempty": false
                 },
                 "warmup_ms": {
                   "format": "int32",
-                  "type": "integer"
+                  "type": "integer",
+                  "x-omitempty": false
                 }
               },
               "readOnly": true,
@@ -5691,6 +5720,7 @@ func init() {
               ],
               "type": "integer"
             },
+            "mcp_protocol_version": {"type": "string", "x-nullable": false, "enum": ["", "2026-07-28"], "description": "Explicit stateless MCP transport mode. Omitted create is legacy; omitted replace preserves. Immutable after create: delete and recreate to change. Requires TCP FullProxy mode=4, sel=0 or 2, sockMapMode=off. No session affinity, model, P/D or KV routing."},
             "session_header_name": {
               "description": "Session-key extraction setting for proxy affinity. Use a header name such as X-Session-ID, cookie:NAME for one cookie, query:NAME for one query parameter, or basic-auth for the Basic Authorization username. RR (sel=0) and persistence (sel=3) paths contain handling; a missing usable key follows their RR or IP-based fallback respectively. This setting is not authentication. GET includes it only for those selectors. The server accepts at most 127 UTF-8 bytes and rejects embedded NUL or invalid UTF-8 before changing rule state. This byte limit reserves the terminator in the 128-byte data-plane field; UI validation must count encoded bytes rather than characters. Cross-mode interaction with L7 HTTP_COOKIE remains unresolved.",
               "type": "string",
@@ -37118,16 +37148,29 @@ func init() {
       }
     },
     "EndPointHostState": {
-      "description": "Explicit host-state input. Supply both nonzero epPort and epProto for generated-key targeting, or omit both for host-wide targeting. Custom monitor names cannot be selected by the specific tuple path. Host-wide requests can succeed without matches. epPort narrows to uint16 without full validation; immediate dependent updates are implemented for fullproxy rules, not universally.",
+      "description": "Explicit host-state input. Supply both nonzero epPort and epProto for generated-key targeting, or omit both for host-wide targeting. epPort is validated in 0..65535 before conversion. Fullproxy dataplane updates respect the selected endpoint port; zero retains all ports on the host. Custom monitor names cannot be selected by the specific tuple path. Host-wide requests can succeed without matches. Immediate dependent updates are implemented for fullproxy rules, not universally.",
       "type": "object",
       "properties": {
         "epPort": {
-          "description": "Nonzero port requires epProto; zero or omission requires epProto empty for host-wide targeting. Conversion to uint16 is not fully validated.",
-          "type": "integer"
+          "description": "Nonzero port in 1..65535 requires epProto; zero or omission requires epProto empty for host-wide targeting.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
         },
         "epProto": {
-          "description": "Generated monitor-key probe type; supply together with nonzero epPort or omit both. This selector cannot resolve a custom monitor name and is not a universal transport-protocol selector.",
-          "type": "string"
+          "description": "Generated monitor-key probe type: tcp, udp, sctp, http, https, ping, tls-hello or none. Supply together with nonzero epPort or omit both. This selector cannot resolve a custom monitor name and is not a universal transport-protocol selector.",
+          "type": "string",
+          "enum": [
+            "",
+            "tcp",
+            "udp",
+            "sctp",
+            "http",
+            "https",
+            "ping",
+            "tls-hello",
+            "none"
+          ]
         },
         "hostName": {
           "description": "Literal endpoint host IP used for monitor matching, not a hostname or CIDR.",
@@ -40017,7 +40060,7 @@ func init() {
               "x-nullable": false
             },
             "fc_effective": {
-              "description": "The capacity admission gate's resolved state on this rule's model pool, read from the data plane. Present on GET for AI-gateway services (sse_mode, pd_disagg_mode or an api-key policy); ignored on input. mode is off, observe or enforce; the ceilings are the values in force, the process defaults where the rule declared nothing; inflight and queued are live counts; queue_memory_bound_mib is the memory the full queue may park (queue_depth x 1 MiB); telemetry_stale_ms is the P/D scorers' trust window; source names where each value in force came from (rule, env or default); effective_max_outstanding is the service ceiling in force now (the adaptive one while the pool adapts), adapt_state and adapt_reason say where it stands and why, warming_endpoints counts endpoints inside their warm-up window.",
+              "description": "The capacity admission gate's resolved state on this rule's model pool, read from the data plane. Present on GET for installed AI-gateway and modern MCP services; absent when no pool was read. Every numeric value is explicit, including zero. Ignored on input. mode is off, observe or enforce; the ceilings are the values in force, the process defaults where the rule declared nothing; inflight and queued are live counts; queue_memory_bound_mib is the memory the full queue may park (queue_depth x 1 MiB); telemetry_stale_ms is the P/D scorers' trust window; source names where each value in force came from (rule, env or default); effective_max_outstanding is the service ceiling in force now (the adaptive one while the pool adapts), adapt_state and adapt_reason say where it stands and why, warming_endpoints counts endpoints inside their warm-up window.",
               "type": "object",
               "properties": {
                 "adapt_reason": {
@@ -40051,16 +40094,19 @@ func init() {
                 "decode_max_inflight": {
                   "description": "Per-endpoint ceiling for decode legs; 0 is unlimited.",
                   "type": "integer",
+                  "x-omitempty": false,
                   "format": "int32"
                 },
                 "effective_max_outstanding": {
                   "description": "The service ceiling in force now; below max_outstanding while an adaptive pool is tightened.",
                   "type": "integer",
+                  "x-omitempty": false,
                   "format": "int32"
                 },
                 "ep_max_inflight": {
                   "description": "Per-endpoint ceiling for the normal role; 0 is unlimited.",
                   "type": "integer",
+                  "x-omitempty": false,
                   "format": "int32"
                 },
                 "expose_headers": {
@@ -40074,11 +40120,13 @@ func init() {
                 "inflight": {
                   "description": "Inference requests executing on the pool right now.",
                   "type": "integer",
+                  "x-omitempty": false,
                   "format": "int32"
                 },
                 "max_outstanding": {
                   "description": "Pool-wide ceiling on executing inference requests; 0 is unlimited.",
                   "type": "integer",
+                  "x-omitempty": false,
                   "format": "int32"
                 },
                 "mode": {
@@ -40088,26 +40136,31 @@ func init() {
                 "prefill_max_inflight": {
                   "description": "Per-endpoint ceiling for prefill legs; 0 is unlimited.",
                   "type": "integer",
+                  "x-omitempty": false,
                   "format": "int32"
                 },
                 "queue_depth": {
                   "description": "Requests that may wait for a unit; 0 means over a ceiling is refused.",
                   "type": "integer",
+                  "x-omitempty": false,
                   "format": "int32"
                 },
                 "queue_memory_bound_mib": {
                   "description": "Memory the full queue may park, in MiB (queue_depth x 1 MiB, one parked client connection per waiting request).",
                   "type": "integer",
+                  "x-omitempty": false,
                   "format": "int64"
                 },
                 "queue_wait_ms": {
                   "description": "The wait window in force for a queued request, in milliseconds.",
                   "type": "integer",
+                  "x-omitempty": false,
                   "format": "int32"
                 },
                 "queued": {
                   "description": "Inference requests waiting for a unit right now.",
                   "type": "integer",
+                  "x-omitempty": false,
                   "format": "int32"
                 },
                 "source": {
@@ -40223,29 +40276,35 @@ func init() {
                 "telemetry_stale_ms": {
                   "description": "The P/D scorers' trust window for scraped queue depth, in milliseconds.",
                   "type": "integer",
+                  "x-omitempty": false,
                   "format": "int32"
                 },
                 "tenant_max_share_pct": {
                   "description": "The tenant share in force, in percent; 0 or 100 is no share.",
                   "type": "integer",
+                  "x-omitempty": false,
                   "format": "int32"
                 },
                 "tenants_active": {
                   "description": "Tenants holding a unit or waiting on the pool now, while it holds tenants to a share.",
                   "type": "integer",
+                  "x-omitempty": false,
                   "format": "int32"
                 },
                 "ttft_target_ms": {
                   "type": "integer",
+                  "x-omitempty": false,
                   "format": "int32"
                 },
                 "warming_endpoints": {
                   "description": "Endpoints inside their warm-up window.",
                   "type": "integer",
+                  "x-omitempty": false,
                   "format": "int32"
                 },
                 "warmup_ms": {
                   "type": "integer",
+                  "x-omitempty": false,
                   "format": "int32"
                 }
               },
@@ -40785,6 +40844,7 @@ func init() {
                 10
               ]
             },
+            "mcp_protocol_version": {"type": "string", "x-nullable": false, "enum": ["", "2026-07-28"], "description": "Explicit stateless MCP transport mode. Omitted create is legacy; omitted replace preserves. Immutable after create: delete and recreate to change. Requires TCP FullProxy mode=4, sel=0 or 2, sockMapMode=off. No session affinity, model, P/D or KV routing."},
             "session_header_name": {
               "description": "Session-key extraction setting for proxy affinity. Use a header name such as X-Session-ID, cookie:NAME for one cookie, query:NAME for one query parameter, or basic-auth for the Basic Authorization username. RR (sel=0) and persistence (sel=3) paths contain handling; a missing usable key follows their RR or IP-based fallback respectively. This setting is not authentication. GET includes it only for those selectors. The server accepts at most 127 UTF-8 bytes and rejects embedded NUL or invalid UTF-8 before changing rule state. This byte limit reserves the terminator in the 128-byte data-plane field; UI validation must count encoded bytes rather than characters. Cross-mode interaction with L7 HTTP_COOKIE remains unresolved.",
               "type": "string",
@@ -41158,7 +41218,7 @@ func init() {
           "x-nullable": false
         },
         "fc_effective": {
-          "description": "The capacity admission gate's resolved state on this rule's model pool, read from the data plane. Present on GET for AI-gateway services (sse_mode, pd_disagg_mode or an api-key policy); ignored on input. mode is off, observe or enforce; the ceilings are the values in force, the process defaults where the rule declared nothing; inflight and queued are live counts; queue_memory_bound_mib is the memory the full queue may park (queue_depth x 1 MiB); telemetry_stale_ms is the P/D scorers' trust window; source names where each value in force came from (rule, env or default); effective_max_outstanding is the service ceiling in force now (the adaptive one while the pool adapts), adapt_state and adapt_reason say where it stands and why, warming_endpoints counts endpoints inside their warm-up window.",
+          "description": "The capacity admission gate's resolved state on this rule's model pool, read from the data plane. Present on GET for installed AI-gateway and modern MCP services; absent when no pool was read. Every numeric value is explicit, including zero. Ignored on input. mode is off, observe or enforce; the ceilings are the values in force, the process defaults where the rule declared nothing; inflight and queued are live counts; queue_memory_bound_mib is the memory the full queue may park (queue_depth x 1 MiB); telemetry_stale_ms is the P/D scorers' trust window; source names where each value in force came from (rule, env or default); effective_max_outstanding is the service ceiling in force now (the adaptive one while the pool adapts), adapt_state and adapt_reason say where it stands and why, warming_endpoints counts endpoints inside their warm-up window.",
           "type": "object",
           "properties": {
             "adapt_reason": {
@@ -41192,16 +41252,19 @@ func init() {
             "decode_max_inflight": {
               "description": "Per-endpoint ceiling for decode legs; 0 is unlimited.",
               "type": "integer",
+              "x-omitempty": false,
               "format": "int32"
             },
             "effective_max_outstanding": {
               "description": "The service ceiling in force now; below max_outstanding while an adaptive pool is tightened.",
               "type": "integer",
+              "x-omitempty": false,
               "format": "int32"
             },
             "ep_max_inflight": {
               "description": "Per-endpoint ceiling for the normal role; 0 is unlimited.",
               "type": "integer",
+              "x-omitempty": false,
               "format": "int32"
             },
             "expose_headers": {
@@ -41215,11 +41278,13 @@ func init() {
             "inflight": {
               "description": "Inference requests executing on the pool right now.",
               "type": "integer",
+              "x-omitempty": false,
               "format": "int32"
             },
             "max_outstanding": {
               "description": "Pool-wide ceiling on executing inference requests; 0 is unlimited.",
               "type": "integer",
+              "x-omitempty": false,
               "format": "int32"
             },
             "mode": {
@@ -41229,26 +41294,31 @@ func init() {
             "prefill_max_inflight": {
               "description": "Per-endpoint ceiling for prefill legs; 0 is unlimited.",
               "type": "integer",
+              "x-omitempty": false,
               "format": "int32"
             },
             "queue_depth": {
               "description": "Requests that may wait for a unit; 0 means over a ceiling is refused.",
               "type": "integer",
+              "x-omitempty": false,
               "format": "int32"
             },
             "queue_memory_bound_mib": {
               "description": "Memory the full queue may park, in MiB (queue_depth x 1 MiB, one parked client connection per waiting request).",
               "type": "integer",
+              "x-omitempty": false,
               "format": "int64"
             },
             "queue_wait_ms": {
               "description": "The wait window in force for a queued request, in milliseconds.",
               "type": "integer",
+              "x-omitempty": false,
               "format": "int32"
             },
             "queued": {
               "description": "Inference requests waiting for a unit right now.",
               "type": "integer",
+              "x-omitempty": false,
               "format": "int32"
             },
             "source": {
@@ -41364,29 +41434,35 @@ func init() {
             "telemetry_stale_ms": {
               "description": "The P/D scorers' trust window for scraped queue depth, in milliseconds.",
               "type": "integer",
+              "x-omitempty": false,
               "format": "int32"
             },
             "tenant_max_share_pct": {
               "description": "The tenant share in force, in percent; 0 or 100 is no share.",
               "type": "integer",
+              "x-omitempty": false,
               "format": "int32"
             },
             "tenants_active": {
               "description": "Tenants holding a unit or waiting on the pool now, while it holds tenants to a share.",
               "type": "integer",
+              "x-omitempty": false,
               "format": "int32"
             },
             "ttft_target_ms": {
               "type": "integer",
+              "x-omitempty": false,
               "format": "int32"
             },
             "warming_endpoints": {
               "description": "Endpoints inside their warm-up window.",
               "type": "integer",
+              "x-omitempty": false,
               "format": "int32"
             },
             "warmup_ms": {
               "type": "integer",
+              "x-omitempty": false,
               "format": "int32"
             }
           },
@@ -41926,6 +42002,7 @@ func init() {
             10
           ]
         },
+        "mcp_protocol_version": {"type": "string", "x-nullable": false, "enum": ["", "2026-07-28"], "description": "Explicit stateless MCP transport mode. Omitted create is legacy; omitted replace preserves. Immutable after create: delete and recreate to change. Requires TCP FullProxy mode=4, sel=0 or 2, sockMapMode=off. No session affinity, model, P/D or KV routing."},
         "session_header_name": {
           "description": "Session-key extraction setting for proxy affinity. Use a header name such as X-Session-ID, cookie:NAME for one cookie, query:NAME for one query parameter, or basic-auth for the Basic Authorization username. RR (sel=0) and persistence (sel=3) paths contain handling; a missing usable key follows their RR or IP-based fallback respectively. This setting is not authentication. GET includes it only for those selectors. The server accepts at most 127 UTF-8 bytes and rejects embedded NUL or invalid UTF-8 before changing rule state. This byte limit reserves the terminator in the 128-byte data-plane field; UI validation must count encoded bytes rather than characters. Cross-mode interaction with L7 HTTP_COOKIE remains unresolved.",
           "type": "string",

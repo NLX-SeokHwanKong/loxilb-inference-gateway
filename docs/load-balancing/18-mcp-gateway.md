@@ -10,9 +10,21 @@
 
 ---
 
+## Protocol versions
+
+The session examples below cover the legacy Streamable HTTP transport (2025-11-25). MCP 2026-07-28 uses independent requests and removes protocol sessions and initialization. Create a separate TCP FullProxy rule with `mcp_protocol_version: "2026-07-28"`, `sel: 0` or `sel: 2`, and `sockMapMode: "off"`; omit `session_header_name`. Existing rules retain their mode; changing it requires a new rule. All aliases on a shared listener must agree on the mode.
+
+The modern rule validates required request headers against JSON-RPC metadata before backend selection. Supported L7 header routes use `Mcp-Method` and the decoded `Mcp-Name`; policies cannot modify validated transport headers or add session persistence. JSON and finite SSE responses are supported. Validation buffers bodies up to 768 KiB and rejects larger requests with HTTP 413. HTTP/1.1 supports one outstanding request per connection; pipelining is rejected. With L7 policies, operands must fit the existing routing field bounds. These are admission limits, not streaming validation fallbacks.
+
+The modern frontend can negotiate HTTP/2 independently of an HTTP/1.1 backend. The H2-to-H1 bridge allocates one backend connection per live stream, bounded by the per-frontend-connection bridge-slot limit (32). It preserves incremental SSE and isolates cancellation to that stream. RR/WRR selection is shared across frontend protocols; unequal L7 backendRef weights select within the permitted route pool rather than multiplying the base endpoint weights. Oversized or malformed backend response framing terminates the affected stream.
+
+Configured FC admission applies to modern POST requests, including per-endpoint saturation and endpoint-return warmup. Read `fc_effective` to verify installed mode, limits and warming state; configuration values alone do not establish enforcement. Capacity fallback and connection retries remain inside the selected L7 route and require a permit for the target endpoint.
+
+See the [modern regression fixture and commands](../../cicd/mcp-stateless/README.md). Its portable unit tests do not establish an installed runtime qualification. MRTR, subscriptions, arbitrary tool parameter schema reflection and OAuth authorization are outside this implementation's scope.
+
 ## 1. Why put a gateway in front of MCP servers
 
-MCP servers speak the streamable-HTTP transport: a client opens a session, receives an
+Legacy MCP servers speak the session-oriented Streamable HTTP transport: a client opens a session, receives an
 `mcp-session-id`, and every subsequent JSON-RPC call must land on the server that owns that
 session. Load-balancing this naively breaks sessions. The inference gateway solves it at L7:
 

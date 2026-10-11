@@ -608,9 +608,10 @@ type ruleEnt struct {
 	sockMapMode                 uint8 // Directional sockmap accel: 0=off,1=both,2=request,3=response
 	halfCloseMode               uint8 // half-close hold, enum sp_hold_mode: 0=unset,1=off,2=hold
 	egress                      bool
-	traceType                   string                  // Tracing catalog name for deep inspection
-	tracingCatalogID            uint16                  // Resolved catalog_id for tracing (0 = no tracing)
-	backendProtocol             string                  // Backend protocol capability: "http1", "http2", or "both"
+	traceType                   string // Tracing catalog name for deep inspection
+	tracingCatalogID            uint16 // Resolved catalog_id for tracing (0 = no tracing)
+	backendProtocol             string // Backend protocol capability: "http1", "http2", or "both"
+	mcpProtocolVersion          string
 	sessionHeaderName           string                  // Custom session header for persist mode (e.g., "mcp-session-id")
 	sseMode                     bool                    // SSE mode: suppress idle-timeout during streaming
 	apiKeyAuth                  string                  // data-plane credential policy AS DECLARED: "", "disabled", "required", "jwt" or "apikey-or-jwt"
@@ -1134,6 +1135,7 @@ func (R *RuleH) Rules2Json() ([]byte, error) {
 		t.ServPortMax = data.tuples.l4Dst.valMax
 		t.Sel = data.act.action.(*ruleLBActs).sel
 		t.Mode = data.act.action.(*ruleLBActs).mode
+		t.MCPProtocolVersion = cmn.MCPVersion(data.mcpProtocolVersion)
 
 		// Make Endpoints
 		tmpEp := data.act.action.(*ruleLBActs).endPoints
@@ -1212,8 +1214,9 @@ func (R *RuleH) GetLBRule() ([]cmn.LbRuleMod, error) {
 			ret.Serv.HalfCloseEffective = data.halfCloseEffective(halfCloseInForce())
 		}
 		ret.Serv.Egress = data.egress
-		ret.Serv.TraceType = data.traceType                 // Tracing catalog
-		ret.Serv.BackendProtocol = data.backendProtocol     // Backend protocol capability
+		ret.Serv.TraceType = data.traceType             // Tracing catalog
+		ret.Serv.BackendProtocol = data.backendProtocol // Backend protocol capability
+		ret.Serv.MCPProtocolVersion = cmn.MCPVersion(data.mcpProtocolVersion)
 		ret.Serv.SessionHeaderName = data.sessionHeaderName // Custom session header for persist mode
 		ret.Serv.SSEMode = data.sseMode                     // SSE streaming mode
 		// Surface the RESOLVED policy, never the raw configured string: an
@@ -1250,10 +1253,10 @@ func (R *RuleH) GetLBRule() ([]cmn.LbRuleMod, error) {
 		ret.Serv.FcMaxQueueDepth = data.fcMaxQueueDepth
 		ret.Serv.FcMaxQueueWaitMs = data.fcMaxQueueWaitMs
 		data.fcCfg.toServ(&ret.Serv)
-		// The capacity gate's resolved state on the pool, for an AI-gateway
-		// service: what the data plane holds, not what was posted. A read
-		// model beside the configuration, never replayed into a POST.
-		if data.aiGwMode() && mh.dpEbpf != nil {
+		// The capacity gate's resolved state on the pool, for AI-gateway or
+		// modern MCP services: what the data plane holds, not what was posted.
+		// A read model beside configuration, never replayed into a POST.
+		if (data.aiGwMode() || data.mcpProtocolVersion != "") && mh.dpEbpf != nil {
 			if eff, ok := mh.dpEbpf.DpFcStateGet(data.tuples.l3Dst.addr.IP,
 				data.tuples.l4Dst.valMin, uint8(data.tuples.l4Prot.val),
 				data.tuples.path, data.tuples.pathPrefix, data.tuples.modelName); ok {
@@ -4051,6 +4054,9 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 
 	// Reject values that cannot be represented by the fixed-size C data-plane
 	// ABI before looking up, allocating, deleting or updating any rule state.
+	if err := cmn.ValidateMCPService(&serv); err != nil {
+		return RuleArgsErr, &cmn.RuleArgumentError{Err: err}
+	}
 	if err := validateLBFixedCStringFields(serv); err != nil {
 		return RuleArgsErr, &cmn.RuleArgumentError{Err: err}
 	}
@@ -4465,6 +4471,12 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 	tk.LogIt(tk.LogDebug, "lb-rule key (add): %q\n", rt.ruleKey())
 
 	eRule := R.tables[RtLB].eMap[rt.ruleKey()]
+	if err := resolveMCPService(&serv, eRule); err != nil {
+		return RuleArgsErr, &cmn.RuleArgumentError{Err: err}
+	}
+	if other := R.lbListenerMCPConflict(eRule, &rt, string(serv.MCPProtocolVersion)); other != nil {
+		return RuleArgsErr, &cmn.RuleArgumentError{Err: fmt.Errorf("mcp_protocol_version: %s shares this address and port with a different MCP transport mode; all host/path/model pools must agree", listenerRuleName(&other.tuples))}
+	}
 
 	// Reject shared-listener source conflicts before create/replace mutates
 	// any rule or fence. Replay uses the same safety contract.
@@ -4593,6 +4605,7 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 		// Detect changes to all extended mutable fields
 		if eRule.traceType != serv.TraceType ||
 			(serv.BackendProtocol != "" && eRule.backendProtocol != serv.BackendProtocol) ||
+			eRule.mcpProtocolVersion != string(serv.MCPProtocolVersion) ||
 			eRule.sessionHeaderName != serv.SessionHeaderName ||
 			eRule.sseMode != serv.SSEMode ||
 			(serv.ApiKeyAuth != "" && eRule.apiKeyAuth != serv.ApiKeyAuth) ||
@@ -4829,6 +4842,7 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 		if serv.BackendProtocol != "" {
 			eRule.backendProtocol = serv.BackendProtocol
 		}
+		eRule.mcpProtocolVersion = string(serv.MCPProtocolVersion)
 		eRule.sessionHeaderName = serv.SessionHeaderName
 		eRule.sseMode = serv.SSEMode
 		// PRESERVE on omit, unlike the fields around it — the why lives on
@@ -5184,6 +5198,7 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 	}
 
 	// Store custom session header name for persist mode
+	r.mcpProtocolVersion = string(serv.MCPProtocolVersion)
 	r.sessionHeaderName = serv.SessionHeaderName
 
 	// Store SSE streaming configuration
@@ -6444,7 +6459,7 @@ func (R *RuleH) applyHostStateToRules(hostName string, epPort uint16, epProto st
 				proto := rule.tuples.l4Prot.val
 				epIP := ep.xIP
 
-				ret := mh.dp.DpHooks.DpLBEndpointHostStateUpdate(svcIP, svcPort, proto, epIP, state)
+				ret := mh.dp.DpHooks.DpLBEndpointHostStateUpdate(svcIP, svcPort, proto, epIP, epPort, state)
 				if ret == 0 {
 					tk.LogIt(tk.LogInfo, "P2 GPU: Applied hostState '%s' to sockproxy - svc=%v:%v ep=%v\n",
 						state, svcIP, svcPort, epIP)
@@ -7056,10 +7071,11 @@ func (r *ruleEnt) LB2DP(work DpWorkT) int {
 	nWork.ConnLimit = r.connLimit // per-service concurrent-conn ceiling (0 = unlimited)
 	nWork.PolId = r.qosPolId      // Tier-0 rule-attached policer (0 = none)
 	nWork.HostURL = r.tuples.path
-	nWork.PathPrefix = r.tuples.pathPrefix                            // P6: Pass path prefix
-	nWork.PathMatchMode = r.tuples.pathMatchMode                      // P6: Pass path match mode
-	nWork.ModelName = r.tuples.modelName                              // AI model name for pool selection
-	nWork.BackendProtocol = r.backendProtocol                         // Backend protocol capability
+	nWork.PathPrefix = r.tuples.pathPrefix       // P6: Pass path prefix
+	nWork.PathMatchMode = r.tuples.pathMatchMode // P6: Pass path match mode
+	nWork.ModelName = r.tuples.modelName         // AI model name for pool selection
+	nWork.BackendProtocol = r.backendProtocol    // Backend protocol capability
+	nWork.MCPProtocolVersion = r.mcpProtocolVersion
 	nWork.SessionHeaderName = r.sessionHeaderName                     // Custom session header name for persist mode
 	nWork.SSEMode = r.sseMode                                         // SSE streaming mode
 	nWork.ApiKeyAuth = r.apiKeyAuth                                   // data-plane credential policy, as declared (encoder resolves)
@@ -7201,7 +7217,9 @@ func (r *ruleEnt) LB2DP(work DpWorkT) int {
 		// push re-enters — failover and failback are immediate.
 		applyMemberSelection(at.endPoints, r.adminStateUp)
 
-		if at.sel == cmn.LbSelPrio {
+		// Modern MCP fullproxy selects original weighted members per request.
+		// Kernel slot replication would duplicate members and apply weights twice.
+		if at.sel == cmn.LbSelPrio && r.mcpProtocolVersion == "" {
 			j := 0
 			k := 0
 			var small [MaxLBEndPoints]int
