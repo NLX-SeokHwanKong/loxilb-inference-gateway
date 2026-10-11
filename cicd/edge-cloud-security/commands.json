@@ -1,0 +1,790 @@
+[
+  {
+    "id": "SET-01",
+    "command": "export LAB=\"$EDGE_LAB\""
+  },
+  {
+    "id": "SET-02",
+    "command": "umask 077"
+  },
+  {
+    "id": "SET-03",
+    "command": "mkdir -m 700 \"$LAB\""
+  },
+  {
+    "id": "SET-04",
+    "command": "export SRC=\"$EDGE_SOURCE\""
+  },
+  {
+    "id": "SET-05",
+    "command": "export GW_IMAGE=\"$EDGE_GATEWAY_IMAGE\""
+  },
+  {
+    "id": "SET-06",
+    "command": "docker image inspect \"$GW_IMAGE\" --format \"{{.Id}}\" > \"$LAB/image-id.txt\""
+  },
+  {
+    "id": "SET-07",
+    "command": "docker ps -a --filter label=owner=\"$EDGE_OWNER\" --format \"{{.Names}} {{.Status}}\""
+  },
+  {
+    "id": "SET-08",
+    "command": "! docker network inspect uc7-security > /dev/null 2>&1"
+  },
+  {
+    "id": "SET-09",
+    "command": "mkdir -m 700 \"$LAB/config\""
+  },
+  {
+    "id": "SET-10",
+    "command": "openssl rand -hex 24 > \"$LAB/config/pg_password\""
+  },
+  {
+    "id": "SET-11",
+    "command": "openssl rand -hex 24 > \"$LAB/config/aikey_password\""
+  },
+  {
+    "id": "SET-12",
+    "command": "openssl rand -hex 24 > \"$LAB/config/mgmt_db_password\""
+  },
+  {
+    "id": "SET-13",
+    "command": "docker network create --label owner=\"$EDGE_OWNER\" --subnet 172.30.97.0/24 uc7-security"
+  },
+  {
+    "id": "SET-14",
+    "command": "mkdir -m 700 \"$LAB/pgdata\" && docker run -d --name uc7-pg -v \"$LAB/pgdata:/var/lib/postgresql/data\" --label owner=\"$EDGE_OWNER\" --network uc7-security --ip 172.30.97.30 -v \"$LAB/config:/run/uc7:ro\" -e POSTGRES_USER=uc7owner -e POSTGRES_DB=uc7 -e POSTGRES_PASSWORD_FILE=/run/uc7/pg_password \"$PG_IMAGE\""
+  },
+  {
+    "id": "SET-15",
+    "command": "sleep 8"
+  },
+  {
+    "id": "SET-16",
+    "command": "docker exec uc7-pg pg_isready -h 127.0.0.1 -U uc7owner -d uc7"
+  },
+  {
+    "id": "SET-17",
+    "command": "docker cp \"$SRC/scripts/aigw-db-bootstrap.sql\" uc7-pg:/tmp/bootstrap.sql"
+  },
+  {
+    "id": "SET-18",
+    "command": "docker exec uc7-pg sh -c 'AIGW_DB_PASSWORD=$(cat /run/uc7/aikey_password) AIGW_MGMT_DB_PASSWORD=$(cat /run/uc7/mgmt_db_password) psql -h 127.0.0.1 -U uc7owner -d uc7 -q -f /tmp/bootstrap.sql'"
+  },
+  {
+    "id": "SET-19",
+    "command": "docker run -d --name uc7-gw --label owner=\"$EDGE_OWNER\" --privileged --network uc7-security --ip 172.30.97.10 -v \"$LAB/config:/etc/loxilb\" -e LOXILB_KV_COLDSTART_SEED_N=0 -e LLB_KV_NONE_HASH_SEED=0 -e LLB_PD_MAX_TOTAL_INFLIGHT=16 --entrypoint /bin/bash \"$GW_IMAGE\" -c \"sleep infinity\""
+  },
+  {
+    "id": "SET-20",
+    "command": "docker run -d --name uc7-a --label owner=\"$EDGE_OWNER\" --network uc7-security --ip 172.30.97.50 --entrypoint /bin/bash \"$CLIENT_IMAGE\" -c \"sleep infinity\""
+  },
+  {
+    "id": "SET-21",
+    "command": "docker run -d --name uc7-b --label owner=\"$EDGE_OWNER\" --network uc7-security --ip 172.30.97.51 --entrypoint /bin/bash \"$CLIENT_IMAGE\" -c \"sleep infinity\""
+  },
+  {
+    "id": "SET-22",
+    "command": "docker run -d --name uc7-c --label owner=\"$EDGE_OWNER\" --network uc7-security --ip 172.30.97.52 --entrypoint /bin/bash \"$CLIENT_IMAGE\" -c \"sleep infinity\""
+  },
+  {
+    "id": "SET-23",
+    "command": "docker run -d --name uc7-d --label owner=\"$EDGE_OWNER\" --network uc7-security --ip 172.30.97.53 --entrypoint /bin/bash \"$CLIENT_IMAGE\" -c \"sleep infinity\""
+  },
+  {
+    "id": "SET-24",
+    "command": "docker run -d --name uc7-ep --label owner=\"$EDGE_OWNER\" --network uc7-security --ip 172.30.97.21 -e ECHO_NAME=uc7-backend \"$BACKEND_IMAGE\""
+  },
+  {
+    "id": "SET-25",
+    "command": "docker exec -d uc7-gw bash -c '/root/loxilb-io/loxilb/loxilb -p --userservice --mgmt-db-host 172.30.97.30 --mgmt-db-port 5432 --mgmt-db-user aigw_mgmt_user --mgmt-db-name uc7 --mgmt-db-password-file /etc/loxilb/mgmt_db_password --aikey-db-host 172.30.97.30 --aikey-db-port 5432 --aikey-db-user aigwuser --aikey-db-name uc7 --aikey-db-password-file /etc/loxilb/aikey_password > /tmp/uc7.out 2>/tmp/uc7.err'"
+  },
+  {
+    "id": "SET-26",
+    "command": "sleep 15"
+  },
+  {
+    "id": "SET-27",
+    "command": "docker exec uc7-gw curl -sS --max-time 10 -w \"\\nHTTP:%{http_code}\\n\" -X GET \"http://127.0.0.1:11111/netlox/v1/version\""
+  },
+  {
+    "id": "SET-28",
+    "command": "jq -n --arg password \"$EDGE_ADMIN_PASSWORD\" '{username:\"uc7admin\",password:$password,role:\"admin\"}' > \"$LAB/admin.json\""
+  },
+  {
+    "id": "SET-29",
+    "command": "docker exec uc7-gw curl -sS --max-time 10 -w \"\\nHTTP:%{http_code}\\n\" -X POST -H \"Content-Type: application/json\" --data-binary \"$(cat \"$LAB/admin.json\")\" \"http://127.0.0.1:11111/netlox/v1/auth/users\""
+  },
+  {
+    "id": "SET-30",
+    "command": "docker exec uc7-gw curl -fsS --max-time 10 -X POST -H \"Content-Type: application/json\" --data-binary \"$(cat \"$LAB/admin.json\")\" http://127.0.0.1:11111/netlox/v1/auth/login > \"$LAB/login.private.json\""
+  },
+  {
+    "id": "SET-31",
+    "command": "export TOKEN=$(jq -er .token \"$LAB/login.private.json\")"
+  },
+  {
+    "id": "SET-32",
+    "command": "docker exec uc7-gw mkdir -p /etc/loxilb/tokenizers/Qwen__Qwen3-0.6B"
+  },
+  {
+    "id": "SET-33",
+    "command": "docker cp \"$SRC/cicd/common/kv_hash/fixtures/tokenizers/Qwen__Qwen3-0.6B/tokenizer.json\" uc7-gw:/etc/loxilb/tokenizers/Qwen__Qwen3-0.6B/tokenizer.json"
+  },
+  {
+    "id": "SET-34",
+    "command": "docker cp \"$SRC/cicd/common/kv_hash/fixtures/kv_hash_vectors.json\" uc7-gw:/etc/loxilb/tokenizers/kv_hash_vectors.json"
+  },
+  {
+    "id": "SET-35",
+    "command": "jq \"[.prompts[0] | {prompt:.prompt}]\" \"$SRC/cicd/vllm-kvcache-routing-cpu/prompts/corpus.json\" > \"$LAB/corpus.json\""
+  },
+  {
+    "id": "SET-36",
+    "command": "jq '.prompts[0] | {model:\"Qwen/Qwen3-0.6B\",prompt:.prompt,max_tokens:8}' \"$SRC/cicd/vllm-kvcache-routing-cpu/prompts/corpus.json\" > \"$LAB/request.json\""
+  },
+  {
+    "id": "ACL-01",
+    "command": "cat > \"$LAB/alias.json\" <<'JSON'\n{\n  \"serviceArguments\": {\n    \"externalIP\": \"172.30.97.10\",\n    \"port\": 8080,\n    \"protocol\": \"tcp\",\n    \"mode\": 4,\n    \"host\": \"172.30.97.10\",\n    \"model_name\": \"edge-alias\",\n    \"inactiveTimeOut\": 60,\n    \"connectionLimit\": 4,\n    \"api_key_auth\": \"required\"\n  },\n  \"allowedSources\": [\n    {\n      \"prefix\": \"172.30.97.50/32\"\n    },\n    {\n      \"prefix\": \"172.30.97.52/32\"\n    },\n    {\n      \"prefix\": \"172.30.97.53/32\"\n    }\n  ],\n  \"endpoints\": [\n    {\n      \"endpointIP\": \"172.30.97.21\",\n      \"targetPort\": 80,\n      \"weight\": 1\n    }\n  ]\n}\nJSON"
+  },
+  {
+    "id": "ACL-02",
+    "command": "cat > \"$LAB/model.json\" <<'JSON'\n{\n  \"serviceArguments\": {\n    \"externalIP\": \"172.30.97.10\",\n    \"port\": 8080,\n    \"protocol\": \"tcp\",\n    \"mode\": 4,\n    \"host\": \"172.30.97.10\",\n    \"model_name\": \"Qwen/Qwen3-0.6B\",\n    \"inactiveTimeOut\": 60,\n    \"connectionLimit\": 4,\n    \"api_key_auth\": \"required\",\n    \"kvExactMode\": 3,\n    \"kvZmqPort\": 5557,\n    \"kvHashAlgo\": \"sha256_cbor\",\n    \"kvWarmupSec\": 2,\n    \"kvBlockSize\": 16,\n    \"kvEngineType\": \"vllm\"\n  },\n  \"allowedSources\": [\n    {\n      \"prefix\": \"172.30.97.50/32\"\n    },\n    {\n      \"prefix\": \"172.30.97.52/32\"\n    },\n    {\n      \"prefix\": \"172.30.97.53/32\"\n    }\n  ],\n  \"endpoints\": [\n    {\n      \"endpointIP\": \"172.30.97.21\",\n      \"targetPort\": 80,\n      \"weight\": 1\n    }\n  ]\n}\nJSON"
+  },
+  {
+    "id": "ACL-03",
+    "command": "docker exec uc7-gw curl -sS --max-time 10 -w \"\\nHTTP:%{http_code}\\n\" -X POST -H \"Authorization: Bearer $TOKEN\" -H \"Content-Type: application/json\" --data-binary \"$(cat \"$LAB/alias.json\")\" \"http://127.0.0.1:11111/netlox/v1/config/loadbalancer\""
+  },
+  {
+    "id": "ACL-04",
+    "command": "docker exec uc7-gw curl -sS --max-time 10 -w \"\\nHTTP:%{http_code}\\n\" -X POST -H \"Authorization: Bearer $TOKEN\" -H \"Content-Type: application/json\" --data-binary \"$(cat \"$LAB/model.json\")\" \"http://127.0.0.1:11111/netlox/v1/config/loadbalancer\""
+  },
+  {
+    "id": "ACL-05",
+    "command": "docker exec uc7-gw curl -sS --max-time 10 -w \"\\nHTTP:%{http_code}\\n\" -X GET -H \"Authorization: Bearer $TOKEN\" \"http://127.0.0.1:11111/netlox/v1/config/loadbalancer/all\""
+  },
+  {
+    "id": "ACL-06",
+    "command": "jq '.allowedSources=[{prefix:\"172.30.97.51/32\"}]' \"$LAB/model.json\" > \"$LAB/conflict.json\""
+  },
+  {
+    "id": "ACL-07",
+    "command": "docker exec uc7-gw curl -sS --max-time 10 -w \"\\nHTTP:%{http_code}\\n\" -X POST -H \"Authorization: Bearer $TOKEN\" -H \"Content-Type: application/json\" --data-binary \"$(cat \"$LAB/conflict.json\")\" \"http://127.0.0.1:11111/netlox/v1/config/loadbalancer\""
+  },
+  {
+    "id": "XDP-01",
+    "command": "cat > \"$LAB/blacklist.json\" <<'JSON'\n{\n  \"filterType\": \"blacklist\",\n  \"cidr\": \"172.30.97.51/32\",\n  \"action\": \"drop\",\n  \"priority\": 210\n}\nJSON"
+  },
+  {
+    "id": "XDP-02",
+    "command": "docker exec uc7-gw curl -sS --max-time 10 -w \"\\nHTTP:%{http_code}\\n\" -X POST -H \"Authorization: Bearer $TOKEN\" -H \"Content-Type: application/json\" --data-binary \"$(cat \"$LAB/blacklist.json\")\" \"http://127.0.0.1:11111/netlox/v1/config/ipfilter\""
+  },
+  {
+    "id": "XDP-03",
+    "command": "docker exec uc7-gw curl -sS --max-time 10 -w \"\\nHTTP:%{http_code}\\n\" -X GET -H \"Authorization: Bearer $TOKEN\" \"http://127.0.0.1:11111/netlox/v1/config/ipfilter/all\""
+  },
+  {
+    "id": "XDP-04",
+    "command": "docker exec uc7-b curl -sS --connect-timeout 2 --max-time 4 -w \"\\nHTTP:%{http_code}\\n\" -H \"Content-Type: application/json\" -H \"X-Edge-Nonce: XDP-04\" --data-binary \"$(cat \"$LAB/request.json\")\" http://172.30.97.10:8080/v1/completions"
+  },
+  {
+    "id": "XDP-05",
+    "command": "python3 \"$SRC/cicd/edge-cloud-security/wait_metric.py\" loxilb_ipfilter_blacklist_packets_total &&\ndocker exec uc7-gw curl -sS --max-time 10 -w \"\\nHTTP:%{http_code}\\n\" -X GET -H \"Authorization: Bearer $TOKEN\" \"http://127.0.0.1:11111/netlox/v1/metrics\" > \"$LAB/xdp.prom\""
+  },
+  {
+    "id": "XDP-06",
+    "command": "docker exec uc7-gw curl -sS --max-time 10 -w \"\\nHTTP:%{http_code}\\n\" -X DELETE -H \"Authorization: Bearer $TOKEN\" \"http://127.0.0.1:11111/netlox/v1/config/ipfilter?filterType=blacklist&cidr=172.30.97.51/32\""
+  },
+  {
+    "id": "RATE-01",
+    "command": "cat > \"$LAB/securityrate.json\" <<'JSON'\n{\n  \"synEnabled\": true,\n  \"synThreshold\": 10,\n  \"cookieThreshold\": 5,\n  \"connRateEnabled\": true,\n  \"ratePerSec\": 5,\n  \"udpEnabled\": true,\n  \"udpPktThreshold\": 100,\n  \"udpBandwidthMB\": 100\n}\nJSON"
+  },
+  {
+    "id": "RATE-02",
+    "command": "docker exec uc7-gw curl -sS --max-time 10 -w \"\\nHTTP:%{http_code}\\n\" -X POST -H \"Authorization: Bearer $TOKEN\" -H \"Content-Type: application/json\" --data-binary \"$(cat \"$LAB/securityrate.json\")\" \"http://127.0.0.1:11111/netlox/v1/config/securityrate\""
+  },
+  {
+    "id": "RATE-03",
+    "command": "docker exec uc7-gw curl -sS --max-time 10 -w \"\\nHTTP:%{http_code}\\n\" -X GET -H \"Authorization: Bearer $TOKEN\" \"http://127.0.0.1:11111/netlox/v1/config/securityrate/all\""
+  },
+  {
+    "id": "RATE-04",
+    "command": "docker exec uc7-c curl -sS --max-time 2 -o /dev/null -w \"%{http_code}\\n\" http://172.30.97.10:8080/v1/models > \"$LAB/rate-0.txt\" 2>&1 &\nRATE_PID_1=$!"
+  },
+  {
+    "id": "RATE-05",
+    "command": "docker exec uc7-c curl -sS --max-time 2 -o /dev/null -w \"%{http_code}\\n\" http://172.30.97.10:8080/v1/models > \"$LAB/rate-1.txt\" 2>&1 &\nRATE_PID_2=$!"
+  },
+  {
+    "id": "RATE-06",
+    "command": "docker exec uc7-c curl -sS --max-time 2 -o /dev/null -w \"%{http_code}\\n\" http://172.30.97.10:8080/v1/models > \"$LAB/rate-2.txt\" 2>&1 &\nRATE_PID_3=$!"
+  },
+  {
+    "id": "RATE-07",
+    "command": "docker exec uc7-c curl -sS --max-time 2 -o /dev/null -w \"%{http_code}\\n\" http://172.30.97.10:8080/v1/models > \"$LAB/rate-3.txt\" 2>&1 &\nRATE_PID_4=$!"
+  },
+  {
+    "id": "RATE-08",
+    "command": "docker exec uc7-c curl -sS --max-time 2 -o /dev/null -w \"%{http_code}\\n\" http://172.30.97.10:8080/v1/models > \"$LAB/rate-4.txt\" 2>&1 &\nRATE_PID_5=$!"
+  },
+  {
+    "id": "RATE-09",
+    "command": "docker exec uc7-c curl -sS --max-time 2 -o /dev/null -w \"%{http_code}\\n\" http://172.30.97.10:8080/v1/models > \"$LAB/rate-5.txt\" 2>&1 &\nRATE_PID_6=$!"
+  },
+  {
+    "id": "RATE-10",
+    "command": "wait \"$RATE_PID_1\" \"$RATE_PID_2\" \"$RATE_PID_3\" \"$RATE_PID_4\" \"$RATE_PID_5\" \"$RATE_PID_6\""
+  },
+  {
+    "id": "RATE-11",
+    "command": "sleep 12"
+  },
+  {
+    "id": "RATE-12",
+    "command": "docker exec uc7-gw curl -sS --max-time 10 -w \"\\nHTTP:%{http_code}\\n\" -X GET -H \"Authorization: Bearer $TOKEN\" \"http://127.0.0.1:11111/netlox/v1/metrics\" > \"$LAB/rate.prom\""
+  },
+  {
+    "id": "RATE-13",
+    "command": "docker exec uc7-gw curl -sS --max-time 10 -w \"\\nHTTP:%{http_code}\\n\" -X DELETE -H \"Authorization: Bearer $TOKEN\" \"http://127.0.0.1:11111/netlox/v1/config/securityrate\""
+  },
+  {
+    "id": "FW-01",
+    "command": "cat > \"$LAB/firewall.json\" <<'JSON'\n{\n  \"ruleArguments\": {\n    \"sourceIP\": \"172.30.97.53/32\",\n    \"destinationIP\": \"172.30.97.10/32\",\n    \"minDestinationPort\": 8080,\n    \"maxDestinationPort\": 8080,\n    \"protocol\": 6,\n    \"preference\": 65010\n  },\n  \"opts\": {\n    \"drop\": true\n  }\n}\nJSON"
+  },
+  {
+    "id": "FW-02",
+    "command": "docker exec uc7-gw curl -sS --max-time 10 -w \"\\nHTTP:%{http_code}\\n\" -X POST -H \"Authorization: Bearer $TOKEN\" -H \"Content-Type: application/json\" --data-binary \"$(cat \"$LAB/firewall.json\")\" \"http://127.0.0.1:11111/netlox/v1/config/firewall\""
+  },
+  {
+    "id": "FW-03",
+    "command": "docker exec uc7-gw curl -sS --max-time 10 -w \"\\nHTTP:%{http_code}\\n\" -X GET -H \"Authorization: Bearer $TOKEN\" \"http://127.0.0.1:11111/netlox/v1/config/firewall/all\""
+  },
+  {
+    "id": "FW-04",
+    "command": "docker exec uc7-d curl -sS --connect-timeout 2 --max-time 4 -w \"\\nHTTP:%{http_code}\\n\" -H \"Content-Type: application/json\" -H \"X-Edge-Nonce: FW-04\" --data-binary \"$(cat \"$LAB/request.json\")\" http://172.30.97.10:8080/v1/completions"
+  },
+  {
+    "id": "FW-05",
+    "command": "python3 \"$SRC/cicd/edge-cloud-security/wait_metric.py\" loxilb_fw_rule_drop_packets_total &&\ndocker exec uc7-gw curl -sS --max-time 10 -w \"\\nHTTP:%{http_code}\\n\" -X GET -H \"Authorization: Bearer $TOKEN\" \"http://127.0.0.1:11111/netlox/v1/metrics\" > \"$LAB/firewall.prom\""
+  },
+  {
+    "id": "FW-06",
+    "command": "docker exec uc7-gw curl -sS --max-time 10 -w \"\\nHTTP:%{http_code}\\n\" -X DELETE -H \"Authorization: Bearer $TOKEN\" \"http://127.0.0.1:11111/netlox/v1/config/firewall?sourceIP=172.30.97.53/32&destinationIP=172.30.97.10/32&minDestinationPort=8080&maxDestinationPort=8080&protocol=6&preference=65010\""
+  },
+  {
+    "id": "CONN-HOLD-1",
+    "command": "docker exec uc7-a bash -c 'exec 3<>/dev/tcp/172.30.97.10/8080; printf \"POST /v1/completions HTTP/1.1\\r\\nHost: 172.30.97.10:8080\\r\\n\" >&3; sleep 8' > \"$LAB/holder-0.txt\" 2>&1 &\nHOLDER_PID_1=$!"
+  },
+  {
+    "id": "CONN-HOLD-2",
+    "command": "docker exec uc7-a bash -c 'exec 3<>/dev/tcp/172.30.97.10/8080; printf \"POST /v1/completions HTTP/1.1\\r\\nHost: 172.30.97.10:8080\\r\\n\" >&3; sleep 8' > \"$LAB/holder-1.txt\" 2>&1 &\nHOLDER_PID_2=$!"
+  },
+  {
+    "id": "CONN-HOLD-3",
+    "command": "docker exec uc7-a bash -c 'exec 3<>/dev/tcp/172.30.97.10/8080; printf \"POST /v1/completions HTTP/1.1\\r\\nHost: 172.30.97.10:8080\\r\\n\" >&3; sleep 8' > \"$LAB/holder-2.txt\" 2>&1 &\nHOLDER_PID_3=$!"
+  },
+  {
+    "id": "CONN-HOLD-4",
+    "command": "docker exec uc7-a bash -c 'exec 3<>/dev/tcp/172.30.97.10/8080; printf \"POST /v1/completions HTTP/1.1\\r\\nHost: 172.30.97.10:8080\\r\\n\" >&3; sleep 8' > \"$LAB/holder-3.txt\" 2>&1 &\nHOLDER_PID_4=$!"
+  },
+  {
+    "id": "CONN-WAIT",
+    "command": "sleep 2"
+  },
+  {
+    "id": "CONN-EXCESS",
+    "command": "docker exec uc7-a curl -sS --connect-timeout 2 --max-time 3 -w \"\\nHTTP:%{http_code}\\n\" http://172.30.97.10:8080/v1/models"
+  },
+  {
+    "id": "CONN-RELEASE",
+    "command": "wait \"$HOLDER_PID_1\" \"$HOLDER_PID_2\" \"$HOLDER_PID_3\" \"$HOLDER_PID_4\""
+  },
+  {
+    "id": "CONN-RELEASE-WAIT",
+    "command": "sleep 2"
+  },
+  {
+    "id": "CONN-01",
+    "command": "docker exec uc7-gw curl -sS --max-time 10 -w \"\\nHTTP:%{http_code}\\n\" -X GET -H \"Authorization: Bearer $TOKEN\" \"http://127.0.0.1:11111/netlox/v1/config/loadbalancer/externalipaddress/172.30.97.10/port/8080/protocol/tcp/stats\""
+  },
+  {
+    "id": "KEY-01",
+    "command": "cat > \"$LAB/key-request.json\" <<'JSON'\n{\n  \"tenant_id\": \"uc7-tenant\",\n  \"name\": \"uc7-key\",\n  \"allowed_models\": [\n    \"Qwen/Qwen3-0.6B\"\n  ],\n  \"rate_limit_rps\": 1,\n  \"burst_size\": 1,\n  \"tokens_per_min\": 100000,\n  \"enabled\": true\n}\nJSON"
+  },
+  {
+    "id": "KEY-02",
+    "command": "docker exec uc7-gw curl -fsS --max-time 10 -X POST -H \"Authorization: Bearer $TOKEN\" -H \"Content-Type: application/json\" --data-binary \"$(cat \"$LAB/key-request.json\")\" http://127.0.0.1:11111/netlox/v1/config/ai/apikey > \"$LAB/key.private.json\""
+  },
+  {
+    "id": "KEY-03",
+    "command": "export RAW_KEY=$(jq -er .raw_key \"$LAB/key.private.json\")"
+  },
+  {
+    "id": "KEY-04",
+    "command": "export KEY_ID=$(jq -er .key_id \"$LAB/key.private.json\")"
+  },
+  {
+    "id": "KEY-05",
+    "command": "sleep 15"
+  },
+  {
+    "id": "KEY-06",
+    "command": "docker exec uc7-a curl -sS --connect-timeout 2 --max-time 4 -w \"\\nHTTP:%{http_code}\\n\" -H \"Content-Type: application/json\" -H \"X-Edge-Nonce: KEY-06\" --data-binary \"$(cat \"$LAB/request.json\")\" http://172.30.97.10:8080/v1/completions"
+  },
+  {
+    "id": "KEY-07",
+    "command": "docker exec uc7-a curl -sS --connect-timeout 2 --max-time 4 -w \"\\nHTTP:%{http_code}\\n\" -H \"Content-Type: application/json\" -H \"X-Edge-Nonce: KEY-07\" -H \"X-Api-Key: $RAW_KEY\" --data-binary \"$(cat \"$LAB/request.json\")\" http://172.30.97.10:8080/v1/completions"
+  },
+  {
+    "id": "KEY-07-WAIT",
+    "command": "sleep 2"
+  },
+  {
+    "id": "ACL-08",
+    "command": "docker exec uc7-a curl -sS --connect-timeout 2 --max-time 4 -w \"\\nHTTP:%{http_code}\\n\" -H \"Content-Type: application/json\" -H \"X-Edge-Nonce: ACL-08\" -H \"X-Api-Key: $RAW_KEY\" --data-binary \"$(cat \"$LAB/request.json\")\" http://172.30.97.10:8080/v1/completions"
+  },
+  {
+    "id": "ACL-09",
+    "command": "docker exec uc7-b curl -sS --connect-timeout 2 --max-time 4 -w \"\\nHTTP:%{http_code}\\n\" -H \"Content-Type: application/json\" -H \"X-Edge-Nonce: ACL-09\" -H \"X-Api-Key: $RAW_KEY\" --data-binary \"$(cat \"$LAB/request.json\")\" http://172.30.97.10:8080/v1/completions"
+  },
+  {
+    "id": "KEY-08",
+    "command": "sleep 2"
+  },
+  {
+    "id": "KEY-09",
+    "command": "docker exec uc7-a curl -sS --max-time 4 -o /dev/null -w \"%{http_code}\\n\" -H \"X-Api-Key: $RAW_KEY\" -H \"Content-Type: application/json\" --data-binary \"$(cat \"$LAB/request.json\")\" http://172.30.97.10:8080/v1/completions > \"$LAB/burst-0.txt\" 2>&1 &\nKEY_PID_1=$!"
+  },
+  {
+    "id": "KEY-10",
+    "command": "docker exec uc7-a curl -sS --max-time 4 -o /dev/null -w \"%{http_code}\\n\" -H \"X-Api-Key: $RAW_KEY\" -H \"Content-Type: application/json\" --data-binary \"$(cat \"$LAB/request.json\")\" http://172.30.97.10:8080/v1/completions > \"$LAB/burst-1.txt\" 2>&1 &\nKEY_PID_2=$!"
+  },
+  {
+    "id": "KEY-11",
+    "command": "docker exec uc7-a curl -sS --max-time 4 -o /dev/null -w \"%{http_code}\\n\" -H \"X-Api-Key: $RAW_KEY\" -H \"Content-Type: application/json\" --data-binary \"$(cat \"$LAB/request.json\")\" http://172.30.97.10:8080/v1/completions > \"$LAB/burst-2.txt\" 2>&1 &\nKEY_PID_3=$!"
+  },
+  {
+    "id": "KEY-12",
+    "command": "docker exec uc7-a curl -sS --max-time 4 -o /dev/null -w \"%{http_code}\\n\" -H \"X-Api-Key: $RAW_KEY\" -H \"Content-Type: application/json\" --data-binary \"$(cat \"$LAB/request.json\")\" http://172.30.97.10:8080/v1/completions > \"$LAB/burst-3.txt\" 2>&1 &\nKEY_PID_4=$!"
+  },
+  {
+    "id": "KEY-13",
+    "command": "docker exec uc7-a curl -sS --max-time 4 -o /dev/null -w \"%{http_code}\\n\" -H \"X-Api-Key: $RAW_KEY\" -H \"Content-Type: application/json\" --data-binary \"$(cat \"$LAB/request.json\")\" http://172.30.97.10:8080/v1/completions > \"$LAB/burst-4.txt\" 2>&1 &\nKEY_PID_5=$!"
+  },
+  {
+    "id": "KEY-14",
+    "command": "docker exec uc7-a curl -sS --max-time 4 -o /dev/null -w \"%{http_code}\\n\" -H \"X-Api-Key: $RAW_KEY\" -H \"Content-Type: application/json\" --data-binary \"$(cat \"$LAB/request.json\")\" http://172.30.97.10:8080/v1/completions > \"$LAB/burst-5.txt\" 2>&1 &\nKEY_PID_6=$!"
+  },
+  {
+    "id": "KEY-15",
+    "command": "wait \"$KEY_PID_1\" \"$KEY_PID_2\" \"$KEY_PID_3\" \"$KEY_PID_4\" \"$KEY_PID_5\" \"$KEY_PID_6\""
+  },
+  {
+    "id": "KEY-16",
+    "command": "cat \"$LAB\"/burst-*.txt"
+  },
+  {
+    "id": "KEY-17",
+    "command": "docker exec uc7-gw curl -sS --max-time 10 -w \"\\nHTTP:%{http_code}\\n\" -X GET -H \"Authorization: Bearer $TOKEN\" \"http://127.0.0.1:11111/netlox/v1/metrics\" > \"$LAB/l7.prom\""
+  },
+  {
+    "id": "KEY-18",
+    "command": "sleep 2"
+  },
+  {
+    "id": "KEY-19",
+    "command": "docker exec uc7-a curl -sS --connect-timeout 2 --max-time 4 -w \"\\nHTTP:%{http_code}\\n\" -H \"Content-Type: application/json\" -H \"X-Edge-Nonce: KEY-19\" -H \"X-Api-Key: $RAW_KEY\" --data-binary \"$(cat \"$LAB/request.json\")\" http://172.30.97.10:8080/v1/completions"
+  },
+  {
+    "id": "KV-01",
+    "command": "export EP_PID=$(docker inspect -f \"{{.State.Pid}}\" uc7-ep)"
+  },
+  {
+    "id": "KV-02",
+    "command": "PYTHONPATH= PYTHONHASHSEED=0 nsenter -t \"$EP_PID\" -n \"$EDGE_VENV/bin/python\" \"$SRC/cicd/vllm-kvcache-routing-cpu/kv_event_publisher.py\" --corpus \"$LAB/corpus.json\" --tokenizer \"$SRC/cicd/common/kv_hash/fixtures/tokenizers/Qwen__Qwen3-0.6B/tokenizer.json\" --vectors \"$SRC/cicd/common/kv_hash/fixtures/kv_hash_vectors.json\" --bind 172.30.97.21 --port 5557 --algo sha256_cbor --block-size 16 --repeat 100 --repeat-interval 5 --no-vocabulary > \"$LAB/publisher.log\" 2>&1 &"
+  },
+  {
+    "id": "KV-03",
+    "command": "export PUB_PID=$!"
+  },
+  {
+    "id": "KV-04",
+    "command": "sleep 12\nkill -0 \"$PUB_PID\""
+  },
+  {
+    "id": "KV-05",
+    "command": "docker exec uc7-gw curl -sS --max-time 10 -w \"\\nHTTP:%{http_code}\\n\" -X GET -H \"Authorization: Bearer $TOKEN\" \"http://127.0.0.1:11111/netlox/v1/metrics\" > \"$LAB/kv-before.prom\""
+  },
+  {
+    "id": "KV-06",
+    "command": "docker exec uc7-a curl -sS --connect-timeout 2 --max-time 4 -w \"\\nHTTP:%{http_code}\\n\" -H \"Content-Type: application/json\" -H \"X-Edge-Nonce: KV-06\" -H \"X-Api-Key: $RAW_KEY\" --data-binary \"$(cat \"$LAB/request.json\")\" http://172.30.97.10:8080/v1/completions"
+  },
+  {
+    "id": "KV-07",
+    "command": "sleep 12"
+  },
+  {
+    "id": "KV-08",
+    "command": "docker exec uc7-gw curl -sS --max-time 10 -w \"\\nHTTP:%{http_code}\\n\" -X GET -H \"Authorization: Bearer $TOKEN\" \"http://127.0.0.1:11111/netlox/v1/metrics\" > \"$LAB/kv-after.prom\""
+  },
+  {
+    "id": "KV-09",
+    "command": "grep -E \"tier15_hits|inventory|kv_\" \"$LAB/kv-after.prom\""
+  },
+  {
+    "id": "ALL-01",
+    "command": "nsenter -t \"$EP_PID\" -n tcpdump -l -i eth0 -A -s 0 \"tcp port 80\" > \"$LAB/receipt.private.log\" 2> \"$LAB/capture.log\" &"
+  },
+  {
+    "id": "ALL-02",
+    "command": "export CAP_PID=$!"
+  },
+  {
+    "id": "ALL-03",
+    "command": "docker exec uc7-gw curl -sS --max-time 10 -w \"\\nHTTP:%{http_code}\\n\" -X POST -H \"Authorization: Bearer $TOKEN\" -H \"Content-Type: application/json\" --data-binary \"$(cat \"$LAB/blacklist.json\")\" \"http://127.0.0.1:11111/netlox/v1/config/ipfilter\""
+  },
+  {
+    "id": "ALL-04",
+    "command": "docker exec uc7-gw curl -sS --max-time 10 -w \"\\nHTTP:%{http_code}\\n\" -X POST -H \"Authorization: Bearer $TOKEN\" -H \"Content-Type: application/json\" --data-binary \"$(cat \"$LAB/securityrate.json\")\" \"http://127.0.0.1:11111/netlox/v1/config/securityrate\""
+  },
+  {
+    "id": "ALL-05",
+    "command": "docker exec uc7-gw curl -sS --max-time 10 -w \"\\nHTTP:%{http_code}\\n\" -X POST -H \"Authorization: Bearer $TOKEN\" -H \"Content-Type: application/json\" --data-binary \"$(cat \"$LAB/firewall.json\")\" \"http://127.0.0.1:11111/netlox/v1/config/firewall\""
+  },
+  {
+    "id": "ALL-06",
+    "command": "cat > \"$LAB/shaper.json\" <<'JSON'\n{\n  \"policyIdent\": \"uc7-shaper\",\n  \"policyInfo\": {\n    \"type\": 0,\n    \"committedInfoRate\": 16,\n    \"peakInfoRate\": 16,\n    \"committedBlkSize\": 250000\n  },\n  \"targetObject\": {\n    \"attachment\": 0,\n    \"polObjName\": \"172.30.97.10:8080:tcp\"\n  }\n}\nJSON"
+  },
+  {
+    "id": "ALL-07",
+    "command": "docker exec uc7-gw curl -sS --max-time 10 -w \"\\nHTTP:%{http_code}\\n\" -X POST -H \"Authorization: Bearer $TOKEN\" -H \"Content-Type: application/json\" --data-binary \"$(cat \"$LAB/shaper.json\")\" \"http://127.0.0.1:11111/netlox/v1/config/policy\""
+  },
+  {
+    "id": "ALL-08",
+    "command": "sleep 2"
+  },
+  {
+    "id": "ALL-09",
+    "command": "docker exec uc7-gw curl -sS --max-time 10 -w \"\\nHTTP:%{http_code}\\n\" -X GET -H \"Authorization: Bearer $TOKEN\" \"http://127.0.0.1:11111/netlox/v1/metrics\" > \"$LAB/all-before.prom\""
+  },
+  {
+    "id": "ALL-10",
+    "command": "docker exec uc7-b curl -sS --connect-timeout 2 --max-time 4 -w \"\\nHTTP:%{http_code}\\n\" -H \"Content-Type: application/json\" -H \"X-Edge-Nonce: ALL-10\" -H \"X-Api-Key: $RAW_KEY\" --data-binary \"$(cat \"$LAB/request.json\")\" http://172.30.97.10:8080/v1/completions"
+  },
+  {
+    "id": "ALL-11",
+    "command": "docker exec uc7-d curl -sS --connect-timeout 2 --max-time 4 -w \"\\nHTTP:%{http_code}\\n\" -H \"Content-Type: application/json\" -H \"X-Edge-Nonce: ALL-11\" -H \"X-Api-Key: $RAW_KEY\" --data-binary \"$(cat \"$LAB/request.json\")\" http://172.30.97.10:8080/v1/completions"
+  },
+  {
+    "id": "ALL-12",
+    "command": "docker exec uc7-a curl -sS --connect-timeout 2 --max-time 4 -w \"\\nHTTP:%{http_code}\\n\" -H \"Content-Type: application/json\" -H \"X-Edge-Nonce: ALL-12\" --data-binary \"$(cat \"$LAB/request.json\")\" http://172.30.97.10:8080/v1/completions"
+  },
+  {
+    "id": "ALL-13",
+    "command": "sleep 2"
+  },
+  {
+    "id": "ALL-14",
+    "command": "docker exec uc7-a curl -sS --connect-timeout 2 --max-time 4 -w \"\\nHTTP:%{http_code}\\n\" -H \"Content-Type: application/json\" -H \"X-Edge-Nonce: ALL-14\" -H \"X-Api-Key: $RAW_KEY\" --data-binary \"$(cat \"$LAB/request.json\")\" http://172.30.97.10:8080/v1/completions"
+  },
+  {
+    "id": "ALL-KEY-08",
+    "command": "sleep 2"
+  },
+  {
+    "id": "ALL-KEY-09",
+    "command": "docker exec uc7-a curl -sS --max-time 4 -o /dev/null -w \"%{http_code}\\n\" -H \"X-Api-Key: $RAW_KEY\" -H \"Content-Type: application/json\" --data-binary \"$(cat \"$LAB/request.json\")\" http://172.30.97.10:8080/v1/completions > \"$LAB/all-burst-0.txt\" 2>&1 &\nKEY_PID_1=$!"
+  },
+  {
+    "id": "ALL-KEY-10",
+    "command": "docker exec uc7-a curl -sS --max-time 4 -o /dev/null -w \"%{http_code}\\n\" -H \"X-Api-Key: $RAW_KEY\" -H \"Content-Type: application/json\" --data-binary \"$(cat \"$LAB/request.json\")\" http://172.30.97.10:8080/v1/completions > \"$LAB/all-burst-1.txt\" 2>&1 &\nKEY_PID_2=$!"
+  },
+  {
+    "id": "ALL-KEY-11",
+    "command": "docker exec uc7-a curl -sS --max-time 4 -o /dev/null -w \"%{http_code}\\n\" -H \"X-Api-Key: $RAW_KEY\" -H \"Content-Type: application/json\" --data-binary \"$(cat \"$LAB/request.json\")\" http://172.30.97.10:8080/v1/completions > \"$LAB/all-burst-2.txt\" 2>&1 &\nKEY_PID_3=$!"
+  },
+  {
+    "id": "ALL-KEY-12",
+    "command": "docker exec uc7-a curl -sS --max-time 4 -o /dev/null -w \"%{http_code}\\n\" -H \"X-Api-Key: $RAW_KEY\" -H \"Content-Type: application/json\" --data-binary \"$(cat \"$LAB/request.json\")\" http://172.30.97.10:8080/v1/completions > \"$LAB/all-burst-3.txt\" 2>&1 &\nKEY_PID_4=$!"
+  },
+  {
+    "id": "ALL-KEY-13",
+    "command": "docker exec uc7-a curl -sS --max-time 4 -o /dev/null -w \"%{http_code}\\n\" -H \"X-Api-Key: $RAW_KEY\" -H \"Content-Type: application/json\" --data-binary \"$(cat \"$LAB/request.json\")\" http://172.30.97.10:8080/v1/completions > \"$LAB/all-burst-4.txt\" 2>&1 &\nKEY_PID_5=$!"
+  },
+  {
+    "id": "ALL-KEY-14",
+    "command": "docker exec uc7-a curl -sS --max-time 4 -o /dev/null -w \"%{http_code}\\n\" -H \"X-Api-Key: $RAW_KEY\" -H \"Content-Type: application/json\" --data-binary \"$(cat \"$LAB/request.json\")\" http://172.30.97.10:8080/v1/completions > \"$LAB/all-burst-5.txt\" 2>&1 &\nKEY_PID_6=$!"
+  },
+  {
+    "id": "ALL-KEY-15",
+    "command": "wait \"$KEY_PID_1\" \"$KEY_PID_2\" \"$KEY_PID_3\" \"$KEY_PID_4\" \"$KEY_PID_5\" \"$KEY_PID_6\""
+  },
+  {
+    "id": "ALL-KEY-16",
+    "command": "cat \"$LAB\"/all-burst-*.txt"
+  },
+  {
+    "id": "ALL-KEY-17",
+    "command": "docker exec uc7-gw curl -sS --max-time 10 -w \"\\nHTTP:%{http_code}\\n\" -X GET -H \"Authorization: Bearer $TOKEN\" \"http://127.0.0.1:11111/netlox/v1/metrics\" > \"$LAB/all-l7.prom\""
+  },
+  {
+    "id": "ALL-KEY-18",
+    "command": "sleep 2"
+  },
+  {
+    "id": "ALL-KEY-19",
+    "command": "docker exec uc7-a curl -sS --connect-timeout 2 --max-time 4 -w \"\\nHTTP:%{http_code}\\n\" -H \"Content-Type: application/json\" -H \"X-Edge-Nonce: ALL-KEY-19\" -H \"X-Api-Key: $RAW_KEY\" --data-binary \"$(cat \"$LAB/request.json\")\" http://172.30.97.10:8080/v1/completions"
+  },
+  {
+    "id": "ALL-FLOOD-WAIT",
+    "command": "sleep 2"
+  },
+  {
+    "id": "ALL-FLOOD-01",
+    "command": "docker exec uc7-c curl --parallel --parallel-immediate --parallel-max 16 -sS --max-time 1 -o /dev/null \"http://172.30.97.10:8080/v1/models?probe=[1-100]\" > \"$LAB/flood.txt\" 2>&1 &\nFLOOD_PID=$!"
+  },
+  {
+    "id": "ALL-FLOOD-02",
+    "command": "sleep 0.2"
+  },
+  {
+    "id": "ALL-FLOOD-03",
+    "command": "docker exec uc7-a curl -sS --connect-timeout 2 --max-time 4 -w \"\\nHTTP:%{http_code} TIME:%{time_total}\\n\" -H \"Content-Type: application/json\" -H \"X-Edge-Nonce: ALL-FLOOD-03\" -H \"X-Api-Key: $RAW_KEY\" --data-binary \"$(cat \"$LAB/request.json\")\" http://172.30.97.10:8080/v1/completions"
+  },
+  {
+    "id": "ALL-FLOOD-04",
+    "command": "wait \"$FLOOD_PID\" || true"
+  },
+  {
+    "id": "ALL-15",
+    "command": "sleep 12"
+  },
+  {
+    "id": "ALL-16",
+    "command": "docker exec uc7-gw curl -sS --max-time 10 -w \"\\nHTTP:%{http_code}\\n\" -X GET -H \"Authorization: Bearer $TOKEN\" \"http://127.0.0.1:11111/netlox/v1/metrics\" > \"$LAB/all-after.prom\""
+  },
+  {
+    "id": "ALL-17",
+    "command": "grep -E \"blacklist|fw_rule_drop|security_.*blocked|tier15_hits|rate_limit_hits|shaper\" \"$LAB/all-after.prom\""
+  },
+  {
+    "id": "ALL-18",
+    "command": "grep -F ALL-14 \"$LAB/receipt.private.log\""
+  },
+  {
+    "id": "ALL-19",
+    "command": "! grep -E \"ALL-10|ALL-11|ALL-12\" \"$LAB/receipt.private.log\""
+  },
+  {
+    "id": "PROTO-01",
+    "command": "docker exec uc7-a curl --version"
+  },
+  {
+    "id": "PROTO-02",
+    "command": "jq '.serviceArguments.sse_mode=true' \"$LAB/model.json\" > \"$LAB/sse-model.json\""
+  },
+  {
+    "id": "PROTO-03",
+    "command": "docker exec uc7-gw curl -sS --max-time 10 -w \"\\nHTTP:%{http_code}\\n\" -X POST -H \"Authorization: Bearer $TOKEN\" -H \"Content-Type: application/json\" --data-binary \"$(cat \"$LAB/sse-model.json\")\" http://127.0.0.1:11111/netlox/v1/config/loadbalancer"
+  },
+  {
+    "id": "PROTO-04",
+    "command": "jq '.stream=true' \"$LAB/request.json\" > \"$LAB/stream.json\""
+  },
+  {
+    "id": "PROTO-05",
+    "command": "sleep 3"
+  },
+  {
+    "id": "PROTO-06",
+    "command": "docker exec uc7-a curl -i -N -sS --connect-timeout 2 --max-time 8 -w \"\\nHTTP:%{http_code} VERSION:%{http_version}\\n\" -H \"Content-Type: application/json\" -H \"X-Edge-Nonce: PROTO-06\" -H \"X-Api-Key: $RAW_KEY\" --data-binary \"$(cat \"$LAB/stream.json\")\" http://172.30.97.10:8080/v1/completions"
+  },
+  {
+    "id": "PROTO-07",
+    "command": "sleep 2"
+  },
+  {
+    "id": "PROTO-08",
+    "command": "docker exec uc7-a curl --http2-prior-knowledge -i -N -sS --connect-timeout 2 --max-time 8 -w \"\\nHTTP:%{http_code} VERSION:%{http_version}\\n\" -H \"Content-Type: application/json\" -H \"X-Edge-Nonce: PROTO-08\" -H \"X-Api-Key: $RAW_KEY\" --data-binary \"$(cat \"$LAB/stream.json\")\" http://172.30.97.10:8080/v1/completions"
+  },
+  {
+    "id": "PROTO-09",
+    "command": "docker exec uc7-a curl --http2-prior-knowledge -sS --connect-timeout 2 --max-time 8 -w \"\\nHTTP:%{http_code} VERSION:%{http_version}\\n\" -H \"Content-Type: application/json\" -H \"X-Edge-Nonce: PROTO-09\" --data-binary \"$(cat \"$LAB/stream.json\")\" http://172.30.97.10:8080/v1/completions"
+  },
+  {
+    "id": "REC-01",
+    "command": "docker exec uc7-gw curl -sS --max-time 10 -w \"\\nHTTP:%{http_code}\\n\" -X POST -H \"Authorization: Bearer $TOKEN\" -H \"Content-Type: application/json\" --data-binary '{}' http://127.0.0.1:11111/netlox/v1/config/persist"
+  },
+  {
+    "id": "REC-02",
+    "command": "sleep 3"
+  },
+  {
+    "id": "REC-03",
+    "command": "docker exec uc7-gw curl -fsS --max-time 10 -H \"Authorization: Bearer $TOKEN\" http://127.0.0.1:11111/netlox/v1/config/snapshot > \"$LAB/snapshot.private.json\""
+  },
+  {
+    "id": "REC-04",
+    "command": "docker exec uc7-gw curl -sS --max-time 20 -w \"\\nHTTP:%{http_code}\\n\" -X POST -H \"Authorization: Bearer $TOKEN\" -H \"Content-Type: application/json\" --data-binary \"$(cat \"$LAB/snapshot.private.json\")\" \"http://127.0.0.1:11111/netlox/v1/config/restore?mode=commit\""
+  },
+  {
+    "id": "REC-05",
+    "command": "sleep 10"
+  },
+  {
+    "id": "REC-06",
+    "command": "docker exec uc7-a curl -sS --max-time 4 -w \"\\nHTTP:%{http_code}\\n\" -H \"X-Api-Key: $RAW_KEY\" -H \"X-Edge-Nonce: REC-06\" -H \"Content-Type: application/json\" --data-binary \"$(cat \"$LAB/request.json\")\" http://172.30.97.10:8080/v1/completions"
+  },
+  {
+    "id": "REC-07",
+    "command": "docker exec uc7-d curl -sS --connect-timeout 2 --max-time 3 -w \"\\nHTTP:%{http_code}\\n\" -H \"X-Api-Key: $RAW_KEY\" http://172.30.97.10:8080/v1/models"
+  },
+  {
+    "id": "REC-08",
+    "command": "docker exec uc7-gw curl -sS --max-time 10 -H \"Authorization: Bearer $TOKEN\" \"http://127.0.0.1:11111/netlox/v1/config/loadbalancer/externalipaddress/172.30.97.10/port/8080/protocol/tcp/kvexactstatus?model_name=Qwen%2FQwen3-0.6B\""
+  },
+  {
+    "id": "REC-09",
+    "command": "export OUTAGE_KEY=lxb_$(openssl rand -hex 32)"
+  },
+  {
+    "id": "REC-10",
+    "command": "docker stop --time 5 uc7-pg"
+  },
+  {
+    "id": "REC-11",
+    "command": "sleep 2"
+  },
+  {
+    "id": "REC-12",
+    "command": "docker exec uc7-a curl -sS --max-time 4 -w \"\\nHTTP:%{http_code}\\n\" -H \"X-Api-Key: $OUTAGE_KEY\" -H \"X-Edge-Nonce: REC-12\" -H \"Content-Type: application/json\" --data-binary \"$(cat \"$LAB/request.json\")\" http://172.30.97.10:8080/v1/completions"
+  },
+  {
+    "id": "REC-13",
+    "command": "docker start uc7-pg"
+  },
+  {
+    "id": "REC-14",
+    "command": "sleep 10\npython3 \"$EDGE_SOURCE/cicd/edge-cloud-security/verify_recovery.py\""
+  },
+  {
+    "id": "REC-15",
+    "command": "docker exec uc7-a curl -sS --max-time 4 -w \"\\nHTTP:%{http_code}\\n\" -H \"X-Api-Key: $RAW_KEY\" -H \"X-Edge-Nonce: REC-15\" -H \"Content-Type: application/json\" --data-binary \"$(cat \"$LAB/request.json\")\" http://172.30.97.10:8080/v1/completions"
+  },
+  {
+    "id": "ALL-20",
+    "command": "docker exec uc7-gw curl -sS --max-time 10 -w \"\\nHTTP:%{http_code}\\n\" -X DELETE -H \"Authorization: Bearer $TOKEN\" \"http://127.0.0.1:11111/netlox/v1/config/ipfilter?filterType=blacklist&cidr=172.30.97.51/32\""
+  },
+  {
+    "id": "ALL-21",
+    "command": "docker exec uc7-gw curl -sS --max-time 10 -w \"\\nHTTP:%{http_code}\\n\" -X DELETE -H \"Authorization: Bearer $TOKEN\" \"http://127.0.0.1:11111/netlox/v1/config/firewall?sourceIP=172.30.97.53/32&destinationIP=172.30.97.10/32&minDestinationPort=8080&maxDestinationPort=8080&protocol=6&preference=65010\""
+  },
+  {
+    "id": "ALL-22",
+    "command": "docker exec uc7-gw curl -sS --max-time 10 -w \"\\nHTTP:%{http_code}\\n\" -X DELETE -H \"Authorization: Bearer $TOKEN\" \"http://127.0.0.1:11111/netlox/v1/config/securityrate\""
+  },
+  {
+    "id": "ALL-23",
+    "command": "docker exec uc7-gw curl -sS --max-time 10 -w \"\\nHTTP:%{http_code}\\n\" -X DELETE -H \"Authorization: Bearer $TOKEN\" \"http://127.0.0.1:11111/netlox/v1/config/policy/ident/uc7-shaper\""
+  },
+  {
+    "id": "ALL-24",
+    "command": "sleep 2"
+  },
+  {
+    "id": "ALL-25",
+    "command": "docker exec uc7-d curl -sS --connect-timeout 2 --max-time 4 -w \"\\nHTTP:%{http_code}\\n\" -H \"Content-Type: application/json\" -H \"X-Edge-Nonce: ALL-25\" -H \"X-Api-Key: $RAW_KEY\" --data-binary \"$(cat \"$LAB/request.json\")\" http://172.30.97.10:8080/v1/completions"
+  },
+  {
+    "id": "ALL-26",
+    "command": "docker exec uc7-gw curl -sS --max-time 10 -w \"\\nHTTP:%{http_code}\\n\" -X DELETE -H \"Authorization: Bearer $TOKEN\" \"http://127.0.0.1:11111/netlox/v1/config/loadbalancer/hosturl/172.30.97.10/externalipaddress/172.30.97.10/port/8080/protocol/tcp?model_name=edge-alias\""
+  },
+  {
+    "id": "ALL-27",
+    "command": "docker exec uc7-b curl -sS --connect-timeout 2 --max-time 4 -w \"\\nHTTP:%{http_code}\\n\" -H \"Content-Type: application/json\" -H \"X-Edge-Nonce: ALL-27\" -H \"X-Api-Key: $RAW_KEY\" --data-binary \"$(cat \"$LAB/request.json\")\" http://172.30.97.10:8080/v1/completions"
+  },
+  {
+    "id": "ALL-28",
+    "command": "sleep 2"
+  },
+  {
+    "id": "ALL-29",
+    "command": "docker exec uc7-a curl -sS --connect-timeout 2 --max-time 4 -w \"\\nHTTP:%{http_code}\\n\" -H \"Content-Type: application/json\" -H \"X-Edge-Nonce: ALL-29\" -H \"X-Api-Key: $RAW_KEY\" --data-binary \"$(cat \"$LAB/request.json\")\" http://172.30.97.10:8080/v1/completions"
+  },
+  {
+    "id": "CLI-01",
+    "command": "printf '%s\\n' \"$TOKEN\" | docker exec -i uc7-gw loxicmd set login --provider manual > \"$LAB/cli-login.private.txt\" 2>&1"
+  },
+  {
+    "id": "CLI-02",
+    "command": "docker exec uc7-gw loxicmd get apikey \"$KEY_ID\" -o json > \"$LAB/cli-key-metadata.json\""
+  },
+  {
+    "id": "CLI-03",
+    "command": "docker exec uc7-gw loxicmd get lb -o json > \"$LAB/cli-lb.json\""
+  },
+  {
+    "id": "END-01",
+    "command": "docker exec uc7-gw curl -sS --max-time 10 -w \"\\nHTTP:%{http_code}\\n\" -X GET -H \"Authorization: Bearer $TOKEN\" \"http://127.0.0.1:11111/netlox/v1/config/loadbalancer/all\" > \"$LAB/final-readback.json\""
+  },
+  {
+    "id": "END-02",
+    "command": "docker exec uc7-gw cat /tmp/uc7.out /tmp/uc7.err > \"$LAB/gateway.private.log\""
+  },
+  {
+    "id": "END-JOURNAL",
+    "command": "docker logs uc7-ep > \"$LAB/backend-journal.jsonl\" 2>&1"
+  },
+  {
+    "id": "END-03",
+    "command": "owned_stop \"$PUB_PID\" \"$PUB_TICK\"; owned_stop \"$CAP_PID\" \"$CAP_TICK\""
+  },
+  {
+    "id": "END-04",
+    "command": "wait \"$PUB_PID\" \"$CAP_PID\" 2>/dev/null || true"
+  },
+  {
+    "id": "END-05",
+    "command": "docker stop --time 5 uc7-gw uc7-a uc7-b uc7-c uc7-d uc7-ep uc7-pg"
+  },
+  {
+    "id": "END-06",
+    "command": "docker rm uc7-gw uc7-a uc7-b uc7-c uc7-d uc7-ep uc7-pg"
+  },
+  {
+    "id": "END-07",
+    "command": "docker network rm uc7-security"
+  },
+  {
+    "id": "END-08",
+    "command": "unset TOKEN RAW_KEY KEY_ID OUTAGE_KEY PUB_PID CAP_PID EP_PID"
+  },
+  {
+    "id": "END-09",
+    "command": "docker ps -a --filter label=owner=\"$EDGE_OWNER\" --format \"{{.Names}} {{.Status}}\""
+  },
+  {
+    "id": "AGG-01",
+    "command": "cat > \"$LAB/security-aggregate.json\" <<'JSON'\n{\n  \"synEnabled\": false,\n  \"synThreshold\": 100,\n  \"cookieThreshold\": 50,\n  \"connRateEnabled\": false,\n  \"ratePerSec\": 100,\n  \"udpEnabled\": false,\n  \"udpPktThreshold\": 100,\n  \"udpBandwidthMB\": 100,\n  \"whitelistIps\": [],\n  \"aggregateSynThreshold\": 120,\n  \"aggregateConnRatePerSec\": 0,\n  \"aggregateUdpPktThreshold\": 120,\n  \"aggregateUdpBandwidthMB\": 0\n}\nJSON"
+  },
+  {
+    "id": "AGG-02",
+    "command": "docker cp \"$LAB/security-aggregate.json\" uc7-gw:/tmp/security-aggregate.json"
+  },
+  {
+    "id": "AGG-03",
+    "command": "docker exec uc7-gw curl -sS --max-time 10 -w \"\\nHTTP:%{http_code}\\n\" -X POST -H \"Authorization: Bearer $TOKEN\" -H \"Content-Type: application/json\" --data-binary @/tmp/security-aggregate.json http://127.0.0.1:11111/netlox/v1/config/securityrate"
+  },
+  {
+    "id": "AGG-04",
+    "command": "docker exec uc7-gw curl -sS --max-time 10 -H \"Authorization: Bearer $TOKEN\" http://127.0.0.1:11111/netlox/v1/config/securityrate/all"
+  },
+  {
+    "id": "AGG-05",
+    "command": "docker exec uc7-gw curl -sS --max-time 10 -H \"Authorization: Bearer $TOKEN\" http://127.0.0.1:11111/netlox/v1/config/securityrate/all"
+  },
+  {
+    "id": "AGG-06",
+    "command": "docker exec uc7-gw curl -sS --max-time 10 -w \"\\nHTTP:%{http_code}\\n\" -X DELETE -H \"Authorization: Bearer $TOKEN\" http://127.0.0.1:11111/netlox/v1/config/securityrate"
+  }
+]

@@ -36,6 +36,7 @@ on:
       - 'cicd/secfilter/**'
       - 'cicd/security-kv-coexist/**'
       - 'cicd/qos-fullproxy/**'
+      - 'cicd/edge-cloud-security/**'
       - 'cicd/vllm-kvcache-routing-cpu/kv_event_publisher.py'
       - '.github/workflows/security-sanity.yml'
   pull_request:
@@ -50,6 +51,7 @@ on:
       - 'cicd/secfilter/**'
       - 'cicd/security-kv-coexist/**'
       - 'cicd/qos-fullproxy/**'
+      - 'cicd/edge-cloud-security/**'
       - 'cicd/vllm-kvcache-routing-cpu/kv_event_publisher.py'
       - '.github/workflows/security-sanity.yml'
   schedule:
@@ -90,6 +92,8 @@ jobs:
           submodules: recursive
           token: ${{ secrets.CI_SUBMODULE_TOKEN || github.token }}
       - uses: actions/setup-python@v5
+      - name: Portable UC-7 safety regressions
+        run: python3 -m unittest discover -s cicd/edge-cloud-security -p 'test_*.py'
       - name: Idle-reap oracle regression
         run: bash cicd/security-kv-coexist/test_idle_oracle.sh
       - uses: actions/setup-go@v5

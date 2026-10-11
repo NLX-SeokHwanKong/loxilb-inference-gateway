@@ -1,0 +1,10 @@
+FROM golang:1.25-alpine AS build
+WORKDIR /src
+COPY cicd/common/reflect-echo/go.mod cicd/common/reflect-echo/go.sum ./
+COPY cicd/common/reflect-echo/vendor/ ./vendor/
+COPY cicd/edge-cloud-security/backend/server.go cicd/edge-cloud-security/backend/server_test.go ./
+RUN CGO_ENABLED=0 GOFLAGS=-mod=vendor go test ./... && CGO_ENABLED=0 GOFLAGS=-mod=vendor go build -o /uc7-backend ./...
+FROM alpine:3.20
+COPY --from=build /uc7-backend /uc7-backend
+EXPOSE 80
+ENTRYPOINT ["/uc7-backend"]
