@@ -8,6 +8,7 @@ import importlib.util
 import json
 import os
 import platform
+import sys
 from pathlib import Path
 import socket
 import subprocess
@@ -100,7 +101,7 @@ def checked(command, log):
     subprocess.run(command, check=True, stdout=log, stderr=subprocess.STDOUT)
 
 
-def campaign(image, folder, subnet, require_h2, require_weighted=False, require_fc=False, require_fc_warmup=False, require_cb=False):
+def campaign(image, folder, subnet, require_h2, require_weighted=False, require_fc=False, require_fc_warmup=False, require_cb=False, require_sdk=False):
     if os.name != 'posix' or not Path('/proc').is_dir():
         raise RuntimeError('Runner requires a Linux Docker host')
     if not image.startswith('sha256:') or len(image) != 71:
@@ -129,8 +130,9 @@ def campaign(image, folder, subnet, require_h2, require_weighted=False, require_
     owner = 'uc8-' + uuid.uuid4().hex[:12]
     resources = Resources(owner)
     gateway, backend = str(net.network_address + 10), str(net.network_address + 1)
-    for port in ((8181, 8182, 8191) if require_h2 else (8181, 8182)) + ((8201, 8202) if require_fc or require_fc_warmup else ()) + ((8211,) if require_cb else ()):
+    for port in ((8181, 8182, 8191) if require_h2 else (8181, 8182)) + ((8201, 8202) if require_fc or require_fc_warmup else ()) + ((8211,) if require_cb else ()) + ((8231,8232) if require_sdk else ()):
         probe = socket.socket()
+        probe.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
         try:
             probe.bind(('0.0.0.0', port))
         finally:
@@ -169,6 +171,13 @@ def campaign(image, folder, subnet, require_h2, require_weighted=False, require_
                                             '--backend-id', identity, '--journal', str(journal), '--response-mode', mode],
                                            stdin=subprocess.DEVNULL, stdout=log, stderr=log)
                 resources.processes.append(process)
+            if require_sdk:
+                sdk_journals=[]
+                for port,mode in [(8231,'json'),(8232,'sse')]:
+                    journal=folder/('sdk-'+mode+'.jsonl');sdk_journals.append(journal)
+                    resources.processes.append(subprocess.Popen([sys.executable,'-B',str(fixture.parent/'sdk_backend.py'),
+                        '--bind',backend,'--port',str(port),'--journal',str(journal),'--mode',mode],
+                        stdin=subprocess.DEVNULL,stdout=log,stderr=log))
             if require_fc or require_fc_warmup:
                 fc_journals = []
                 for identity, port in [('fc-backend-a', 8201), ('fc-backend-b', 8202)]:
@@ -241,6 +250,11 @@ def campaign(image, folder, subnet, require_h2, require_weighted=False, require_
             weighted_policy['rules'][0]['action']['forward']['backendRefs'][1]['weight'] = 3
             management(api + '/config/l7policy', 'POST', weighted_policy)
             report['weighted_policy_readback'] = management(api + '/config/l7policy/id/' + weighted_policy['id'])[1]
+        if require_sdk:
+            for port,target in [(2048,8231),(2049,8232)]:
+                sdk_rule=copy.deepcopy(document);sdk_rule['serviceArguments']['port']=port
+                sdk_rule['endpoints']=[{'endpointIP':backend,'targetPort':target,'weight':1}]
+                management(api+'/config/loadbalancer','POST',sdk_rule)
         report['rule_readback'] = management(api + '/config/loadbalancer/all')[1]
         backends = ['backend-a', 'backend-b']; ca = cert / 'rootCA.crt'
         report['checks']['h1'] = gateway_replay('http://' + gateway + ':2028/mcp', journals, backends)
@@ -251,6 +265,8 @@ def campaign(image, folder, subnet, require_h2, require_weighted=False, require_
         policy = policy_document(l7_rule['serviceArguments']['id'], str(uuid.uuid4()))
         management(api + '/config/l7policy', 'POST', policy)
         report['checks']['l7'] = l7_replay('http://' + gateway + ':2030/mcp', api, journals, *backends, policy)
+        from verify_review import replay as review_replay
+        report['checks']['review-adversarial']=review_replay('http://'+gateway+':2030/mcp',journals,require_h2)
         report['checks']['api'] = api_replay(api, document, 2032)
         report['checks']['outage'] = owned_outage(resources, 'http://' + gateway + ':2030/mcp',
                                                    'http://' + gateway + ':2028/mcp', journals, folder)
@@ -267,7 +283,7 @@ def campaign(image, folder, subnet, require_h2, require_weighted=False, require_
             report['checks']['h2-upstream-faults'] = faults_replay('http://' + gateway + ':2034/mcp', fault_journal)
             report['checks']['h2-fault-sibling-isolation'] = [
                 multiplex_replay('http://' + gateway + ':2035/mcp', journals, fault_case=case['case'], fault_journal=fault_journal)
-                for case in report['checks']['h2-upstream-faults']['checks']]
+                for case in report['checks']['h2-upstream-faults']['checks'] if case['case']!='reset-during-upload']
         if require_weighted:
             for port, heavy, light in [(2031, 'backend-a', 'backend-b'), (2033, 'backend-b', 'backend-a')]:
                 address = 'http://' + gateway + ':' + str(port) + '/mcp'
@@ -320,6 +336,22 @@ def campaign(image, folder, subnet, require_h2, require_weighted=False, require_
             report['checks']['circuit-breaker'] = cb_replay('http://' + gateway + ':2044/mcp', api,
                 [cb_journal], cb_template, cb_control,
                 lambda: subprocess.check_output(['docker', 'logs', name], stderr=subprocess.STDOUT, text=True), require_h2=require_h2)
+        if require_sdk:
+            sdk_checks=[]
+            for port,journal in zip((2048,2049),sdk_journals):
+                command=[sys.executable,'-B',str(fixture.parent/'verify_sdk.py'),'--url',
+                    'http://'+gateway+':'+str(port)+'/mcp','--journal',str(journal)]
+                result=subprocess.run(command,capture_output=True,text=True)
+                (folder/('sdk-client-'+str(port)+'.log')).write_text(result.stdout+result.stderr)
+                if result.returncode: raise RuntimeError('Independent SDK failed: '+result.stderr[-2000:])
+                sdk_checks.append(json.loads(result.stdout))
+            report['checks']['independent-sdk']=sdk_checks
+            if require_h2:
+                from verify_backpressure import replay as backpressure_replay
+                def gateway_logs():
+                    return subprocess.check_output(['docker','logs',resources.container],stderr=subprocess.STDOUT,text=True)
+                report['checks']['h2-backpressure-sdk-cancellation']=backpressure_replay(
+                    'http://'+gateway+':2049/mcp',sdk_journals[1],gateway_logs)
         report['outcome'] = 'PASS'
     except Exception as error:
         report['outcome'] = 'FAIL'; report['error'] = str(error)
@@ -348,6 +380,7 @@ if __name__ == '__main__':
     parser.add_argument('--image', required=True)
     parser.add_argument('--subnet', default='172.30.99.0/24')
     parser.add_argument('--evidence-dir', type=Path)
+    parser.add_argument('--require-sdk',action='store_true')
     parser.add_argument('--require-h2', action='store_true')
     parser.add_argument('--require-weighted', action='store_true')
     parser.add_argument('--require-fc', action='store_true')
@@ -355,4 +388,4 @@ if __name__ == '__main__':
     parser.add_argument('--require-cb', action='store_true')
     args = parser.parse_args()
     evidence = args.evidence_dir or Path(tempfile.mkdtemp(prefix='uc8-mcp-evidence-'))
-    print(json.dumps(campaign(args.image, evidence.resolve(), args.subnet, args.require_h2, args.require_weighted, args.require_fc, args.require_fc_warmup, args.require_cb), indent=2))
+    print(json.dumps(campaign(args.image, evidence.resolve(), args.subnet, args.require_h2, args.require_weighted, args.require_fc, args.require_fc_warmup, args.require_cb, args.require_sdk), indent=2))

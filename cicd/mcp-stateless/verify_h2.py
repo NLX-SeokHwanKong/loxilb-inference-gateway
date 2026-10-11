@@ -113,6 +113,9 @@ def replay(url, ca, journals, backends, count=8):
         expected = (400, 413) if name.startswith('long-') else (400,)
         if report['http_version'] != '2' or report['status'] not in expected or journal_size(journals) != before:
             raise AssertionError(name + ': expected HTTP/2 400 and zero backend arrival')
+        denial=json.loads(report['payload'])
+        if denial.get('jsonrpc')!='2.0' or not isinstance(denial.get('error',{}).get('code'),int):
+            raise AssertionError(name+': H2 gateway denial is not structured JSON-RPC')
         negatives.append({'case': name, 'status': report['status'], 'backend_journal_delta': 0})
     return {'scope': 'real HTTP/2 request routing and negative headers/bounds',
             'transport': 'cleartext prior knowledge' if urlsplit(url).scheme == 'http' else 'TLS',

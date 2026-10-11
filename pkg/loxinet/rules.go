@@ -756,6 +756,8 @@ type RuleH struct {
 	// config on restart (no separate persisted structure) since the id round-trips through
 	// lbconfig.txt and replays via NetLbRuleAdd -> AddLbRule on boot.
 	opaqueID map[string]*ruleEnt
+	// Only modern rules can conflict with a legacy addition; rebuilt on replay.
+	mcpRules map[string]*ruleEnt
 }
 
 // RulesInit - initialize the Rules subsystem
@@ -781,6 +783,7 @@ func RulesInit(zone *Zone) *RuleH {
 	nRh.tables[RtLB].Mark = utils.NewMarker(1, RtMaximumLbs)
 	// opaque id -> rule index, rebuilt from persisted config on restart.
 	nRh.opaqueID = make(map[string]*ruleEnt)
+	nRh.mcpRules = make(map[string]*ruleEnt)
 
 	for i := 0; i < MaxEndPointCheckers; i++ {
 		nRh.epCs[i].tD = make(chan bool)
@@ -4475,7 +4478,7 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 		return RuleArgsErr, &cmn.RuleArgumentError{Err: err}
 	}
 	if other := R.lbListenerMCPConflict(eRule, &rt, string(serv.MCPProtocolVersion)); other != nil {
-		return RuleArgsErr, &cmn.RuleArgumentError{Err: fmt.Errorf("mcp_protocol_version: %s shares this address and port with a different MCP transport mode; all host/path/model pools must agree", listenerRuleName(&other.tuples))}
+		return RuleArgsErr, &cmn.RuleArgumentError{Err: fmt.Errorf("mcp_protocol_version: %s shares this address and port with a different MCP transport mode; all overlapping rules must agree", listenerRuleName(&other.tuples))}
 	}
 
 	// Reject shared-listener source conflicts before create/replace mutates
@@ -4605,7 +4608,6 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 		// Detect changes to all extended mutable fields
 		if eRule.traceType != serv.TraceType ||
 			(serv.BackendProtocol != "" && eRule.backendProtocol != serv.BackendProtocol) ||
-			eRule.mcpProtocolVersion != string(serv.MCPProtocolVersion) ||
 			eRule.sessionHeaderName != serv.SessionHeaderName ||
 			eRule.sseMode != serv.SSEMode ||
 			(serv.ApiKeyAuth != "" && eRule.apiKeyAuth != serv.ApiKeyAuth) ||
@@ -5356,6 +5358,7 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 	}
 
 	R.tables[RtLB].eMap[rt.ruleKey()] = r
+	R.trackMCPLbRule(rt.ruleKey(), r)
 	if r.ruleNum < RtMaximumLbs {
 		R.tables[RtLB].rArr[r.ruleNum] = r
 	}
@@ -5724,6 +5727,7 @@ func (R *RuleH) DeleteLbRule(serv cmn.LbServiceArg) (int, error) {
 	R.syncProxySrcFence(rule)
 
 	delete(R.tables[RtLB].eMap, rt.ruleKey())
+	R.trackMCPLbRule(rt.ruleKey(), nil)
 	// drop the opaque-id index entry alongside the rule.
 	R.unregisterOpaqueID(rule)
 	// The sockproxy L7 attach is torn down with the listener, so the attachment

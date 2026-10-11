@@ -34,7 +34,10 @@ def policy_document(lb_id, policy_id):
     return {'name': 'UC8 MCP validated method/name routing', 'id': policy_id, 'lbId': lb_id,
             'rules': [route(1, 'tools/call', 'echo', (0, 1)),
                       route(2, 'resources/read', 'fixture://status', (0,)),
-                      route(3, 'prompts/get', 'welcome', (1,)), route(99, refs=(0,))]}
+                      route(3, 'prompts/get', 'welcome', (1,)),
+                      {'position':98,'matchSets':[{'conditions':[condition('x-route-key','reserved')]}],
+                       'action':{'kind':'FORWARD','forward':{'backendRefs':[{'ep':0,'weight':1}]}}},
+                      route(99, refs=(0,))]}
 
 
 def replay(url, management_url, journals, backend_a, backend_b, policy, count=12):

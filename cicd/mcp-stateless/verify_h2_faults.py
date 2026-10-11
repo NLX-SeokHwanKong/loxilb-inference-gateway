@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import subprocess
 import time
+import tempfile
 import uuid
 from client import headers_for, request_body
 from verify_h2 import parse_payload
@@ -38,7 +39,34 @@ def replay(url, journal):
         checks.append({'case': case, 'http_status': int(status), 'http_version': version,
                        'curl_exit': result.returncode, 'elapsed_seconds': time.monotonic() - started,
                        'stderr': result.stderr.strip(), 'request_id': body['id'], 'complete_result': False})
-    return {'scope': 'real HTTP/2 frontend malformed HTTP/1 backend responses', 'checks': checks}
+    for transport in ('h1','h2'):
+        body=request_body('tools/call',uuid.uuid4().hex,name='echo',arguments={'message':'upload','blob':'z'*(700*1024)})
+        command=['curl','--silent','--show-error','--max-time','8','--data-binary',json.dumps(body),
+                 '--write-out','\nUC8-FAULT:%{response_code}|%{http_version}\n',
+                 '--http2-prior-knowledge' if transport=='h2' else '--http1.1',
+                 '-H','X-UC8-Fault: reset-during-upload','-H','X-UC8-Request-ID: '+body['id']]
+        for key,value in headers_for(body).items():command+=['-H',key+': '+value]
+        with tempfile.NamedTemporaryFile(mode='w',suffix='.json') as upload:
+            upload.write(json.dumps(body));upload.flush()
+            command[command.index('--data-binary')+1]='@'+upload.name
+            command.append(url);result=subprocess.run(command,capture_output=True,text=True,timeout=10)
+        payload,trailer=result.stdout.rsplit('\nUC8-FAULT:',1);status,version=trailer.strip().split('|')
+        try:events=parse_payload(payload)
+        except (ValueError,UnicodeError):events=[]
+        if any('result' in event for event in events) or (result.returncode==0 and int(status) not in (502,503)):
+            raise AssertionError('Mid-upload reset produced success')
+        deadline=time.monotonic()+2
+        while True:
+            arrived=[json.loads(line) for line in journal.read_text().splitlines() if json.loads(line).get('request_id')==body['id']]
+            if arrived or time.monotonic()>deadline:break
+            time.sleep(.05)
+        time.sleep(.1)
+        arrived=[json.loads(line) for line in journal.read_text().splitlines() if json.loads(line).get('request_id')==body['id']]
+        if len(arrived)!=1 or not 0<arrived[0]['received_body_bytes']<arrived[0]['declared_body_bytes']:
+            raise AssertionError('Mid-upload fault lacks unique partial application receipt')
+        checks.append({'case':'reset-during-upload','transport':transport,'http_status':int(status),
+                       'curl_exit':result.returncode,'arrival':arrived[0],'complete_result':False})
+    return {'scope': 'real frontend malformed HTTP/1 responses and partial-upload backend reset', 'checks': checks}
 
 
 if __name__ == '__main__':

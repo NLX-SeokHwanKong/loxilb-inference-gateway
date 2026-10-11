@@ -97,7 +97,10 @@ def replay(url, management_url, journals, template, backend_control, gateway_log
         if any(row['status'] != 503 for row in refused) or _rows(journals) != baseline_rows:
             raise AssertionError('OPEN must refuse with503 and zero backend arrivals')
         wait_transition(r'OPEN\s*(?:→|->)\s*HALF_OPEN', 45)
-        recovered = concurrent('recovered')
+        probe=perform(('halfopen-probe',0,'HTTP/1.1'))
+        if probe['status']!=200: raise AssertionError('HALF_OPEN first probe failed')
+        wait_transition(r'HALF_OPEN\s*(?:→|->)\s*CLOSED',5)
+        recovered = [probe]+concurrent('recovered')
         records.extend(recovered)
         if any(row['status'] != 200 for row in recovered):
             raise AssertionError('Recovered HALF_OPEN/CLOSED requests failed')

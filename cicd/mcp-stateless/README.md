@@ -123,3 +123,11 @@ Each malformed upstream case is also replayed alongside a healthy SSE stream on 
 - [2026-07-28 versioning](https://modelcontextprotocol.io/specification/2026-07-28/basic/versioning)
 - [2026-07-28 progress](https://modelcontextprotocol.io/specification/2026-07-28/basic/patterns/progress)
 - [2026-07-28 schema](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/schema/2026-07-28/schema.ts)
+
+## Independent SDK and review regressions
+
+Install the explicitly pinned official `mcp==2.3.0` and `h2==4.3.0` in a campaign environment. Add `--require-sdk` to the isolated runner. This verifies a real official SDK client and backend in both JSON and finite SSE modes, including 2,000-key objects and 700 KiB uploads with independent raw-body and execution journals. It qualifies that tool slice only; it does not qualify OAuth, MRTR, subscriptions or every SDK capability.
+
+The H2 zero-window test holds a real 64 MiB SDK result until the Gateway reports its 50 MiB high-water pause, releases flow control, checks exact result bytes and the 10 MiB low-water resume, then resets a separate stream owning an actual long-running SDK task and requires backend cancellation. A backend that reads only the upload prefix and resets proves partial application receipt and absence of normal completion; this is separate from pre-connect retry and response-framing faults.
+
+Gateway validation error bodies are asserted separately from backend errors. Only `2026-07-28` is accepted; malformed or unknown future versions are denied, with zero backend arrival. Long unrelated headers must pass with a real L7 policy while an oversized referenced operand must be refused.

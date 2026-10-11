@@ -9,6 +9,10 @@ import struct
 import threading
 
 
+class Server(socketserver.ThreadingTCPServer):
+    allow_reuse_address=True
+
+
 class Handler(socketserver.StreamRequestHandler):
     def handle(self):
         self.connection.settimeout(5)
@@ -24,6 +28,14 @@ class Handler(socketserver.StreamRequestHandler):
             key, value = line.decode().split(':', 1)
             headers[key.lower()] = value.strip()
         size = int(headers.get('content-length', '0'))
+        if headers.get('x-uc8-fault')=='reset-during-upload':
+            prefix=self.rfile.read(min(1024,size))
+            row={'event':'fault-request','request_id':headers.get('x-uc8-request-id'),
+                 'case':'reset-during-upload','declared_body_bytes':size,'received_body_bytes':len(prefix)}
+            with self.server.lock:
+                with self.server.journal.open('a') as output:output.write(json.dumps(row)+'\n')
+            self.connection.setsockopt(socket.SOL_SOCKET,socket.SO_LINGER,struct.pack('ii',1,0))
+            return
         if not 0 < size < 8192:
             return
         body = json.loads(self.rfile.read(size))
@@ -55,7 +67,7 @@ if __name__ == '__main__':
     parser.add_argument('--port', type=int, required=True)
     parser.add_argument('--journal', type=Path, required=True)
     args = parser.parse_args()
-    with socketserver.ThreadingTCPServer((args.bind, args.port), Handler) as server:
+    with Server((args.bind, args.port), Handler) as server:
         server.daemon_threads = True
         server.journal = args.journal
         server.lock = threading.Lock()

@@ -13,6 +13,8 @@ package common
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -135,5 +137,16 @@ func TestMCPL7PolicyRefusesConditionTruncation(t *testing.T) {
 	}
 	if err := ValidateMCPL7Policy([]L7RuleArg{{MatchSets: []L7MatchSetArg{{Conditions: []L7ConditionArg{{Key: strings.Repeat("k", 63), Value: strings.Repeat("v", 255)}}}}}}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestMCPProtocolVersionDatapathLockstep(t *testing.T) {
+	raw, err := os.ReadFile("../loxilb-ebpf/common/sockproxy_mcp.h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	matches := regexp.MustCompile(`(?m)^#define SP_MCP_VERSION "([^"]+)"$`).FindSubmatch(raw)
+	if len(matches) != 2 || string(matches[1]) != MCPStatelessProtocolVersion {
+		t.Fatal("Go and C MCP version declarations differ")
 	}
 }

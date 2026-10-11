@@ -112,9 +112,15 @@ def replay(url, journals, ca=None):
             else:
                 sock.sendall(request)
             with sock.makefile('rb') as stream:
-                status, _, _ = read_response(stream)
+                status, response_headers, response_body = read_response(stream)
         if status != expect:
             raise AssertionError(name + ': expected %d, got %d' % (expect, status))
+        if expect>=400:
+            denial=json.loads(response_body)
+            if denial.get('jsonrpc')!='2.0' or not isinstance(denial.get('error',{}).get('code'),int):
+                raise AssertionError(name+': gateway denial is not structured JSON-RPC')
+            if expect==405 and response_headers.get('allow')!='POST':
+                raise AssertionError(name+': missing Allow: POST')
         delta = journal_size(journals) - before
         if (expect >= 400 and delta != 0) or (expect == 200 and delta != 2):
             raise AssertionError(name + ': wrong backend arrival/execution delta %d' % delta)

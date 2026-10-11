@@ -869,6 +869,10 @@ type LoadbalanceEntryServiceArguments struct {
 	// Minimum: 0
 	MaxStreamDurationSec int32 `json:"max_stream_duration_sec,omitempty"`
 
+	// Explicit stateless MCP transport mode. Omitted or empty on create preserves legacy behavior. Omitted replace preserves the existing value; changing it requires delete and recreate. Requires TCP FullProxy (mode=4), round-robin (sel=0) or weighted round-robin (sel=2), and sockMapMode=off. Session affinity, model routing, P/D disaggregation and KV routing are rejected. Configuration readback does not prove request validation or backend delivery.
+	// Enum: [ 2026-07-28]
+	McpProtocolVersion string `json:"mcp_protocol_version,omitempty"`
+
 	// NAT/proxy mode (0=DNAT, 1=one-arm, 2=FullNAT, 3=DSR, 4=FullProxy, 5=host one-arm). Zero selects DNAT. DSR requires hash selection and endpoint ports equal to the service port. Host one-arm requires an unspecified VIP. FullProxy is the userspace proxy path; PATCH rejects it, and POST replacement has the listener-state limitations documented on serviceArguments.
 	// Enum: [0 1 2 3 4 5]
 	Mode int32 `json:"mode,omitempty"`
@@ -977,9 +981,6 @@ type LoadbalanceEntryServiceArguments struct {
 
 	// Session-key extraction setting for proxy affinity. Use a header name such as X-Session-ID, cookie:NAME for one cookie, query:NAME for one query parameter, or basic-auth for the Basic Authorization username. RR (sel=0) and persistence (sel=3) paths contain handling; a missing usable key follows their RR or IP-based fallback respectively. This setting is not authentication. GET includes it only for those selectors. The server accepts at most 127 UTF-8 bytes and rejects embedded NUL or invalid UTF-8 before changing rule state. This byte limit reserves the terminator in the 128-byte data-plane field; UI validation must count encoded bytes rather than characters. Cross-mode interaction with L7 HTTP_COOKIE remains unresolved.
 	SessionHeaderName string `json:"session_header_name,omitempty"`
-	// Explicit stateless MCP protocol mode. Omitted replace preserves the current mode.
-	// Empty is legacy. Changing an existing rule requires delete and recreate.
-	McpProtocolVersion *string `json:"mcp_protocol_version,omitempty"`
 
 	// SNAT rule indicator on domain readback. Implementation gap - this REST POST does not copy the property and PATCH does not overlay it, so setting it here does not create a SNAT rule.
 	Snat bool `json:"snat,omitempty"`
@@ -1016,12 +1017,6 @@ type LoadbalanceEntryServiceArguments struct {
 // Validate validates this loadbalance entry service arguments
 func (m *LoadbalanceEntryServiceArguments) Validate(formats strfmt.Registry) error {
 	var res []error
-
-	if m.McpProtocolVersion != nil {
-		if err := validate.EnumCase("serviceArguments.mcp_protocol_version", "body", *m.McpProtocolVersion, []interface{}{"", "2026-07-28"}, true); err != nil {
-			res = append(res, err)
-		}
-	}
 
 	if err := m.validateAPIKeyAuth(formats); err != nil {
 		res = append(res, err)
@@ -1160,6 +1155,10 @@ func (m *LoadbalanceEntryServiceArguments) Validate(formats strfmt.Registry) err
 	}
 
 	if err := m.validateMaxStreamDurationSec(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := m.validateMcpProtocolVersion(formats); err != nil {
 		res = append(res, err)
 	}
 
@@ -2069,6 +2068,48 @@ func (m *LoadbalanceEntryServiceArguments) validateMaxStreamDurationSec(formats 
 	}
 
 	if err := validate.MinimumInt("serviceArguments"+"."+"max_stream_duration_sec", "body", int64(m.MaxStreamDurationSec), 0, false); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+var loadbalanceEntryServiceArgumentsTypeMcpProtocolVersionPropEnum []interface{}
+
+func init() {
+	var res []string
+	if err := json.Unmarshal([]byte(`["","2026-07-28"]`), &res); err != nil {
+		panic(err)
+	}
+	for _, v := range res {
+		loadbalanceEntryServiceArgumentsTypeMcpProtocolVersionPropEnum = append(loadbalanceEntryServiceArgumentsTypeMcpProtocolVersionPropEnum, v)
+	}
+}
+
+const (
+
+	// LoadbalanceEntryServiceArgumentsMcpProtocolVersionEmpty captures enum value ""
+	LoadbalanceEntryServiceArgumentsMcpProtocolVersionEmpty string = ""
+
+	// LoadbalanceEntryServiceArgumentsMcpProtocolVersionNr2026Dash07Dash28 captures enum value "2026-07-28"
+	LoadbalanceEntryServiceArgumentsMcpProtocolVersionNr2026Dash07Dash28 string = "2026-07-28"
+)
+
+// prop value enum
+func (m *LoadbalanceEntryServiceArguments) validateMcpProtocolVersionEnum(path, location string, value string) error {
+	if err := validate.EnumCase(path, location, value, loadbalanceEntryServiceArgumentsTypeMcpProtocolVersionPropEnum, true); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArguments) validateMcpProtocolVersion(formats strfmt.Registry) error {
+	if swag.IsZero(m.McpProtocolVersion) { // not required
+		return nil
+	}
+
+	// value enum
+	if err := m.validateMcpProtocolVersionEnum("serviceArguments"+"."+"mcp_protocol_version", "body", m.McpProtocolVersion); err != nil {
 		return err
 	}
 

@@ -162,9 +162,9 @@ func TestProxyMetricsSnapshotLockstep(t *testing.T) {
 		}
 		j := strings.Index(s[i:], "} proxy_metrics_snapshot_t;")
 		if j < 0 {
-            t.Fatalf("%s: unterminated proxy_metrics_snapshot", path)
-        }
-        body := s[i : i+j]
+			t.Fatalf("%s: unterminated proxy_metrics_snapshot", path)
+		}
+		body := s[i : i+j]
 		body = regexp.MustCompile(`(?s)/\*.*?\*/`).ReplaceAllString(body, "")
 		body = regexp.MustCompile(`//[^\n]*`).ReplaceAllString(body, "")
 		var out []string

@@ -18,11 +18,11 @@ import (
 
 func TestMCPReadbackAndPresence(t *testing.T) {
 	m := serializeLBRule(cmn.LbRuleMod{Serv: cmn.LbServiceArg{MCPProtocolVersion: cmn.MCPStatelessProtocolVersion}})
-	if m.ServiceArguments.McpProtocolVersion == nil || *m.ServiceArguments.McpProtocolVersion != cmn.MCPStatelessProtocolVersion {
+	if m.ServiceArguments.McpProtocolVersion != cmn.MCPStatelessProtocolVersion {
 		t.Fatal("MCP protocol declaration missing from GET")
 	}
 	legacy := serializeLBRule(cmn.LbRuleMod{})
-	if legacy.ServiceArguments.McpProtocolVersion != nil {
+	if legacy.ServiceArguments.McpProtocolVersion != "" {
 		t.Fatal("legacy GET unexpectedly enables MCP")
 	}
 	p, err := parseLoadbalancerRequestPresence([]byte(`{"serviceArguments":{"mcp_protocol_version":null}}`))
@@ -49,11 +49,16 @@ func TestMCPPostNullRefusedBeforeRuleMutation(t *testing.T) {
 }
 func TestMCPPostCopiesExplicitPresence(t *testing.T) {
 	for _, c := range []struct {
-		version *string
+		version string
 		present bool
-	}{{nil, false}, {new(string), true}, {func() *string { v := cmn.MCPStatelessProtocolVersion; return &v }(), true}} {
+	}{{"", false}, {"", true}, {cmn.MCPStatelessProtocolVersion, true}} {
 		params := newCreateParams("")
 		params.Attr.ServiceArguments.McpProtocolVersion = c.version
+		raw := `{"serviceArguments":{}}`
+		if c.present {
+			raw = `{"serviceArguments":{"mcp_protocol_version":"` + c.version + `"}}`
+		}
+		params.HTTPRequest = params.HTTPRequest.WithContext(WithRawLoadbalancerBody(params.HTTPRequest.Context(), []byte(raw)))
 		old := ApiHooks
 		stub := &stubLbAddHook{}
 		ApiHooks = stub
@@ -66,7 +71,7 @@ func TestMCPPostCopiesExplicitPresence(t *testing.T) {
 		if got.MCPProtocolVersionPresent != c.present {
 			t.Fatalf("presence=%v want %v", got.MCPProtocolVersionPresent, c.present)
 		}
-		if c.version != nil && string(got.MCPProtocolVersion) != *c.version {
+		if string(got.MCPProtocolVersion) != c.version {
 			t.Fatal("POST lost protocol version")
 		}
 	}

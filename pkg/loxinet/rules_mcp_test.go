@@ -104,3 +104,31 @@ func TestMCPListenerAliasesCannotMixTransportModes(t *testing.T) {
 		t.Fatal("overlapping port range bypassed consistency")
 	}
 }
+
+func TestMCPLegacyConflictIndexLifecycle(t *testing.T) {
+	rules := newTestRuleH()
+	rules.mcpRules = make(map[string]*ruleEnt)
+	_, prefix, _ := net.ParseCIDR("192.0.2.10/32")
+	rt := ruleTuples{l3Dst: ruleIPTuple{*prefix}, l4Prot: rule8Tuple{6, 255}, l4Dst: rule16RTuple{8080, 8080, true}}
+	peer := &ruleEnt{tuples: rt, mcpProtocolVersion: cmn.MCPStatelessProtocolVersion}
+	rules.tables[RtLB].eMap["modern"] = peer
+	rules.trackMCPLbRule("modern", peer)
+	if rules.lbListenerMCPConflict(nil, &rt, "") != peer {
+		t.Fatal("index missed modern conflict")
+	}
+	delete(rules.tables[RtLB].eMap, "modern")
+	rules.trackMCPLbRule("modern", nil)
+	if rules.lbListenerMCPConflict(nil, &rt, "") != nil || len(rules.mcpRules) != 0 {
+		t.Fatal("deleted rule remains indexed")
+	}
+	peer.mcpProtocolVersion = ""
+	rules.tables[RtLB].eMap["legacy"] = peer
+	rules.trackMCPLbRule("legacy", peer)
+	if len(rules.mcpRules) != 0 || rules.lbListenerMCPConflict(nil, &rt, "") != nil {
+		t.Fatal("legacy rule indexed as modern")
+	}
+	// Modern additions must still scan the primary map to refuse an existing legacy rule.
+	if rules.lbListenerMCPConflict(nil, &rt, cmn.MCPStatelessProtocolVersion) != peer {
+		t.Fatal("modern addition bypassed legacy peer")
+	}
+}

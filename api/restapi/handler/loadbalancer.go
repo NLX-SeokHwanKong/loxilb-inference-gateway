@@ -217,8 +217,8 @@ func ConfigPostLoadbalancer(params operations.PostConfigLoadbalancerParams, prin
 	lbRules.Serv.PDBootstrapPort = uint16(params.Attr.ServiceArguments.PdBootstrapPort)
 
 	// Custom session header configuration - supports both RR and Persist modes
-	if params.Attr.ServiceArguments.McpProtocolVersion != nil {
-		lbRules.Serv.MCPProtocolVersion = cmn.MCPVersion(*params.Attr.ServiceArguments.McpProtocolVersion)
+	if pres.svcPresent("mcp_protocol_version") || params.Attr.ServiceArguments.McpProtocolVersion != "" {
+		lbRules.Serv.MCPProtocolVersion = cmn.MCPVersion(params.Attr.ServiceArguments.McpProtocolVersion)
 		lbRules.Serv.MCPProtocolVersionPresent = true
 	}
 	lbRules.Serv.SessionHeaderName = params.Attr.ServiceArguments.SessionHeaderName
@@ -653,7 +653,7 @@ func serializeLBRule(lb cmn.LbRuleMod) *models.LoadbalanceEntry {
 
 	if lb.Serv.MCPProtocolVersion != "" {
 		version := string(lb.Serv.MCPProtocolVersion)
-		tmpSvc.McpProtocolVersion = &version
+		tmpSvc.McpProtocolVersion = version
 	}
 
 	// Custom session header name - supports both RR and Persist modes

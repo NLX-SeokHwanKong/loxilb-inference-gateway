@@ -20,6 +20,12 @@ The modern frontend can negotiate HTTP/2 independently of an HTTP/1.1 backend. T
 
 Configured FC admission applies to modern POST requests, including per-endpoint saturation and endpoint-return warmup. Read `fc_effective` to verify installed mode, limits and warming state; configuration values alone do not establish enforcement. Capacity fallback and connection retries remain inside the selected L7 route and require a permit for the target endpoint.
 
+Only the explicitly implemented `2026-07-28` version is accepted. Future dates are not negotiated automatically. Validation denials carry a JSON-RPC error with a safely recovered request ID, or `null` when no valid ID is available. Unknown versions use `-32022` with the supported version list; malformed requests and mirrored-header failures remain distinct. Early framing/size failures may precede body parsing. `null` configuration is rejected. Omitting the version on a replacement preserves the existing mode; an explicit empty value selects legacy behavior only when creating a new rule.
+
+Delete/recreate affects new connections. Existing connections can retain the old transport policy until they close; drain or close clients before moving a listener between modes. The modern implementation uses a new backend connection per H1 request or H2 stream. It does not pool backend legs, so connection churn and TIME-WAIT are deployment capacity constraints. Admission limits and workload-specific connection measurements are needed before sizing a fleet.
+
+Unrelated Authorization/Cookie/custom headers retain their wire bytes and are not subject to the small L7 operand limit. Only headers referenced by policy must fit the routing fields. Encoded Unicode/control characters in `Mcp-Name` follow the MCP Base64 contract; a name that cannot be represented safely by a configured L7 operand is refused before routing.
+
 See the [modern regression fixture and commands](../../cicd/mcp-stateless/README.md). Its portable unit tests do not establish an installed runtime qualification. MRTR, subscriptions, arbitrary tool parameter schema reflection and OAuth authorization are outside this implementation's scope.
 
 ## 1. Why put a gateway in front of MCP servers

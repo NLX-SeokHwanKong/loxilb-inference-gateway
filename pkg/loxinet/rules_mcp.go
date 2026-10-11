@@ -35,7 +35,11 @@ func resolveMCPService(serv *cmn.LbServiceArg, existing *ruleEnt) error {
 func (R *RuleH) lbListenerMCPConflict(self *ruleEnt, rt *ruleTuples, want string) *ruleEnt {
 	var found *ruleEnt
 	var foundKey string
-	for key, r := range R.tables[RtLB].eMap {
+	peers := R.tables[RtLB].eMap
+	if want == "" && R.mcpRules != nil {
+		peers = R.mcpRules
+	}
+	for key, r := range peers {
 		if r == self {
 			continue
 		}
@@ -50,4 +54,16 @@ func (R *RuleH) lbListenerMCPConflict(self *ruleEnt, rt *ruleTuples, want string
 		}
 	}
 	return found
+}
+
+// Called with the same rule-table serialization as the primary map mutation.
+func (R *RuleH) trackMCPLbRule(key string, rule *ruleEnt) {
+	if R.mcpRules == nil {
+		return
+	} // test/partial contexts use the primary-map fallback
+	if rule != nil && rule.mcpProtocolVersion != "" {
+		R.mcpRules[key] = rule
+	} else {
+		delete(R.mcpRules, key)
+	}
 }
