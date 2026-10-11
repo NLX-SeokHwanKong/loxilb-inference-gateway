@@ -5,12 +5,35 @@ import json
 import queue
 import socket
 import threading
+import time
 import urllib.error
 from urllib.parse import urlsplit, urlunsplit
 import uuid
 from client import connection, headers_for, messages, request_body
 from verify_fc_route import _effective_counter, _receipt, _rows
 from verify_l7 import management, policy_document
+
+
+def _settle_closed_counter(detail, timeout=1.0):
+    """Observe deferred failed-dial teardown; require exact zero by a deadline.
+
+    Local502 is sent before notifier teardown returns its service permit.
+    Active-holder and normal-response counter checks remain instantaneous.
+    """
+    started = time.monotonic()
+    observations = []
+    while True:
+        readback = management(detail)[1]
+        effective = readback['serviceArguments'].get('fc_effective')
+        elapsed = time.monotonic() - started
+        observations.append({'elapsed_seconds': elapsed, 'effective': effective})
+        if not effective or effective.get('mode') != 'enforce' or effective.get('ep_max_inflight') != 1 or effective.get('queue_depth') != 0 or effective.get('queued') != 0:
+            raise AssertionError('Closed-dial FC contract incorrect: ' + json.dumps(observations))
+        if effective.get('inflight') == 0 and elapsed <= timeout:
+            return effective, observations
+        if effective.get('inflight') != 1 or elapsed >= timeout:
+            raise AssertionError('Closed-dial permit did not return to zero: ' + json.dumps(observations))
+        time.sleep(.01)
 
 
 def replay(url, management_url, journals, template, port=2042, closed_port=8299, backend='fc-backend-a'):
@@ -127,7 +150,27 @@ def replay(url, management_url, journals, template, port=2042, closed_port=8299,
             conn.close()
         if closed_status != 502 or _rows(journals) != rows_before:
             raise AssertionError('Closed-only retry escaped its route or returned incorrect status: ' + str(closed_status))
-        closed_effective = _effective_counter(detail, 0)
+        closed_effective, closed_observations = _settle_closed_counter(detail)
+        closed_probes = [{'request_id': closed_only['id'], 'status': closed_status,
+            'backend_arrivals': 0, 'observations': closed_observations}]
+        # Repeat only the failed-close edge to capture scheduling transitions
+        # and prove the permit returns without any backend execution.
+        for number in range(11):
+            probe = request_body('prompts/get', identity + '-closed-repeat-' + str(number), name='welcome')
+            before_probe = _rows(journals)
+            conn, path = connection(target)
+            try:
+                conn.request('POST', path, json.dumps(probe).encode(), headers_for(probe))
+                response = conn.getresponse()
+                probe_status = response.status
+                response.read()
+            finally:
+                conn.close()
+            if probe_status != 502 or _rows(journals) != before_probe:
+                raise AssertionError('Repeated closed-only route escaped or returned incorrect status')
+            _, observed = _settle_closed_counter(detail)
+            closed_probes.append({'request_id': probe['id'], 'status': probe_status,
+                'backend_arrivals': 0, 'observations': observed})
         # Four requests traverse both catchall RR positions twice, proving
         # repeated successful live retry and exactly-once backend arrival.
         for number in range(4):
@@ -151,7 +194,7 @@ def replay(url, management_url, journals, template, port=2042, closed_port=8299,
             'closed_port': closed_port, 'installation_observations': observations, 'policy': policy,
             'active': active, 'blocked_status': status, 'blocked_backend_arrivals': 0, 'retained': retained,
             'settled': settled, 'closed_only_status': closed_status, 'closed_only_backend_arrivals': 0,
-            'closed_only_effective': closed_effective, 'recovered': _effective_counter(detail, 0), 'receipts': receipts}
+            'closed_only_probes': closed_probes, 'closed_only_effective': closed_effective, 'closed_only_settlement': {'deadline_seconds': 1.0, 'observations': closed_observations}, 'recovered': _effective_counter(detail, 0), 'receipts': receipts}
     finally:
         if hold:
             hold.close()
