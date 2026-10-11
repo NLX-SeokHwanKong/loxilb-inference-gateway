@@ -1,5 +1,7 @@
 # cicd/security-kv-coexist — security features × KV-cache-aware routing coexistence gate
 
+The fixture pins `LOXILB_KV_COLDSTART_SEED_N=0` because its routing oracles require the published EP-A counter to increase for every probe. The product default diverts every 16th hit to a healthy cold prefill EP; a successful diverted request can leave EP-A unchanged. Disabling seeding here isolates security/KV coexistence without weakening the EP-A assertion. This fixture does not qualify the default cold-seeding policy.
+
 Proves that the kernel-side security controls (XDP ipfilter, XDP securityrate, TC firewall
 fence for `allowedSources`) and the sockproxy-side controls (`connectionLimit`, api-key
 policy, capacity admission) can all be switched on **against one fullproxy KV-exact P/D
