@@ -1,8 +1,9 @@
 import json,pathlib,re,sys,os
+from wait_metric import metric_sum
 r=pathlib.Path(os.environ['EDGE_REPORT']);lab=pathlib.Path(os.environ['EDGE_LAB']);stage=sys.argv[1];checks={}
 def chk(n,v):checks[n]=bool(v)
 def http(id,want):chk(id+'_http',re.findall(r'HTTP:(\d{3})',(r/(id+'.out')).read_text(errors='replace'))==[str(want)])
-def metric(p,name):return sum(float(l.split()[-1]) for l in p.read_text().splitlines() if l.startswith(name))
+def metric(p,name):return metric_sum(p.read_text(),name)
 def delta(n,a,b):chk(n+'_delta',metric(lab/a,n)>metric(lab/b,n))
 if stage=='01-setup':
  http('SET-27',200);http('SET-29',200);chk('pg_ready','accepting connections' in (r/'SET-16.out').read_text());chk('management_token',bool(json.loads((lab/'login.private.json').read_text()).get('token')))
@@ -39,4 +40,4 @@ elif stage=='13-cli':
  chk('key_handle_matches',len(keys)==1 and keys[0].get('key_id')==raw['key_id']);chk('key_policy_matches',keys[0].get('tenant_id')=='uc7-tenant' and keys[0].get('allowed_models')==['Qwen/Qwen3-0.6B'] and keys[0].get('rate_limit_rps')==1 and keys[0].get('burst_size')==1 and keys[0].get('enabled') is True)
  chk('survivor_model',len(lbs)==1 and lbs[0]['serviceArguments'].get('model_name')=='Qwen/Qwen3-0.6B');a=lbs[0]['serviceArguments'];chk('lb_gate_tuple',a.get('externalIP')=='172.30.97.10' and a.get('port')==8080 and a.get('protocol')=='tcp' and a.get('api_key_auth')=='required');chk('source_policy',set(x['prefix'] for x in lbs[0]['allowedSources'])=={'172.30.97.50/32','172.30.97.52/32','172.30.97.53/32'});chk('no_secret_values',raw['raw_key'] not in json.dumps(keys));chk('no_secret_fields',all('raw_key' not in k and 'key_hash' not in k for k in keys))
 elif stage=='14-cleanup':chk('empty_owner_inventory',(r/'END-09.out').read_text().strip()=='')
-report={'stage':stage,'state':'PASS' if all(checks.values()) else 'FAIL','checks':checks};(r/(stage+'.json')).write_text(json.dumps(report,indent=2));print(json.dumps(report));sys.exit(0 if report['state']=='PASS' else 1)
+report={'stage':stage,'state':'PASS' if checks and all(checks.values()) else 'FAIL','checks':checks};(r/(stage+'.json')).write_text(json.dumps(report,indent=2));print(json.dumps(report));sys.exit(0 if report['state']=='PASS' else 1)

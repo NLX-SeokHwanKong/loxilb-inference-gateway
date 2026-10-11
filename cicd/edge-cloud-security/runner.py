@@ -105,8 +105,6 @@ def execution(state, phase):
                   'test -n "$TOKEN" || exit 1']
     def emit(record, supplementary=False):
         id, command = record['id'], record['command']
-        if id=='END-05':
-            lines.append(shlex.quote(sys.executable)+' '+shlex.quote(str(HERE/'runner.py'))+' guard || exit 1')
         folder = report/'supplemental' if supplementary else report
         base = folder/id
         (folder/(id+'.command')).write_text(command+'\n')
@@ -117,10 +115,6 @@ def execution(state, phase):
         allowed = [0,28] if id in TIMEOUTS else [0,7,52,55,56,28] if id=='CONN-EXCESS' else [0]
         condition = ' && '.join(f'test "$rc" != {c}' for c in allowed)
         lines.append(f'if {condition}; then printf "FAILED %s exit=%s; private output in report\\n" {shlex.quote(id)} "$rc"; exit 1; fi')
-        if id=='KV-03':
-            lines.append('PUB_TICK=$(awk \'{print $22}\' /proc/"$PUB_PID"/stat) || exit 1')
-        if id=='ALL-02':
-            lines.append('CAP_TICK=$(awk \'{print $22}\' /proc/"$CAP_PID"/stat) || exit 1')
         if id in ENDS:
             lines.append(shlex.quote(sys.executable)+' '+shlex.quote(str(HERE/'stage_gate.py'))+' '+ENDS[id]+' || exit 1')
         if id == 'CLI-03':

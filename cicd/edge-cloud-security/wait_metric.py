@@ -6,18 +6,36 @@ import sys
 import time
 
 
+def metric_sum(text, metric):
+    import re
+    pattern=re.compile(r'^'+re.escape(metric)+r'(?:\{.*\})?\s+(\S+)(?:\s+\d+)?\s*$')
+    values=[]
+    for line in text.splitlines():
+        if not (line.startswith(metric+'{') or line.startswith(metric+' ')):
+            continue
+        match=pattern.fullmatch(line)
+        if not match:
+            raise ValueError('Malformed expected metric '+metric)
+        value=float(match.group(1))
+        if not math.isfinite(value) or value<0:
+            raise ValueError('Invalid counter sample '+metric)
+        values.append(value)
+    total=sum(values)
+    if not values or not math.isfinite(total):
+        raise ValueError('Missing or overflowing counter '+metric)
+    return total
+
+
 def positive_counter(text, metric):
     try:
-        values=[float(line.split()[-1]) for line in text.splitlines()
-                if line.startswith(metric+'{') or line.startswith(metric+' ')]
-    except (ValueError,IndexError):
+        return metric_sum(text,metric)>0
+    except ValueError:
         return False
-    return bool(values) and all(math.isfinite(v) and v>=0 for v in values) and sum(values)>0
 
 
 def main():
     metric=sys.argv[1]
-    if metric not in ['loxilb_ipfilter_blacklist_packets_total','loxilb_fw_rule_drop_packets_total']:
+    if metric not in ['loxilb_ipfilter_blacklist_packets_total','loxilb_fw_rule_drop_packets_total','loxilb_pd_kv_tier15_hits_total']:
         raise SystemExit('Unsupported counter')
     deadline=time.monotonic()+30
     while True:

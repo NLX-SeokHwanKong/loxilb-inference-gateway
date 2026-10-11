@@ -405,7 +405,7 @@
   },
   {
     "id": "KV-03",
-    "command": "export PUB_PID=$!"
+    "command": "export PUB_PID=$!\nPUB_TICK=$(awk '{print $22}' /proc/\"$PUB_PID\"/stat)"
   },
   {
     "id": "KV-04",
@@ -413,7 +413,7 @@
   },
   {
     "id": "KV-05",
-    "command": "docker exec uc7-gw curl -sS --max-time 10 -w \"\\nHTTP:%{http_code}\\n\" -X GET -H \"Authorization: Bearer $TOKEN\" \"http://127.0.0.1:11111/netlox/v1/metrics\" > \"$LAB/kv-before.prom\""
+    "command": "sleep 2\ndocker exec uc7-a curl -sS --connect-timeout 2 --max-time 4 -w \"\\nHTTP:%{http_code}\\n\" -H \"Content-Type: application/json\" -H \"X-Edge-Nonce: KV-BASELINE\" -H \"X-Api-Key: $RAW_KEY\" --data-binary \"$(cat \"$LAB/request.json\")\" http://172.30.97.10:8080/v1/completions > \"$LAB/kv-baseline.private.body\" || exit 1\ngrep -q \"HTTP:200\" \"$LAB/kv-baseline.private.body\" || exit 1\ngrep -q KV-BASELINE \"$LAB/kv-baseline.private.body\" || exit 1\npython3 \"$EDGE_SOURCE/cicd/edge-cloud-security/wait_metric.py\" loxilb_pd_kv_tier15_hits_total\nsleep 2\ndocker exec uc7-gw curl -sS --max-time 10 -w \"\\nHTTP:%{http_code}\\n\" -X GET -H \"Authorization: Bearer $TOKEN\" \"http://127.0.0.1:11111/netlox/v1/metrics\" > \"$LAB/kv-before.prom\""
   },
   {
     "id": "KV-06",
@@ -437,7 +437,7 @@
   },
   {
     "id": "ALL-02",
-    "command": "export CAP_PID=$!"
+    "command": "export CAP_PID=$!\nCAP_TICK=$(awk '{print $22}' /proc/\"$CAP_PID\"/stat)"
   },
   {
     "id": "ALL-03",
@@ -465,7 +465,7 @@
   },
   {
     "id": "ALL-09",
-    "command": "docker exec uc7-gw curl -sS --max-time 10 -w \"\\nHTTP:%{http_code}\\n\" -X GET -H \"Authorization: Bearer $TOKEN\" \"http://127.0.0.1:11111/netlox/v1/metrics\" > \"$LAB/all-before.prom\""
+    "command": "docker exec uc7-b curl -sS --connect-timeout 1 --max-time 2 -o /dev/null http://172.30.97.10:8080/v1/models > \"$LAB/baseline-blacklist-probe.private.txt\" 2>&1\ntest \"$?\" -eq 28 || exit 1\npython3 \"$EDGE_SOURCE/cicd/edge-cloud-security/wait_metric.py\" loxilb_ipfilter_blacklist_packets_total\ndocker exec uc7-gw curl -sS --max-time 10 -w \"\\nHTTP:%{http_code}\\n\" -X GET -H \"Authorization: Bearer $TOKEN\" \"http://127.0.0.1:11111/netlox/v1/metrics\" > \"$LAB/all-before.prom\""
   },
   {
     "id": "ALL-10",
@@ -745,7 +745,7 @@
   },
   {
     "id": "END-05",
-    "command": "docker stop --time 5 uc7-gw uc7-a uc7-b uc7-c uc7-d uc7-ep uc7-pg"
+    "command": "python3 \"$EDGE_SOURCE/cicd/edge-cloud-security/runner.py\" guard && docker stop --time 5 uc7-gw uc7-a uc7-b uc7-c uc7-d uc7-ep uc7-pg"
   },
   {
     "id": "END-06",

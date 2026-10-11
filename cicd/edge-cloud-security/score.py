@@ -1,4 +1,6 @@
 import json,pathlib,re,os
+from wait_metric import metric_sum
+from runner import ENDS
 r=pathlib.Path(os.environ['EDGE_REPORT']);lab=pathlib.Path(os.environ['EDGE_LAB'])
 results={}
 for f in r.glob('*.out'):
@@ -36,7 +38,7 @@ check('key_not_forwarded',key not in capture and all(key not in (r/(id+'.out')).
 def metric(path,prefix):
  s=path.read_text()
  if 'loxilb_' not in s:raise ValueError('Missing metric evidence')
- return sum(float(line.split()[-1]) for line in s.splitlines() if line.startswith(prefix))
+ return metric_sum(s,prefix)
 deltas={}
 for prefix in ['loxilb_ipfilter_blacklist_packets_total','loxilb_fw_rule_drop_packets_total','loxilb_security_conn_blocked_total','loxilb_pd_kv_tier15_hits_total','loxilb_ai_rate_limit_hits_total']:
  deltas[prefix]=metric(lab/'all-after.prom',prefix)-metric(lab/'all-before.prom',prefix);check(prefix+'_delta',deltas[prefix]>0)
@@ -51,9 +53,9 @@ check('rate_counter_matches_429',deltas['loxilb_ai_rate_limit_hits_total']==sum(
 for f in sorted(r.glob('[0-9][0-9]-*.json')):
  d=json.loads(f.read_text())
  for k,v in d['checks'].items():check(d['stage']+'_'+k,v)
-check('all_14_stages',len(list(r.glob('[0-9][0-9]-*.json')))==14)
+check('all_14_stages',{f.stem for f in r.glob('[0-9][0-9]-*.json')}==set(ENDS.values()))
 check('all_191_commands',len(list(r.glob('*.exit')))==191)
-report={'state':'PASS' if all(checks.values()) else 'FAIL','checks':checks,'http_results':results,'metric_deltas':deltas}
+report={'state':'PASS' if all(checks.values()) and len(checks)==159 else 'FAIL','expected_assertions':159,'checks':checks,'http_results':results,'metric_deltas':deltas}
 (r/'score.json').write_text(json.dumps(report,indent=2));print(json.dumps({'state':report['state'],'assertions':len(checks),'failed':[k for k,v in checks.items() if not v],'metric_deltas':deltas}))
 
 if report['state']!='PASS':raise SystemExit('Failed checks: '+str([k for k,v in checks.items() if not v]))

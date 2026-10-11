@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 import runner
-from wait_metric import positive_counter
+from wait_metric import positive_counter, metric_sum
 from password import generate_password
 import re
 
@@ -92,6 +92,13 @@ class OracleTests(unittest.TestCase):
             self.assertNotIn('PASS',p.stdout)
             self.assertIn('exits failed',p.stderr)
 
+    def test_unknown_stage_cannot_pass_empty_checks(self):
+        import os,subprocess,sys
+        with tempfile.TemporaryDirectory() as d:
+            p=subprocess.run([sys.executable,str(Path(__file__).parent/'stage_gate.py'),'unknown-stage'],env=dict(os.environ,EDGE_REPORT=d,EDGE_LAB=d),capture_output=True,text=True)
+            self.assertNotEqual(p.returncode,0)
+            self.assertEqual(json.loads((Path(d)/'unknown-stage.json').read_text())['state'],'FAIL')
+
 class PasswordTests(unittest.TestCase):
     def test_forced_triple_entropy_is_rejected(self):
         with patch('password.secrets.token_hex',side_effect=['aaa'+'0123456789abcdef'*3,'0123456789abcdef'*3]) as entropy:
@@ -116,6 +123,14 @@ class CounterTests(unittest.TestCase):
         for body in ['', '{"error":"failed"}', metric+' 0', metric+' NaN', metric+' inf', metric+' -1', metric+' bad']:
             with self.subTest(body=body):
                 self.assertFalse(positive_counter(body,metric))
+
+    def test_counter_requires_finite_present_nonnegative_samples(self):
+        metric='loxilb_security_conn_blocked_total'
+        for body in ['',metric+' inf',metric+' NaN',metric+' -1',metric+' 1e308\n'+metric+' 1e308']:
+            with self.subTest(body=body),self.assertRaises(ValueError):metric_sum(body,metric)
+
+    def test_timestamp_is_not_the_counter_value(self):
+        self.assertEqual(metric_sum('counter{source="x"} 2 1700000000000','counter'),2)
 
     def test_positive_expected_family_only(self):
         metric='loxilb_ipfilter_blacklist_packets_total'
