@@ -3,7 +3,7 @@
   "scope": "LoadbalanceEntry fields and AI KV inventory query parameters; not a test-coverage claim",
   "sourceSha256": {
     "swagger-extras.yml": "5e36fc44f7bcae7588611893ef158e68e0f26c2a0e67d0a9fc719ab3c026c3bc",
-    "swagger.yml": "abc1b1f98e4c89f37bb537e358ef5bd187aae7e4d0c8b78e432fe444af142f7b"
+    "swagger.yml": "a4226e5811e31bd35a900e6f00b37409d8691dd1482cac2da383755f444d8afc"
   },
   "fields": [
     {
@@ -617,7 +617,7 @@
       "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective",
       "required": false,
       "contract": {
-        "description": "The capacity admission gate's resolved state on this rule's model pool, read from the data plane. Present on GET for AI-gateway services (sse_mode, pd_disagg_mode or an api-key policy); ignored on input. mode is off, observe or enforce; the ceilings are the values in force, the process defaults where the rule declared nothing; inflight and queued are live counts; queue_memory_bound_mib is the memory the full queue may park (queue_depth x 1 MiB); telemetry_stale_ms is the P/D scorers' trust window; source names where each value in force came from (rule, env or default); effective_max_outstanding is the service ceiling in force now (the adaptive one while the pool adapts), adapt_state and adapt_reason say where it stands and why, warming_endpoints counts endpoints inside their warm-up window.",
+        "description": "The capacity admission gate's resolved state on this rule's model pool, read from the data plane. Present on GET for installed AI-gateway and modern MCP services; absent when no pool was read. Every numeric value is explicit, including zero. Ignored on input. mode is off, observe or enforce; the ceilings are the values in force, the process defaults where the rule declared nothing; inflight and queued are live counts; queue_memory_bound_mib is the memory the full queue may park (queue_depth x 1 MiB); telemetry_stale_ms is the P/D scorers' trust window; source names where each value in force came from (rule, env or default); effective_max_outstanding is the service ceiling in force now (the adaptive one while the pool adapts), adapt_state and adapt_reason say where it stands and why, warming_endpoints counts endpoints inside their warm-up window.",
         "readOnly": true,
         "type": "object"
       }
@@ -668,7 +668,8 @@
       "contract": {
         "description": "Per-endpoint ceiling for decode legs; 0 is unlimited.",
         "format": "int32",
-        "type": "integer"
+        "type": "integer",
+        "x-omitempty": false
       }
     },
     {
@@ -677,7 +678,8 @@
       "contract": {
         "description": "The service ceiling in force now; below max_outstanding while an adaptive pool is tightened.",
         "format": "int32",
-        "type": "integer"
+        "type": "integer",
+        "x-omitempty": false
       }
     },
     {
@@ -686,7 +688,8 @@
       "contract": {
         "description": "Per-endpoint ceiling for the normal role; 0 is unlimited.",
         "format": "int32",
-        "type": "integer"
+        "type": "integer",
+        "x-omitempty": false
       }
     },
     {
@@ -707,7 +710,8 @@
       "contract": {
         "description": "Inference requests executing on the pool right now.",
         "format": "int32",
-        "type": "integer"
+        "type": "integer",
+        "x-omitempty": false
       }
     },
     {
@@ -716,7 +720,8 @@
       "contract": {
         "description": "Pool-wide ceiling on executing inference requests; 0 is unlimited.",
         "format": "int32",
-        "type": "integer"
+        "type": "integer",
+        "x-omitempty": false
       }
     },
     {
@@ -733,7 +738,8 @@
       "contract": {
         "description": "Per-endpoint ceiling for prefill legs; 0 is unlimited.",
         "format": "int32",
-        "type": "integer"
+        "type": "integer",
+        "x-omitempty": false
       }
     },
     {
@@ -742,7 +748,8 @@
       "contract": {
         "description": "Requests that may wait for a unit; 0 means over a ceiling is refused.",
         "format": "int32",
-        "type": "integer"
+        "type": "integer",
+        "x-omitempty": false
       }
     },
     {
@@ -751,7 +758,8 @@
       "contract": {
         "description": "Memory the full queue may park, in MiB (queue_depth x 1 MiB, one parked client connection per waiting request).",
         "format": "int64",
-        "type": "integer"
+        "type": "integer",
+        "x-omitempty": false
       }
     },
     {
@@ -760,7 +768,8 @@
       "contract": {
         "description": "The wait window in force for a queued request, in milliseconds.",
         "format": "int32",
-        "type": "integer"
+        "type": "integer",
+        "x-omitempty": false
       }
     },
     {
@@ -769,7 +778,8 @@
       "contract": {
         "description": "Inference requests waiting for a unit right now.",
         "format": "int32",
-        "type": "integer"
+        "type": "integer",
+        "x-omitempty": false
       }
     },
     {
@@ -942,7 +952,8 @@
       "contract": {
         "description": "The P/D scorers' trust window for scraped queue depth, in milliseconds.",
         "format": "int32",
-        "type": "integer"
+        "type": "integer",
+        "x-omitempty": false
       }
     },
     {
@@ -951,7 +962,8 @@
       "contract": {
         "description": "The tenant share in force, in percent; 0 or 100 is no share.",
         "format": "int32",
-        "type": "integer"
+        "type": "integer",
+        "x-omitempty": false
       }
     },
     {
@@ -960,7 +972,8 @@
       "contract": {
         "description": "Tenants holding a unit or waiting on the pool now, while it holds tenants to a share.",
         "format": "int32",
-        "type": "integer"
+        "type": "integer",
+        "x-omitempty": false
       }
     },
     {
@@ -968,7 +981,8 @@
       "required": false,
       "contract": {
         "format": "int32",
-        "type": "integer"
+        "type": "integer",
+        "x-omitempty": false
       }
     },
     {
@@ -977,7 +991,8 @@
       "contract": {
         "description": "Endpoints inside their warm-up window.",
         "format": "int32",
-        "type": "integer"
+        "type": "integer",
+        "x-omitempty": false
       }
     },
     {
@@ -985,7 +1000,8 @@
       "required": false,
       "contract": {
         "format": "int32",
-        "type": "integer"
+        "type": "integer",
+        "x-omitempty": false
       }
     },
     {
@@ -1384,6 +1400,19 @@
         "format": "int32",
         "minimum": 0,
         "type": "integer",
+        "x-nullable": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/mcp_protocol_version",
+      "required": false,
+      "contract": {
+        "description": "Explicit stateless MCP transport mode. Omitted or empty on create preserves legacy behavior. Omitted replace preserves the existing value; changing it requires delete and recreate. Requires TCP FullProxy (mode=4), round-robin (sel=0) or weighted round-robin (sel=2), and sockMapMode=off. Session affinity, model routing, P/D disaggregation and KV routing are rejected. Configuration readback does not prove request validation or backend delivery.",
+        "enum": [
+          "",
+          "2026-07-28"
+        ],
+        "type": "string",
         "x-nullable": false
       }
     },

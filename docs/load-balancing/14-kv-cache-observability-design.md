@@ -120,13 +120,15 @@ C data plane                                    Go control plane
 
 **Type:** HistogramVec
 
-**Labels:** `stage` (tokenize | hash | cgo | scan), `outcome` (hit | miss)
+**Labels:** `stage` (tokenize | hash | cgo), `outcome` (hit | miss). The C enum carries a 4th slot, `KV_STAGE_SCAN`, reserved for a
+C-side split of the inventory scan (`sockproxy_kv_exact.h`); `pd_kv_exact_select` never measures it, so it is NOT exported — a series
+that cannot move is not published (bed 2026-10-10, O-PRIO-1).
 
 **Buckets:** `{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0}` seconds - mirrors TTFB histogram and C-side `latency_bucket_bounds_us[]`
 
-**Help:** "Per-stage microsecond latency of Tier-1.5 KV-exact routing hot path, split by outcome. Stages: tokenize (HF tokenizer via CGO), hash (CBOR + chained block hash), cgo (best_worker CGO crossing), scan (inventory scan). Outcomes: hit (Tier-1.5 won), miss (fell through to Tier 2)."
+**Help:** "Per-stage microsecond latency of Tier-1.5 KV-exact routing hot path, split by outcome. Stages: tokenize (HF tokenizer via CGO), hash (CBOR + chained block hash), cgo (best_worker CGO crossing, which carries the inventory scan). Outcomes: hit (Tier-1.5 won), miss (fell through to Tier 2)."
 
-**Rationale:** This is THE diagnostic metric for "why is KV routing slow?" Without it, operators see a slow request but cannot tell whether tokenization, hashing, CGO crossing, or the scan is the bottleneck. The hit/miss split reveals whether the cost is worth the TTFT savings.
+**Rationale:** This is THE diagnostic metric for "why is KV routing slow?" Without it, operators see a slow request but cannot tell whether tokenization, hashing, or the CGO crossing (which carries the inventory scan) is the bottleneck. The hit/miss split reveals whether the cost is worth the TTFT savings.
 
 **Source:** the `kv_stage_buckets` / `kv_stage_sum_us` / `kv_stage_count` atomics in
 `proxy_global_stats_t` (`sockproxy.h`):
@@ -136,7 +138,7 @@ C data plane                                    Go control plane
 
 **Enum mapping** (`sockproxy_kv_exact.h`):
 ```
-Stage 0: tokenize     Stage 1: hash     Stage 2: cgo     Stage 3: scan
+Stage 0: tokenize     Stage 1: hash     Stage 2: cgo     Stage 3: scan (reserved, not exported)
 Outcome 0: miss       Outcome 1: hit
 ```
 
@@ -148,7 +150,7 @@ Outcome 0: miss       Outcome 1: hit
 | `loxilb-ebpf/common/sockproxy_metrics.c` | Nested loop in `proxy_get_metrics()`: 3D atomic_load + copy, plus 2D copies of sum_us and count |
 | `api/prometheus/sockproxy_metrics.go` (CGO) | Mirror 3 arrays in CGO C struct |
 | `api/prometheus/sockproxy_metrics.go` (promauto) | `promauto.NewHistogramVec{loxilb_pd_kv_stage_duration_seconds, []string{"stage", "outcome"}, Buckets: ...}` |
-| `api/prometheus/sockproxy_metrics.go` (helpers) | Stage names: `[]string{"tokenize", "hash", "cgo", "scan"}` |
+| `api/prometheus/sockproxy_metrics.go` (helpers) | Stage names: `[]string{"tokenize", "hash", "cgo", "scan"}` (the 4th slot is reserved and not exported) |
 | `api/prometheus/sockproxy_metrics.go` (loop) | Per (stage, outcome): monotonic delta on count, then reconstruct from cumulative bucket deltas |
 
 #### 2.4.1. Histogram Reconstruction - Shared Helper

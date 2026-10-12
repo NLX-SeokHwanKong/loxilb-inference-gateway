@@ -26,6 +26,7 @@ package snapshot
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
@@ -49,44 +50,45 @@ func fullFieldLbRule() cmn.LbRuleMod {
 	adminUp := true
 	return cmn.LbRuleMod{
 		Serv: cmn.LbServiceArg{
-			ServIP:            "20.20.20.1",
-			PrivateIP:         "10.10.10.1",
-			ServPort:          8080,
-			ServPortMax:       8090,
-			Proto:             "tcp",
-			BlockNum:          7,
-			Sel:               cmn.LbSelHash,
-			Bgp:               true,
-			Monitor:           true,
-			Security:          cmn.LBServHTTPS,
-			Mode:              cmn.LBModeOneArm,
-			InactiveTimeout:   240,
-			Managed:           true,
-			ProbeType:         "http",
-			ProbePort:         9000,
-			ProbeReq:          "/healthz",
-			ProbeResp:         "ok",
-			ProbeTimeout:      5,
-			ProbeRetries:      3,
-			Name:              "full-field-rule",
-			PersistTimeout:    300,
-			Snat:              true,
-			HostUrl:           "svc.example.test",
-			PathPrefix:        "/v1",
-			PathMatchMode:     "prefix",
-			ProxyProtocolV2:   true,
-			SockMapMode:       cmn.SockMapModeBoth,
-			Egress:            true,
-			Id:                "3c1f9df2-2f2e-4c3e-9d9b-2b6f6d1a0001",
-			AdminStateUp:      &adminUp,
-			ProjectId:         "proj-full-field",
-			Annotations:       map[string]string{"octaviaProtocol": "TCP", "team": "gw"},
-			ConnectionLimit:   512,
-			TraceType:         "sse",
-			BackendProtocol:   "https",
-			SessionHeaderName: "x-session-id",
-			ModelName:         "qwen3-06b",
-			SSEMode:           true,
+			ServIP:             "20.20.20.1",
+			PrivateIP:          "10.10.10.1",
+			ServPort:           8080,
+			ServPortMax:        8090,
+			Proto:              "tcp",
+			BlockNum:           7,
+			Sel:                cmn.LbSelHash,
+			Bgp:                true,
+			Monitor:            true,
+			Security:           cmn.LBServHTTPS,
+			Mode:               cmn.LBModeOneArm,
+			InactiveTimeout:    240,
+			Managed:            true,
+			ProbeType:          "http",
+			ProbePort:          9000,
+			ProbeReq:           "/healthz",
+			ProbeResp:          "ok",
+			ProbeTimeout:       5,
+			ProbeRetries:       3,
+			Name:               "full-field-rule",
+			PersistTimeout:     300,
+			Snat:               true,
+			HostUrl:            "svc.example.test",
+			PathPrefix:         "/v1",
+			PathMatchMode:      "prefix",
+			ProxyProtocolV2:    true,
+			SockMapMode:        cmn.SockMapModeBoth,
+			Egress:             true,
+			Id:                 "3c1f9df2-2f2e-4c3e-9d9b-2b6f6d1a0001",
+			AdminStateUp:       &adminUp,
+			ProjectId:          "proj-full-field",
+			Annotations:        map[string]string{"octaviaProtocol": "TCP", "team": "gw"},
+			ConnectionLimit:    512,
+			TraceType:          "sse",
+			BackendProtocol:    "https",
+			MCPProtocolVersion: cmn.MCPStatelessProtocolVersion,
+			SessionHeaderName:  "x-session-id",
+			ModelName:          "qwen3-06b",
+			SSEMode:            true,
 			// A JWT-capable mode so the profile reference below is a
 			// coherent pairing (the rule layer refuses a profile on any
 			// other mode) while api_key_auth itself stays non-zero.
@@ -282,5 +284,12 @@ func TestLbRuleFullFieldRoundTrip(t *testing.T) {
 	}
 	if wantDigest != gotDigest {
 		t.Fatalf("full-field LB rule content drifted across apply/get:\n got %+v\nwant %+v", after.Domains.LoadBalancer, doc.Domains.LoadBalancer)
+	}
+}
+
+func TestLbSnapshotMCPNullDoesNotBecomeLegacy(t *testing.T) {
+	var rule cmn.LbRuleMod
+	if err := json.Unmarshal([]byte(`{"serviceArguments":{"mcp_protocol_version":null}}`), &rule); err == nil {
+		t.Fatal("snapshot MCP null decoded as legacy")
 	}
 }

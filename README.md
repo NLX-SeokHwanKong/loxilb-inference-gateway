@@ -22,7 +22,7 @@ flowchart LR
     G -->|"cache-aware / P·D routing"| P["Prefill pool"]
     G --> D["Decode pool"]
     G -->|"cache-aware routing"| S["Converged engine pool"]
-    G -->|"session-sticky"| M["MCP server pool"]
+    G -->|"stateless / legacy session routing"| M["MCP server pool"]
     P -. "KV-cache events" .-> G
     S -. "KV-cache events" .-> G
     P == "KV transfer" ==> D
@@ -37,7 +37,7 @@ flowchart LR
 | Model-name routing | Routes by the requested model to per-model endpoint pools | [Model load balancing][model-lb] |
 | SSE streaming | Stream-aware proxying with idle-timeout suppression and a runaway cap | [SSE & quota][sse] |
 | AI traffic governance | API keys, JWT, model authorization and request/token quotas, enforced before dispatch | [AI traffic governance][gov] |
-| MCP gateway | Session-sticky proxying of Model Context Protocol server pools | [MCP gateway][mcp-gw] |
+| MCP gateway | Explicit MCP 2026-07-28 stateless validation and per-request selection, or legacy session routing | [MCP gateway][mcp-gw] |
 | Observability | Prometheus metrics and provisioned Grafana dashboards for L4, L7 and AI traffic | [Monitoring][mon] |
 | Classic load balancing | Everything upstream loxilb does: L4/NAT, Kubernetes service LB, SCTP/telco, HA | [upstream docs][upstream-docs] |
 

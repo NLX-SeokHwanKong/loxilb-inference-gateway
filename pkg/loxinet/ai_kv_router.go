@@ -36,9 +36,12 @@ import "C"
 
 import (
 	"crypto/sha256"
+	"os"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 	"unsafe"
 
 	log "github.com/sirupsen/logrus"
@@ -350,15 +353,85 @@ func kvTokenizerLoadAndCommit(backend KvTokenizerBackend, modelName, slug string
 	return tokenizer, false
 }
 
+// The tokenizer runs on the proxy worker that is relaying every other
+// connection of its shard (pd_kv_exact_select -> llb_ai_kv_tokenize* over
+// CGO, synchronous), and the caller only ever keeps the first maxTokens ids
+// (KV_MAX_TOKENS = 4096: the block-hash chain is a prefix match). Encoding a
+// whole long-context prompt (a coding assistant's 100 KiB+ of repository
+// context) and then cutting the ids was therefore milliseconds of head-of-line
+// blocking per request, paid by the SSE streams of that worker, for tokens
+// that were thrown away. The text is bounded BEFORE the digest and the
+// encode: maxTokens * kvTokenizeBytesPerToken bytes, cut at a rune boundary.
+//
+// Why the bound is safe for the hash chain: BPE/WordPiece tokenization of a
+// text prefix agrees with the prefix of the full text's tokenization up to
+// the pre-tokenization boundary nearest the cut, so the ids that differ can
+// only be the last few before the cut. With 16 bytes per token the cut lies
+// well past the maxTokens-th token for any natural text (1-4 bytes/token),
+// and those ids are discarded. A text so compact that the bounded prefix
+// yields fewer than maxTokens ids (long runs merged into wide tokens) keeps
+// every id but the last kvTokenizeCutGuard, so the chain never carries a
+// boundary-dependent block: the overlap score is at worst a little shorter,
+// never wrong. Operators can widen the bound with
+// LOXILB_KV_TOKENIZE_BYTES_PER_TOKEN (4..256).
+const (
+	kvTokenizeBytesPerTokenDefault = 16
+	kvTokenizeCutGuard             = 64
+)
+
+var (
+	kvTokenizeBytesPerTokenOnce sync.Once
+	kvTokenizeBytesPerToken     = kvTokenizeBytesPerTokenDefault
+)
+
+// kvResolveTokenizeBytesPerToken reads LOXILB_KV_TOKENIZE_BYTES_PER_TOKEN once
+// (init-time idiom of kvResolveMaxBlocks); garbage or out-of-range falls back
+// to the compiled default with a warning.
+func kvResolveTokenizeBytesPerToken() int {
+	if v := os.Getenv("LOXILB_KV_TOKENIZE_BYTES_PER_TOKEN"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 4 && n <= 256 {
+			log.Infof("kv-router: tokenize bound %d bytes/token (from LOXILB_KV_TOKENIZE_BYTES_PER_TOKEN)", n)
+			return n
+		}
+		log.Warnf("kv-router: invalid LOXILB_KV_TOKENIZE_BYTES_PER_TOKEN=%q (want 4..256), using default %d",
+			v, kvTokenizeBytesPerTokenDefault)
+	}
+	return kvTokenizeBytesPerTokenDefault
+}
+
+// kvTokenizeBound cuts text to maxTokens * bytes-per-token bytes on a UTF-8
+// rune boundary. The second result says whether anything was cut.
+func kvTokenizeBound(text string, maxTokens int) (string, bool) {
+	kvTokenizeBytesPerTokenOnce.Do(func() {
+		kvTokenizeBytesPerToken = kvResolveTokenizeBytesPerToken()
+	})
+	if maxTokens <= 0 {
+		return text, false
+	}
+	limit := maxTokens * kvTokenizeBytesPerToken
+	if limit <= 0 || len(text) <= limit {
+		return text, false
+	}
+	// back up to the start of the rune that straddles the limit
+	for limit > 0 && !utf8.RuneStart(text[limit]) {
+		limit--
+	}
+	return text[:limit], true
+}
+
 // kvTokenizeWithCache tokenizes text using the model's tokenizer, with LRU
 // caching. addSpecialTokens follows the KvTokenizer.Encode contract (true for
 // raw completions prompts, false for chat-rendered text) and is part of the
 // cache identity: the two modes produce different id streams on BOS-carrying
 // tokenizers, so a shared entry would leak one mode's tokens into the other.
+// The text is bounded first (kvTokenizeBound), so two prompts that differ
+// only past the bound share one entry: they share every id that is kept.
 func kvTokenizeWithCache(text, modelName string, maxTokens int, addSpecialTokens bool) []uint32 {
 	slug := kvModelSlug(modelName)
 
-	// Cache key = full-text identity (slug + len + sha256 + encode mode).
+	text, cut := kvTokenizeBound(text, maxTokens)
+
+	// Cache key = bounded-text identity (slug + len + sha256 + encode mode).
 	key := kvTokenCacheKeyFor(slug, text, addSpecialTokens)
 
 	// Check cache under read lock
@@ -387,6 +460,11 @@ func kvTokenizeWithCache(text, modelName string, maxTokens int, addSpecialTokens
 	// Truncate to maxTokens
 	if len(ids) > maxTokens {
 		ids = ids[:maxTokens]
+	} else if cut && len(ids) > kvTokenizeCutGuard {
+		// The bounded prefix tokenized to fewer ids than the caller keeps,
+		// so the ids near the cut are the boundary-dependent ones: drop them
+		// rather than hash a block vLLM would compute differently.
+		ids = ids[:len(ids)-kvTokenizeCutGuard]
 	}
 
 	// Store in cache under write lock, evict LRU if over capacity

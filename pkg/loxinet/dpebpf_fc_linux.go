@@ -33,6 +33,7 @@ struct proxy_ent {
 import "C"
 
 import (
+	"fmt"
 	"net"
 	"unsafe"
 
@@ -46,6 +47,14 @@ import (
 // two calls the management plane makes for one rule and for the process.
 
 var fcModeNames = [...]string{"off", "observe", "enforce"}
+
+// fcPoolLookupHost mirrors llb_conv_nat2proxy's default host identity.
+func fcPoolLookupHost(svcIP net.IP, svcPort uint16, hostURL string) string {
+	if hostURL != "" {
+		return hostURL
+	}
+	return fmt.Sprintf("%s:%d", svcIP.String(), svcPort)
+}
 
 // DpFcStateGet - the gate's resolved state on the rule's model pool: the
 // pool is the one the rule's host, path prefix and model name resolve to on
@@ -63,7 +72,9 @@ func (e *DpEbpfH) DpFcStateGet(svcIP net.IP, svcPort uint16, proto uint8,
 	key.xport = C.ushort(tk.Htons(svcPort))
 	key.protocol = C.uchar(proto)
 
-	cHost := C.CString(hostURL)
+	// llb_conv_nat2proxy synthesizes VIP:port for an omitted host. Query the
+	// installed pool identity, while retaining explicit host/path/model keys.
+	cHost := C.CString(fcPoolLookupHost(svcIP, svcPort, hostURL))
 	cPath := C.CString(pathPrefix)
 	cModel := C.CString(modelName)
 	defer C.free(unsafe.Pointer(cHost))
