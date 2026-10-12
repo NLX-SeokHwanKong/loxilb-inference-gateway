@@ -608,6 +608,80 @@ func (s *RateLimiterStore) ReserveTokens(tenantID string, want, tokensPerMin, bu
 	return true, 0, currentQuotaEpoch.Load()
 }
 
+// ReserveTokensElastic is ReserveTokens for a claim in two parts: firm, which
+// is refused when it does not fit exactly as ReserveTokens refuses it, and
+// elastic, which is shrunk to what the bucket still holds — down to nothing
+// — and is never the reason for a denial. The default reservation of a
+// request that declares no completion ceiling is the elastic part: leaving
+// the field out must not make a request cheaper to admit, and must not get
+// it refused either.
+//
+// The elastic part is first bounded by what the bucket can ever hold beside
+// the firm part (burst − firm), then by the level left after every
+// outstanding claim.
+//
+// Returns ReserveTokens' three values and granted: the tokens this call
+// left on the bucket, firm plus what remained of elastic. That, not the
+// asked amount, is what the caller must release at settlement. granted is 0
+// and resEpoch 0 when nothing was recorded. Atomic-only, same hot-path
+// constraints as ReserveTokens.
+func (s *RateLimiterStore) ReserveTokensElastic(tenantID string, firm, elastic, tokensPerMin, burstPct int) (allowed bool, retryAfterSecs int, resEpoch int64, granted int) {
+	if firm < 0 {
+		firm = 0
+	}
+	if elastic <= 0 {
+		allowed, retryAfterSecs, resEpoch = s.ReserveTokens(tenantID, firm, tokensPerMin, burstPct)
+		if allowed && resEpoch != 0 {
+			granted = firm
+		}
+		return allowed, retryAfterSecs, resEpoch, granted
+	}
+	if tokensPerMin <= 0 {
+		return true, 0, 0, 0
+	}
+
+	v, ok := s.quotaMap.Load(tenantID)
+	if !ok {
+		v, _ = s.quotaMap.LoadOrStore(tenantID, &tokenWindowEntry{})
+	}
+	e := v.(*tokenWindowEntry)
+
+	limit := int64(tokensPerMin)
+	atomic.StoreInt64(&e.limitTokens, limit)
+	atomic.StoreInt64(&e.burstPct, int64(burstPct))
+	touchQuotaEpoch(e)
+
+	burst := burstTokensFor(limit, int64(burstPct))
+	if int64(firm) > burst {
+		// The firm part alone can never be admitted: ReserveTokens' denial.
+		return false, int(epochInterval.Seconds()), 0, 0
+	}
+	el := min(int64(elastic), burst-int64(firm))
+
+	// Same two-atomics admission as ReserveTokens: claim everything, then
+	// hand back what does not fit. What does not fit comes off the elastic
+	// part first; only a shortfall the elastic part cannot absorb is the
+	// firm part's, and that one is a denial.
+	level := burst - debtTokensOf(atomic.LoadInt64(&e.tatMs), quotaNowMs.Load(), limit)
+	want := int64(firm) + el
+	newReserved := atomic.AddInt64(&e.reserved, want)
+	if over := newReserved - level; over > 0 {
+		if over > el {
+			reservedSubClamp(e, want)
+			deficit := over - el
+			retry := int(min((deficit*60+limit-1)/limit, int64(epochInterval.Seconds())))
+			return false, max(retry, 1), 0, 0
+		}
+		reservedSubClamp(e, over)
+		el -= over
+	}
+	if int64(firm)+el == 0 {
+		// Nothing is held, so there is nothing to settle.
+		return true, 0, 0, 0
+	}
+	return true, 0, currentQuotaEpoch.Load(), firm + int(el)
+}
+
 // SettleTokens replaces a request's admission-time reservation with the
 // response's real token charge: the reservation (reservedAmt, tagged with
 // the resEpoch ReserveTokens returned) is released, then actual tokens are
@@ -664,6 +738,18 @@ func (s *RateLimiterStore) ReleaseReservation(key string, amt int, resEpoch int6
 		return
 	}
 	reservedSubClamp(e, int64(amt))
+}
+
+// ReservedTokens returns the tokens outstanding reservations hold on a quota
+// key right now: claims admitted and not yet settled. 0 for a key with no
+// entry. It is the ledger a release-accounting check reads, inside the
+// reservation's own minute — the epoch advance zeroes it, so a later read
+// proves nothing about a leak.
+func (s *RateLimiterStore) ReservedTokens(key string) int64 {
+	if v, ok := s.quotaMap.Load(key); ok {
+		return atomic.LoadInt64(&v.(*tokenWindowEntry).reserved)
+	}
+	return 0
 }
 
 // reservedSubClamp releases amt from e.reserved without letting it go

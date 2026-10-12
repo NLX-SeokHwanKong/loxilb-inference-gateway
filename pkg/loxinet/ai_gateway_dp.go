@@ -1276,8 +1276,15 @@ func tokenQuotaConsumeInternal(svc rateLimitService, store *rl.RateLimiterStore,
 // user|model, key and per-VIP buckets next to the tenant aggregate;
 // parameter order mirrors tokenQuotaReserveInternal.
 //
+// defaultTokens is the rule's default reservation and counts only when the
+// request declares no ceiling (maxTokens <= 0); 0 is off. It is claimed as
+// an elastic part: shrunk to what the buckets still hold and never the
+// reason for a denial. *granted is what the buckets hold after the call,
+// which is the amount the C caller must echo at settlement; with no default
+// in play it is the plain prompt + max_tokens claim.
+//
 //export llb_ai_token_quota_reserve
-func llb_ai_token_quota_reserve(tenantID *C.char, modelName *C.char, userID *C.char, keyID *C.char, svcIdent *C.char, promptEst C.int, maxTokens C.int, resEpoch *C.longlong, result *C.ai_gw_decision_t) (ret C.int) {
+func llb_ai_token_quota_reserve(tenantID *C.char, modelName *C.char, userID *C.char, keyID *C.char, svcIdent *C.char, promptEst C.int, maxTokens C.int, defaultTokens C.int, resEpoch *C.longlong, granted *C.int, result *C.ai_gw_decision_t) (ret C.int) {
 	// See llb_ai_validate_key for why the denial is recorded in the deferred
 	// function rather than at each deny arm.
 	var metricTenant, metricModel string
@@ -1300,6 +1307,9 @@ func llb_ai_token_quota_reserve(tenantID *C.char, modelName *C.char, userID *C.c
 	if resEpoch != nil {
 		*resEpoch = 0
 	}
+	if granted != nil {
+		*granted = 0
+	}
 
 	tenant := C.GoString(tenantID)
 	metricTenant, metricModel = tenant, C.GoString(modelName)
@@ -1310,9 +1320,14 @@ func llb_ai_token_quota_reserve(tenantID *C.char, modelName *C.char, userID *C.c
 	if maxTokens > 0 {
 		want += int(maxTokens)
 	}
+	elastic := 0
+	if maxTokens <= 0 && defaultTokens > 0 {
+		elastic = int(defaultTokens)
+	}
 	// A keyless caller (no tenant) may still reserve against the per-VIP
 	// shared bucket when it names the service.
-	if want <= 0 || (tenant == "" && C.GoString(svcIdent) == "") {
+	service := C.GoString(svcIdent)
+	if (want <= 0 && elastic <= 0) || (tenant == "" && service == "") {
 		return 0
 	}
 
@@ -1322,7 +1337,7 @@ func llb_ai_token_quota_reserve(tenantID *C.char, modelName *C.char, userID *C.c
 	}
 
 	store := getGlobalRL()
-	allowed, retrySecs, epoch := tokenQuotaReserveInternal(svc, store, tenant, C.GoString(modelName), C.GoString(userID), C.GoString(keyID), C.GoString(svcIdent), want)
+	allowed, retrySecs, epoch, held, clamped := tokenQuotaReserveElasticInternal(svc, store, tenant, C.GoString(modelName), C.GoString(userID), C.GoString(keyID), service, want, elastic)
 	if !allowed {
 		if result != nil {
 			result.decision = 3
@@ -1335,8 +1350,14 @@ func llb_ai_token_quota_reserve(tenantID *C.char, modelName *C.char, userID *C.c
 			tenant, want, C.GoString(modelName))
 		return -1
 	}
+	if clamped {
+		noteReservationClamped(service)
+	}
 	if resEpoch != nil {
 		*resEpoch = C.longlong(epoch)
+	}
+	if granted != nil {
+		*granted = C.int(held)
 	}
 	return 0
 }

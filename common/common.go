@@ -1078,6 +1078,18 @@ type LbServiceArg struct {
 	HalfCloseMode string `json:"half_close_mode,omitempty"`
 	// HalfCloseModePresent is the presence bit for replace semantics.
 	HalfCloseModePresent bool `json:"-"`
+	// AIDefaultReservation - "on" makes the admission gate reserve a default
+	// number of completion tokens for a request that declares no max_tokens;
+	// "off" reserves the prompt estimate alone. Empty (or "inherit" on
+	// input) runs on LLB_AI_DEFAULT_RESERVATION, else off.
+	AIDefaultReservation string `json:"ai_default_reservation,omitempty"`
+	// AIDefaultReservationPresent is the presence bit for replace semantics.
+	AIDefaultReservationPresent bool `json:"-"`
+	// AIDefaultMaxTokens - the default reservation in tokens. 0 leaves
+	// LLB_AI_DEFAULT_MAX_TOKENS, else the built-in 512, in force.
+	AIDefaultMaxTokens uint32 `json:"ai_default_max_tokens,omitempty"`
+	// AIDefaultMaxTokensPresent is the presence bit for replace semantics.
+	AIDefaultMaxTokensPresent bool `json:"-"`
 	// Egress - Egress Rule
 	Egress bool `json:"egress"`
 	// Id - Stable opaque identifier for the LB rule (Octavia).
@@ -1748,6 +1760,15 @@ type FcEffectiveArg struct {
 	// ExposeHeaders is "on" when admitted responses carry the admission
 	// headers, else "off".
 	ExposeHeaders string `json:"expose_headers"`
+	// DefaultReservation is "on" when a request without max_tokens reserves
+	// a default for its completion, else "off"; DefaultMaxTokens is that
+	// default in tokens (0 while off). ReservationClamped counts the
+	// requests of the service (every model pool of its VIP and port) whose
+	// default was admitted smaller than DefaultMaxTokens, since the process
+	// started.
+	DefaultReservation string `json:"default_reservation"`
+	DefaultMaxTokens   uint32 `json:"default_max_tokens"`
+	ReservationClamped uint64 `json:"reservation_clamped"`
 	// Source names where each value in force came from: "rule", "env" or
 	// "default".
 	Source FcEffectiveSource `json:"source"`
@@ -1768,6 +1789,8 @@ type FcEffectiveSource struct {
 	TtftTargetMs       string `json:"ttft_target_ms"`
 	TenantMaxSharePct  string `json:"tenant_max_share_pct"`
 	ExposeHeaders      string `json:"expose_headers"`
+	DefaultReservation string `json:"default_reservation"`
+	DefaultMaxTokens   string `json:"default_max_tokens"`
 }
 
 // LbRuleMod - Info related to a load-balancer entry

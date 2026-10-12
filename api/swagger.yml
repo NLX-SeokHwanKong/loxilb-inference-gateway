@@ -10940,6 +10940,52 @@ definitions:
               (LLB_FC_EXPOSE_HEADERS). Refused (400) with sockMapMode both or
               response, where the gateway never sees the response. Replace and
               null semantics as fc_mode.
+          ai_default_reservation:
+            type: string
+            x-nullable: false
+            enum: ["on", "off", "inherit"]
+            description: >-
+              Whether a request that declares no completion ceiling (no
+              max_tokens or max_completion_tokens, or a value that is not a
+              positive whole number: negative, 0, a string, a float, an object
+              or an array) reserves a default number of completion tokens
+              against the token quotas at admission. off reserves the prompt
+              estimate alone, so leaving the field out is the cheaper choice at
+              admission. on reserves ai_default_max_tokens beside the prompt
+              estimate, as a claim each quota bucket may shrink: it is cut to
+              what the bucket can hold beside the prompt estimate and to what
+              is left of it, down to nothing, and it is never the reason a
+              request is refused - only the prompt estimate and a declared
+              ceiling are. A request admitted with less than the default is
+              counted in fc_effective.reservation_clamped and in
+              loxilb_ai_reservation_clamped_total. The claim is released when
+              the response is settled, as a declared ceiling's is. Nothing is
+              written into the forwarded request, and a declared ceiling is
+              never replaced. inherit, or omitted on create, runs on the process
+              default (LLB_AI_DEFAULT_RESERVATION, else off). Replace and null
+              semantics as fc_mode; a replace that changes nothing else applies
+              in place, to requests admitted from then on. Read back only when
+              declared; what is in force is fc_effective.default_reservation.
+              The gate reserves before a rule is selected by host, path or
+              model, so on a VIP and port that several rules share, the value
+              of the rule installed first on it is the one in force for all of
+              them, as with api_key_auth: declare the same value on each.
+          ai_default_max_tokens:
+            type: integer
+            format: int32
+            x-nullable: false
+            minimum: 0
+            maximum: 100000000
+            default: 0
+            description: >-
+              The default reservation in tokens, used while
+              ai_default_reservation is in force as on. 0 or omitted leaves the
+              process default (LLB_AI_DEFAULT_MAX_TOKENS) in force, else the
+              built-in 512, which is an estimate of a typical completion and
+              not a measured one; at most 100000000. Changeable at runtime by a
+              replace POST (the stored value is kept when omitted, an explicit
+              0 resets to the process default). Explicit JSON null is rejected.
+              The value in force and its source are read back in fc_effective.
           fc_effective:
             type: object
             readOnly: true
@@ -11064,6 +11110,20 @@ definitions:
                 type: string
                 enum: ["on", "off"]
                 description: Whether admitted responses carry the admission headers.
+              default_reservation:
+                type: string
+                enum: ["on", "off"]
+                description: Whether a request without a declared max_tokens reserves a default for its completion (ai_default_reservation as this rule resolves it; on a VIP and port shared by several rules the gate uses the first-installed rule's).
+              default_max_tokens:
+                type: integer
+                x-omitempty: false
+                format: int32
+                description: The default reservation in tokens; 0 while default_reservation is off.
+              reservation_clamped:
+                type: integer
+                x-omitempty: false
+                format: int64
+                description: Requests admitted with less than default_max_tokens reserved because a quota bucket did not hold all of it, since the process started. Counted per service - every model pool of the same VIP and port reads the same number. Never a refusal.
               source:
                 type: object
                 description: >-
@@ -11108,6 +11168,12 @@ definitions:
                     type: string
                     enum: [rule, env, default]
                   expose_headers:
+                    type: string
+                    enum: [rule, env, default]
+                  default_reservation:
+                    type: string
+                    enum: [rule, env, default]
+                  default_max_tokens:
                     type: string
                     enum: [rule, env, default]
           kvExactMode:

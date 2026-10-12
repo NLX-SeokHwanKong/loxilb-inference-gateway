@@ -4753,6 +4753,25 @@ func init() {
               "description": "Service lifecycle flag. In the domain, absent/true enables new selection and false pauses new selection while retaining members. Implementation gap: POST drops this property, so false does not create a paused rule. The restricted L4 PATCH path handles explicit changes and GET reports effective state. Source behavior does not prove established-connection preservation.",
               "type": "boolean"
             },
+            "ai_default_max_tokens": {
+              "default": 0,
+              "description": "The default reservation in tokens, used while ai_default_reservation is in force as on. 0 or omitted leaves the process default (LLB_AI_DEFAULT_MAX_TOKENS) in force, else the built-in 512, which is an estimate of a typical completion and not a measured one; at most 100000000. Changeable at runtime by a replace POST (the stored value is kept when omitted, an explicit 0 resets to the process default). Explicit JSON null is rejected. The value in force and its source are read back in fc_effective.",
+              "format": "int32",
+              "maximum": 100000000,
+              "minimum": 0,
+              "type": "integer",
+              "x-nullable": false
+            },
+            "ai_default_reservation": {
+              "description": "Whether a request that declares no completion ceiling (no max_tokens or max_completion_tokens, or a value that is not a positive whole number: negative, 0, a string, a float, an object or an array) reserves a default number of completion tokens against the token quotas at admission. off reserves the prompt estimate alone, so leaving the field out is the cheaper choice at admission. on reserves ai_default_max_tokens beside the prompt estimate, as a claim each quota bucket may shrink: it is cut to what the bucket can hold beside the prompt estimate and to what is left of it, down to nothing, and it is never the reason a request is refused - only the prompt estimate and a declared ceiling are. A request admitted with less than the default is counted in fc_effective.reservation_clamped and in loxilb_ai_reservation_clamped_total. The claim is released when the response is settled, as a declared ceiling's is. Nothing is written into the forwarded request, and a declared ceiling is never replaced. inherit, or omitted on create, runs on the process default (LLB_AI_DEFAULT_RESERVATION, else off). Replace and null semantics as fc_mode; a replace that changes nothing else applies in place, to requests admitted from then on. Read back only when declared; what is in force is fc_effective.default_reservation. The gate reserves before a rule is selected by host, path or model, so on a VIP and port that several rules share, the value of the rule installed first on it is the one in force for all of them, as with api_key_auth: declare the same value on each.",
+              "enum": [
+                "on",
+                "off",
+                "inherit"
+              ],
+              "type": "string",
+              "x-nullable": false
+            },
             "alpn_protocols": {
               "description": "HTTP ALPN capability list, typically [h2, http/1.1], [h2] or [http/1.1]. Recognized values override backend_protocol through a shared capability used by listener and backend TLS setup; list order is not preserved as preference order. Empty leaves backend_protocol in use. Implementation limitations: unknown tokens are ignored, an entirely unrecognized list falls back to backend_protocol, and the H1/both listener callback can select H1 without a common advertised protocol. This is not strict ALPN allow-list enforcement. See shared readback/update warnings.",
               "items": {
@@ -4972,6 +4991,20 @@ func init() {
                   "type": "integer",
                   "x-omitempty": false
                 },
+                "default_max_tokens": {
+                  "description": "The default reservation in tokens; 0 while default_reservation is off.",
+                  "format": "int32",
+                  "type": "integer",
+                  "x-omitempty": false
+                },
+                "default_reservation": {
+                  "description": "Whether a request without a declared max_tokens reserves a default for its completion (ai_default_reservation as this rule resolves it; on a VIP and port shared by several rules the gate uses the first-installed rule's).",
+                  "enum": [
+                    "on",
+                    "off"
+                  ],
+                  "type": "string"
+                },
                 "effective_max_outstanding": {
                   "description": "The service ceiling in force now; below max_outstanding while an adaptive pool is tightened.",
                   "format": "int32",
@@ -5038,6 +5071,12 @@ func init() {
                   "type": "integer",
                   "x-omitempty": false
                 },
+                "reservation_clamped": {
+                  "description": "Requests admitted with less than default_max_tokens reserved because a quota bucket did not hold all of it, since the process started. Counted per service - every model pool of the same VIP and port reads the same number. Never a refusal.",
+                  "format": "int64",
+                  "type": "integer",
+                  "x-omitempty": false
+                },
                 "source": {
                   "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default).",
                   "properties": {
@@ -5050,6 +5089,22 @@ func init() {
                       "type": "string"
                     },
                     "decode_max_inflight": {
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ],
+                      "type": "string"
+                    },
+                    "default_max_tokens": {
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ],
+                      "type": "string"
+                    },
+                    "default_reservation": {
                       "enum": [
                         "rule",
                         "env",
@@ -39891,6 +39946,25 @@ func init() {
               "description": "Service lifecycle flag. In the domain, absent/true enables new selection and false pauses new selection while retaining members. Implementation gap: POST drops this property, so false does not create a paused rule. The restricted L4 PATCH path handles explicit changes and GET reports effective state. Source behavior does not prove established-connection preservation.",
               "type": "boolean"
             },
+            "ai_default_max_tokens": {
+              "description": "The default reservation in tokens, used while ai_default_reservation is in force as on. 0 or omitted leaves the process default (LLB_AI_DEFAULT_MAX_TOKENS) in force, else the built-in 512, which is an estimate of a typical completion and not a measured one; at most 100000000. Changeable at runtime by a replace POST (the stored value is kept when omitted, an explicit 0 resets to the process default). Explicit JSON null is rejected. The value in force and its source are read back in fc_effective.",
+              "type": "integer",
+              "format": "int32",
+              "default": 0,
+              "maximum": 100000000,
+              "minimum": 0,
+              "x-nullable": false
+            },
+            "ai_default_reservation": {
+              "description": "Whether a request that declares no completion ceiling (no max_tokens or max_completion_tokens, or a value that is not a positive whole number: negative, 0, a string, a float, an object or an array) reserves a default number of completion tokens against the token quotas at admission. off reserves the prompt estimate alone, so leaving the field out is the cheaper choice at admission. on reserves ai_default_max_tokens beside the prompt estimate, as a claim each quota bucket may shrink: it is cut to what the bucket can hold beside the prompt estimate and to what is left of it, down to nothing, and it is never the reason a request is refused - only the prompt estimate and a declared ceiling are. A request admitted with less than the default is counted in fc_effective.reservation_clamped and in loxilb_ai_reservation_clamped_total. The claim is released when the response is settled, as a declared ceiling's is. Nothing is written into the forwarded request, and a declared ceiling is never replaced. inherit, or omitted on create, runs on the process default (LLB_AI_DEFAULT_RESERVATION, else off). Replace and null semantics as fc_mode; a replace that changes nothing else applies in place, to requests admitted from then on. Read back only when declared; what is in force is fc_effective.default_reservation. The gate reserves before a rule is selected by host, path or model, so on a VIP and port that several rules share, the value of the rule installed first on it is the one in force for all of them, as with api_key_auth: declare the same value on each.",
+              "type": "string",
+              "enum": [
+                "on",
+                "off",
+                "inherit"
+              ],
+              "x-nullable": false
+            },
             "alpn_protocols": {
               "description": "HTTP ALPN capability list, typically [h2, http/1.1], [h2] or [http/1.1]. Recognized values override backend_protocol through a shared capability used by listener and backend TLS setup; list order is not preserved as preference order. Empty leaves backend_protocol in use. Implementation limitations: unknown tokens are ignored, an entirely unrecognized list falls back to backend_protocol, and the H1/both listener callback can select H1 without a common advertised protocol. This is not strict ALPN allow-list enforcement. See shared readback/update warnings.",
               "type": "array",
@@ -40111,6 +40185,20 @@ func init() {
                   "x-omitempty": false,
                   "format": "int32"
                 },
+                "default_max_tokens": {
+                  "description": "The default reservation in tokens; 0 while default_reservation is off.",
+                  "type": "integer",
+                  "format": "int32",
+                  "x-omitempty": false
+                },
+                "default_reservation": {
+                  "description": "Whether a request without a declared max_tokens reserves a default for its completion (ai_default_reservation as this rule resolves it; on a VIP and port shared by several rules the gate uses the first-installed rule's).",
+                  "type": "string",
+                  "enum": [
+                    "on",
+                    "off"
+                  ]
+                },
                 "effective_max_outstanding": {
                   "description": "The service ceiling in force now; below max_outstanding while an adaptive pool is tightened.",
                   "type": "integer",
@@ -40177,6 +40265,12 @@ func init() {
                   "x-omitempty": false,
                   "format": "int32"
                 },
+                "reservation_clamped": {
+                  "description": "Requests admitted with less than default_max_tokens reserved because a quota bucket did not hold all of it, since the process started. Counted per service - every model pool of the same VIP and port reads the same number. Never a refusal.",
+                  "type": "integer",
+                  "format": "int64",
+                  "x-omitempty": false
+                },
                 "source": {
                   "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default).",
                   "type": "object",
@@ -40190,6 +40284,22 @@ func init() {
                       ]
                     },
                     "decode_max_inflight": {
+                      "type": "string",
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ]
+                    },
+                    "default_max_tokens": {
+                      "type": "string",
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ]
+                    },
+                    "default_reservation": {
                       "type": "string",
                       "enum": [
                         "rule",
@@ -41055,6 +41165,25 @@ func init() {
           "description": "Service lifecycle flag. In the domain, absent/true enables new selection and false pauses new selection while retaining members. Implementation gap: POST drops this property, so false does not create a paused rule. The restricted L4 PATCH path handles explicit changes and GET reports effective state. Source behavior does not prove established-connection preservation.",
           "type": "boolean"
         },
+        "ai_default_max_tokens": {
+          "description": "The default reservation in tokens, used while ai_default_reservation is in force as on. 0 or omitted leaves the process default (LLB_AI_DEFAULT_MAX_TOKENS) in force, else the built-in 512, which is an estimate of a typical completion and not a measured one; at most 100000000. Changeable at runtime by a replace POST (the stored value is kept when omitted, an explicit 0 resets to the process default). Explicit JSON null is rejected. The value in force and its source are read back in fc_effective.",
+          "type": "integer",
+          "format": "int32",
+          "default": 0,
+          "maximum": 100000000,
+          "minimum": 0,
+          "x-nullable": false
+        },
+        "ai_default_reservation": {
+          "description": "Whether a request that declares no completion ceiling (no max_tokens or max_completion_tokens, or a value that is not a positive whole number: negative, 0, a string, a float, an object or an array) reserves a default number of completion tokens against the token quotas at admission. off reserves the prompt estimate alone, so leaving the field out is the cheaper choice at admission. on reserves ai_default_max_tokens beside the prompt estimate, as a claim each quota bucket may shrink: it is cut to what the bucket can hold beside the prompt estimate and to what is left of it, down to nothing, and it is never the reason a request is refused - only the prompt estimate and a declared ceiling are. A request admitted with less than the default is counted in fc_effective.reservation_clamped and in loxilb_ai_reservation_clamped_total. The claim is released when the response is settled, as a declared ceiling's is. Nothing is written into the forwarded request, and a declared ceiling is never replaced. inherit, or omitted on create, runs on the process default (LLB_AI_DEFAULT_RESERVATION, else off). Replace and null semantics as fc_mode; a replace that changes nothing else applies in place, to requests admitted from then on. Read back only when declared; what is in force is fc_effective.default_reservation. The gate reserves before a rule is selected by host, path or model, so on a VIP and port that several rules share, the value of the rule installed first on it is the one in force for all of them, as with api_key_auth: declare the same value on each.",
+          "type": "string",
+          "enum": [
+            "on",
+            "off",
+            "inherit"
+          ],
+          "x-nullable": false
+        },
         "alpn_protocols": {
           "description": "HTTP ALPN capability list, typically [h2, http/1.1], [h2] or [http/1.1]. Recognized values override backend_protocol through a shared capability used by listener and backend TLS setup; list order is not preserved as preference order. Empty leaves backend_protocol in use. Implementation limitations: unknown tokens are ignored, an entirely unrecognized list falls back to backend_protocol, and the H1/both listener callback can select H1 without a common advertised protocol. This is not strict ALPN allow-list enforcement. See shared readback/update warnings.",
           "type": "array",
@@ -41275,6 +41404,20 @@ func init() {
               "x-omitempty": false,
               "format": "int32"
             },
+            "default_max_tokens": {
+              "description": "The default reservation in tokens; 0 while default_reservation is off.",
+              "type": "integer",
+              "format": "int32",
+              "x-omitempty": false
+            },
+            "default_reservation": {
+              "description": "Whether a request without a declared max_tokens reserves a default for its completion (ai_default_reservation as this rule resolves it; on a VIP and port shared by several rules the gate uses the first-installed rule's).",
+              "type": "string",
+              "enum": [
+                "on",
+                "off"
+              ]
+            },
             "effective_max_outstanding": {
               "description": "The service ceiling in force now; below max_outstanding while an adaptive pool is tightened.",
               "type": "integer",
@@ -41341,6 +41484,12 @@ func init() {
               "x-omitempty": false,
               "format": "int32"
             },
+            "reservation_clamped": {
+              "description": "Requests admitted with less than default_max_tokens reserved because a quota bucket did not hold all of it, since the process started. Counted per service - every model pool of the same VIP and port reads the same number. Never a refusal.",
+              "type": "integer",
+              "format": "int64",
+              "x-omitempty": false
+            },
             "source": {
               "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default).",
               "type": "object",
@@ -41354,6 +41503,22 @@ func init() {
                   ]
                 },
                 "decode_max_inflight": {
+                  "type": "string",
+                  "enum": [
+                    "rule",
+                    "env",
+                    "default"
+                  ]
+                },
+                "default_max_tokens": {
+                  "type": "string",
+                  "enum": [
+                    "rule",
+                    "env",
+                    "default"
+                  ]
+                },
+                "default_reservation": {
                   "type": "string",
                   "enum": [
                     "rule",
@@ -42172,6 +42337,19 @@ func init() {
           "type": "integer",
           "format": "int32"
         },
+        "default_max_tokens": {
+          "description": "The default reservation in tokens; 0 while default_reservation is off.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "default_reservation": {
+          "description": "Whether a request without a declared max_tokens reserves a default for its completion (ai_default_reservation as this rule resolves it; on a VIP and port shared by several rules the gate uses the first-installed rule's).",
+          "type": "string",
+          "enum": [
+            "on",
+            "off"
+          ]
+        },
         "effective_max_outstanding": {
           "description": "The service ceiling in force now; below max_outstanding while an adaptive pool is tightened.",
           "type": "integer",
@@ -42229,6 +42407,11 @@ func init() {
           "type": "integer",
           "format": "int32"
         },
+        "reservation_clamped": {
+          "description": "Requests admitted with less than default_max_tokens reserved because a quota bucket did not hold all of it, since the process started. Counted per service - every model pool of the same VIP and port reads the same number. Never a refusal.",
+          "type": "integer",
+          "format": "int64"
+        },
         "source": {
           "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default).",
           "type": "object",
@@ -42242,6 +42425,22 @@ func init() {
               ]
             },
             "decode_max_inflight": {
+              "type": "string",
+              "enum": [
+                "rule",
+                "env",
+                "default"
+              ]
+            },
+            "default_max_tokens": {
+              "type": "string",
+              "enum": [
+                "rule",
+                "env",
+                "default"
+              ]
+            },
+            "default_reservation": {
               "type": "string",
               "enum": [
                 "rule",
@@ -42388,6 +42587,22 @@ func init() {
           ]
         },
         "decode_max_inflight": {
+          "type": "string",
+          "enum": [
+            "rule",
+            "env",
+            "default"
+          ]
+        },
+        "default_max_tokens": {
+          "type": "string",
+          "enum": [
+            "rule",
+            "env",
+            "default"
+          ]
+        },
+        "default_reservation": {
           "type": "string",
           "enum": [
             "rule",

@@ -87,6 +87,9 @@ func ConfigPostLoadbalancer(params operations.PostConfigLoadbalancerParams, prin
 	if err := pres.validateHalfCloseMode(params.Attr.ServiceArguments); err != nil {
 		return errorResponseWithCode(http.StatusBadRequest, err.Error())
 	}
+	if err := pres.validateAIDefaultReservation(params.Attr.ServiceArguments); err != nil {
+		return errorResponseWithCode(http.StatusBadRequest, err.Error())
+	}
 	if err := validateBackendTLSArguments(params.Attr.ServiceArguments); err != nil {
 		return errorResponseWithCode(http.StatusBadRequest, err.Error())
 	}
@@ -149,6 +152,7 @@ func ConfigPostLoadbalancer(params operations.PostConfigLoadbalancerParams, prin
 		lbRules.Serv.SockMapMode = *params.Attr.ServiceArguments.SockMapMode
 	}
 	pres.applyHalfCloseMode(&lbRules.Serv, params.Attr.ServiceArguments)
+	pres.applyAIDefaultReservation(&lbRules.Serv, params.Attr.ServiceArguments)
 	lbRules.Serv.Egress = params.Attr.ServiceArguments.Egress
 	lbRules.Serv.TraceType = params.Attr.ServiceArguments.TraceType // Tracing catalog (independent from GPU routing)
 
@@ -747,6 +751,8 @@ func serializeLBRule(lb cmn.LbRuleMod) *models.LoadbalanceEntry {
 	tmpSvc.FcTtftTargetMs = int32(lb.Serv.FcTtftTargetMs)
 	tmpSvc.FcTenantMaxSharePct = int32(lb.Serv.FcTenantMaxSharePct)
 	tmpSvc.FcExposeHeaders = lb.Serv.FcExposeHeaders
+	tmpSvc.AiDefaultReservation = lb.Serv.AIDefaultReservation
+	tmpSvc.AiDefaultMaxTokens = int32(lb.Serv.AIDefaultMaxTokens)
 	if eff := lb.Serv.FcEffective; eff != nil {
 		tmpSvc.FcEffective = &models.LoadbalanceEntryServiceArgumentsFcEffective{
 			Mode:                    eff.Mode,
@@ -771,6 +777,9 @@ func serializeLBRule(lb cmn.LbRuleMod) *models.LoadbalanceEntry {
 			TenantsActive:           int32(eff.TenantsActive),
 			TenantSlots:             int32(eff.TenantSlots),
 			ExposeHeaders:           eff.ExposeHeaders,
+			DefaultReservation:      eff.DefaultReservation,
+			DefaultMaxTokens:        int32(eff.DefaultMaxTokens),
+			ReservationClamped:      int64(eff.ReservationClamped),
 			Source: &models.LoadbalanceEntryServiceArgumentsFcEffectiveSource{
 				Mode:               eff.Source.Mode,
 				MaxOutstanding:     eff.Source.MaxOutstanding,
@@ -785,6 +794,8 @@ func serializeLBRule(lb cmn.LbRuleMod) *models.LoadbalanceEntry {
 				TtftTargetMs:       eff.Source.TtftTargetMs,
 				TenantMaxSharePct:  eff.Source.TenantMaxSharePct,
 				ExposeHeaders:      eff.Source.ExposeHeaders,
+				DefaultReservation: eff.Source.DefaultReservation,
+				DefaultMaxTokens:   eff.Source.DefaultMaxTokens,
 			},
 		}
 	}

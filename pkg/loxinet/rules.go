@@ -605,8 +605,9 @@ type ruleEnt struct {
 	inst                        string
 	secMode                     cmn.LBSec
 	ppv2En                      bool
-	sockMapMode                 uint8 // Directional sockmap accel: 0=off,1=both,2=request,3=response
-	halfCloseMode               uint8 // half-close hold, enum sp_hold_mode: 0=unset,1=off,2=hold
+	sockMapMode                 uint8         // Directional sockmap accel: 0=off,1=both,2=request,3=response
+	halfCloseMode               uint8         // half-close hold, enum sp_hold_mode: 0=unset,1=off,2=hold
+	aiDefaultResv               aiDefaultResv // default reservation for a request without max_tokens, as declared
 	egress                      bool
 	traceType                   string // Tracing catalog name for deep inspection
 	tracingCatalogID            uint16 // Resolved catalog_id for tracing (0 = no tracing)
@@ -1256,6 +1257,8 @@ func (R *RuleH) GetLBRule() ([]cmn.LbRuleMod, error) {
 		ret.Serv.FcMaxQueueDepth = data.fcMaxQueueDepth
 		ret.Serv.FcMaxQueueWaitMs = data.fcMaxQueueWaitMs
 		data.fcCfg.toServ(&ret.Serv)
+		ret.Serv.AIDefaultReservation = cmn.AIDefaultReservationFromRule(data.aiDefaultResv.mode)
+		ret.Serv.AIDefaultMaxTokens = data.aiDefaultResv.maxTokens
 		// The capacity gate's resolved state on the pool, for AI-gateway or
 		// modern MCP services: what the data plane holds, not what was posted.
 		// A read model beside configuration, never replayed into a POST.
@@ -1263,6 +1266,7 @@ func (R *RuleH) GetLBRule() ([]cmn.LbRuleMod, error) {
 			if eff, ok := mh.dpEbpf.DpFcStateGet(data.tuples.l3Dst.addr.IP,
 				data.tuples.l4Dst.valMin, uint8(data.tuples.l4Prot.val),
 				data.tuples.path, data.tuples.pathPrefix, data.tuples.modelName); ok {
+				data.aiDefaultResv.fillEffective(&eff, data.tuples.l3Dst.addr.IP, data.tuples.l4Dst.valMin)
 				ret.Serv.FcEffective = &eff
 			}
 		}
@@ -4550,6 +4554,10 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 	if halfCloseErr != nil {
 		return RuleArgsErr, halfCloseErr
 	}
+	nextAIDefaultResv, aiDefaultResvErr := aiDefaultResvResolve(eRule, &serv)
+	if aiDefaultResvErr != nil {
+		return RuleArgsErr, aiDefaultResvErr
+	}
 	// Checked against the resolved api_key_auth, which a replace may have
 	// preserved, and against the listener's L7 attachment as it stands. The
 	// attachment is read from the index rather than the policy registry because
@@ -4710,12 +4718,15 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 		// requests waiting in its queue and restart its counts. The data
 		// plane's in-place update applies it and wakes the waiters it lets
 		// through. The half-close mode is applied the same way: re-creating
-		// the entry would cut the clients held under the old mode.
+		// the entry would cut the clients held under the old mode. So is the
+		// default reservation: it sizes the claims of requests admitted
+		// from then on, and nothing in flight depends on it.
 		inPlaceOnlyChg := false
 		if !ruleChg && (eRule.fcMaxQueueDepth != nextFcMaxQueueDepth ||
 			eRule.fcMaxQueueWaitMs != nextFcMaxQueueWaitMs ||
 			eRule.fcCfg != nextFcCfg ||
-			eRule.halfCloseMode != nextHalfClose) {
+			eRule.halfCloseMode != nextHalfClose ||
+			eRule.aiDefaultResv != nextAIDefaultResv) {
 			ruleChg = true
 			inPlaceOnlyChg = true
 		}
@@ -4897,6 +4908,7 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 		eRule.fcMaxQueueWaitMs = nextFcMaxQueueWaitMs
 		eRule.fcCfg = nextFcCfg
 		eRule.halfCloseMode = nextHalfClose
+		eRule.aiDefaultResv = nextAIDefaultResv
 		eRule.cbEnable = serv.CbEnable
 		eRule.kvExactMode = serv.KvExactMode
 		eRule.kvBlockSize = serv.KvBlockSize
@@ -5265,6 +5277,9 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 
 	// Store the half-close hold mode
 	r.halfCloseMode = nextHalfClose
+
+	// Store the default reservation
+	r.aiDefaultResv = nextAIDefaultResv
 
 	// Store the per-endpoint circuit-breaker enable
 	r.cbEnable = serv.CbEnable
@@ -7133,6 +7148,7 @@ func (r *ruleEnt) LB2DP(work DpWorkT) int {
 	nWork.FcTenantSharePct = uint8(r.fcCfg.tenantSharePct)
 	nWork.FcExposeHeaders = r.fcCfg.exposeHeaders
 	nWork.HalfCloseMode = r.halfCloseDpMode()
+	nWork.AIDefaultTokens = r.aiDefaultResv.tokensInForce()
 	nWork.CbEnable = r.cbEnable
 	nWork.KvExactMode = r.kvExactMode // KV-cache exact routing
 	nWork.KvBlockSize = r.kvBlockSize

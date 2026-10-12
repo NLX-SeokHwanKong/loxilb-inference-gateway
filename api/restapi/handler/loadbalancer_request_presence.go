@@ -322,6 +322,46 @@ func (p *loadbalancerRequestPresence) applyHalfCloseMode(
 	}
 }
 
+// validateAIDefaultReservation checks the default reservation's two fields
+// on their own, as validateHalfCloseMode does: null is refused, the switch
+// is one of its words and the value is bounded (the rule layer checks again
+// for callers without the handler).
+func (p *loadbalancerRequestPresence) validateAIDefaultReservation(
+	src *models.LoadbalanceEntryServiceArguments,
+) error {
+	for _, key := range []string{"ai_default_reservation", "ai_default_max_tokens"} {
+		if p.svcIsNull(key) {
+			return fmt.Errorf("%s must not be null", key)
+		}
+	}
+	if src == nil {
+		return nil
+	}
+	if _, err := cmn.AIDefaultReservationToRule(src.AiDefaultReservation); err != nil {
+		return err
+	}
+	if src.AiDefaultMaxTokens < 0 || int64(src.AiDefaultMaxTokens) > int64(cmn.AIDefaultMaxTokensMax) {
+		return fmt.Errorf("ai_default_max_tokens must be within 0..%d", cmn.AIDefaultMaxTokensMax)
+	}
+	return nil
+}
+
+// applyAIDefaultReservation copies the default reservation's two fields
+// with their presence bits, as applyHalfCloseMode does.
+func (p *loadbalancerRequestPresence) applyAIDefaultReservation(
+	dst *cmn.LbServiceArg,
+	src *models.LoadbalanceEntryServiceArguments,
+) {
+	if p.svcPresent("ai_default_reservation") || src.AiDefaultReservation != "" {
+		dst.AIDefaultReservation = src.AiDefaultReservation
+		dst.AIDefaultReservationPresent = p.svcPresent("ai_default_reservation")
+	}
+	if p.svcPresent("ai_default_max_tokens") || src.AiDefaultMaxTokens != 0 {
+		dst.AIDefaultMaxTokens = uint32(src.AiDefaultMaxTokens)
+		dst.AIDefaultMaxTokensPresent = p.svcPresent("ai_default_max_tokens")
+	}
+}
+
 // applyFcGate copies the admission gate's rule fields with their presence
 // bits, as applyFcQueue does for the queue pair.
 func (p *loadbalancerRequestPresence) applyFcGate(

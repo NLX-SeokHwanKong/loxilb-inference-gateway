@@ -3,7 +3,7 @@
   "scope": "LoadbalanceEntry fields and AI KV inventory query parameters; not a test-coverage claim",
   "sourceSha256": {
     "swagger-extras.yml": "5e36fc44f7bcae7588611893ef158e68e0f26c2a0e67d0a9fc719ab3c026c3bc",
-    "swagger.yml": "cfe101bec279e24973c9e2c9bf830940f40fc81e7469ed84ab85110fa135a18c"
+    "swagger.yml": "78fa6c4e3413c6fd65024bb53394140bb481534a86a1c1f6a0f80adafaadabcb"
   },
   "fields": [
     {
@@ -311,6 +311,33 @@
       "contract": {
         "description": "Service lifecycle flag. In the domain, absent/true enables new selection and false pauses new selection while retaining members. Implementation gap: POST drops this property, so false does not create a paused rule. The restricted L4 PATCH path handles explicit changes and GET reports effective state. Source behavior does not prove established-connection preservation.",
         "type": "boolean"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/ai_default_max_tokens",
+      "required": false,
+      "contract": {
+        "default": 0,
+        "description": "The default reservation in tokens, used while ai_default_reservation is in force as on. 0 or omitted leaves the process default (LLB_AI_DEFAULT_MAX_TOKENS) in force, else the built-in 512, which is an estimate of a typical completion and not a measured one; at most 100000000. Changeable at runtime by a replace POST (the stored value is kept when omitted, an explicit 0 resets to the process default). Explicit JSON null is rejected. The value in force and its source are read back in fc_effective.",
+        "format": "int32",
+        "maximum": 100000000,
+        "minimum": 0,
+        "type": "integer",
+        "x-nullable": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/ai_default_reservation",
+      "required": false,
+      "contract": {
+        "description": "Whether a request that declares no completion ceiling (no max_tokens or max_completion_tokens, or a value that is not a positive whole number: negative, 0, a string, a float, an object or an array) reserves a default number of completion tokens against the token quotas at admission. off reserves the prompt estimate alone, so leaving the field out is the cheaper choice at admission. on reserves ai_default_max_tokens beside the prompt estimate, as a claim each quota bucket may shrink: it is cut to what the bucket can hold beside the prompt estimate and to what is left of it, down to nothing, and it is never the reason a request is refused - only the prompt estimate and a declared ceiling are. A request admitted with less than the default is counted in fc_effective.reservation_clamped and in loxilb_ai_reservation_clamped_total. The claim is released when the response is settled, as a declared ceiling's is. Nothing is written into the forwarded request, and a declared ceiling is never replaced. inherit, or omitted on create, runs on the process default (LLB_AI_DEFAULT_RESERVATION, else off). Replace and null semantics as fc_mode; a replace that changes nothing else applies in place, to requests admitted from then on. Read back only when declared; what is in force is fc_effective.default_reservation. The gate reserves before a rule is selected by host, path or model, so on a VIP and port that several rules share, the value of the rule installed first on it is the one in force for all of them, as with api_key_auth: declare the same value on each.",
+        "enum": [
+          "on",
+          "off",
+          "inherit"
+        ],
+        "type": "string",
+        "x-nullable": false
       }
     },
     {
@@ -673,6 +700,28 @@
       }
     },
     {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/default_max_tokens",
+      "required": false,
+      "contract": {
+        "description": "The default reservation in tokens; 0 while default_reservation is off.",
+        "format": "int32",
+        "type": "integer",
+        "x-omitempty": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/default_reservation",
+      "required": false,
+      "contract": {
+        "description": "Whether a request without a declared max_tokens reserves a default for its completion (ai_default_reservation as this rule resolves it; on a VIP and port shared by several rules the gate uses the first-installed rule's).",
+        "enum": [
+          "on",
+          "off"
+        ],
+        "type": "string"
+      }
+    },
+    {
       "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/effective_max_outstanding",
       "required": false,
       "contract": {
@@ -783,6 +832,16 @@
       }
     },
     {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/reservation_clamped",
+      "required": false,
+      "contract": {
+        "description": "Requests admitted with less than default_max_tokens reserved because a quota bucket did not hold all of it, since the process started. Counted per service - every model pool of the same VIP and port reads the same number. Never a refusal.",
+        "format": "int64",
+        "type": "integer",
+        "x-omitempty": false
+      }
+    },
+    {
       "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/source",
       "required": false,
       "contract": {
@@ -804,6 +863,30 @@
     },
     {
       "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/source/decode_max_inflight",
+      "required": false,
+      "contract": {
+        "enum": [
+          "rule",
+          "env",
+          "default"
+        ],
+        "type": "string"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/source/default_max_tokens",
+      "required": false,
+      "contract": {
+        "enum": [
+          "rule",
+          "env",
+          "default"
+        ],
+        "type": "string"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/source/default_reservation",
       "required": false,
       "contract": {
         "enum": [

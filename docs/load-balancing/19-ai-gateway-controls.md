@@ -164,6 +164,67 @@ Note that a single request larger than the bucket can never be admitted — the 
 check refuses it outright rather than letting it queue — so `burst_pct` must leave room for
 the largest prompt-plus-`max_tokens` a tenant legitimately sends.
 
+### Requests without `max_tokens`: the default reservation
+
+Before a request is sent to a backend the gateway reserves its worst case against every
+token quota it counts on (tenant, tenant and model, user, user and model, key, and the
+service's shared bucket): the prompt estimate plus the completion ceiling the request
+declares in `max_tokens` or `max_completion_tokens`. The reservation is released when the
+response is settled and replaced by what was really used.
+
+A request that declares no ceiling — the field is absent, `-1` or any negative number, `0`,
+a string, a float, an object or an array — reserves its prompt estimate alone. That makes
+leaving the field out the cheaper choice at admission: the same request with a ceiling can
+be refused before dispatch, and without one it cannot, so a tenant's `tokens_per_min`
+bounds only its prompts until the usage is counted afterwards.
+
+The default reservation closes most of that gap. It is off unless set, per service:
+
+```bash
+curl -s -X POST http://127.0.0.1:11111/netlox/v1/config/loadbalancer \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"serviceArguments": {"externalIP": "10.10.10.254", "port": 2020, "protocol": "tcp",
+        "mode": 4, "sse_mode": true, "host": "10.10.10.254",
+        "ai_default_reservation": "on", "ai_default_max_tokens": 1024},
+       "endpoints": [{"endpointIP": "31.31.31.1", "targetPort": 8080, "weight": 1}]}'
+```
+
+| Field | Values | Meaning |
+|---|---|---|
+| `ai_default_reservation` | `on`, `off`, `inherit` | `on`: a request without a ceiling also reserves the default. `inherit` or omitted: the process default, `LLB_AI_DEFAULT_RESERVATION` (`on`/`off`), else off |
+| `ai_default_max_tokens` | `0`–`100000000` | the default in tokens. `0` or omitted: `LLB_AI_DEFAULT_MAX_TOKENS`, else the built-in `512` |
+
+How it behaves:
+
+- **It never refuses a request.** The default is reserved beside the prompt estimate, and
+  each quota bucket cuts it to what it can hold: to the bucket's capacity less the prompt
+  estimate, and to what earlier reservations have left, down to nothing. Only the prompt
+  estimate — and a ceiling the request declares — can be refused, exactly as before.
+- **A request admitted with less than the default is counted**, per service, in
+  `fc_effective.reservation_clamped` on the rule's `GET` and in
+  `loxilb_ai_reservation_clamped_total{service}`. A count that keeps rising means the
+  default is large for the budgets on that service, or the budgets are tight.
+- **It sizes the reservation only.** Nothing is written into the request, a declared
+  ceiling is never replaced, and the response is charged for its real usage as before.
+- **It narrows the gap, it does not close it.** When a bucket is nearly empty the default
+  is cut to nothing and that request is prompt-only again; if its response then overruns
+  the budget, the tenant's next requests are refused `token_quota_exceeded` until the
+  bucket refills.
+- The built-in `512` is an estimate of a typical completion, not a measured one. Set
+  `ai_default_max_tokens` to what your clients' completions look like.
+
+**One value per VIP and port.** The gateway reserves before it selects a rule by host,
+path or model, so where several rules share a VIP and port (model-name routing, for
+example) the value of the rule installed first on it is in force for all of them, as with
+`api_key_auth`. Declare the same value on each rule of such a service.
+
+`fc_effective.default_reservation`, `default_max_tokens` and their `source` entries
+(`rule`, `env`, `default`) say what each rule resolves to. Both fields follow the replace rules of the
+`fc_*` fields: omitted on a replace keeps the stored value, `inherit` and `0` return to the
+process default, `null` is refused, and a replace that changes nothing else applies in
+place, to requests admitted from then on. A streamed request body whose `max_tokens` the
+gateway has not read by the time it admits the request is treated as declaring none.
+
 ---
 
 ## 4. Model-name routing

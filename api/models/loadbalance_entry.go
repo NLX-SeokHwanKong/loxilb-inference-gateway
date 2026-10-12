@@ -657,6 +657,15 @@ type LoadbalanceEntryServiceArguments struct {
 	// Service lifecycle flag. In the domain, absent/true enables new selection and false pauses new selection while retaining members. Implementation gap: POST drops this property, so false does not create a paused rule. The restricted L4 PATCH path handles explicit changes and GET reports effective state. Source behavior does not prove established-connection preservation.
 	AdminStateUp bool `json:"adminStateUp,omitempty"`
 
+	// The default reservation in tokens, used while ai_default_reservation is in force as on. 0 or omitted leaves the process default (LLB_AI_DEFAULT_MAX_TOKENS) in force, else the built-in 512, which is an estimate of a typical completion and not a measured one; at most 100000000. Changeable at runtime by a replace POST (the stored value is kept when omitted, an explicit 0 resets to the process default). Explicit JSON null is rejected. The value in force and its source are read back in fc_effective.
+	// Maximum: 1e+08
+	// Minimum: 0
+	AiDefaultMaxTokens int32 `json:"ai_default_max_tokens,omitempty"`
+
+	// Whether a request that declares no completion ceiling (no max_tokens or max_completion_tokens, or a value that is not a positive whole number: negative, 0, a string, a float, an object or an array) reserves a default number of completion tokens against the token quotas at admission. off reserves the prompt estimate alone, so leaving the field out is the cheaper choice at admission. on reserves ai_default_max_tokens beside the prompt estimate, as a claim each quota bucket may shrink: it is cut to what the bucket can hold beside the prompt estimate and to what is left of it, down to nothing, and it is never the reason a request is refused - only the prompt estimate and a declared ceiling are. A request admitted with less than the default is counted in fc_effective.reservation_clamped and in loxilb_ai_reservation_clamped_total. The claim is released when the response is settled, as a declared ceiling's is. Nothing is written into the forwarded request, and a declared ceiling is never replaced. inherit, or omitted on create, runs on the process default (LLB_AI_DEFAULT_RESERVATION, else off). Replace and null semantics as fc_mode; a replace that changes nothing else applies in place, to requests admitted from then on. Read back only when declared; what is in force is fc_effective.default_reservation. The gate reserves before a rule is selected by host, path or model, so on a VIP and port that several rules share, the value of the rule installed first on it is the one in force for all of them, as with api_key_auth: declare the same value on each.
+	// Enum: [on off inherit]
+	AiDefaultReservation string `json:"ai_default_reservation,omitempty"`
+
 	// HTTP ALPN capability list, typically [h2, http/1.1], [h2] or [http/1.1]. Recognized values override backend_protocol through a shared capability used by listener and backend TLS setup; list order is not preserved as preference order. Empty leaves backend_protocol in use. Implementation limitations: unknown tokens are ignored, an entirely unrecognized list falls back to backend_protocol, and the H1/both listener callback can select H1 without a common advertised protocol. This is not strict ALPN allow-list enforcement. See shared readback/update warnings.
 	AlpnProtocols []string `json:"alpn_protocols"`
 
@@ -1018,6 +1027,14 @@ type LoadbalanceEntryServiceArguments struct {
 func (m *LoadbalanceEntryServiceArguments) Validate(formats strfmt.Registry) error {
 	var res []error
 
+	if err := m.validateAiDefaultMaxTokens(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := m.validateAiDefaultReservation(formats); err != nil {
+		res = append(res, err)
+	}
+
 	if err := m.validateAPIKeyAuth(formats); err != nil {
 		res = append(res, err)
 	}
@@ -1225,6 +1242,67 @@ func (m *LoadbalanceEntryServiceArguments) Validate(formats strfmt.Registry) err
 	if len(res) > 0 {
 		return errors.CompositeValidationError(res...)
 	}
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArguments) validateAiDefaultMaxTokens(formats strfmt.Registry) error {
+	if swag.IsZero(m.AiDefaultMaxTokens) { // not required
+		return nil
+	}
+
+	if err := validate.MinimumInt("serviceArguments"+"."+"ai_default_max_tokens", "body", int64(m.AiDefaultMaxTokens), 0, false); err != nil {
+		return err
+	}
+
+	if err := validate.MaximumInt("serviceArguments"+"."+"ai_default_max_tokens", "body", int64(m.AiDefaultMaxTokens), 1e+08, false); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+var loadbalanceEntryServiceArgumentsTypeAiDefaultReservationPropEnum []interface{}
+
+func init() {
+	var res []string
+	if err := json.Unmarshal([]byte(`["on","off","inherit"]`), &res); err != nil {
+		panic(err)
+	}
+	for _, v := range res {
+		loadbalanceEntryServiceArgumentsTypeAiDefaultReservationPropEnum = append(loadbalanceEntryServiceArgumentsTypeAiDefaultReservationPropEnum, v)
+	}
+}
+
+const (
+
+	// LoadbalanceEntryServiceArgumentsAiDefaultReservationOn captures enum value "on"
+	LoadbalanceEntryServiceArgumentsAiDefaultReservationOn string = "on"
+
+	// LoadbalanceEntryServiceArgumentsAiDefaultReservationOff captures enum value "off"
+	LoadbalanceEntryServiceArgumentsAiDefaultReservationOff string = "off"
+
+	// LoadbalanceEntryServiceArgumentsAiDefaultReservationInherit captures enum value "inherit"
+	LoadbalanceEntryServiceArgumentsAiDefaultReservationInherit string = "inherit"
+)
+
+// prop value enum
+func (m *LoadbalanceEntryServiceArguments) validateAiDefaultReservationEnum(path, location string, value string) error {
+	if err := validate.EnumCase(path, location, value, loadbalanceEntryServiceArgumentsTypeAiDefaultReservationPropEnum, true); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArguments) validateAiDefaultReservation(formats strfmt.Registry) error {
+	if swag.IsZero(m.AiDefaultReservation) { // not required
+		return nil
+	}
+
+	// value enum
+	if err := m.validateAiDefaultReservationEnum("serviceArguments"+"."+"ai_default_reservation", "body", m.AiDefaultReservation); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -2826,6 +2904,13 @@ type LoadbalanceEntryServiceArgumentsFcEffective struct {
 	// Per-endpoint ceiling for decode legs; 0 is unlimited.
 	DecodeMaxInflight int32 `json:"decode_max_inflight"`
 
+	// The default reservation in tokens; 0 while default_reservation is off.
+	DefaultMaxTokens int32 `json:"default_max_tokens"`
+
+	// Whether a request without a declared max_tokens reserves a default for its completion (ai_default_reservation as this rule resolves it; on a VIP and port shared by several rules the gate uses the first-installed rule's).
+	// Enum: [on off]
+	DefaultReservation string `json:"default_reservation,omitempty"`
+
 	// The service ceiling in force now; below max_outstanding while an adaptive pool is tightened.
 	EffectiveMaxOutstanding int32 `json:"effective_max_outstanding"`
 
@@ -2859,6 +2944,9 @@ type LoadbalanceEntryServiceArgumentsFcEffective struct {
 
 	// Inference requests waiting for a unit right now.
 	Queued int32 `json:"queued"`
+
+	// Requests admitted with less than default_max_tokens reserved because a quota bucket did not hold all of it, since the process started. Counted per service - every model pool of the same VIP and port reads the same number. Never a refusal.
+	ReservationClamped int64 `json:"reservation_clamped"`
 
 	// source
 	Source *LoadbalanceEntryServiceArgumentsFcEffectiveSource `json:"source,omitempty"`
@@ -2898,6 +2986,10 @@ func (m *LoadbalanceEntryServiceArgumentsFcEffective) Validate(formats strfmt.Re
 	}
 
 	if err := m.validateAdaptive(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := m.validateDefaultReservation(formats); err != nil {
 		res = append(res, err)
 	}
 
@@ -3056,6 +3148,48 @@ func (m *LoadbalanceEntryServiceArgumentsFcEffective) validateAdaptive(formats s
 	return nil
 }
 
+var loadbalanceEntryServiceArgumentsFcEffectiveTypeDefaultReservationPropEnum []interface{}
+
+func init() {
+	var res []string
+	if err := json.Unmarshal([]byte(`["on","off"]`), &res); err != nil {
+		panic(err)
+	}
+	for _, v := range res {
+		loadbalanceEntryServiceArgumentsFcEffectiveTypeDefaultReservationPropEnum = append(loadbalanceEntryServiceArgumentsFcEffectiveTypeDefaultReservationPropEnum, v)
+	}
+}
+
+const (
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveDefaultReservationOn captures enum value "on"
+	LoadbalanceEntryServiceArgumentsFcEffectiveDefaultReservationOn string = "on"
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveDefaultReservationOff captures enum value "off"
+	LoadbalanceEntryServiceArgumentsFcEffectiveDefaultReservationOff string = "off"
+)
+
+// prop value enum
+func (m *LoadbalanceEntryServiceArgumentsFcEffective) validateDefaultReservationEnum(path, location string, value string) error {
+	if err := validate.EnumCase(path, location, value, loadbalanceEntryServiceArgumentsFcEffectiveTypeDefaultReservationPropEnum, true); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArgumentsFcEffective) validateDefaultReservation(formats strfmt.Registry) error {
+	if swag.IsZero(m.DefaultReservation) { // not required
+		return nil
+	}
+
+	// value enum
+	if err := m.validateDefaultReservationEnum("serviceArguments"+"."+"fc_effective"+"."+"default_reservation", "body", m.DefaultReservation); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 var loadbalanceEntryServiceArgumentsFcEffectiveTypeExposeHeadersPropEnum []interface{}
 
 func init() {
@@ -3178,6 +3312,14 @@ type LoadbalanceEntryServiceArgumentsFcEffectiveSource struct {
 	// Enum: [rule env default]
 	DecodeMaxInflight string `json:"decode_max_inflight,omitempty"`
 
+	// default max tokens
+	// Enum: [rule env default]
+	DefaultMaxTokens string `json:"default_max_tokens,omitempty"`
+
+	// default reservation
+	// Enum: [rule env default]
+	DefaultReservation string `json:"default_reservation,omitempty"`
+
 	// ep max inflight
 	// Enum: [rule env default]
 	EpMaxInflight string `json:"ep_max_inflight,omitempty"`
@@ -3232,6 +3374,14 @@ func (m *LoadbalanceEntryServiceArgumentsFcEffectiveSource) Validate(formats str
 	}
 
 	if err := m.validateDecodeMaxInflight(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := m.validateDefaultMaxTokens(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := m.validateDefaultReservation(formats); err != nil {
 		res = append(res, err)
 	}
 
@@ -3369,6 +3519,96 @@ func (m *LoadbalanceEntryServiceArgumentsFcEffectiveSource) validateDecodeMaxInf
 
 	// value enum
 	if err := m.validateDecodeMaxInflightEnum("serviceArguments"+"."+"fc_effective"+"."+"source"+"."+"decode_max_inflight", "body", m.DecodeMaxInflight); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+var loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeDefaultMaxTokensPropEnum []interface{}
+
+func init() {
+	var res []string
+	if err := json.Unmarshal([]byte(`["rule","env","default"]`), &res); err != nil {
+		panic(err)
+	}
+	for _, v := range res {
+		loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeDefaultMaxTokensPropEnum = append(loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeDefaultMaxTokensPropEnum, v)
+	}
+}
+
+const (
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveSourceDefaultMaxTokensRule captures enum value "rule"
+	LoadbalanceEntryServiceArgumentsFcEffectiveSourceDefaultMaxTokensRule string = "rule"
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveSourceDefaultMaxTokensEnv captures enum value "env"
+	LoadbalanceEntryServiceArgumentsFcEffectiveSourceDefaultMaxTokensEnv string = "env"
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveSourceDefaultMaxTokensDefault captures enum value "default"
+	LoadbalanceEntryServiceArgumentsFcEffectiveSourceDefaultMaxTokensDefault string = "default"
+)
+
+// prop value enum
+func (m *LoadbalanceEntryServiceArgumentsFcEffectiveSource) validateDefaultMaxTokensEnum(path, location string, value string) error {
+	if err := validate.EnumCase(path, location, value, loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeDefaultMaxTokensPropEnum, true); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArgumentsFcEffectiveSource) validateDefaultMaxTokens(formats strfmt.Registry) error {
+	if swag.IsZero(m.DefaultMaxTokens) { // not required
+		return nil
+	}
+
+	// value enum
+	if err := m.validateDefaultMaxTokensEnum("serviceArguments"+"."+"fc_effective"+"."+"source"+"."+"default_max_tokens", "body", m.DefaultMaxTokens); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+var loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeDefaultReservationPropEnum []interface{}
+
+func init() {
+	var res []string
+	if err := json.Unmarshal([]byte(`["rule","env","default"]`), &res); err != nil {
+		panic(err)
+	}
+	for _, v := range res {
+		loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeDefaultReservationPropEnum = append(loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeDefaultReservationPropEnum, v)
+	}
+}
+
+const (
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveSourceDefaultReservationRule captures enum value "rule"
+	LoadbalanceEntryServiceArgumentsFcEffectiveSourceDefaultReservationRule string = "rule"
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveSourceDefaultReservationEnv captures enum value "env"
+	LoadbalanceEntryServiceArgumentsFcEffectiveSourceDefaultReservationEnv string = "env"
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveSourceDefaultReservationDefault captures enum value "default"
+	LoadbalanceEntryServiceArgumentsFcEffectiveSourceDefaultReservationDefault string = "default"
+)
+
+// prop value enum
+func (m *LoadbalanceEntryServiceArgumentsFcEffectiveSource) validateDefaultReservationEnum(path, location string, value string) error {
+	if err := validate.EnumCase(path, location, value, loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeDefaultReservationPropEnum, true); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArgumentsFcEffectiveSource) validateDefaultReservation(formats strfmt.Registry) error {
+	if swag.IsZero(m.DefaultReservation) { // not required
+		return nil
+	}
+
+	// value enum
+	if err := m.validateDefaultReservationEnum("serviceArguments"+"."+"fc_effective"+"."+"source"+"."+"default_reservation", "body", m.DefaultReservation); err != nil {
 		return err
 	}
 

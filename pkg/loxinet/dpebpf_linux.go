@@ -1865,6 +1865,7 @@ func DpLBRuleMod(w *LBDpWorkQ) int {
 	dat.fc_tenant_share_pct = C.uint8_t(w.FcTenantSharePct)
 	dat.fc_expose_headers = C.uint8_t(w.FcExposeHeaders)
 	dat.half_close_mode = C.uint8_t(w.HalfCloseMode)
+	dat.ai_default_tokens = C.uint32_t(w.AIDefaultTokens)
 
 	// Per-endpoint circuit breaker (opt-in per rule)
 	if w.CbEnable {

@@ -401,6 +401,7 @@ type LBDpWorkQ struct {
 	FcTenantSharePct            uint8                   // tenant share in percent (0 = process default)
 	FcExposeHeaders             uint8                   // admission headers on admitted responses, enum fc_rule_expose (0 = process default)
 	HalfCloseMode               uint8                   // half-close hold, enum sp_hold_mode (0 = process default)
+	AIDefaultTokens             uint32                  // default reservation in force for a request without max_tokens (0 = off)
 	CbEnable                    bool                    // per-endpoint circuit breaker for full-proxy rules
 	KvExactMode                 uint8                   // KV-cache exact routing: 0=off, 1=zmq
 	KvBlockSize                 uint32                  // Token block size for KV hash computation

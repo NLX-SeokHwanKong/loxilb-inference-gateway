@@ -110,7 +110,15 @@ import (
 // migration is restamp-only. Builds that predate it refuse 1.9 documents
 // via the minor-version gate - so a downgraded build cannot take a document
 // whose default is hold and quietly run its services off.
-const SchemaVersion = "1.9"
+//
+// 1.10: a load-balancer rule gained ai_default_reservation and
+// ai_default_max_tokens, the default token reservation of a request that
+// declares no max_tokens. A rule without them runs on the process default,
+// which is what absent values read as, so the 1.9->1.10 migration is
+// restamp-only. Builds that predate it refuse 1.10 documents via the
+// minor-version gate: their decoder does not know the two fields, and a
+// rule restored without them would reserve less than its operator set.
+const SchemaVersion = "1.10"
 
 // DocKind identifies the document type, matching §4's "kind" field.
 const DocKind = "loxilb-snapshot"

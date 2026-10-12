@@ -96,6 +96,9 @@ func ConfigPatchLoadbalancer(params operations.PatchConfigLoadbalancerExternalip
 		if err := pres.validateHalfCloseMode(pb0.ServiceArguments); err != nil {
 			return patchErr(err.Error())
 		}
+		if err := pres.validateAIDefaultReservation(pb0.ServiceArguments); err != nil {
+			return patchErr(err.Error())
+		}
 	}
 
 	pb := params.Attr // the parsed patch body (may be nil for an empty body)
@@ -156,6 +159,7 @@ func ConfigPatchLoadbalancer(params operations.PatchConfigLoadbalancerExternalip
 		pres.applyFcQueue(&merged.Serv, sa)
 		pres.applyFcGate(&merged.Serv, sa)
 		pres.applyHalfCloseMode(&merged.Serv, sa)
+		pres.applyAIDefaultReservation(&merged.Serv, sa)
 		if err := cmn.FcQueuePairError(merged.Serv.FcMaxQueueDepth, merged.Serv.FcMaxQueueWaitMs); err != nil {
 			return patchErr(err.Error())
 		}

@@ -1,17 +1,17 @@
 {
  "schema_version": 1,
  "provenance": {
-  "generated_at": "2026-10-12T15:27:57+00:00",
-  "source_revision": "8e7a42e4b5249f364551cc0dd114c5bda6224f9e",
+  "generated_at": "2026-10-12T22:38:12+00:00",
+  "source_revision": "d939389f0bc25ea84e62e3abe6f3d4d1e2fc7f53",
   "upstream_repository": "https://github.com/loxilb-io/loxilb",
   "upstream_revision": "98487453eaf1853690de5928eab95a51817ba5d7"
  },
  "contract": {
-  "gateway_families": 326,
+  "gateway_families": 327,
   "upstream_families": 60,
   "present_identical": 35,
   "present_divergent": 0,
-  "absent": 291,
+  "absent": 292,
   "upstream_only": 25
  },
  "upstream_only": [
@@ -1183,6 +1183,19 @@
      "outcome",
      "status",
      "tenant"
+    ]
+   }
+  },
+  {
+   "name": "loxilb_ai_reservation_clamped_total",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "counter",
+    "labels": [
+     "service"
     ]
    }
   },

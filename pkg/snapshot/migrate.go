@@ -160,6 +160,14 @@ var Migrations = []Migration{
 		ToVersion:   "1.9",
 		Apply:       func(doc *Document) error { return nil },
 	},
+	// 1.9 -> 1.10: load-balancer rules gained the default reservation pair.
+	// A rule without them ran on the process default, and absent values
+	// read as that, so there is nothing to normalize: re-stamp only.
+	{
+		FromVersion: "1.9",
+		ToVersion:   "1.10",
+		Apply:       func(doc *Document) error { return nil },
+	},
 }
 
 // ApplyMigrations runs every registered Migration whose FromVersion matches
