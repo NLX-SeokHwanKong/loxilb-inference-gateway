@@ -46,6 +46,11 @@ type Fake struct {
 	// Dest, when set, replaces the default destination list in the headers
 	// response (comma-separated ip:port, as the EPP sends it).
 	Dest string
+	// Dests, when set, names one entry per stream in turn (the first stream
+	// gets Dests[0], the second Dests[1], ...): an EPP that spreads its
+	// decisions over the pool, as the llm-d scheduler does with equal
+	// scores. Takes precedence over Dest.
+	Dests []string
 
 	Mu           sync.Mutex
 	Streams      int // ext_proc streams opened so far
@@ -125,6 +130,11 @@ func (f *Fake) Process(st extprocv3.ExternalProcessor_ProcessServer) error {
 	if f.Dest != "" {
 		dest = f.Dest
 	}
+	f.Mu.Lock()
+	if len(f.Dests) > 0 {
+		dest = f.Dests[(f.Streams-1)%len(f.Dests)]
+	}
+	f.Mu.Unlock()
 	dyn, _ := structpb.NewStruct(map[string]any{epp.MetadataNamespace: map[string]any{epp.HeaderDestination: dest}})
 	switch f.Mode {
 	case "metadata-only":
