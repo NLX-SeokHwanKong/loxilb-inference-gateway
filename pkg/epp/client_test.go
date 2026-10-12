@@ -11,6 +11,7 @@ import (
 	"errors"
 	"net"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -353,4 +354,93 @@ func TestEppClientResetsAHalfOpenConnection(t *testing.T) {
 	if got := c.Resets.Load(); got != 1 {
 		t.Fatalf("resets after recovery = %d, want still 1", got)
 	}
+}
+
+// An EPP that goes away and comes back (a pod restart, T5) is reached
+// again within seconds: the client caps gRPC's reconnect backoff at 2 s,
+// where the default climbs 1, 1.6, 2.6, 4.1, 6.6 s... past a minute, and
+// every stream in between fails fast on a connection nobody is retrying.
+// The EPP's port is taken over by a listener that refuses every handshake
+// and records when each attempt came, so the backoff is observed directly
+// rather than through a restart that might land next to a retry by luck.
+func TestEppClientReconnectsToAReturningEPP(t *testing.T) {
+	f := epptest.New("ok")
+	f.Dest = "10.0.0.1:8000"
+	addr, stop := epptest.Start(t, f, false)
+	c := epp.NewClient()
+	defer c.Close()
+	cfg := epp.RuleCfg{Endpoint: addr, Plaintext: true, TimeoutMs: 300}
+
+	dec, s := c.Submit(context.Background(), cfg, sampleRequest())
+	if dec.Status != epp.StatusOK {
+		t.Fatalf("warm-up: %+v", dec)
+	}
+	s.Abort()
+
+	// The EPP dies; something else holds its port and drops every connection
+	// before the HTTP/2 handshake, which gRPC counts as a failed attempt.
+	stop()
+	refuser, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Fatalf("take over %s: %v", addr, err)
+	}
+	var mu sync.Mutex
+	var attempts []time.Time
+	go func() {
+		for {
+			conn, err := refuser.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			attempts = append(attempts, time.Now())
+			mu.Unlock()
+			conn.Close()
+		}
+	}()
+	down := time.Now()
+	dec, s = c.Submit(context.Background(), cfg, sampleRequest())
+	if dec.Status != epp.StatusError {
+		s.Abort()
+		t.Fatalf("submit while the EPP is down: %+v", dec)
+	}
+	time.Sleep(12 * time.Second)
+	refuser.Close()
+
+	mu.Lock()
+	seen := append([]time.Time{down}, attempts...)
+	mu.Unlock()
+	var longest time.Duration
+	for i := 1; i < len(seen); i++ {
+		if gap := seen[i].Sub(seen[i-1]); gap > longest {
+			longest = gap
+		}
+	}
+	t.Logf("%d reconnect attempts in 12 s, longest gap %s", len(seen)-1, longest.Round(time.Millisecond))
+	if len(seen)-1 < 6 {
+		t.Fatalf("%d reconnect attempts in 12 s, want at least 6 (2 s backoff cap)", len(seen)-1)
+	}
+	if longest > 2600*time.Millisecond {
+		t.Fatalf("%s between reconnect attempts, want at most 2 s (+20%% jitter); the backoff is not capped", longest)
+	}
+
+	// The EPP is back on the same address: the next attempt reaches it.
+	_, stopAgain, err := epptest.ListenAndServe(addr, f, false)
+	if err != nil {
+		t.Fatalf("restart the EPP on %s: %v", addr, err)
+	}
+	defer stopAgain()
+	back := time.Now()
+	for {
+		dec, s = c.Submit(context.Background(), cfg, sampleRequest())
+		if dec.Status == epp.StatusOK {
+			s.Abort()
+			break
+		}
+		if time.Since(back) > 3*time.Second {
+			t.Fatalf("no decision %s after the EPP returned (last: %+v)", time.Since(back), dec)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Logf("first decision %s after the EPP returned", time.Since(back).Round(time.Millisecond))
 }
