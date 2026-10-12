@@ -1,17 +1,17 @@
 {
  "schema_version": 1,
  "provenance": {
-  "generated_at": "2026-10-11T09:21:18+00:00",
-  "source_revision": "25fd81eb05a966ed11c4846088e373b35718b898",
+  "generated_at": "2026-10-12T15:27:57+00:00",
+  "source_revision": "8e7a42e4b5249f364551cc0dd114c5bda6224f9e",
   "upstream_repository": "https://github.com/loxilb-io/loxilb",
   "upstream_revision": "98487453eaf1853690de5928eab95a51817ba5d7"
  },
  "contract": {
-  "gateway_families": 325,
+  "gateway_families": 326,
   "upstream_families": 60,
   "present_identical": 35,
   "present_divergent": 0,
-  "absent": 290,
+  "absent": 291,
   "upstream_only": 25
  },
  "upstream_only": [
@@ -797,6 +797,20 @@
     "type": "gauge",
     "labels": [
      "engine",
+     "service"
+    ]
+   }
+  },
+  {
+   "name": "loxilb_ai_fc_tenant_slots",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "gauge",
+    "labels": [
+     "kind",
      "service"
     ]
    }

@@ -269,7 +269,8 @@ slot is freed as soon as it holds nothing, so the table bounds the tenants
 active at once, not the tenants known: with a service ceiling in `enforce`
 mode that is never more than `fc_max_outstanding` plus `fc_max_queue_depth`.
 `fc_effective.tenants_active` counts them and `fc_effective.tenant_slots`
-is the size in force.
+is the size in force; Prometheus has both per service as
+`loxilb_ai_fc_tenant_slots` (`kind="used"`, `kind="max"`).
 
 When a rule with a tenant share is applied on a node whose key store knows
 more tenants (API-key owners and tenant rate-limit rows) than a pool tracks,
@@ -357,6 +358,7 @@ pool key) and are emitted for every AI-gateway pool in every mode.
 | `loxilb_ai_admission_adapt_moves_total{direction}` | counter | steps of the adaptive ceiling, `down` and `up` |
 | `loxilb_ai_admission_warming_endpoints` | gauge | endpoints inside their warm-up window |
 | `loxilb_ai_admission_tenants_active` | gauge | tenants holding a unit or waiting, while the pool has a tenant share |
+| `loxilb_ai_fc_tenant_slots{service, kind}` | gauge | the tenant table, per service: `kind="max"` is the table size (`LLB_FC_TENANT_SLOTS`), `kind="used"` the tenants on the service's fullest pool right now. `used` above `max` means tenants past the table share one budget; alert before that, for example on `used / max > 0.8` |
 | `loxilb_ai_admission_anomalies_total{kind}` | counter | process-wide: `underflow` and `unknown_permit` are bookkeeping faults (any increase is a defect, not load); `tenant_table_full` counts requests whose tenant shared the overflow slot |
 
 The process accept valve (`LLB_PD_MAX_TOTAL_INFLIGHT`) bounds connection
