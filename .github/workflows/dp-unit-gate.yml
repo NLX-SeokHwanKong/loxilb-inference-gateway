@@ -1,0 +1,73 @@
+name: DP-Unit-Gate-CI
+
+# gcc-only unit tests of the data plane (loxilb-ebpf/common): no clang, no
+# libbpf build, no eBPF load, no docker — a plain ubuntu-24.04 runner with
+# gcc, make, libc6-dev, libssl-dev and libnghttp2-dev. The apt line uses
+# --no-install-recommends, so libc6-dev must be named (it is only a
+# Recommends of gcc); libssl-dev serves test_cookie, test_kv_exact and
+# sockproxy_h2.c, libnghttp2-dev serves test_h2_inject. Each target is its
+# own step and every step runs even when an earlier one failed, so one red
+# run names every red target.
+#
+# test_kv reads cicd/common/kv_hash/fixtures/kv_hash_vectors.json through
+# the relative path ../../cicd/common/kv_hash/... from loxilb-ebpf/common
+# (overridable with LLB_KV_HASH_VECTORS), which the superproject checkout
+# provides; nothing else outside the submodule is needed.
+
+on:
+  pull_request:
+    branches: [ "main" ]
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  dp-unit:
+    name: dp-unit-gate
+    # Dependabot PRs don't receive repo secrets, so CI_SUBMODULE_TOKEN is empty
+    # and the private loxilb-ebpf submodule can't be cloned (same as build-check).
+    if: ${{ github.actor != 'dependabot[bot]' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.CI_SUBMODULE_TOKEN || github.token }}
+
+      - name: "Install the toolchain the unit targets need"
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc make libc6-dev libssl-dev libnghttp2-dev
+
+      - name: "test_shard (notifier: shard + epoll)"
+        run: make -C loxilb-ebpf/common test_shard
+
+      - name: "test_pd (P/D rewriter, h2 inject, cookie, leak, complete, framing, CB, admission, ctrl)"
+        if: ${{ !cancelled() }}
+        run: make -C loxilb-ebpf/common test_pd
+
+      - name: "test_pd_cache (cache-aware P/D routing, incl. the cap case)"
+        if: ${{ !cancelled() }}
+        run: make -C loxilb-ebpf/common test_pd_cache
+
+      - name: "test_kv (KV-exact, model routing, pd ids, conv-pool alias; fixture from cicd/common/kv_hash)"
+        if: ${{ !cancelled() }}
+        run: make -C loxilb-ebpf/common test_kv
+
+      - name: "test_fc (flow control: gate, queue, adapt, tenant, expose)"
+        if: ${{ !cancelled() }}
+        run: make -C loxilb-ebpf/common test_fc
+
+      - name: "test_cache_mark (which backpressure mark a relay cache runs under)"
+        if: ${{ !cancelled() }}
+        run: make -C loxilb-ebpf/common test_cache_mark
+
+      - name: "test_abandon (unfinished-stream accounting, stalled-client policy, reset of a paused backend leg)"
+        if: ${{ !cancelled() }}
+        run: make -C loxilb-ebpf/common test_abandon
+
+      - name: "check_notify_arm (notify_add_ent is called from exactly one helper)"
+        if: ${{ !cancelled() }}
+        run: sh loxilb-ebpf/common/check_notify_arm.sh
