@@ -21,7 +21,7 @@ import (
 // swagger:model LoadbalanceEntry
 type LoadbalanceEntry struct {
 
-	// Source-address prefixes associated with the LB source-check path. A nonempty domain list enables source checking; GET returns the stored prefixes. This is an address filter, not projectId-based tenant authorization. Only load-balancer rules in the first 29 rule slots (0-28) can carry source checks - the slot is allocated by the Gateway, not chosen here - so a create or patch carrying allowedSources on a rule allocated a higher slot is refused with 412; GET /status/capabilities reports the slot budget as lb_allowed_sources.
+	// Source-address prefixes associated with the LB source-check path. A nonempty domain list enables source checking; GET returns the stored prefixes. This is an address filter, not projectId-based tenant authorization. FullProxy rules sharing an address, port and protocol must declare the same normalized source-prefix set (including empty); conflicting creates and updates are rejected with 400 before changing existing policy. Overlapping port ranges must also agree. Deleting one pool preserves the fence required by remaining pools. Only load-balancer rules in the first 29 rule slots (0-28) can carry source checks - the slot is allocated by the Gateway, not chosen here - so a create or patch carrying allowedSources on a rule allocated a higher slot is refused with 412; GET /status/capabilities reports the slot budget as lb_allowed_sources.
 	AllowedSources []*LoadbalanceEntryAllowedSourcesItems0 `json:"allowedSources"`
 
 	// Backend members; the domain accepts 1 through 32 input members. Creation sorts members by IP and updates reconcile existing slots, so input-array order is not a stable L7 backend-reference identity. Implementation warnings: POST/PATCH do not copy httpMethod, urlPath, expectedCodes, httpVersion or domainName into LB members, and GET does not return them. Their presence in this schema does not configure an HTTP monitor. Existing-member reconciliation updates weight but does not copy backup, subnetId or monitorAddress, so their create-time storage does not establish update support. Weight and port narrowing lack original-value range validation. state and counter are derived output and are ignored as configuration input.
@@ -649,7 +649,7 @@ func (m *LoadbalanceEntrySecondaryVIPsItems0) UnmarshalBinary(b []byte) error {
 	return nil
 }
 
-// LoadbalanceEntryServiceArguments Service configuration. Implementation warnings for this REST representation: POST does not copy adminStateUp or snat into the domain. GET omits privateIP, timeoutMemberConnect, timeoutMemberData, timeoutTcpInspect, vip_qos_policy_id, alpn_protocols, tls_ciphers, tls_versions, hsts_max_age, hsts_include_subdomains, hsts_preload, backend_ca_cert_id, backend_client_cert_id and mtls_frontend.client_crl_path. GET/edit/POST is therefore not a lossless configuration round trip. PATCH has a limited overlay and does not update arbitrary properties. Metadata-only POSTs can return an unchanged-rule error before applying metadata; managed is not assigned on the existing-rule update path. FullProxy replacement removes its pool but C retains the listener; reuse does not reliably restore listener arguments or rebuild TLS contexts, so updated TLS/HSTS/timeout settings are not established by stored state. Requested-security fail-closed behavior and LB-resource/listener policy ownership remain unresolved; these defects are not supported fallback or update semantics.
+// LoadbalanceEntryServiceArguments Service configuration. Implementation warnings for this REST representation: POST does not copy adminStateUp or snat into the domain. GET omits privateIP and vip_qos_policy_id. GET/edit/POST is therefore not a lossless configuration round trip. PATCH has a limited overlay and does not update arbitrary properties. Metadata-only POSTs can return an unchanged-rule error before applying metadata; managed is not assigned on the existing-rule update path. FullProxy replacement removes its pool but C retains the listener; reuse does not reliably restore listener arguments or rebuild TLS contexts, so updated TLS/HSTS/timeout settings are not established by stored state. Requested-security fail-closed behavior and LB-resource/listener policy ownership remain unresolved; these defects are not supported fallback or update semantics.
 //
 // swagger:model LoadbalanceEntryServiceArguments
 type LoadbalanceEntryServiceArguments struct {
@@ -677,7 +677,7 @@ type LoadbalanceEntryServiceArguments struct {
 	// Minimum: 0
 	BackendKeepaliveIntervalSec int32 `json:"backend_keepalive_interval_sec,omitempty"`
 
-	// FullProxy HTTP capability - http1 selects HTTP/1.1, http2 selects HTTP/2, and both prefers HTTP/2 with HTTP/1.1 fallback. The capability is shared by listener/backend ALPN configuration; recognized alpn_protocols values override it. GET reports this field only for FullProxy.
+	// FullProxy HTTP capability - http1 selects HTTP/1.1, http2 selects HTTP/2, and both prefers HTTP/2 with HTTP/1.1 fallback. The capability is shared by listener/backend ALPN configuration; recognized alpn_protocols values override it. The default applies to a new rule; a replace that omits the field keeps the value the rule has. GET reports this field only for FullProxy.
 	// Enum: [http1 http2 both]
 	BackendProtocol *string `json:"backend_protocol,omitempty"`
 
@@ -719,7 +719,7 @@ type LoadbalanceEntryServiceArguments struct {
 	// Minimum: 1
 	ChwblReplication int64 `json:"chwbl_replication,omitempty"`
 
-	// Concurrent-connection ceiling for the rule, counted across all of its endpoints; zero or absent means unlimited. Distinct from the per-source-IP security limits. POST stores it, PATCH overlays it when present (an explicit zero clears it) and GET reports it (omitted when zero); null is rejected. Enforced by the conntrack selector on DNAT-mode rules: once the rule's live connection count has reached the ceiling, further SYNs are dropped without a reset and without a conntrack entry, and a slot frees when a connection is torn down. A FullProxy rule is not gated by this field, and HTTP/2 streams are not counted as connections.
+	// Concurrent-connection ceiling for the rule, counted across all of its endpoints; zero or absent means unlimited. Distinct from the per-source-IP security limits. POST stores it, PATCH overlays it when present (an explicit zero clears it) and GET reports it (omitted when zero); null is rejected. Enforced by the conntrack selector on DNAT-mode rules: once the rule's live connection count has reached the ceiling, further SYNs are dropped without a reset and without a conntrack entry, and a slot frees when a connection is torn down. FullProxy listeners enforce the ceiling at accept: excess connections are closed before request processing. HTTP/2 streams are not counted as separate connections.
 	ConnectionLimit uint32 `json:"connectionLimit,omitempty"`
 
 	// Marks an egress rule. The ordinary LB2DP programming path returns early for this marker; do not infer ordinary ingress FullProxy behavior. The existing-rule path rejects changes to this flag.
@@ -884,6 +884,10 @@ type LoadbalanceEntryServiceArguments struct {
 	// Minimum: 0
 	MaxStreamDurationSec int32 `json:"max_stream_duration_sec,omitempty"`
 
+	// Explicit stateless MCP transport mode. Omitted or empty on create preserves legacy behavior. Omitted replace preserves the existing value; changing it requires delete and recreate. Requires TCP FullProxy (mode=4), round-robin (sel=0) or weighted round-robin (sel=2), and sockMapMode=off. Session affinity, model routing, P/D disaggregation and KV routing are rejected. Configuration readback does not prove request validation or backend delivery.
+	// Enum: [ 2026-07-28]
+	McpProtocolVersion string `json:"mcp_protocol_version,omitempty"`
+
 	// NAT/proxy mode (0=DNAT, 1=one-arm, 2=FullNAT, 3=DSR, 4=FullProxy, 5=host one-arm). Zero selects DNAT. DSR requires hash selection and endpoint ports equal to the service port. Host one-arm requires an unspecified VIP. FullProxy is the userspace proxy path; PATCH rejects it, and POST replacement has the listener-state limitations documented on serviceArguments.
 	// Enum: [0 1 2 3 4 5]
 	Mode int32 `json:"mode,omitempty"`
@@ -1012,7 +1016,7 @@ type LoadbalanceEntryServiceArguments struct {
 	// Header-accumulation deadline in milliseconds on the attached L7 policy path. Zero uses 10000 ms. This is not a general transport-level TCP inspection timeout or a claim of controller export support.
 	TimeoutTCPInspect uint32 `json:"timeoutTcpInspect,omitempty"`
 
-	// Cipher string passed to both the TLS 1.3 ciphersuite and TLS 1.2 cipher configuration calls for listener/backend contexts, regardless of the selected version range. Empty uses the built-in lists. Implementation warnings: the C copy limits the string to 255 bytes without admission rejection; either OpenSSL call can fail, and listener creation then reaches an SSL-context assertion. Invalid input is not guaranteed to produce a clean REST rejection. See shared readback/update warnings.
+	// Cipher string passed to both the TLS 1.3 ciphersuite and TLS 1.2 cipher configuration calls for listener/backend contexts, regardless of the selected version range. Empty uses the built-in lists. A string longer than 255 bytes, and a string either call does not take, is refused with 400 before the rule is stored, on a FullProxy rule that terminates TLS; any other rule stores the value and does not use it. Because one string goes to both calls, a string that names only TLS 1.2 ciphers or only TLS 1.3 ciphersuites is refused; a string that names both kinds is taken. GET returns the stored string.
 	TLSCiphers string `json:"tls_ciphers,omitempty"`
 
 	// TLS version selection for listener/backend context setup. The encoder recognizes TLSv1.0 through TLSv1.3 and collapses recognized entries to an inclusive minimum/maximum range; empty uses TLS 1.2 through 1.3. Implementation limitations: noncontiguous selections include intermediate versions, unknown tokens are ignored, and an entirely unrecognized list uses default bounds. This is not exact allow-list enforcement; version policy and strict rejection require separate decisions and fixes.
@@ -1174,6 +1178,10 @@ func (m *LoadbalanceEntryServiceArguments) Validate(formats strfmt.Registry) err
 	}
 
 	if err := m.validateMaxStreamDurationSec(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := m.validateMcpProtocolVersion(formats); err != nil {
 		res = append(res, err)
 	}
 
@@ -2147,6 +2155,48 @@ func (m *LoadbalanceEntryServiceArguments) validateMaxStreamDurationSec(formats 
 	return nil
 }
 
+var loadbalanceEntryServiceArgumentsTypeMcpProtocolVersionPropEnum []interface{}
+
+func init() {
+	var res []string
+	if err := json.Unmarshal([]byte(`["","2026-07-28"]`), &res); err != nil {
+		panic(err)
+	}
+	for _, v := range res {
+		loadbalanceEntryServiceArgumentsTypeMcpProtocolVersionPropEnum = append(loadbalanceEntryServiceArgumentsTypeMcpProtocolVersionPropEnum, v)
+	}
+}
+
+const (
+
+	// LoadbalanceEntryServiceArgumentsMcpProtocolVersionEmpty captures enum value ""
+	LoadbalanceEntryServiceArgumentsMcpProtocolVersionEmpty string = ""
+
+	// LoadbalanceEntryServiceArgumentsMcpProtocolVersionNr2026Dash07Dash28 captures enum value "2026-07-28"
+	LoadbalanceEntryServiceArgumentsMcpProtocolVersionNr2026Dash07Dash28 string = "2026-07-28"
+)
+
+// prop value enum
+func (m *LoadbalanceEntryServiceArguments) validateMcpProtocolVersionEnum(path, location string, value string) error {
+	if err := validate.EnumCase(path, location, value, loadbalanceEntryServiceArgumentsTypeMcpProtocolVersionPropEnum, true); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArguments) validateMcpProtocolVersion(formats strfmt.Registry) error {
+	if swag.IsZero(m.McpProtocolVersion) { // not required
+		return nil
+	}
+
+	// value enum
+	if err := m.validateMcpProtocolVersionEnum("serviceArguments"+"."+"mcp_protocol_version", "body", m.McpProtocolVersion); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 var loadbalanceEntryServiceArgumentsTypeModePropEnum []interface{}
 
 func init() {
@@ -2837,7 +2887,7 @@ func (m *LoadbalanceEntryServiceArgumentsBackendTLSEffective) UnmarshalBinary(b 
 	return nil
 }
 
-// LoadbalanceEntryServiceArgumentsFcEffective The capacity admission gate's resolved state on this rule's model pool, read from the data plane. Present on GET for AI-gateway services (sse_mode, pd_disagg_mode or an api-key policy); ignored on input. mode is off, observe or enforce; the ceilings are the values in force, the process defaults where the rule declared nothing; inflight and queued are live counts; queue_memory_bound_mib is the memory the full queue may park (queue_depth x 1 MiB); telemetry_stale_ms is the P/D scorers' trust window; source names where each value in force came from (rule, env or default); effective_max_outstanding is the service ceiling in force now (the adaptive one while the pool adapts), adapt_state and adapt_reason say where it stands and why, warming_endpoints counts endpoints inside their warm-up window.
+// LoadbalanceEntryServiceArgumentsFcEffective The capacity admission gate's resolved state on this rule's model pool, read from the data plane. Present on GET for installed AI-gateway and modern MCP services; absent when no pool was read. Every numeric value is explicit, including zero. Ignored on input. mode is off, observe or enforce; the ceilings are the values in force, the process defaults where the rule declared nothing; inflight and queued are live counts; queue_memory_bound_mib is the memory the full queue may park (queue_depth x 1 MiB); telemetry_stale_ms is the P/D scorers' trust window; source names where each value in force came from (rule, env or default); effective_max_outstanding is the service ceiling in force now (the adaptive one while the pool adapts), adapt_state and adapt_reason say where it stands and why, warming_endpoints counts endpoints inside their warm-up window.
 //
 // swagger:model LoadbalanceEntryServiceArgumentsFcEffective
 type LoadbalanceEntryServiceArgumentsFcEffective struct {
@@ -2855,62 +2905,62 @@ type LoadbalanceEntryServiceArgumentsFcEffective struct {
 	Adaptive string `json:"adaptive,omitempty"`
 
 	// Per-endpoint ceiling for decode legs; 0 is unlimited.
-	DecodeMaxInflight int32 `json:"decode_max_inflight,omitempty"`
+	DecodeMaxInflight int32 `json:"decode_max_inflight"`
 
 	// The service ceiling in force now; below max_outstanding while an adaptive pool is tightened.
-	EffectiveMaxOutstanding int32 `json:"effective_max_outstanding,omitempty"`
+	EffectiveMaxOutstanding int32 `json:"effective_max_outstanding"`
 
 	// Per-endpoint ceiling for the normal role; 0 is unlimited.
-	EpMaxInflight int32 `json:"ep_max_inflight,omitempty"`
+	EpMaxInflight int32 `json:"ep_max_inflight"`
 
 	// Whether admitted responses carry the admission headers.
 	// Enum: [on off]
 	ExposeHeaders string `json:"expose_headers,omitempty"`
 
 	// Inference requests executing on the pool right now.
-	Inflight int32 `json:"inflight,omitempty"`
+	Inflight int32 `json:"inflight"`
 
 	// Pool-wide ceiling on executing inference requests; 0 is unlimited.
-	MaxOutstanding int32 `json:"max_outstanding,omitempty"`
+	MaxOutstanding int32 `json:"max_outstanding"`
 
 	// The gate mode in force on the pool (off, observe or enforce).
 	Mode string `json:"mode,omitempty"`
 
 	// Per-endpoint ceiling for prefill legs; 0 is unlimited.
-	PrefillMaxInflight int32 `json:"prefill_max_inflight,omitempty"`
+	PrefillMaxInflight int32 `json:"prefill_max_inflight"`
 
 	// Requests that may wait for a unit; 0 means over a ceiling is refused.
-	QueueDepth int32 `json:"queue_depth,omitempty"`
+	QueueDepth int32 `json:"queue_depth"`
 
 	// Memory the full queue may park, in MiB (queue_depth x 1 MiB, one parked client connection per waiting request).
-	QueueMemoryBoundMib int64 `json:"queue_memory_bound_mib,omitempty"`
+	QueueMemoryBoundMib int64 `json:"queue_memory_bound_mib"`
 
 	// The wait window in force for a queued request, in milliseconds.
-	QueueWaitMs int32 `json:"queue_wait_ms,omitempty"`
+	QueueWaitMs int32 `json:"queue_wait_ms"`
 
 	// Inference requests waiting for a unit right now.
-	Queued int32 `json:"queued,omitempty"`
+	Queued int32 `json:"queued"`
 
 	// source
 	Source *LoadbalanceEntryServiceArgumentsFcEffectiveSource `json:"source,omitempty"`
 
 	// The P/D scorers' trust window for scraped queue depth, in milliseconds.
-	TelemetryStaleMs int32 `json:"telemetry_stale_ms,omitempty"`
+	TelemetryStaleMs int32 `json:"telemetry_stale_ms"`
 
 	// The tenant share in force, in percent; 0 or 100 is no share.
-	TenantMaxSharePct int32 `json:"tenant_max_share_pct,omitempty"`
+	TenantMaxSharePct int32 `json:"tenant_max_share_pct"`
 
 	// Tenants holding a unit or waiting on the pool now, while it holds tenants to a share.
-	TenantsActive int32 `json:"tenants_active,omitempty"`
+	TenantsActive int32 `json:"tenants_active"`
 
 	// ttft target ms
-	TtftTargetMs int32 `json:"ttft_target_ms,omitempty"`
+	TtftTargetMs int32 `json:"ttft_target_ms"`
 
 	// Endpoints inside their warm-up window.
-	WarmingEndpoints int32 `json:"warming_endpoints,omitempty"`
+	WarmingEndpoints int32 `json:"warming_endpoints"`
 
 	// warmup ms
-	WarmupMs int32 `json:"warmup_ms,omitempty"`
+	WarmupMs int32 `json:"warmup_ms"`
 }
 
 // Validate validates this loadbalance entry service arguments fc effective
@@ -4141,7 +4191,7 @@ type LoadbalanceEntryServiceArgumentsMtlsFrontend struct {
 	// Certificate-name pattern, for example *.corp.example.com, used when require_client_cn is true. The C path contains wildcard matching; the encoder carries at most 255 bytes. This field alone does not enable client certificate verification.
 	ClientCnPattern string `json:"client_cn_pattern,omitempty"`
 
-	// Optional gateway-local static PEM CRL path for leaf-certificate revocation checking on the configured frontend CA path. When empty, the implementation may use a sibling crl.pem beside the CA bundle. It is not automatic CRL retrieval or chain-wide revocation validation. The encoder carries at most 255 bytes; normal GET omits this field.
+	// Optional gateway-local static PEM CRL path for leaf-certificate revocation checking on the configured frontend CA path. When empty, the implementation may use a sibling crl.pem beside the CA bundle. It is not automatic CRL retrieval or chain-wide revocation validation. The encoder carries at most 255 bytes. GET returns the stored path.
 	ClientCrlPath string `json:"client_crl_path,omitempty"`
 
 	// Requests certificate-name pattern checking on the active frontend mTLS path. Supply a nonempty client_cn_pattern; an empty pattern does not establish an additional identity restriction.

@@ -17,6 +17,7 @@ package handler
 
 import (
 	"github.com/go-openapi/runtime/middleware"
+	"github.com/go-openapi/strfmt"
 	"github.com/loxilb-io/loxilb/api/models"
 	"github.com/loxilb-io/loxilb/api/restapi/operations"
 	cmn "github.com/loxilb-io/loxilb/common"
@@ -115,6 +116,15 @@ func ConfigDeleteEndPoint(params operations.DeleteConfigEndpointEpipaddressIPAdd
 
 func ConfigPostEndPointHostState(params operations.PostConfigEndpointhoststateParams, principal interface{}) middleware.Responder {
 	tk.LogIt(tk.LogTrace, "api: EndPoint %s API called. url : %s\n", params.HTTPRequest.Method, params.HTTPRequest.URL)
+
+	if err := params.Attr.Validate(strfmt.Default); err != nil {
+		return &ErrorResponse{Payload: ResultErrorResponseError(&cmn.ValidationError{Err: err})}
+	}
+
+	// Keep the tuple invariant outside generated model validation as well.
+	if (params.Attr.EpPort == 0) != (params.Attr.EpProto == "") {
+		return &ErrorResponse{Payload: ResultErrorResponseError(cmn.NewValidationError("epPort", "nonzero epPort and epProto must be supplied together"))}
+	}
 
 	EPHost := cmn.EndPointHostMod{}
 	EPHost.HostName = params.Attr.HostName

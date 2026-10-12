@@ -188,6 +188,22 @@ func TestFcQueueReadBack(t *testing.T) {
 	if eff["mode"] != "enforce" {
 		t.Fatalf("fc_effective.mode = %v, want enforce", eff["mode"])
 	}
+
+	// An installed off/unlimited/idle pool is observably different from an
+	// unavailable readback: every numeric zero must reach the wire.
+	lb.Serv.FcEffective = &cmn.FcEffectiveArg{Mode: "off"}
+	m = wireOf()
+	eff, ok = m["fc_effective"].(map[string]any)
+	if !ok {
+		t.Fatal("installed zero-valued FC state was omitted")
+	}
+	for _, key := range []string{"max_outstanding", "ep_max_inflight", "prefill_max_inflight", "decode_max_inflight",
+		"queue_depth", "queue_wait_ms", "inflight", "queued", "queue_memory_bound_mib", "telemetry_stale_ms",
+		"warmup_ms", "ttft_target_ms", "effective_max_outstanding", "warming_endpoints", "tenant_max_share_pct", "tenants_active"} {
+		if value, present := eff[key]; !present || value != float64(0) {
+			t.Errorf("installed fc_effective.%s = %v present=%t, want explicit zero", key, value, present)
+		}
+	}
 }
 
 func TestFcQueuePatchOverlay(t *testing.T) {

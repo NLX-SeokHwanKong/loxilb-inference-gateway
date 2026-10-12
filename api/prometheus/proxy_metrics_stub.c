@@ -147,6 +147,21 @@ typedef struct proxy_metrics_snapshot {
     uint64_t hold_empty_out;
     uint64_t hold_accel_skipped;
     uint64_t hold_default_mode;
+
+    /* Tier-1.5 routing cost and match depth. TAIL-APPEND ONLY — same three-way lockstep. */
+    uint64_t kv_stage_bucket[4][2][12];
+    uint64_t kv_stage_sum_us[4][2];
+    uint64_t kv_stage_count[4][2];
+    uint64_t kv_blocks_bucket[2][12];
+    uint64_t kv_blocks_sum[2];
+    uint64_t kv_blocks_count[2];
+
+    /* Streams that ended before their terminator. TAIL-APPEND ONLY — same three-way lockstep. */
+    uint64_t stream_abandon_total[3];
+    uint64_t stream_abandon_age_bucket[3][12];
+    uint64_t stream_abandon_age_sum_s[3];
+    uint64_t stream_abandon_age_count[3];
+    uint64_t stream_stall_abort_sec;
 } proxy_metrics_snapshot_t;
 
 __attribute__((weak))

@@ -48,10 +48,10 @@ IPv6 in the path: bracket the literal — `…/externalipaddress/[2001:db8:aa::1
 | `name` | string | ✅ | |
 | `sel` | int | ✅ | LB algorithm: `0` rr · `3` persist · `8` CHWBL · `10` wrr-hash (weighted CHWBL) |
 | `adminStateUp` | `*bool` | ✅ | absent→enabled; `false`→drain |
-| `connectionLimit` | uint32 | ✅ | per-rule concurrent ceiling; `0`=unlimited |
+| `connectionLimit` | uint32 | ✅ | per-rule concurrent ceiling; `0`=unlimited. NAT rules: refused by drop at SYN time in the datapath. Fullproxy (`mode:4`) rules: enforced by the listener at accept — the (N+1)th client connection is reset immediately — and read back as `activeConnections` in `/stats` from the same gauge |
 | `inactiveTimeOut` | uint32 | ✅ | seconds |
 | `probeRetries`, `probeTimeout`, `probereq`, `proberesp` | — | ✅ | health probe (`probereq`/`proberesp` are lowercase here; the camelCase `probeReq`/`probeResp` forms belong to the `/config/endpoint` model only) |
-| `allowedSources` | array | ✅ | |
+| `allowedSources` | array | ✅ | `[{"prefix":"<cidr>"}]`. NAT rules: fw mark + source check in the datapath. Fullproxy (`mode:4`) rules: a per-VIP TC firewall fence (`allow <cidr>→VIP/32:port` pref 65000 per source, `drop 0.0.0.0/0→VIP/32:port` pref 64999) so a non-allowed SYN never reaches the kernel socket; the fence follows the rule's sources on replace and goes with the rule on delete, and is excluded from snapshots like every auto-generated source-check rule. Refused with 400 in proxy-only mode (no datapath to enforce it) |
 | `projectId` | string | — | tenant/project; filterable |
 | `annotations` | map | — | opaque; ≤32 keys / ≤256-char values |
 | `timeoutMemberConnect` | uint32 (ms) | ✅ | |
@@ -227,6 +227,14 @@ gateway relays the answer itself: a plaintext connection whose traffic the kerne
 given to carry (a TLS connection, or one already accelerated, is cut at its FIN as before).
 A held client is closed once its answers are written, once the backend ends the answer's
 connection, when no answer byte has reached it for the bound below, or on a release.
+
+A FIN does not say why it was sent: a client that half-closed after its request and a
+client that closed its socket and left look the same to the gateway. Under `hold` the one
+that left is held like any other, its backend request runs to its end or to the bound, and
+the usage of that answer is charged to the tenant as if it had been delivered. Do not set
+`hold` on a service with token quotas or billing. Clients should not shut down their write
+side before they have read the answer; under the default `off` the gateway cuts the
+connection at the FIN.
 
 | Method | Path | Purpose |
 |---|---|---|

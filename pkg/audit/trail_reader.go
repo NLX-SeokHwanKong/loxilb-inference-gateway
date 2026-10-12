@@ -537,6 +537,17 @@ func (r *TrailReader) isActive(o *openSegment) bool {
 
 func openTrailSegment(seg trailSegment) (*openSegment, error) {
 	f, err := os.Open(seg.path)
+	if errors.Is(err, os.ErrNotExist) && !seg.active && !seg.gz {
+		// Compression publishes the archive before removing the plain file.
+		// A scan may identify the plain name just before that removal. Open
+		// the same sealed segment's archive rather than report idle while a
+		// known successor still has unread records. Active names are reused
+		// and must never take this fallback.
+		seg.path += gzipExt
+		seg.name += gzipExt
+		seg.gz = true
+		f, err = os.Open(seg.path)
+	}
 	if err != nil {
 		return nil, err
 	}

@@ -608,9 +608,10 @@ type ruleEnt struct {
 	sockMapMode                 uint8 // Directional sockmap accel: 0=off,1=both,2=request,3=response
 	halfCloseMode               uint8 // half-close hold, enum sp_hold_mode: 0=unset,1=off,2=hold
 	egress                      bool
-	traceType                   string                  // Tracing catalog name for deep inspection
-	tracingCatalogID            uint16                  // Resolved catalog_id for tracing (0 = no tracing)
-	backendProtocol             string                  // Backend protocol capability: "http1", "http2", or "both"
+	traceType                   string // Tracing catalog name for deep inspection
+	tracingCatalogID            uint16 // Resolved catalog_id for tracing (0 = no tracing)
+	backendProtocol             string // Backend protocol capability: "http1", "http2", or "both"
+	mcpProtocolVersion          string
 	sessionHeaderName           string                  // Custom session header for persist mode (e.g., "mcp-session-id")
 	sseMode                     bool                    // SSE mode: suppress idle-timeout during streaming
 	apiKeyAuth                  string                  // data-plane credential policy AS DECLARED: "", "disabled", "required", "jwt" or "apikey-or-jwt"
@@ -665,6 +666,7 @@ type ruleEnt struct {
 	mtlsFrontend                *cmn.MTLSFrontendConfig // mTLS frontend configuration
 	mtlsBackend                 *cmn.MTLSBackendConfig  // mTLS backend configuration
 	srcList                     []*allowedSrcElem
+	proxySrcFw                  []cmn.FwRuleArg // fullproxy per-VIP source fence currently installed in the TC firewall (see syncProxySrcFence)
 	locIPs                      map[string]struct{}
 	hwOffload                   bool              // FwRuleArg.HwOffload mirror, plumbed through Fw2DP to FwDpWorkQ.HwOffload
 	id                          string            // stable opaque id (client-supplied verbatim, or minted UUIDv4)
@@ -758,6 +760,8 @@ type RuleH struct {
 	// config on restart (no separate persisted structure) since the id round-trips through
 	// lbconfig.txt and replays via NetLbRuleAdd -> AddLbRule on boot.
 	opaqueID map[string]*ruleEnt
+	// Only modern rules can conflict with a legacy addition; rebuilt on replay.
+	mcpRules map[string]*ruleEnt
 }
 
 // RulesInit - initialize the Rules subsystem
@@ -783,6 +787,7 @@ func RulesInit(zone *Zone) *RuleH {
 	nRh.tables[RtLB].Mark = utils.NewMarker(1, RtMaximumLbs)
 	// opaque id -> rule index, rebuilt from persisted config on restart.
 	nRh.opaqueID = make(map[string]*ruleEnt)
+	nRh.mcpRules = make(map[string]*ruleEnt)
 
 	for i := 0; i < MaxEndPointCheckers; i++ {
 		nRh.epCs[i].tD = make(chan bool)
@@ -1137,6 +1142,7 @@ func (R *RuleH) Rules2Json() ([]byte, error) {
 		t.ServPortMax = data.tuples.l4Dst.valMax
 		t.Sel = data.act.action.(*ruleLBActs).sel
 		t.Mode = data.act.action.(*ruleLBActs).mode
+		t.MCPProtocolVersion = cmn.MCPVersion(data.mcpProtocolVersion)
 
 		// Make Endpoints
 		tmpEp := data.act.action.(*ruleLBActs).endPoints
@@ -1215,8 +1221,9 @@ func (R *RuleH) GetLBRule() ([]cmn.LbRuleMod, error) {
 			ret.Serv.HalfCloseEffective = data.halfCloseEffective(halfCloseInForce())
 		}
 		ret.Serv.Egress = data.egress
-		ret.Serv.TraceType = data.traceType                 // Tracing catalog
-		ret.Serv.BackendProtocol = data.backendProtocol     // Backend protocol capability
+		ret.Serv.TraceType = data.traceType             // Tracing catalog
+		ret.Serv.BackendProtocol = data.backendProtocol // Backend protocol capability
+		ret.Serv.MCPProtocolVersion = cmn.MCPVersion(data.mcpProtocolVersion)
 		ret.Serv.SessionHeaderName = data.sessionHeaderName // Custom session header for persist mode
 		ret.Serv.SSEMode = data.sseMode                     // SSE streaming mode
 		// Surface the RESOLVED policy, never the raw configured string: an
@@ -1253,10 +1260,10 @@ func (R *RuleH) GetLBRule() ([]cmn.LbRuleMod, error) {
 		ret.Serv.FcMaxQueueDepth = data.fcMaxQueueDepth
 		ret.Serv.FcMaxQueueWaitMs = data.fcMaxQueueWaitMs
 		data.fcCfg.toServ(&ret.Serv)
-		// The capacity gate's resolved state on the pool, for an AI-gateway
-		// service: what the data plane holds, not what was posted. A read
-		// model beside the configuration, never replayed into a POST.
-		if data.aiGwMode() && mh.dpEbpf != nil {
+		// The capacity gate's resolved state on the pool, for AI-gateway or
+		// modern MCP services: what the data plane holds, not what was posted.
+		// A read model beside configuration, never replayed into a POST.
+		if (data.aiGwMode() || data.mcpProtocolVersion != "") && mh.dpEbpf != nil {
 			if eff, ok := mh.dpEbpf.DpFcStateGet(data.tuples.l3Dst.addr.IP,
 				data.tuples.l4Dst.valMin, uint8(data.tuples.l4Prot.val),
 				data.tuples.path, data.tuples.pathPrefix, data.tuples.modelName); ok {
@@ -1590,6 +1597,7 @@ const (
 	lbModelNameMaxBytes         = 127
 	lbJwtAuthProfileMaxBytes    = 63
 	lbEndpointHashKeyMaxBytes   = 511
+	lbTLSCiphersMaxBytes        = 255
 )
 
 func validateLBFixedCString(field, value string, maxBytes int) error {
@@ -1616,6 +1624,7 @@ func validateLBFixedCStringFields(serv cmn.LbServiceArg) error {
 		{name: "session_header_name", value: serv.SessionHeaderName, maxBytes: lbSessionHeaderNameMaxBytes},
 		{name: "model_name", value: serv.ModelName, maxBytes: lbModelNameMaxBytes},
 		{name: "jwt_auth_profile", value: serv.JwtAuthProfile, maxBytes: lbJwtAuthProfileMaxBytes},
+		{name: "tls_ciphers", value: serv.TlsCiphers, maxBytes: lbTLSCiphersMaxBytes},
 	} {
 		if err := validateLBFixedCString(field.name, field.value, field.maxBytes); err != nil {
 			return err
@@ -2101,6 +2110,147 @@ func (R *RuleH) deleteAllowedLbSrc(CIDR string, lbMark uint32) error {
 	}
 
 	return nil
+}
+
+// Fullproxy source fence
+//
+// A mode=4 (fullproxy) rule never enters nat_map: llb_add_map_elem sends
+// DP_SET_FULLPROXY to proxy_add_entry() and the sockproxy terminates the
+// connection in userspace. The allowedSources check of a NAT rule is a two-step
+// mechanism — the pref-0 "allow src→0/0" fw rule installed by addAllowedLbSrc
+// marks the packet, and dp_do_nat refuses an unmarked packet under
+// NAT_LB_OP_CHKSRC — whose second step a fullproxy rule can never reach, so the
+// field was accepted and silently not enforced. Admission has to stay in front
+// of the kernel socket (a non-allowed source must not consume listen backlog,
+// syncookies, accept, a TLS handshake or a proxy context), so a fullproxy rule
+// carries a per-VIP fence in the TC firewall instead:
+//
+//	allow src=<cidr> dst=<vip>/32 dport=<port> proto=<p>  pref 65000  (one per CIDR)
+//	drop  src=0/0    dst=<vip>/32 dport=<port> proto=<p>  pref 64999
+//
+// pdi_rule_insert orders by descending pref (equal pref FIFO) and the datapath
+// takes the first match, so the fence always precedes the pref-0 generic allow
+// rules NAT rules use and never affects them (the destination differs). The
+// pair carries SrcChkFwMark so snapshots skip it like every other auto-generated
+// source-check rule (pkg/snapshot filterSrcChkRules). NAT rules keep the mark +
+// CHKSRC path untouched. The datapath proxies IPv4 only, so a v6 rule gets no
+// fence. Every fw add/delete flushes the conntrack table, exactly as the
+// existing allowedSources plumbing does.
+const (
+	lbProxySrcFenceAllowPref uint32 = 65000
+	lbProxySrcFenceDropPref  uint32 = 64999
+)
+
+func lbRuleIsFullProxy(r *ruleEnt) bool {
+	at, ok := r.act.action.(*ruleLBActs)
+	return ok && at.mode == cmn.LBModeFullProxy
+}
+
+// lbProxySrcFenceWanted lists the fence a rule needs as it stands now: nothing
+// unless it is a fullproxy rule with allowed sources.
+func lbProxySrcFenceWanted(r *ruleEnt) []cmn.FwRuleArg {
+	if !lbRuleIsFullProxy(r) || len(r.srcList) == 0 {
+		return nil
+	}
+	vip := r.tuples.l3Dst.addr.IP
+	if vip == nil || tk.IsNetIPv6(vip.String()) {
+		return nil
+	}
+	dst := vip.String() + "/32"
+	pmin, pmax := r.tuples.l4Dst.valMin, r.tuples.l4Dst.valMax
+	if pmax < pmin {
+		pmax = pmin
+	}
+	proto := r.tuples.l4Prot.val
+	want := make([]cmn.FwRuleArg, 0, len(r.srcList)+1)
+	for _, src := range r.srcList {
+		want = append(want, cmn.FwRuleArg{SrcIP: src.srcPref.String(), DstIP: dst,
+			DstPortMin: pmin, DstPortMax: pmax, Proto: proto, Pref: lbProxySrcFenceAllowPref})
+	}
+	want = append(want, cmn.FwRuleArg{SrcIP: "0.0.0.0/0", DstIP: dst,
+		DstPortMin: pmin, DstPortMax: pmax, Proto: proto, Pref: lbProxySrcFenceDropPref})
+	return want
+}
+
+// lbProxySrcFencePlan turns the installed fence and the wanted one into the
+// firewall calls that get from one to the other: adds come allows first and
+// the drop last, deletes come the drop first and the allows last, so a source
+// that is allowed throughout is never fenced out in between.
+func lbProxySrcFencePlan(have, want []cmn.FwRuleArg) (adds, dels []cmn.FwRuleArg) {
+	in := func(fw cmn.FwRuleArg, set []cmn.FwRuleArg) bool {
+		for _, h := range set {
+			if h == fw {
+				return true
+			}
+		}
+		return false
+	}
+	isDrop := func(fw cmn.FwRuleArg) bool { return fw.Pref == lbProxySrcFenceDropPref }
+	for pass := 0; pass < 2; pass++ {
+		for _, fw := range want {
+			if isDrop(fw) == (pass == 0) || in(fw, have) {
+				continue
+			}
+			adds = append(adds, fw)
+		}
+		for _, fw := range have {
+			if isDrop(fw) != (pass == 0) || in(fw, want) {
+				continue
+			}
+			dels = append(dels, fw)
+		}
+	}
+	return adds, dels
+}
+
+// syncProxySrcFence makes the installed fence of a rule match what it needs
+// now (lbProxySrcFenceWanted), in the order lbProxySrcFencePlan gives. It
+// returns the first error; the fence is left as far as it got and
+// r.proxySrcFw records exactly what is installed, so a retry or the rule's
+// deletion finishes the job.
+func (R *RuleH) syncProxySrcFence(r *ruleEnt) error {
+	want := lbProxySrcFenceWanted(r)
+	adds, dels := lbProxySrcFencePlan(r.proxySrcFw, want)
+	have := append([]cmn.FwRuleArg(nil), r.proxySrcFw...)
+	var firstErr error
+
+	for _, fw := range adds {
+		isDrop := fw.Pref == lbProxySrcFenceDropPref
+		opts := cmn.FwOptArg{Allow: !isDrop, Drop: isDrop, Mark: SrcChkFwMark}
+		if _, err := R.AddFwRule(fw, opts); err != nil && !strings.Contains(err.Error(), "fwrule-exists") {
+			tk.LogIt(tk.LogError, "lb-rule %s proxy src-fence add %s->%s pref %d failed: %v\n",
+				r.tuples.String(), fw.SrcIP, fw.DstIP, fw.Pref, err)
+			if firstErr == nil {
+				firstErr = fmt.Errorf("proxy src-fence add failed: %w", err)
+			}
+			continue
+		}
+		have = append(have, fw)
+	}
+	for _, fw := range dels {
+		if !R.proxySrcFenceNeededByPeer(r, fw) {
+			if _, err := R.DeleteFwRule(fw); err != nil {
+				tk.LogIt(tk.LogError, "lb-rule %s proxy src-fence del %s->%s pref %d failed: %v\n",
+					r.tuples.String(), fw.SrcIP, fw.DstIP, fw.Pref, err)
+				if firstErr == nil {
+					firstErr = fmt.Errorf("proxy src-fence del failed: %w", err)
+				}
+				continue
+			}
+		}
+		for i := range have {
+			if have[i] == fw {
+				have = append(have[:i], have[i+1:]...)
+				break
+			}
+		}
+	}
+	r.proxySrcFw = have
+	if len(want) > 0 && firstErr == nil {
+		tk.LogIt(tk.LogInfo, "lb-rule %s proxy src-fence: %d allow + drop on %s\n",
+			r.tuples.String(), len(want)-1, want[0].DstIP)
+	}
+	return firstErr
 }
 
 func (R *RuleH) addLbRuleWithFW(Dst string, dPortMin, dPortMax uint16, proto uint8, lbMark uint32) error {
@@ -2708,6 +2858,17 @@ func getLBConsolidatedEPs(oldEps []ruleLBEp, newEps []ruleLBEp, oper cmn.LBOp) (
 					ruleChg = true
 					e.weight = nEp.weight
 				}
+				// The other members a request declares for an endpoint are
+				// taken from it as the weight is. A detach names endpoints
+				// to remove and declares nothing about them.
+				if oper != cmn.LBOPDetach && lbEpDeclaredDiffers(e, &nEp) {
+					ruleChg = true
+					e.epRole = nEp.epRole
+					e.nixlPort = nEp.nixlPort
+					e.backup = nEp.backup
+					e.subnetId = nEp.subnetId
+					e.monAddr = nEp.monAddr
+				}
 				e.chkVal = true
 				n.chkVal = true
 				matched = true
@@ -2771,6 +2932,87 @@ func getLBConsolidatedEPs(oldEps []ruleLBEp, newEps []ruleLBEp, oper cmn.LBOp) (
 	}
 
 	return ruleChg, retEps, delEps
+}
+
+// lbEpDeclaredDiffers reports whether a request declares another role, NIXL
+// port, backup flag, subnet or probe address for an endpoint than it has.
+func lbEpDeclaredDiffers(have, want *ruleLBEp) bool {
+	return have.epRole != want.epRole || have.nixlPort != want.nixlPort ||
+		have.backup != want.backup || have.subnetId != want.subnetId ||
+		have.monAddr != want.monAddr
+}
+
+// lbAllowedSourcesChanged reports whether a request declares another set of
+// allowed sources than the rule has. The order is not part of the set.
+func lbAllowedSourcesChanged(have []*allowedSrcElem, want []cmn.LbAllowedSrcIPArg) bool {
+	if len(have) != len(want) {
+		return true
+	}
+	set := make(map[string]int, len(have))
+	for _, src := range have {
+		set[src.srcPref.String()]++
+	}
+	for _, src := range want {
+		pref := src.Prefix
+		if _, ipNet, err := net.ParseCIDR(pref); err == nil {
+			pref = ipNet.String()
+		}
+		if set[pref] == 0 {
+			return true
+		}
+		set[pref]--
+	}
+	return false
+}
+
+// lbEpsToReprobe returns the endpoints of a rule whose probe has to be
+// registered again: all of them when the rule's probe settings change, else
+// those whose probe address changes. They are returned as the rule has them,
+// so that they are detached under the key they were attached with.
+func lbEpsToReprobe(oldEps, newEps []ruleLBEp, all bool) []ruleLBEp {
+	var eps []ruleLBEp
+	for i := range oldEps {
+		o := &oldEps[i]
+		if !o.epCreated {
+			continue
+		}
+		if all {
+			eps = append(eps, *o)
+			continue
+		}
+		for j := range newEps {
+			n := &newEps[j]
+			if o.xIP.Equal(n.xIP) && o.xPort == n.xPort && o.monAddr != n.monAddr {
+				eps = append(eps, *o)
+				break
+			}
+		}
+	}
+	return eps
+}
+
+// lbEpsMarkDetached clears the probe registration mark of the listed
+// endpoints in a set, so that the next attach registers them again.
+func lbEpsMarkDetached(eps, detached []ruleLBEp) {
+	for i := range eps {
+		for j := range detached {
+			if eps[i].xIP.Equal(detached[j].xIP) && eps[i].xPort == detached[j].xPort {
+				eps[i].epCreated = false
+				break
+			}
+		}
+	}
+}
+
+// lbNameClass is what a rule's name decides besides naming it: whether the
+// rule's VIP is managed by the gateway, and its cluster instance. A rule
+// cannot move from one to another while it is installed.
+func lbNameClass(name string) (unmanagedVIP bool, inst string) {
+	inst = cmn.CIDefault
+	if names := strings.Split(name, ":"); len(names) >= 2 {
+		inst = names[1]
+	}
+	return strings.Contains(name, "ipvs") || strings.Contains(name, "static"), inst
 }
 
 // strSliceEqual reports whether two string slices are element-wise equal (order-sensitive).
@@ -3861,6 +4103,9 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 
 	// Reject values that cannot be represented by the fixed-size C data-plane
 	// ABI before looking up, allocating, deleting or updating any rule state.
+	if err := cmn.ValidateMCPService(&serv); err != nil {
+		return RuleArgsErr, &cmn.RuleArgumentError{Err: err}
+	}
 	if err := validateLBFixedCStringFields(serv); err != nil {
 		return RuleArgsErr, &cmn.RuleArgumentError{Err: err}
 	}
@@ -3868,6 +4113,17 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 	// installed with it or not at all, whichever way it arrived.
 	if err := cmn.ValidateBackendTLS(&serv); err != nil {
 		return RuleArgsErr, &cmn.RuleArgumentError{Err: err}
+	}
+	// A cipher string the TLS library does not take is the caller's to
+	// correct, so it is refused here and never reaches the data plane.
+	if err := lbTLSCiphersErr(&serv); err != nil {
+		return RuleArgsErr, &cmn.RuleArgumentError{Err: err}
+	}
+	// allowedSources is enforced by the eBPF datapath (NAT: fw mark +
+	// CHKSRC; fullproxy: the TC source fence). Proxy-only has neither, and a
+	// restriction that is stored but not enforced must not look configured.
+	if mh.disBPF && len(allowedSources) > 0 {
+		return RuleArgsErr, &cmn.RuleArgumentError{Err: errors.New("allowedSources is unavailable in proxy-only mode (no eBPF datapath to enforce it)")}
 	}
 
 	// Validate service args
@@ -4271,6 +4527,24 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 	tk.LogIt(tk.LogDebug, "lb-rule key (add): %q\n", rt.ruleKey())
 
 	eRule := R.tables[RtLB].eMap[rt.ruleKey()]
+	if err := resolveMCPService(&serv, eRule); err != nil {
+		return RuleArgsErr, &cmn.RuleArgumentError{Err: err}
+	}
+	if other := R.lbListenerMCPConflict(eRule, &rt, string(serv.MCPProtocolVersion)); other != nil {
+		return RuleArgsErr, &cmn.RuleArgumentError{Err: fmt.Errorf("mcp_protocol_version: %s shares this address and port with a different MCP transport mode; all overlapping rules must agree", listenerRuleName(&other.tuples))}
+	}
+
+	// Reject shared-listener source conflicts before create/replace mutates
+	// any rule or fence. Replay uses the same safety contract.
+	if lBActs.mode == cmn.LBModeFullProxy {
+		allowedSources, err = normalizeListenerSources(allowedSources)
+		if err != nil {
+			return RuleArgsErr, &cmn.RuleArgumentError{Err: err}
+		}
+		if other := R.lbListenerSourcesConflict(eRule, &rt, allowedSources); other != nil {
+			return RuleArgsErr, &cmn.RuleArgumentError{Err: fmt.Errorf("allowedSources: %s already uses this address, port and protocol with a different policy; fullproxy rules sharing a listener must use the same allowedSources", listenerRuleName(&other.tuples))}
+		}
+	}
 
 	// The data plane keeps the security mode and the backend TLS contexts once
 	// per listener, so a rule that asks for something else than the rules
@@ -4374,6 +4648,7 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 
 		if eRule.hChk.prbType != serv.ProbeType || eRule.hChk.prbPort != serv.ProbePort ||
 			eRule.hChk.prbReq != serv.ProbeReq || eRule.hChk.prbResp != serv.ProbeResp ||
+			eRule.hChk.prbTimeo != serv.ProbeTimeout || eRule.hChk.prbRetries != serv.ProbeRetries ||
 			eRule.pTO != serv.PersistTimeout || eRule.act.action.(*ruleLBActs).sel != lBActs.sel ||
 			eRule.act.action.(*ruleLBActs).mode != lBActs.mode ||
 			eRule.sockMapMode != sockMapCode ||
@@ -4385,7 +4660,7 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 
 		// Detect changes to all extended mutable fields
 		if eRule.traceType != serv.TraceType ||
-			eRule.backendProtocol != serv.BackendProtocol ||
+			(serv.BackendProtocol != "" && eRule.backendProtocol != serv.BackendProtocol) ||
 			eRule.sessionHeaderName != serv.SessionHeaderName ||
 			eRule.sseMode != serv.SSEMode ||
 			(serv.ApiKeyAuth != "" && eRule.apiKeyAuth != serv.ApiKeyAuth) ||
@@ -4429,24 +4704,13 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 			eRule.hstsPreload != serv.HstsPreload ||
 			!strSliceEqual(eRule.alpnProtocols, serv.AlpnProtocols) ||
 			!strSliceEqual(eRule.tlsVersions, serv.TlsVersions) ||
+			!reflect.DeepEqual(eRule.mtlsFrontend, serv.MTLSFrontend) ||
 			eRule.name != serv.Name {
 			ruleChg = true
 		}
 
-		if len(allowedSources) == len(eRule.srcList) {
-			for _, newSrc := range allowedSources {
-				srcMatch := false
-				for _, src := range eRule.srcList {
-					if src.srcPref.String() != newSrc.Prefix {
-						srcMatch = true
-						break
-					}
-				}
-				if !srcMatch {
-					ruleChg = true
-					break
-				}
-			}
+		if lbAllowedSourcesChanged(eRule.srcList, allowedSources) {
+			ruleChg = true
 		}
 
 		// an explicit admin_state that differs from the current
@@ -4527,6 +4791,14 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 			return RuleExistsErr, errors.New("lbrule-exist error: cant modify rule egress mode")
 		}
 
+		if eRule.name != serv.Name {
+			oldUnmanaged, oldInst := lbNameClass(eRule.name)
+			newUnmanaged, newInst := lbNameClass(serv.Name)
+			if oldUnmanaged != newUnmanaged || oldInst != newInst {
+				return RuleExistsErr, errors.New("lbrule-exist error: cant modify the cluster instance or the VIP handling a rule name declares")
+			}
+		}
+
 		if len(retEps) == 0 {
 			tk.LogIt(tk.LogDebug, "lb-rule %s has no-endpoints: to be deleted\n", eRule.tuples.String())
 			return R.DeleteLbRule(serv)
@@ -4548,6 +4820,9 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 			eRule.DP(DpRemove)
 		}
 
+		// The rule as it stands, for a replace the data plane refuses.
+		replaceUndo := lbReplaceUndoOf(eRule)
+
 		eSrcList := eRule.srcList
 		eRule.srcList = nil
 
@@ -4568,7 +4843,36 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 			R.deleteAllowedLbSrc(srcElem.srcPref.String(), uint32(eRule.ruleNum))
 		}
 
+		// The fullproxy fence follows the new source list. A fence the
+		// firewall refuses is as fatal as a source it refuses: the rule goes
+		// back to the sources it had, fence included.
+		if ferr := R.syncProxySrcFence(eRule); ferr != nil {
+			for _, src := range eRule.srcList {
+				R.deleteAllowedLbSrc(src.srcPref.String(), uint32(eRule.ruleNum))
+			}
+			eRule.srcList = nil
+			for _, src := range eSrcList {
+				if srcElem, serr := R.addAllowedLbSrc(src.srcPref.String(), uint32(eRule.ruleNum)); serr == nil {
+					eRule.srcList = append(eRule.srcList, srcElem)
+				}
+			}
+			R.syncProxySrcFence(eRule)
+			tk.LogIt(tk.LogError, "lb-rule - %s:%s proxy src-fence error\n", eRule.tuples.String(), eRule.act.String())
+			return RuleAllocErr, fmt.Errorf("rule-allowed-src error: %w", ferr)
+		}
+
+		// A probe is registered under the rule's probe settings and the
+		// endpoint's probe address. The endpoints for which either changes
+		// are noted as the rule has them now, with the settings they were
+		// attached under.
+		prevHChk := eRule.hChk
+		probeChg := prevHChk.prbType != serv.ProbeType || prevHChk.prbPort != serv.ProbePort ||
+			prevHChk.prbReq != serv.ProbeReq || prevHChk.prbResp != serv.ProbeResp ||
+			prevHChk.prbTimeo != serv.ProbeTimeout || prevHChk.prbRetries != serv.ProbeRetries
+		reprobeEps := lbEpsToReprobe(eRule.act.action.(*ruleLBActs).endPoints, retEps, probeChg)
+
 		// Update the rule
+		eRule.name = serv.Name
 		eRule.hChk.prbType = serv.ProbeType
 		eRule.hChk.prbPort = serv.ProbePort
 		eRule.hChk.prbReq = serv.ProbeReq
@@ -4597,6 +4901,7 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 		if serv.BackendProtocol != "" {
 			eRule.backendProtocol = serv.BackendProtocol
 		}
+		eRule.mcpProtocolVersion = string(serv.MCPProtocolVersion)
 		eRule.sessionHeaderName = serv.SessionHeaderName
 		eRule.sseMode = serv.SSEMode
 		// PRESERVE on omit, unlike the fields around it — the why lives on
@@ -4770,6 +5075,16 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 		// (in place, NO DpRemove) if the dataplane push fails. The SNAT path has no
 		// per-EP NAT reconcile, so it keeps the plain in-place DpCreate.
 		if !serv.Snat {
+			// Detached under the settings they were attached with, right
+			// before the reconcile attaches them under the new ones.
+			if len(reprobeEps) > 0 {
+				nextHChk := eRule.hChk
+				eRule.hChk = prevHChk
+				R.modNatEpHost(eRule, reprobeEps, false, activateProbe, eRule.egress)
+				eRule.hChk = nextHChk
+				lbEpsMarkDetached(retEps, reprobeEps)
+				lbEpsMarkDetached(delEps, reprobeEps)
+			}
 			var restoreRuleState func()
 			if chwblTxn {
 				restoreRuleState = restoreCHWBLState
@@ -4787,9 +5102,23 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 			}
 		}
 		DpBrokerSyncBarrier(mh.dp)
-		if lBActs.mode == cmn.LBModeFullProxy && eRule.sync != 0 {
+		if lBActs.mode == cmn.LBModeFullProxy && eRule.sync != 0 && !R.lbStandbyKeeps(eRule) {
 			if !backendTLSStaged {
-				return RuleArgsErr, &cmn.RuleArgumentError{Err: lbPushRefusedError(false)}
+				// Taken first: it asks the host about the VIP, and the
+				// answer must be about the request that was refused.
+				refusal := lbPushRefusedError(eRule.tuples.l3Dst.addr.IP, false)
+				// The rule goes back to what it was and is pushed again,
+				// so that what is stored, what is reported and what is
+				// installed agree, and the same request can be sent again
+				// once its cause is gone.
+				if chwblTxn {
+					restoreCHWBLState()
+				}
+				R.lbReplaceUndo(eRule, replaceUndo, activateProbe)
+				DpBrokerSyncBarrier(mh.dp)
+				tk.LogIt(tk.LogError, "lb-rule %s replace not installed by the data plane, the rule is put back (sync %d)\n",
+					eRule.tuples.String(), eRule.sync)
+				return RuleArgsErr, refusal
 			}
 			// The listener still runs the policy the rule had. Put the
 			// rule back to it and push once more, so that what is stored,
@@ -4799,7 +5128,7 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 			DpBrokerSyncBarrier(mh.dp)
 			tk.LogIt(tk.LogError, "lb-rule %s backend TLS policy not replaced, the previous policy stays (sync %d)\n",
 				eRule.tuples.String(), eRule.sync)
-			return RuleArgsErr, &cmn.RuleArgumentError{Err: lbPushRefusedError(true)}
+			return RuleArgsErr, lbPushRefusedError(eRule.tuples.l3Dst.addr.IP, true)
 		}
 		eRule.backendTLSKept = false
 		if chwblTxn {
@@ -4933,6 +5262,7 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 	}
 
 	// Store custom session header name for persist mode
+	r.mcpProtocolVersion = string(serv.MCPProtocolVersion)
 	r.sessionHeaderName = serv.SessionHeaderName
 
 	// Store SSE streaming configuration
@@ -5053,6 +5383,16 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 		}
 		r.srcList = append(r.srcList, srcElem)
 	}
+	if ferr := R.syncProxySrcFence(r); ferr != nil {
+		R.tables[RtLB].Mark.ReleaseMarker(r.ruleNum)
+		for _, src := range r.srcList {
+			R.deleteAllowedLbSrc(src.srcPref.String(), uint32(r.ruleNum))
+		}
+		r.srcList = nil
+		R.syncProxySrcFence(r)
+		tk.LogIt(tk.LogError, "lb-rule - %s:%s proxy src-fence error\n", r.tuples.String(), r.act.String())
+		return RuleAllocErr, fmt.Errorf("rule-allowed-src error: %w", ferr)
+	}
 	r.sT = time.Now()
 	r.iTO = serv.InactiveTimeout
 	r.bgp = serv.Bgp
@@ -5086,6 +5426,7 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 	}
 
 	R.tables[RtLB].eMap[rt.ruleKey()] = r
+	R.trackMCPLbRule(rt.ruleKey(), r)
 	if r.ruleNum < RtMaximumLbs {
 		R.tables[RtLB].rArr[r.ruleNum] = r
 		eppRuleRegister(r.ruleNum, &serv) // the EPP client resolves the rule by this number
@@ -5206,14 +5547,15 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 	// taken back out, so the caller is told and nothing is left to be retried
 	// behind its back. A restored configuration is kept whole instead and the
 	// rule is retried, as before.
-	if lBActs.mode == cmn.LBModeFullProxy && r.sync != 0 && !lbConfigReplay(&serv) {
+	if lBActs.mode == cmn.LBModeFullProxy && r.sync != 0 && !lbConfigReplay(&serv) && !R.lbStandbyKeeps(r) {
 		tk.LogIt(tk.LogError, "lb-rule %s not installed by the data plane, removed (sync %d)\n",
 			r.tuples.String(), r.sync)
+		refusal := lbPushRefusedError(r.tuples.l3Dst.addr.IP, false)
 		if _, derr := R.DeleteLbRule(serv); derr != nil {
 			tk.LogIt(tk.LogError, "lb-rule %s could not be removed after a refused install: %v\n",
 				r.tuples.String(), derr)
 		}
-		return RuleArgsErr, &cmn.RuleArgumentError{Err: lbPushRefusedError(false)}
+		return RuleArgsErr, refusal
 	}
 	R.flushLBCtEntries(r, CtFlushRidZeroOnly)
 
@@ -5450,8 +5792,11 @@ func (R *RuleH) DeleteLbRule(serv cmn.LbServiceArg) (int, error) {
 		R.deleteAllowedLbSrc(srcElem.srcPref.String(), uint32(rule.ruleNum))
 	}
 	rule.srcList = nil
+	// drop first, then the allows: the fence never closes on its own
+	R.syncProxySrcFence(rule)
 
 	delete(R.tables[RtLB].eMap, rt.ruleKey())
+	R.trackMCPLbRule(rt.ruleKey(), nil)
 	// drop the opaque-id index entry alongside the rule.
 	R.unregisterOpaqueID(rule)
 	// The sockproxy L7 attach is torn down with the listener, so the attachment
@@ -6188,7 +6533,7 @@ func (R *RuleH) applyHostStateToRules(hostName string, epPort uint16, epProto st
 				proto := rule.tuples.l4Prot.val
 				epIP := ep.xIP
 
-				ret := mh.dp.DpHooks.DpLBEndpointHostStateUpdate(svcIP, svcPort, proto, epIP, state)
+				ret := mh.dp.DpHooks.DpLBEndpointHostStateUpdate(svcIP, svcPort, proto, epIP, epPort, state)
 				if ret == 0 {
 					tk.LogIt(tk.LogInfo, "P2 GPU: Applied hostState '%s' to sockproxy - svc=%v:%v ep=%v\n",
 						state, svcIP, svcPort, epIP)
@@ -6834,10 +7179,11 @@ func (r *ruleEnt) LB2DP(work DpWorkT) int {
 	nWork.ConnLimit = r.connLimit // per-service concurrent-conn ceiling (0 = unlimited)
 	nWork.PolId = r.qosPolId      // Tier-0 rule-attached policer (0 = none)
 	nWork.HostURL = r.tuples.path
-	nWork.PathPrefix = r.tuples.pathPrefix                            // P6: Pass path prefix
-	nWork.PathMatchMode = r.tuples.pathMatchMode                      // P6: Pass path match mode
-	nWork.ModelName = r.tuples.modelName                              // AI model name for pool selection
-	nWork.BackendProtocol = r.backendProtocol                         // Backend protocol capability
+	nWork.PathPrefix = r.tuples.pathPrefix       // P6: Pass path prefix
+	nWork.PathMatchMode = r.tuples.pathMatchMode // P6: Pass path match mode
+	nWork.ModelName = r.tuples.modelName         // AI model name for pool selection
+	nWork.BackendProtocol = r.backendProtocol    // Backend protocol capability
+	nWork.MCPProtocolVersion = r.mcpProtocolVersion
 	nWork.SessionHeaderName = r.sessionHeaderName                     // Custom session header name for persist mode
 	nWork.SSEMode = r.sseMode                                         // SSE streaming mode
 	nWork.ApiKeyAuth = r.apiKeyAuth                                   // data-plane credential policy, as declared (encoder resolves)
@@ -6981,7 +7327,9 @@ func (r *ruleEnt) LB2DP(work DpWorkT) int {
 		// push re-enters — failover and failback are immediate.
 		applyMemberSelection(at.endPoints, r.adminStateUp)
 
-		if at.sel == cmn.LbSelPrio {
+		// Modern MCP fullproxy selects original weighted members per request.
+		// Kernel slot replication would duplicate members and apply weights twice.
+		if at.sel == cmn.LbSelPrio && r.mcpProtocolVersion == "" {
 			j := 0
 			k := 0
 			var small [MaxLBEndPoints]int

@@ -8,19 +8,20 @@ package models
 import (
 	"context"
 
+	"github.com/go-openapi/errors"
 	"github.com/go-openapi/strfmt"
 	"github.com/go-openapi/swag"
 )
 
-// EndPointHostState Explicit host-state input. Supply both nonzero epPort and epProto for generated-key targeting, or omit both for host-wide targeting. Custom monitor names cannot be selected by the specific tuple path. Host-wide requests can succeed without matches. epPort narrows to uint16 without full validation; immediate dependent updates are implemented for fullproxy rules, not universally.
+// EndPointHostState Explicit host-state input. Supply both nonzero epPort and epProto for generated-key targeting, or omit both for host-wide targeting. epPort is validated in 0..65535 before conversion. Fullproxy dataplane updates respect the selected endpoint port; zero retains all ports on the host. Custom monitor names cannot be selected by the specific tuple path. Host-wide requests can succeed without matches. Immediate dependent updates are implemented for fullproxy rules, not universally.
 //
 // swagger:model EndPointHostState
 type EndPointHostState struct {
 
-	// Nonzero port requires epProto; zero or omission requires epProto empty for host-wide targeting. Conversion to uint16 is not fully validated.
+	// Nonzero port in 1..65535 requires epProto; zero or omission requires epProto empty for host-wide targeting.
 	EpPort int64 `json:"epPort,omitempty"`
 
-	// Generated monitor-key probe type; supply together with nonzero epPort or omit both. This selector cannot resolve a custom monitor name and is not a universal transport-protocol selector.
+	// Generated monitor-key probe type: tcp, udp, sctp, http, https, ping, tls-hello or none. Supply together with nonzero epPort or omit both. This selector cannot resolve a custom monitor name and is not a universal transport-protocol selector.
 	EpProto string `json:"epProto,omitempty"`
 
 	// Literal endpoint host IP used for monitor matching, not a hostname or CIDR.
@@ -32,6 +33,20 @@ type EndPointHostState struct {
 
 // Validate validates this end point host state
 func (m *EndPointHostState) Validate(formats strfmt.Registry) error {
+	if m == nil {
+		return errors.New(400, "endpoint host state is required")
+	}
+	if m.EpPort < 0 || m.EpPort > 65535 {
+		return errors.New(400, "epPort must be between 0 and 65535")
+	}
+	if (m.EpPort == 0) != (m.EpProto == "") {
+		return errors.New(400, "nonzero epPort and epProto must be supplied together")
+	}
+	switch m.EpProto {
+	case "", "tcp", "udp", "sctp", "http", "https", "ping", "tls-hello", "none":
+	default:
+		return errors.New(400, "unknown epProto %q", m.EpProto)
+	}
 	return nil
 }
 

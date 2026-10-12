@@ -63,6 +63,9 @@ func ConfigPostLoadbalancer(params operations.PostConfigLoadbalancerParams, prin
 	if err != nil {
 		return errorResponseWithCode(http.StatusBadRequest, "malformed load-balancer body")
 	}
+	if pres.svcIsNull("mcp_protocol_version") {
+		return errorResponseWithCode(http.StatusBadRequest, "mcp_protocol_version must not be null")
+	}
 	if err := pres.validatePDThresholds(); err != nil {
 		return errorResponseWithCode(http.StatusBadRequest, err.Error())
 	}
@@ -149,11 +152,10 @@ func ConfigPostLoadbalancer(params operations.PostConfigLoadbalancerParams, prin
 	lbRules.Serv.Egress = params.Attr.ServiceArguments.Egress
 	lbRules.Serv.TraceType = params.Attr.ServiceArguments.TraceType // Tracing catalog (independent from GPU routing)
 
-	// Backend protocol capability - default to "http1" for backward compatibility
+	// Backend protocol capability. An omission is passed on as one: the rule
+	// layer gives a new rule "http1" and leaves an existing rule's value alone.
 	if params.Attr.ServiceArguments.BackendProtocol != nil {
 		lbRules.Serv.BackendProtocol = *params.Attr.ServiceArguments.BackendProtocol
-	} else {
-		lbRules.Serv.BackendProtocol = "http1" // Safe default: HTTP/1.1 only
 	}
 
 	// AI model name for pool selection (empty = wildcard, backward compatible)
@@ -218,6 +220,10 @@ func ConfigPostLoadbalancer(params operations.PostConfigLoadbalancerParams, prin
 	applyEppArguments(&lbRules.Serv, params.Attr.ServiceArguments)
 
 	// Custom session header configuration - supports both RR and Persist modes
+	if pres.svcPresent("mcp_protocol_version") || params.Attr.ServiceArguments.McpProtocolVersion != "" {
+		lbRules.Serv.MCPProtocolVersion = cmn.MCPVersion(params.Attr.ServiceArguments.McpProtocolVersion)
+		lbRules.Serv.MCPProtocolVersionPresent = true
+	}
 	lbRules.Serv.SessionHeaderName = params.Attr.ServiceArguments.SessionHeaderName
 	if (lbRules.Serv.Sel == cmn.LbSelRr || lbRules.Serv.Sel == cmn.LbSelRrPersist) && lbRules.Serv.SessionHeaderName != "" {
 		tk.LogIt(tk.LogInfo, "api: lb-rule %s:%v session header: %s (mode: %s)\n",
@@ -648,6 +654,11 @@ func serializeLBRule(lb cmn.LbRuleMod) *models.LoadbalanceEntry {
 		tmpSvc.ModelName = lb.Serv.ModelName
 	}
 
+	if lb.Serv.MCPProtocolVersion != "" {
+		version := string(lb.Serv.MCPProtocolVersion)
+		tmpSvc.McpProtocolVersion = version
+	}
+
 	// Custom session header name - supports both RR and Persist modes
 	if (lb.Serv.Sel == cmn.LbSelRr || lb.Serv.Sel == cmn.LbSelRrPersist) && lb.Serv.SessionHeaderName != "" {
 		tmpSvc.SessionHeaderName = lb.Serv.SessionHeaderName
@@ -673,6 +684,16 @@ func serializeLBRule(lb cmn.LbRuleMod) *models.LoadbalanceEntry {
 	if lb.Serv.BackendKeepaliveIntervalSec != 0 {
 		tmpSvc.BackendKeepaliveIntervalSec = int32(lb.Serv.BackendKeepaliveIntervalSec)
 	}
+	// Member timeouts (ms) and the TLS hardening values, as the rule stores them.
+	tmpSvc.TimeoutMemberConnect = lb.Serv.TimeoutMemberConnect
+	tmpSvc.TimeoutMemberData = lb.Serv.TimeoutMemberData
+	tmpSvc.TimeoutTCPInspect = lb.Serv.TimeoutTcpInspect
+	tmpSvc.AlpnProtocols = lb.Serv.AlpnProtocols
+	tmpSvc.TLSCiphers = lb.Serv.TlsCiphers
+	tmpSvc.TLSVersions = lb.Serv.TlsVersions
+	tmpSvc.HstsMaxAge = lb.Serv.HstsMaxAge
+	tmpSvc.HstsIncludeSubdomains = lb.Serv.HstsIncludeSubdomains
+	tmpSvc.HstsPreload = lb.Serv.HstsPreload
 
 	// P/D disaggregation mode
 	if lb.Serv.PDDisaggMode {
@@ -823,6 +844,7 @@ func serializeLBRule(lb cmn.LbRuleMod) *models.LoadbalanceEntry {
 			ClientCaCertData: lb.Serv.MTLSFrontend.ClientCACertData,
 			RequireClientCn:  &requireClientCN,
 			ClientCnPattern:  lb.Serv.MTLSFrontend.ClientCNPattern,
+			ClientCrlPath:    lb.Serv.MTLSFrontend.ClientCRLPath,
 		}
 		tmpSvc.MtlsFrontend = mtlsFrontend
 	}

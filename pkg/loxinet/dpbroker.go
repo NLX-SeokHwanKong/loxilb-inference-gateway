@@ -366,9 +366,10 @@ type LBDpWorkQ struct {
 	SockMapMode                 uint8 // Directional sockmap accel: 0=off,1=both,2=request,3=response
 	SecMode                     SecT
 	HostURL                     string
-	PathPrefix                  string                  // P6: URL path prefix for L7 routing
-	PathMatchMode               string                  // P6: Path matching mode (disabled, prefix, exact)
-	BackendProtocol             string                  // Backend protocol capability: "http1", "http2", or "both"
+	PathPrefix                  string // P6: URL path prefix for L7 routing
+	PathMatchMode               string // P6: Path matching mode (disabled, prefix, exact)
+	BackendProtocol             string // Backend protocol capability: "http1", "http2", or "both"
+	MCPProtocolVersion          string
 	SessionHeaderName           string                  // Custom session header for persist mode (e.g., "mcp-session-id")
 	ModelName                   string                  // AI model name for pool selection (e.g. "llama-70b"); empty = wildcard
 	CatalogID                   uint16                  // Tracing catalog ID for deep inspection (0 = no tracing)
@@ -626,7 +627,7 @@ type DpHookInterface interface {
 	DpLBSessionReset(*LBSessionResetWorkQ) int
 	DpLBEndpointHealthUpdate(svcIP net.IP, svcPort uint16, proto uint8, epIndex int, inactive bool) int
 	DpLBEndpointHealthUpdateByAddr(svcIP net.IP, svcPort uint16, proto uint8, epIP net.IP, epPort uint16, inactive bool) int
-	DpLBEndpointHostStateUpdate(svcIP net.IP, svcPort uint16, proto uint8, epIP net.IP, hostState string) int
+	DpLBEndpointHostStateUpdate(svcIP net.IP, svcPort uint16, proto uint8, epIP net.IP, epPort uint16, hostState string) int
 	DpLBSetCircuitBreaker(svcIP net.IP, svcPort uint16, proto uint8, enabled bool, failureThreshold uint32, openTimeoutSec uint32) int
 	DpFwRuleAdd(w *FwDpWorkQ) int
 	DpFwRuleDel(w *FwDpWorkQ) int
@@ -1193,6 +1194,21 @@ func (dp *DpH) DpCtStatsRollup() {
 				rule.totalConns = st.TotalConns
 				rule.bytesIn = st.BytesIn
 				rule.bytesOut = st.BytesOut
+			}
+		}
+	}
+
+	// A fullproxy rule never enters nat_map, so nat_ep_map has nothing for it:
+	// the listener's own client gauge is its live count, and the count its
+	// connectionLimit is enforced against at accept (sockproxy fe_conns).
+	if mh.dpEbpf != nil {
+		for _, rule := range mh.zr.Rules.tables[RtLB].eMap {
+			if !lbRuleIsFullProxy(rule) {
+				continue
+			}
+			if st, ok := mh.dpEbpf.DpFeConnStatsGet(rule.tuples.l3Dst.addr.IP,
+				rule.tuples.l4Dst.valMin, uint8(rule.tuples.l4Prot.val)); ok {
+				rule.activeConns = uint64(st.conns)
 			}
 		}
 	}
