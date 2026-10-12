@@ -224,6 +224,12 @@ func (na *NetAPIStruct) NetL7PolicyAdd(p *cmn.L7PolicyArg) (int, error) {
 		return RuleErrBase, fmt.Errorf("l7policy: load-balancer %q not found", p.LbId)
 	}
 
+	if lb.Serv.MCPProtocolVersion != "" {
+		if err := cmn.ValidateMCPL7Policy(p.Rules); err != nil {
+			return RuleArgsErr, &cmn.RuleArgumentError{Err: err}
+		}
+	}
+
 	// An L7 policy and sockmap acceleration are mutually exclusive, for the
 	// reason lbSockMapL7Code states. The rule path enforces the same pairing,
 	// but a policy can be attached long after the rule was created, so the

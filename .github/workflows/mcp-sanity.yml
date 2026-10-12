@@ -3,6 +3,7 @@ name: MCP-Sanity-CI
 # Validates the MCP (Model Context Protocol) gateway path: session-sticky
 # proxying (mcp-session-id), TLS termination and end-to-end HTTPS, plus the
 # no-LB direct client<->server smokes that isolate backend problems.
+# The explicit 2026-07-28 mode also checks request validation and H2-to-H1 relay.
 # All backend images (mcp-server, mcp-server-https, mcp-client) are built
 # from the local context cicd/common/mcp — no published images required.
 
@@ -13,6 +14,8 @@ on:
     paths:
       - 'cicd/mcp-**'
       - 'cicd/common/mcp/**'
+      - 'common/**'
+      - 'loxilb-ebpf'
       - 'pkg/**'
       - 'api/**'
       - '.github/workflows/mcp-sanity.yml'
@@ -21,6 +24,8 @@ on:
     paths:
       - 'cicd/mcp-**'
       - 'cicd/common/mcp/**'
+      - 'common/**'
+      - 'loxilb-ebpf'
       - 'pkg/**'
       - 'api/**'
       - '.github/workflows/mcp-sanity.yml'
@@ -38,6 +43,8 @@ jobs:
           submodules: recursive
           token: ${{ secrets.CI_SUBMODULE_TOKEN || github.token }}
       - uses: actions/setup-python@v5
+      - name: Install real HTTP/2 multiplex client
+        run: python3 -m pip install h2==4.3.0 mcp==2.3.0
       - uses: actions/setup-go@v5
         with:
           go-version: '>=1.18.0'
@@ -47,6 +54,16 @@ jobs:
         run: arch=$(dpkg --print-architecture) && wget -q https://github.com/daulet/tokenizers/releases/download/v1.27.0/libtokenizers.linux-${arch}.tar.gz -O /tmp/libtokenizers.tar.gz && sudo tar -xzf /tmp/libtokenizers.tar.gz -C /usr/local/lib/ && rm /tmp/libtokenizers.tar.gz
       - run: loxilb-ebpf/utils/mkllb_bpffs.sh
       - run: sudo -E env "PATH=$PATH" make
+      - name: Generated MCP model and embedded contract are reproducible
+        run: |
+          bash api/check-mcp-generation.sh
+          go run ./api/cmd/sync-swagger -check
+      - name: Modern MCP validator and framing regressions (sanitizers)
+        run: make -C loxilb-ebpf/common test_mcp
+      - name: Modern MCP API, rules, snapshot and metrics regressions
+        run: sudo -E env "PATH=$PATH" go test -count=1 ./common ./api/models ./pkg/snapshot ./api/restapi/handler ./pkg/loxinet ./api/prometheus
+      - name: Modern MCP fixture wire regressions
+        run: python3 -B -m unittest discover -s cicd/mcp-stateless -v
       - run: sudo -E env "PATH=$PATH" GOBIN=/usr/local/bin go install github.com/jsha/minica@latest
       # Gateway image: pull the published one, or build locally when not yet published
       # Authenticate to GHCR so the private image pull below succeeds; without
@@ -66,6 +83,24 @@ jobs:
       - run: docker exec -dit loxilb mkllb_bpffs
       - run: id=`docker ps -f name=loxilb | cut -d " " -f 1 | grep -iv "CONTAINER"` && docker commit $id ghcr.io/loxilb-io/loxilb-inference-gateway:latest
       - run: docker stop loxilb && docker rm loxilb
+
+      - name: Modern MCP isolated runtime (HTTP, TLS, HTTP/2, L7, rejection)
+        run: |
+          candidate_image=$(docker image inspect ghcr.io/loxilb-io/loxilb-inference-gateway:latest --format '{{.Id}}')
+          python3 -B cicd/mcp-stateless/run_gateway.py --image "$candidate_image" --evidence-dir "$RUNNER_TEMP/uc8-mcp-evidence" --require-h2 --require-weighted --require-fc --require-fc-warmup --require-cb --require-sdk
+      - name: Upload modern MCP runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: modern-mcp-runtime
+          # Only public test evidence: never traverse runtime config or private keys.
+          path: |
+            ${{ runner.temp }}/uc8-mcp-evidence/report.json
+            ${{ runner.temp }}/uc8-mcp-evidence/runtime.log
+            ${{ runner.temp }}/uc8-mcp-evidence/gateway.log
+            ${{ runner.temp }}/uc8-mcp-evidence/sdk-client-*.log
+            ${{ runner.temp }}/uc8-mcp-evidence/*.jsonl
+          if-no-files-found: ignore
 
       - name: MCP direct connectivity (no LB — backend smoke)
         run: |

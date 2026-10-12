@@ -807,6 +807,25 @@ func TestTrailReaderResumesInASegmentCompressedBetweenTheListingAndTheRead(t *te
 	}
 }
 
+func TestTrailReaderAdvancesIntoSegmentCompressedDuringScan(t *testing.T) {
+	dir := t.TempDir()
+	s1 := filepath.Join(dir, "audit-20260101-000000.000.jsonl")
+	s2 := filepath.Join(dir, "audit-20260101-000001.000.jsonl")
+	writeHandSegment(t, s1, handSegment{uuid: "u1", first: 1, records: 2, footer: true})
+	// Start with no successor so the reader is idle at the first footer.
+	r := NewTrailReader(dir, Position{})
+	defer r.Close()
+	if got := seqs(drain(t, r)); fmt.Sprint(got) != "[1 2]" {
+		t.Fatalf("got %v, want [1 2]", got)
+	}
+	writeHandSegment(t, s2, handSegment{uuid: "u2", prev: "u1", first: 3, records: 2, footer: true})
+	writeHandSegment(t, filepath.Join(dir, ActiveSegmentName), handSegment{uuid: "u3", prev: "u2", first: 5, records: 1})
+	onceAfterList(t, func() { compressByHand(t, s2) })
+	if got := seqs(drain(t, r)); fmt.Sprint(got) != "[3 4 5]" {
+		t.Fatalf("compressed successor must not report idle: got %v, want [3 4 5]", got)
+	}
+}
+
 func TestTrailReaderStartsAtTheOldestSegmentThoughItIsBeingCompressed(t *testing.T) {
 	// A reader starting from nothing begins at the oldest segment. With
 	// that one compressed between the listing and the read of its header,

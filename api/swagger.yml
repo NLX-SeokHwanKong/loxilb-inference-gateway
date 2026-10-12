@@ -10945,9 +10945,9 @@ definitions:
             readOnly: true
             description: >-
               The capacity admission gate's resolved state on this rule's model
-              pool, read from the data plane. Present on GET for AI-gateway
-              services (sse_mode, pd_disagg_mode or an api-key policy); ignored on
-              input. mode is off, observe or enforce; the ceilings are the values
+              pool, read from the data plane. Present on GET for installed
+              AI-gateway and modern MCP services; absent when no pool was read.
+              Every numeric value is explicit, including zero. Ignored on input. mode is off, observe or enforce; the ceilings are the values
               in force, the process defaults where the rule declared nothing;
               inflight and queued are live counts; queue_memory_bound_mib is the
               memory the full queue may park (queue_depth x 1 MiB);
@@ -10964,43 +10964,53 @@ definitions:
                   The gate mode in force on the pool (off, observe or enforce).
               max_outstanding:
                 type: integer
+                x-omitempty: false
                 format: int32
                 description: Pool-wide ceiling on executing inference requests; 0 is unlimited.
               ep_max_inflight:
                 type: integer
+                x-omitempty: false
                 format: int32
                 description: Per-endpoint ceiling for the normal role; 0 is unlimited.
               prefill_max_inflight:
                 type: integer
+                x-omitempty: false
                 format: int32
                 description: Per-endpoint ceiling for prefill legs; 0 is unlimited.
               decode_max_inflight:
                 type: integer
+                x-omitempty: false
                 format: int32
                 description: Per-endpoint ceiling for decode legs; 0 is unlimited.
               queue_depth:
                 type: integer
+                x-omitempty: false
                 format: int32
                 description: >-
                   Requests that may wait for a unit; 0 means over a ceiling is refused.
               queue_wait_ms:
                 type: integer
+                x-omitempty: false
                 format: int32
                 description: The wait window in force for a queued request, in milliseconds.
               inflight:
                 type: integer
+                x-omitempty: false
                 format: int32
                 description: Inference requests executing on the pool right now.
               queued:
                 type: integer
+                x-omitempty: false
                 format: int32
                 description: Inference requests waiting for a unit right now.
               queue_memory_bound_mib:
                 type: integer
+                x-omitempty: false
                 format: int64
                 description: Memory the full queue may park, in MiB (queue_depth x 1 MiB, one parked client connection per waiting request).
               telemetry_stale_ms:
                 type: integer
+                x-omitempty: false
                 format: int32
                 description: The P/D scorers' trust window for scraped queue depth, in milliseconds.
               adaptive:
@@ -11008,12 +11018,15 @@ definitions:
                 enum: ["on", "off"]
               warmup_ms:
                 type: integer
+                x-omitempty: false
                 format: int32
               ttft_target_ms:
                 type: integer
+                x-omitempty: false
                 format: int32
               effective_max_outstanding:
                 type: integer
+                x-omitempty: false
                 format: int32
                 description: The service ceiling in force now; below max_outstanding while an adaptive pool is tightened.
               adapt_state:
@@ -11029,14 +11042,17 @@ definitions:
                 description: Why the adaptive ceiling last moved, or why it holds.
               warming_endpoints:
                 type: integer
+                x-omitempty: false
                 format: int32
                 description: Endpoints inside their warm-up window.
               tenant_max_share_pct:
                 type: integer
+                x-omitempty: false
                 format: int32
                 description: The tenant share in force, in percent; 0 or 100 is no share.
               tenants_active:
                 type: integer
+                x-omitempty: false
                 format: int32
                 description: Tenants holding a unit or waiting on the pool now, while it holds tenants to a share.
               expose_headers:
@@ -11268,6 +11284,17 @@ definitions:
               A nonzero declaration requires both
               pd_disagg_mode=true and kvEngineType=sglang; it is rejected on
               other shapes. Zero is accepted on other shapes but has no effect.
+          mcp_protocol_version:
+            type: string
+            x-nullable: false
+            enum: ["", "2026-07-28"]
+            description: >-
+              Explicit stateless MCP transport mode. Omitted or empty on create preserves
+              legacy behavior. Omitted replace preserves the existing value; changing it
+              requires delete and recreate. Requires TCP FullProxy (mode=4), round-robin
+              (sel=0) or weighted round-robin (sel=2), and sockMapMode=off. Session affinity,
+              model routing, P/D disaggregation and KV routing are rejected. Configuration
+              readback does not prove request validation or backend delivery.
           session_header_name:
             type: string
             description: >-
@@ -12559,7 +12586,7 @@ definitions:
         description: "TLS SNI for structured HTTPS and TLS-hello probes, and explicit Host for structured HTTPS. For HTTP, explicit Host override is applied only when httpVersion is 1.1."
 
   EndPointHostState:
-    description: "Explicit host-state input. Supply both nonzero epPort and epProto for generated-key targeting, or omit both for host-wide targeting. Custom monitor names cannot be selected by the specific tuple path. Host-wide requests can succeed without matches. epPort narrows to uint16 without full validation; immediate dependent updates are implemented for fullproxy rules, not universally."
+    description: "Explicit host-state input. Supply both nonzero epPort and epProto for generated-key targeting, or omit both for host-wide targeting. epPort is validated in 0..65535 before conversion. Fullproxy dataplane updates respect the selected endpoint port; zero retains all ports on the host. Custom monitor names cannot be selected by the specific tuple path. Host-wide requests can succeed without matches. Immediate dependent updates are implemented for fullproxy rules, not universally."
     type: object
     properties:
       hostName:
@@ -12567,10 +12594,13 @@ definitions:
         description: "Literal endpoint host IP used for monitor matching, not a hostname or CIDR."
       epPort:
         type: integer
-        description: "Nonzero port requires epProto; zero or omission requires epProto empty for host-wide targeting. Conversion to uint16 is not fully validated."
+        minimum: 0
+        maximum: 65535
+        description: "Nonzero port in 1..65535 requires epProto; zero or omission requires epProto empty for host-wide targeting."
       epProto:
         type: string
-        description: "Generated monitor-key probe type; supply together with nonzero epPort or omit both. This selector cannot resolve a custom monitor name and is not a universal transport-protocol selector."
+        enum: ["", "tcp", "udp", "sctp", "http", "https", "ping", "tls-hello", "none"]
+        description: "Generated monitor-key probe type: tcp, udp, sctp, http, https, ping, tls-hello or none. Supply together with nonzero epPort or omit both. This selector cannot resolve a custom monitor name and is not a universal transport-protocol selector."
       state:
         type: string
         description: Host state string ("green", "yellow", "red" )
