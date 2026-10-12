@@ -101,6 +101,11 @@ func NlpRegister(hook cmn.NetHookInterface) {
 }
 
 func NlpIsBlackListedIntf(name string, masterIdx int) bool {
+	if nNl == nil {
+		// Netlink was never started (NoNlp: the test harness); only the
+		// loopback stays off the data path, as with no lists given.
+		return name == "lo"
+	}
 	if nNl.WhiteList != "none" {
 		filter := nNl.WLRgx.MatchString(name)
 		return !filter

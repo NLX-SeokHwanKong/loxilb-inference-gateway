@@ -86,8 +86,19 @@ func eppTestBackend(t *testing.T) (*httptest.Server, cmn.LbEndPointArg) {
 // {"served":"<name>"} and records the request it received.
 func eppTestBackendSeen(t *testing.T, name string) (*httptest.Server, cmn.LbEndPointArg, *eppTestSeen) {
 	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return eppTestBackendOn(t, name, l)
+}
+
+// eppTestBackendOn serves the `name` backend on an existing listener (one
+// bound elsewhere than loopback, say).
+func eppTestBackendOn(t *testing.T, name string, l net.Listener) (*httptest.Server, cmn.LbEndPointArg, *eppTestSeen) {
+	t.Helper()
 	seen := &eppTestSeen{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		seen.mu.Lock()
 		seen.hits++
@@ -97,8 +108,11 @@ func eppTestBackendSeen(t *testing.T, name string) (*httptest.Server, cmn.LbEndP
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"served":"%s","bytes":%d}`, name, len(body))
 	}))
+	srv.Listener.Close()
+	srv.Listener = l
+	srv.Start()
 	t.Cleanup(srv.Close)
-	host, port, _ := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
+	host, port, _ := net.SplitHostPort(l.Addr().String())
 	var p int
 	fmt.Sscanf(port, "%d", &p)
 	return srv, cmn.LbEndPointArg{EpIP: host, EpPort: uint16(p), Weight: 1}, seen
