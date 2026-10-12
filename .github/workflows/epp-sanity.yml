@@ -1,0 +1,93 @@
+name: EPP-Sanity-CI
+
+# The Endpoint Picker (EPP) integration, tested without a cluster:
+#   epp-unit      pkg/epp (ext_proc client + fake EPP) and the pure-Go
+#                 commands. No root, no submodule, no cgo.
+#   epp-datapath  the in-process data plane: the loxinet harness loads eBPF
+#                 and runs the real sockproxy workers on the runner (root, as
+#                 auth-plane-sanity does), and the EPP tests drive HTTP through
+#                 a VIP to a fake EPP and fake backends. Builds loxilb-ebpf.
+# Both run scripts/epp-test.sh, the same commands as a local run.
+# The k3d scenario (cicd/k3d-incluster-inference-epp) stays in
+# k3d-incluster-inference.yml.
+
+on:
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - 'pkg/epp/**'
+      - 'pkg/loxinet/*epp*'
+      - 'pkg/loxinet/ai_epp_dp.go'
+      - 'cmd/epp-fake/**'
+      - 'cmd/epp-probe/**'
+      - 'loxilb-ebpf'
+      - 'scripts/epp-test.sh'
+      - '.github/workflows/epp-sanity.yml'
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'pkg/epp/**'
+      - 'pkg/loxinet/*epp*'
+      - 'pkg/loxinet/ai_epp_dp.go'
+      - 'cmd/epp-fake/**'
+      - 'cmd/epp-probe/**'
+      - 'loxilb-ebpf'
+      - 'scripts/epp-test.sh'
+      - '.github/workflows/epp-sanity.yml'
+  workflow_dispatch:
+    inputs:
+      ebpfRepo:
+        description: 'loxilb-ebpf repository URL to check out instead of .gitmodules (a fork carrying the branch)'
+        required: false
+        default: ''
+
+jobs:
+  epp-unit:
+    name: epp-unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: scripts/epp-test.sh unit
+
+  epp-datapath:
+    name: epp-datapath
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    # Dependabot PRs have no submodule token; the private eBPF checkout fails.
+    if: github.actor != 'dependabot[bot]'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - name: Check out loxilb-ebpf
+        # The submodule is private: the token goes in as a header. ebpfRepo
+        # (workflow_dispatch) points the checkout at a fork that carries the
+        # pointed-to commit when the branch is not on loxilb-io yet.
+        env:
+          SUBMODULE_TOKEN: ${{ secrets.CI_SUBMODULE_TOKEN || github.token }}
+          EBPF_REPO: ${{ github.event.inputs.ebpfRepo }}
+        run: |
+          if [ -n "$EBPF_REPO" ]; then
+            git config submodule.loxilb-ebpf.url "$EBPF_REPO"
+          fi
+          auth="$(printf 'x-access-token:%s' "$SUBMODULE_TOKEN" | base64 -w0)"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" \
+            submodule update --init --recursive
+          git -C loxilb-ebpf log --oneline -1
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: sudo apt-get update
+      - run: sudo apt-get -y install clang llvm libelf-dev gcc-multilib libpcap-dev linux-tools-$(uname -r) elfutils dwarves libbsd-dev build-essential bison flex libjson-c-dev libnghttp2-dev iproute2
+      - name: Install libtokenizers (cgo link dependency of the router)
+        run: arch=$(dpkg --print-architecture) && wget -q https://github.com/daulet/tokenizers/releases/download/v1.27.0/libtokenizers.linux-${arch}.tar.gz -O /tmp/libtokenizers.tar.gz && sudo tar -xzf /tmp/libtokenizers.tar.gz -C /usr/local/lib/ && rm /tmp/libtokenizers.tar.gz
+      - run: loxilb-ebpf/utils/mkllb_bpffs.sh
+      - run: sudo -E env "PATH=$PATH" make
+      - name: EPP datapath lane
+        run: sudo -E env "PATH=$PATH" scripts/epp-test.sh datapath
