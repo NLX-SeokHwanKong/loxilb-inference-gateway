@@ -28,7 +28,7 @@
 #
 # EXIT CODE
 #
-#   0 only if all three gates pass. Any failure is non-zero and names which
+#   0 only if all gates pass. Any failure is non-zero and names which
 #   gate failed.
 
 set -euo pipefail
@@ -47,6 +47,10 @@ python3 -B -m unittest discover \
 
 echo "--- multi-tier contract: inventory generator tests"
 go test -count=1 ./cicd/ai-multitier-contract/inventory
+
+echo "--- multi-tier contract: MCP declaration and effective-state schema regressions"
+# These model/common tests need neither a linked datapath nor a container.
+go test -count=1 ./common ./api/models
 
 echo "--- multi-tier contract: inventory drift gate"
 # The drift gate: it fails when the published argument inventory stops

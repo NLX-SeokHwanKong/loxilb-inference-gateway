@@ -55,3 +55,18 @@ func TestAIMultitierFixedCStringBridgeRejectsAdmissionBypass(t *testing.T) {
 		})
 	}
 }
+
+func TestMCPBridgeRejectsAdmissionBypass(t *testing.T) {
+	for _, work := range []LBDpWorkQ{
+		{MCPProtocolVersion: "future"},
+		{MCPProtocolVersion: "2026-07-28", NatType: DpDnat, Proto: 6, EpSel: EpRR},
+		{MCPProtocolVersion: "2026-07-28", NatType: DpFullProxy, Proto: 17, EpSel: EpRR},
+		{MCPProtocolVersion: "2026-07-28", NatType: DpFullProxy, Proto: 6, EpSel: EpRRPersist},
+		{MCPProtocolVersion: "2026-07-28", NatType: DpFullProxy, Proto: 6, EpSel: EpRR, SessionHeaderName: "mcp-session-id"},
+		{MCPProtocolVersion: "2026-07-28", NatType: DpFullProxy, Proto: 6, EpSel: EpRR, SockMapMode: 3},
+	} {
+		if got := DpLBRuleMod(&work); got != EbpfErrNat4Add {
+			t.Fatalf("invalid MCP declaration reached C: %d %+v", got, work)
+		}
+	}
+}

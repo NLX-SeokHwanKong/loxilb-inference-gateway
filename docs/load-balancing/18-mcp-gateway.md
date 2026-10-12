@@ -10,9 +10,29 @@
 
 ---
 
+## Protocol versions
+
+The session examples below cover the legacy Streamable HTTP transport (2025-11-25). MCP 2026-07-28 uses independent requests and removes protocol sessions and initialization. Create a separate TCP FullProxy rule with `mcp_protocol_version: "2026-07-28"`, `sel: 0` or `sel: 2`, and `sockMapMode: "off"`; omit `session_header_name`. Existing rules retain their mode; changing it requires a new rule. All aliases on a shared listener must agree on the mode.
+
+The modern rule validates required request headers against JSON-RPC metadata before backend selection. Supported L7 header routes use `Mcp-Method` and the decoded `Mcp-Name`; policies cannot modify validated transport headers or add session persistence. JSON and finite SSE responses are supported. Validation buffers bodies up to 768 KiB and rejects larger requests with HTTP 413. HTTP/1.1 supports one outstanding request per connection; pipelining is rejected. With L7 policies, operands must fit the existing routing field bounds. These are admission limits, not streaming validation fallbacks.
+
+The modern frontend can negotiate HTTP/2 independently of an HTTP/1.1 backend. The H2-to-H1 bridge allocates one backend connection per live stream, bounded by the per-frontend-connection bridge-slot limit (32). It preserves incremental SSE and isolates cancellation to that stream. RR/WRR selection is shared across frontend protocols; unequal L7 backendRef weights select within the permitted route pool rather than multiplying the base endpoint weights. Oversized or malformed backend response framing terminates the affected stream.
+
+Modern MCP requires `backend_protocol: "http1"` or omission and `egress: false` or omission. Admission refuses backend `http2`/`both` and egress rules, including replacements that omit the MCP declaration. Frontend HTTP/2 remains supported through the H2-to-H1 bridge. Endpoint weight `0` retains the existing default-to-`1` behavior; it is not a drain switch. Backend connections are request-owned; connection pooling is deferred to a separate design.
+
+Configured FC admission applies to modern POST requests, including per-endpoint saturation and endpoint-return warmup. Read `fc_effective` to verify installed mode, limits and warming state; configuration values alone do not establish enforcement. Capacity fallback and connection retries remain inside the selected L7 route and require a permit for the target endpoint.
+
+Only the explicitly implemented `2026-07-28` version is accepted. Future dates are not negotiated automatically. Validation denials carry a JSON-RPC error with a safely recovered request ID, or `null` when no valid ID is available. Unknown versions use `-32022` with the supported version list; malformed requests and mirrored-header failures remain distinct. Early framing/size failures may precede body parsing. `null` configuration is rejected. Omitting the version on a replacement preserves the existing mode; an explicit empty value selects legacy behavior only when creating a new rule.
+
+Delete/recreate affects new connections. Existing connections can retain the old transport policy until they close; drain or close clients before moving a listener between modes. The modern implementation uses a new backend connection per H1 request or H2 stream. It does not pool backend legs, so connection churn and TIME-WAIT are deployment capacity constraints. Admission limits and workload-specific connection measurements are needed before sizing a fleet.
+
+Unrelated Authorization/Cookie/custom headers retain their wire bytes and are not subject to the small L7 operand limit. Only headers referenced by policy must fit the routing fields. Encoded Unicode/control characters in `Mcp-Name` follow the MCP Base64 contract; a name that cannot be represented safely by a configured L7 operand is refused before routing.
+
+See the [modern regression fixture and commands](../../cicd/mcp-stateless/README.md). Its portable unit tests do not establish an installed runtime qualification. MRTR, subscriptions, arbitrary tool parameter schema reflection and OAuth authorization are outside this implementation's scope.
+
 ## 1. Why put a gateway in front of MCP servers
 
-MCP servers speak the streamable-HTTP transport: a client opens a session, receives an
+Legacy MCP servers speak the session-oriented Streamable HTTP transport: a client opens a session, receives an
 `mcp-session-id`, and every subsequent JSON-RPC call must land on the server that owns that
 session. Load-balancing this naively breaks sessions. The inference gateway solves it at L7:
 

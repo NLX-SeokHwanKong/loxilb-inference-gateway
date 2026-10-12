@@ -772,9 +772,12 @@ chk TT6 "the target is read back with its source" "$FC_TT_TARGET_MS rule" "$(lb_
 echo ""
 echo "WU: after a return to service each :$PORT_WU endpoint ramps from a quarter of its ceiling ($FC_WU_EP) over ${FC_WU_MS} ms"
 WU_URL="http://$VIP:$PORT_WU/v1/chat/completions"
-hoststate() { # hoststate <red|green>: the :$PORT_WU backends' host state (targets 8082, flips its address)
-  $hexec l3h1 curl -s -m 8 -X POST "$API/config/endpointhoststate" -H 'Content-Type: application/json' \
-    -d "{\"hostName\": \"31.31.31.1\", \"epPort\": 8082, \"epProto\": \"tcp\", \"state\": \"$1\"}"
+hoststate() { # hoststate <red|green>: both explicit endpoint tuples must return.
+  local target
+  for target in 8082 8083; do
+    $hexec l3h1 curl -s -m 8 -X POST "$API/config/endpointhoststate" -H 'Content-Type: application/json' \
+      -d "{\"hostName\": \"31.31.31.1\", \"epPort\": $target, \"epProto\": \"tcp\", \"state\": \"$1\"}"
+  done
 }
 chk WU1 "the window is read back with its source" "$FC_WU_MS rule 0" "$(lb_get $PORT_WU | jq -r '.serviceArguments.fc_effective | "\(.warmup_ms) \(.source.warmup_ms) \(.warming_endpoints // 0)"')"
 chk_has WU2 "the backends go red" Success "$(hoststate red)"
