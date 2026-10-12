@@ -44,6 +44,15 @@ const FcTtftTargetMsMax = 3600000
 // FcTenantMaxSharePctMax bounds a rule's tenant share, a percentage.
 const FcTenantMaxSharePctMax = 100
 
+// The tenant-table size a model pool is created with (LLB_FC_TENANT_SLOTS):
+// the same range and default as FC_TENANT_SLOTS, FC_TENANT_SLOTS_DEFAULT and
+// FC_TENANT_SLOTS_MAX in the data plane's sockproxy_fc.h.
+const (
+	FcTenantSlotsMin     = 64
+	FcTenantSlotsDefault = 256
+	FcTenantSlotsMax     = 4096
+)
+
 // The data plane's encoding of a rule's adaptive switch (enum
 // fc_rule_adaptive), shifted like the mode so a rule can say "off" under an
 // environment that has it on.

@@ -5160,6 +5160,12 @@ func init() {
                   "type": "integer",
                   "x-omitempty": false
                 },
+                "tenant_slots": {
+                  "description": "Tenants the pool tracks by name at once for the tenant share; tenants past it share one budget. Fixed when the pool is created (LLB_FC_TENANT_SLOTS).",
+                  "format": "int32",
+                  "type": "integer",
+                  "x-omitempty": false
+                },
                 "tenants_active": {
                   "description": "Tenants holding a unit or waiting on the pool now, while it holds tenants to a share.",
                   "format": "int32",
@@ -40293,6 +40299,12 @@ func init() {
                   "x-omitempty": false,
                   "format": "int32"
                 },
+                "tenant_slots": {
+                  "description": "Tenants the pool tracks by name at once for the tenant share; tenants past it share one budget. Fixed when the pool is created (LLB_FC_TENANT_SLOTS).",
+                  "type": "integer",
+                  "x-omitempty": false,
+                  "format": "int32"
+                },
                 "tenants_active": {
                   "description": "Tenants holding a unit or waiting on the pool now, while it holds tenants to a share.",
                   "type": "integer",
@@ -41451,6 +41463,12 @@ func init() {
               "x-omitempty": false,
               "format": "int32"
             },
+            "tenant_slots": {
+              "description": "Tenants the pool tracks by name at once for the tenant share; tenants past it share one budget. Fixed when the pool is created (LLB_FC_TENANT_SLOTS).",
+              "type": "integer",
+              "x-omitempty": false,
+              "format": "int32"
+            },
             "tenants_active": {
               "description": "Tenants holding a unit or waiting on the pool now, while it holds tenants to a share.",
               "type": "integer",
@@ -42328,6 +42346,11 @@ func init() {
         },
         "tenant_max_share_pct": {
           "description": "The tenant share in force, in percent; 0 or 100 is no share.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "tenant_slots": {
+          "description": "Tenants the pool tracks by name at once for the tenant share; tenants past it share one budget. Fixed when the pool is created (LLB_FC_TENANT_SLOTS).",
           "type": "integer",
           "format": "int32"
         },

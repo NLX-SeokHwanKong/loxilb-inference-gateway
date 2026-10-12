@@ -199,7 +199,7 @@ func TestFcQueueReadBack(t *testing.T) {
 	}
 	for _, key := range []string{"max_outstanding", "ep_max_inflight", "prefill_max_inflight", "decode_max_inflight",
 		"queue_depth", "queue_wait_ms", "inflight", "queued", "queue_memory_bound_mib", "telemetry_stale_ms",
-		"warmup_ms", "ttft_target_ms", "effective_max_outstanding", "warming_endpoints", "tenant_max_share_pct", "tenants_active"} {
+		"warmup_ms", "ttft_target_ms", "effective_max_outstanding", "warming_endpoints", "tenant_max_share_pct", "tenants_active", "tenant_slots"} {
 		if value, present := eff[key]; !present || value != float64(0) {
 			t.Errorf("installed fc_effective.%s = %v present=%t, want explicit zero", key, value, present)
 		}
@@ -263,4 +263,67 @@ func TestFcQueuePatchOverlay(t *testing.T) {
 			}
 		})
 	}
+}
+
+type warningLbAddHook struct {
+	stubLbAddHook
+	msg   string
+	asked *cmn.LbRuleMod
+}
+
+func (s *warningLbAddHook) NetFcTenantSlotsWarning(m *cmn.LbRuleMod) string {
+	s.asked = m
+	return s.msg
+}
+
+// A rule whose tenant share outgrows the tenant table is still applied: the
+// reply says so in the result text it already has, and a rule with nothing
+// to say, or a net layer that has no such advice, answers as before.
+func TestFcTenantSlotsWarningRidesTheSuccessReply(t *testing.T) {
+	prev := ApiHooks
+	defer func() { ApiHooks = prev }()
+	raw := sprintfBody(connectionLimitCreateBody, `,"fc_tenant_max_share_pct":25`)
+
+	result := func(res interface{}) string {
+		rr, ok := res.(*ResultResponse)
+		if !ok {
+			t.Fatalf("answered %#v, want a result reply", res)
+		}
+		return rr.Result
+	}
+
+	warn := &warningLbAddHook{msg: "300 tenants are known"}
+	ApiHooks = warn
+	if got := result(ConfigPostLoadbalancer(connectionLimitCreateParams(t, raw), nil)); got != "Success; warning: 300 tenants are known" {
+		t.Errorf("with a warning: result %q", got)
+	}
+	if warn.captured == nil || warn.asked == nil || warn.asked.Serv.FcTenantMaxSharePct != 25 {
+		t.Errorf("the rule was not applied and then asked about: applied=%v asked=%v", warn.captured != nil, warn.asked)
+	}
+
+	ApiHooks = &warningLbAddHook{}
+	if got := result(ConfigPostLoadbalancer(connectionLimitCreateParams(t, raw), nil)); got != "Success" {
+		t.Errorf("nothing to warn about: result %q", got)
+	}
+	ApiHooks = &stubLbAddHook{}
+	if got := result(ConfigPostLoadbalancer(connectionLimitCreateParams(t, raw), nil)); got != "Success" {
+		t.Errorf("a net layer without the advice: result %q", got)
+	}
+
+	// A refused rule is refused; the advice is not asked for.
+	refused := &refusedWarningHook{refusingLbAddHook: refusingLbAddHook{err: cmn.FcQueuePairError(4, 0)}}
+	ApiHooks = refused
+	if _, ok := ConfigPostLoadbalancer(connectionLimitCreateParams(t, raw), nil).(*ErrorResponse); !ok || refused.asked {
+		t.Errorf("a refused rule: error reply=%v, advice asked=%v", ok, refused.asked)
+	}
+}
+
+type refusedWarningHook struct {
+	refusingLbAddHook
+	asked bool
+}
+
+func (s *refusedWarningHook) NetFcTenantSlotsWarning(*cmn.LbRuleMod) string {
+	s.asked = true
+	return "never"
 }

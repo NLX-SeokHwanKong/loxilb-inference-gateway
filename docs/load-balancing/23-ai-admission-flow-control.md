@@ -258,12 +258,28 @@ place. The share is a hard cap: it binds even when the service is otherwise
 idle. It needs a service ceiling (`fc_max_outstanding`); a share of `100`
 is no share.
 
-A pool tracks up to 64 tenants at a time. Tenants past that share one last
-slot and are held together to one share; each request placed there counts
+A pool tracks up to `LLB_FC_TENANT_SLOTS` tenants at a time: 256 by default,
+64 at least and 4096 at most (a value outside that range is held to it).
+The value is read from the gateway's environment when a pool is created and
+is the same for every pool; it is not a rule setting, and changing it takes a
+gateway restart. Tenants past the table share one last slot and are held
+together to one share; each request placed there counts
 `loxilb_ai_admission_anomalies_total{kind="tenant_table_full"}`. A tenant's
 slot is freed as soon as it holds nothing, so the table bounds the tenants
-active at once, not the tenants known. `fc_effective.tenants_active`
-counts them.
+active at once, not the tenants known: with a service ceiling in `enforce`
+mode that is never more than `fc_max_outstanding` plus `fc_max_queue_depth`.
+`fc_effective.tenants_active` counts them and `fc_effective.tenant_slots`
+is the size in force.
+
+When a rule with a tenant share is applied on a node whose key store knows
+more tenants (API-key owners and tenant rate-limit rows) than a pool tracks,
+the rule is applied and the reply reads `Success; warning: …`, with the same
+text at WARN level in the gateway log. It is advice and can be early: it
+compares the tenants known, not the tenants active at once.
+
+The table costs 24 bytes per slot and 4 for its lookup index, per model pool
+that has a tenant share: about 7 KiB at 256 slots and about 112 KiB at 4096.
+A pool without a tenant share allocates none.
 
 ## What the client sees
 
@@ -377,7 +393,7 @@ by reason.
 | `proxy_context_inflight` at `proxy_accept_bound`, or `proxy_accept_blocked_total` rising | the node is at its connection-context bound; new connections wait in the listen backlog | raise `LLB_PD_MAX_TOTAL_INFLIGHT` if memory allows, else add gateway instances |
 | `anomalies_total` above 0 | a bookkeeping defect | report it with the gateway log |
 | `decisions_total{reason="tenant_share"}` rising while `inflight` is below the limit | one tenant is at its share; the rest of the ceiling is left for others, as intended | raise `fc_tenant_max_share_pct` if one tenant should be allowed more of an idle pool |
-| `anomalies_total{kind="tenant_table_full"}` rising | more than 64 tenants active on one pool at once; the ones past the table share one budget | expected under a very wide tenant fan-out; split the pool if they need separate budgets |
+| `anomalies_total{kind="tenant_table_full"}` rising | more tenants active on one pool at once than `fc_effective.tenant_slots`; the ones past the table share one budget | raise `LLB_FC_TENANT_SLOTS` (up to 4096) and restart the gateway, or split the pool |
 
 The shipped alert rules (`deploy/monitoring/prometheus/rules/loxilb-alerts.yml`,
 group `loxilb-ai-admission`) fire on sustained shedding, queue timeouts, a

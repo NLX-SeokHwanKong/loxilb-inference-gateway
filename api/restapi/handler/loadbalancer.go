@@ -374,7 +374,20 @@ func ConfigPostLoadbalancer(params operations.PostConfigLoadbalancerParams, prin
 		tk.LogIt(tk.LogDebug, "api: Error occur : %v\n", err)
 		return &ErrorResponse{Payload: ResultErrorResponseError(err)}
 	}
+	// The rule is in. A tenant share on a node that knows more tenants than
+	// a pool tracks is worth saying, in the same reply, and refuses nothing.
+	if w, ok := ApiHooks.(fcTenantSlotsWarner); ok {
+		if msg := w.NetFcTenantSlotsWarning(&lbRules); msg != "" {
+			return &ResultResponse{Result: "Success; warning: " + msg}
+		}
+	}
 	return &ResultResponse{Result: "Success"}
+}
+
+// fcTenantSlotsWarner is the part of the net layer that knows whether a
+// rule's tenant share outgrows the tenant table.
+type fcTenantSlotsWarner interface {
+	NetFcTenantSlotsWarning(*cmn.LbRuleMod) string
 }
 
 func ConfigDeleteLoadbalancer(params operations.DeleteConfigLoadbalancerHosturlHosturlExternalipaddressIPAddressPortPortProtocolProtoParams, principal interface{}) middleware.Responder {
@@ -756,6 +769,7 @@ func serializeLBRule(lb cmn.LbRuleMod) *models.LoadbalanceEntry {
 			WarmingEndpoints:        int32(eff.WarmingEndpoints),
 			TenantMaxSharePct:       int32(eff.TenantMaxSharePct),
 			TenantsActive:           int32(eff.TenantsActive),
+			TenantSlots:             int32(eff.TenantSlots),
 			ExposeHeaders:           eff.ExposeHeaders,
 			Source: &models.LoadbalanceEntryServiceArgumentsFcEffectiveSource{
 				Mode:               eff.Source.Mode,

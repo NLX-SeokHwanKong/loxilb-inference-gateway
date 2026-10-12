@@ -1739,9 +1739,12 @@ type FcEffectiveArg struct {
 	// WarmingEndpoints counts endpoints inside their warm-up window.
 	WarmingEndpoints uint32 `json:"warming_endpoints"`
 	// TenantMaxSharePct is the tenant share in force (0 or 100: none);
-	// TenantsActive counts tenants holding a unit or waiting right now.
+	// TenantsActive counts tenants holding a unit or waiting right now;
+	// TenantSlots is how many the pool tracks by name at once (tenants past
+	// it share one budget), fixed when the pool was created.
 	TenantMaxSharePct uint32 `json:"tenant_max_share_pct"`
 	TenantsActive     uint32 `json:"tenants_active"`
+	TenantSlots       uint32 `json:"tenant_slots"`
 	// ExposeHeaders is "on" when admitted responses carry the admission
 	// headers, else "off".
 	ExposeHeaders string `json:"expose_headers"`

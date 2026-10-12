@@ -109,6 +109,7 @@ func (e *DpEbpfH) DpFcStateGet(svcIP net.IP, svcPort uint16, proto uint8,
 		WarmingEndpoints:        uint32(st.warming_eps),
 		TenantMaxSharePct:       uint32(st.tenant_share_pct),
 		TenantsActive:           uint32(st.tenants_active),
+		TenantSlots:             uint32(st.tenant_slots),
 		ExposeHeaders:           fcOnOff(st.expose_headers),
 		Source: cmn.FcEffectiveSource{
 			Mode:               fcSourceName(st.src[0]),

@@ -64,9 +64,11 @@ typedef struct proxy_fc_svc_stat {
     uint8_t  src_tenant;
     uint8_t  expose_headers;
     uint8_t  src_expose;
+    uint32_t tenant_slots;
+    uint32_t pad3;
 } proxy_fc_svc_stat_t;
 // Pinned to the layout in sockproxy_metrics.h.
-_Static_assert(sizeof(proxy_fc_svc_stat_t) == 368, "proxy_fc_svc_stat_t size");
+_Static_assert(sizeof(proxy_fc_svc_stat_t) == 376, "proxy_fc_svc_stat_t size");
 _Static_assert(offsetof(proxy_fc_svc_stat_t, decisions) == 40, "decisions offset");
 _Static_assert(offsetof(proxy_fc_svc_stat_t, pool) == 144, "pool offset");
 _Static_assert(offsetof(proxy_fc_svc_stat_t, queued) == 208, "queued offset");
@@ -79,6 +81,7 @@ _Static_assert(offsetof(proxy_fc_svc_stat_t, adaptive) == 332, "adaptive offset"
 _Static_assert(offsetof(proxy_fc_svc_stat_t, warming_eps) == 338, "warming_eps offset");
 _Static_assert(offsetof(proxy_fc_svc_stat_t, adapt_down) == 344, "adapt_down offset");
 _Static_assert(offsetof(proxy_fc_svc_stat_t, tenants_active) == 360, "tenants_active offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, tenant_slots) == 368, "tenant_slots offset");
 
 extern int proxy_get_fc_stats(proxy_fc_svc_stat_t *out, int max);
 extern uint64_t proxy_get_fc_anomaly(int kind);

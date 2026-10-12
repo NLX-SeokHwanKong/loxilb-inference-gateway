@@ -11055,6 +11055,11 @@ definitions:
                 x-omitempty: false
                 format: int32
                 description: Tenants holding a unit or waiting on the pool now, while it holds tenants to a share.
+              tenant_slots:
+                type: integer
+                x-omitempty: false
+                format: int32
+                description: Tenants the pool tracks by name at once for the tenant share; tenants past it share one budget. Fixed when the pool is created (LLB_FC_TENANT_SLOTS).
               expose_headers:
                 type: string
                 enum: ["on", "off"]

@@ -2869,6 +2869,9 @@ type LoadbalanceEntryServiceArgumentsFcEffective struct {
 	// The tenant share in force, in percent; 0 or 100 is no share.
 	TenantMaxSharePct int32 `json:"tenant_max_share_pct"`
 
+	// Tenants the pool tracks by name at once for the tenant share; tenants past it share one budget. Fixed when the pool is created (LLB_FC_TENANT_SLOTS).
+	TenantSlots int32 `json:"tenant_slots"`
+
 	// Tenants holding a unit or waiting on the pool now, while it holds tenants to a share.
 	TenantsActive int32 `json:"tenants_active"`
 

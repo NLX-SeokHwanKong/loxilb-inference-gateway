@@ -3,7 +3,7 @@
   "scope": "LoadbalanceEntry fields and AI KV inventory query parameters; not a test-coverage claim",
   "sourceSha256": {
     "swagger-extras.yml": "5e36fc44f7bcae7588611893ef158e68e0f26c2a0e67d0a9fc719ab3c026c3bc",
-    "swagger.yml": "a4226e5811e31bd35a900e6f00b37409d8691dd1482cac2da383755f444d8afc"
+    "swagger.yml": "cfe101bec279e24973c9e2c9bf830940f40fc81e7469ed84ab85110fa135a18c"
   },
   "fields": [
     {
@@ -961,6 +961,16 @@
       "required": false,
       "contract": {
         "description": "The tenant share in force, in percent; 0 or 100 is no share.",
+        "format": "int32",
+        "type": "integer",
+        "x-omitempty": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/tenant_slots",
+      "required": false,
+      "contract": {
+        "description": "Tenants the pool tracks by name at once for the tenant share; tenants past it share one budget. Fixed when the pool is created (LLB_FC_TENANT_SLOTS).",
         "format": "int32",
         "type": "integer",
         "x-omitempty": false
