@@ -127,7 +127,6 @@ func (c aiDefaultResv) fillEffective(eff *cmn.FcEffectiveArg, vip net.IP, port u
 	svc := aiServiceIdent(vip, port)
 	eff.ReservationClampedBurst = reservationClampedCount(svc, resvClampBurst)
 	eff.ReservationClampedBudget = reservationClampedCount(svc, resvClampBudget)
-	eff.ReservationClamped = eff.ReservationClampedBurst + eff.ReservationClampedBudget
 }
 
 // aiDefaultTokensWord spells a default reservation in force for a message.

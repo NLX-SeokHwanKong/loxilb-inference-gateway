@@ -121,6 +121,10 @@ type loxiNetH struct {
 	// external store, and a nil holder would turn config calls into panics.
 	JWTAuthProfiles *JWTAuthProfileH
 
+	// NetIdentity holds the network-identity bindings and the resolver the
+	// admission gate reads. Always initialized, as JWTAuthProfiles is.
+	NetIdentity *NetIdentityH
+
 	// HTTP/HTTPS Protocol Analyzer (Distributed Tracing)
 	tracingEnabled bool           // Whether tracing is enabled
 	ringConsumer   *RingConsumer  // Ring buffer consumer
@@ -766,6 +770,11 @@ func loxiNetInit() {
 		}
 		return mh.zr.Rules.JwtProfileRuleRefs(name)
 	}
+
+	// Network-identity bindings: in memory as well, and read by every
+	// snapshot capture, plan and restore, so the holder is built before the
+	// REST server starts serving for the same reason.
+	mh.NetIdentity = NetIdentityInit()
 
 	// Initialize and spawn the api server subsystem
 	if !opts.Opts.NoAPI {

@@ -168,6 +168,16 @@ var Migrations = []Migration{
 		ToVersion:   "1.10",
 		Apply:       func(doc *Document) error { return nil },
 	},
+	// 1.10 -> 1.11: the netidentity domain was added. Its absent value is
+	// the empty list, which omitempty already writes as nothing, so there
+	// is nothing to normalize: re-stamp only. Deliberately NOT stamped into
+	// included_domains, as 1.7->1.8: a pre-1.11 document never captured the
+	// bindings, so restoring it must leave the live ones untouched.
+	{
+		FromVersion: "1.10",
+		ToVersion:   "1.11",
+		Apply:       func(doc *Document) error { return nil },
+	},
 }
 
 // ApplyMigrations runs every registered Migration whose FromVersion matches

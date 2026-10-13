@@ -796,7 +796,6 @@ func serializeLBRule(lb cmn.LbRuleMod) *models.LoadbalanceEntry {
 			ExposeHeaders:            eff.ExposeHeaders,
 			DefaultReservation:       eff.DefaultReservation,
 			DefaultMaxTokens:         int32(eff.DefaultMaxTokens),
-			ReservationClamped:       int64(eff.ReservationClamped),
 			ReservationClampedBurst:  int64(eff.ReservationClampedBurst),
 			ReservationClampedBudget: int64(eff.ReservationClampedBudget),
 			Source: &models.LoadbalanceEntryServiceArgumentsFcEffectiveSource{

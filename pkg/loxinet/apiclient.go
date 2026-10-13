@@ -758,6 +758,57 @@ func (na *NetAPIStruct) NetJWTAuthProfileDel(name string) (int, error) {
 	return mh.JWTAuthProfiles.ProfileDel(name)
 }
 
+// NetAINetIdentityGet - list the network-identity bindings
+func (na *NetAPIStruct) NetAINetIdentityGet() ([]cmn.NetIdentityMod, error) {
+	if na.BgpPeerMode {
+		return nil, errors.New("running in bgp only mode")
+	}
+	// Built during loxinet init, which finishes after the REST server
+	// starts serving; "not initialized" is the wording the boot replay and
+	// the REST commit restore retry on.
+	if mh.NetIdentity == nil {
+		return nil, errors.New("network-identity bindings not initialized")
+	}
+	return mh.NetIdentity.BindingGet()
+}
+
+// NetAINetIdentityAdd - create or replace a network-identity binding. The
+// holder has its own lock and reads no rule state, so the global
+// configuration mutex is not taken.
+func (na *NetAPIStruct) NetAINetIdentityAdd(pm *cmn.NetIdentityMod) (int, error) {
+	if na.BgpPeerMode {
+		return NetIdentityArgErr, errors.New("running in bgp only mode")
+	}
+	if mh.NetIdentity == nil {
+		return NetIdentityArgErr, errors.New("network-identity bindings not initialized")
+	}
+	return mh.NetIdentity.BindingAdd(pm)
+}
+
+// NetAINetIdentityDel - delete a network-identity binding
+func (na *NetAPIStruct) NetAINetIdentityDel(name string) (int, error) {
+	if na.BgpPeerMode {
+		return NetIdentityArgErr, errors.New("running in bgp only mode")
+	}
+	if mh.NetIdentity == nil {
+		return NetIdentityArgErr, errors.New("network-identity bindings not initialized")
+	}
+	return mh.NetIdentity.BindingDel(name)
+}
+
+// NetAINetIdentityWarning returns what is worth saying about a binding that
+// was just applied, and logs it. It refuses nothing.
+func (na *NetAPIStruct) NetAINetIdentityWarning(pm *cmn.NetIdentityMod) string {
+	if mh.NetIdentity == nil {
+		return ""
+	}
+	msg := mh.NetIdentity.BindingWarning(pm)
+	if msg != "" {
+		tk.LogIt(tk.LogWarning, "[NetIdentity] binding %s: %s\n", pm.Name, msg)
+	}
+	return msg
+}
+
 // NetCIStateGet - Get current node cluster state
 func (na *NetAPIStruct) NetCIStateGet() ([]cmn.HASMod, error) {
 	if na.BgpPeerMode {

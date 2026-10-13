@@ -9151,6 +9151,128 @@ paths:
       tags:
         - ai
 #----------------------------------------------
+# AI Gateway — network-identity bindings (tenant by source network)
+#----------------------------------------------
+  '/config/ai/netidentity':
+    post:
+      summary: Create or replace a network-identity binding
+      description: >-
+        Binds the requests that reach AI services from a network to a
+        tenant. Posting an existing name replaces the binding. A binding
+        applies from the next request, on connections that are already open
+        as well. It is refused with 409 when another binding matches the
+        same source on the same service as specifically and names another
+        tenant. A binding is the configuration of the node it is posted to:
+        it is not replicated to a high-availability peer.
+      operationId: postConfigAiNetidentity
+      parameters:
+        - name: attr
+          in: body
+          required: true
+          description: Attributes of the network-identity binding
+          schema:
+            $ref: '#/definitions/NetIdentityEntry'
+      responses:
+        '200':
+          description: OK
+          schema:
+            $ref: '#/definitions/OperationResult'
+        '400':
+          description: Malformed arguments for API call
+          schema:
+            $ref: '#/definitions/Error'
+        '401':
+          description: Invalid authentication credentials
+          schema:
+            $ref: '#/definitions/Error'
+        '403':
+          $ref: '#/responses/ManagementForbidden'
+        '409':
+          description: Resource Conflict. Another binding maps the same source on the same service to another tenant
+          schema:
+            $ref: '#/definitions/Error'
+        '500':
+          description: Internal service error
+          schema:
+            $ref: '#/definitions/Error'
+        '503':
+          description: Maintenance mode
+          schema:
+            $ref: '#/definitions/Error'
+      tags:
+        - ai
+    get:
+      summary: List network-identity bindings
+      description: >-
+        Returns every network-identity binding in name order, as stored:
+        enumerated fields spelled out, addresses and services in their
+        canonical form.
+      operationId: getConfigAiNetidentityAll
+      responses:
+        '200':
+          description: OK
+          schema:
+            type: object
+            properties:
+              netIdentityAttr:
+                type: array
+                items:
+                  $ref: '#/definitions/NetIdentityEntry'
+        '401':
+          description: Invalid authentication credentials
+          schema:
+            $ref: '#/definitions/Error'
+        '403':
+          $ref: '#/responses/ManagementForbidden'
+        '500':
+          description: Internal service error
+          schema:
+            $ref: '#/definitions/Error'
+        '503':
+          description: Maintenance mode
+          schema:
+            $ref: '#/definitions/Error'
+      tags:
+        - ai
+  '/config/ai/netidentity/{name}':
+    delete:
+      summary: Delete a network-identity binding
+      description: >-
+        Removes the named binding. Requests from its network are decided
+        without it from the next request.
+      operationId: deleteConfigAiNetidentityName
+      parameters:
+        - name: name
+          in: path
+          type: string
+          required: true
+          description: Name of the network-identity binding
+      responses:
+        '200':
+          description: OK
+          schema:
+            $ref: '#/definitions/OperationResult'
+        '401':
+          description: Invalid authentication credentials
+          schema:
+            $ref: '#/definitions/Error'
+        '403':
+          $ref: '#/responses/ManagementForbidden'
+        '404':
+          description: Resource not found
+          schema:
+            $ref: '#/definitions/Error'
+        '500':
+          description: Internal service error
+          schema:
+            $ref: '#/definitions/Error'
+        '503':
+          description: Maintenance mode
+          schema:
+            $ref: '#/definitions/Error'
+      tags:
+        - ai
+#----------------------------------------------
 # Schema definitions
 #----------------------------------------------
 responses:
@@ -10957,7 +11079,8 @@ definitions:
               is left of it, down to nothing, and it is never the reason a
               request is refused - only the prompt estimate and a declared
               ceiling are. A request admitted with less than the default is
-              counted in fc_effective.reservation_clamped and in
+              counted in fc_effective.reservation_clamped_burst or
+              reservation_clamped_budget and in
               loxilb_ai_reservation_clamped_total, by reason: burst (the
               default is more than a bucket can ever hold beside the prompt)
               or budget (the bucket's budget was already taken). The claim is released when
@@ -11125,21 +11248,16 @@ definitions:
                 x-omitempty: false
                 format: int32
                 description: The default reservation in tokens in force on this rule's VIP and port; 0 while default_reservation is off. Per VIP and port, as default_reservation.
-              reservation_clamped:
-                type: integer
-                x-omitempty: false
-                format: int64
-                description: Requests admitted with less than default_max_tokens reserved because a quota bucket did not hold all of it, since the process started. The sum of reservation_clamped_burst and reservation_clamped_budget. Counted per service - every model pool of the same VIP and port reads the same number. Never a refusal.
               reservation_clamped_burst:
                 type: integer
                 x-omitempty: false
                 format: int64
-                description: The part of reservation_clamped where default_max_tokens beside the prompt is more than a quota bucket can ever hold, so the request is clamped on an idle bucket too. A configuration to fix - lower the default or raise the quota or its burst. A request this applies to is counted here whatever the budgets held.
+                description: Requests admitted with less than default_max_tokens reserved, since the process started, because default_max_tokens beside the prompt is more than a quota bucket can ever hold, so the request is clamped on an idle bucket too. A configuration to fix - lower the default or raise the quota or its burst. A request this applies to is counted here whatever the budgets held. Counted per service - every model pool of the same VIP and port reads the same number. Never a refusal.
               reservation_clamped_budget:
                 type: integer
                 x-omitempty: false
                 format: int64
-                description: The part of reservation_clamped where the bucket's budget was already taken by other claims or by spend. Transient - it passes as the window refills.
+                description: Requests admitted with less than default_max_tokens reserved, since the process started, because the bucket's budget was already taken by other claims or by spend. Transient - it passes as the window refills. Counted per service, as reservation_clamped_burst. Never a refusal.
               source:
                 type: object
                 description: >-
@@ -16119,6 +16237,123 @@ definitions:
         description: >-
           Leave the client Authorization header on the upstream request
           instead of stripping it after verification. Default false.
+
+  NetIdentityEntry:
+    type: object
+    description: >-
+      A network-identity binding: the tenant of the requests that reach an
+      AI service from a network. A cidr match says where a request came
+      from; it does not prove who sent it, and any host that can send from
+      the range is attributed to the tenant. Use it for limits, fairness and
+      records, never in place of a credential. An ingress_if match is as
+      strong as the network boundary behind the interface. Where several
+      bindings match a request, an ingress_if match wins over a cidr match,
+      the longest prefix wins among cidr matches, and a binding that names
+      the service wins over one that names none.
+    required:
+      - name
+      - match
+      - tenant
+    properties:
+      name:
+        type: string
+        description: >-
+          Binding name, 1 to 63 characters of letters, digits, '-', '_' and
+          '.', starting with a letter or digit. It is what request records
+          carry.
+      match:
+        type: object
+        description: The source the binding applies to. Exactly one of cidr and ingress_if.
+        properties:
+          cidr:
+            type: array
+            x-omitempty: true
+            items:
+              type: string
+            description: >-
+              IPv4 networks in a.b.c.d/len form, without host bits, that the
+              socket peer of the request is in. At most 256.
+          ingress_if:
+            type: string
+            description: >-
+              Name of the interface the connection arrived on. The name is
+              stored, never an index. A name that does not exist on the node
+              is accepted with a warning in the reply. Interface matching is
+              not active yet: such a binding is stored and matches nothing.
+      services:
+        type: array
+        x-omitempty: true
+        items:
+          type: string
+        description: >-
+          The AI services the binding applies to, each as VIP:port (IPv4).
+          Empty or omitted applies it to every AI service. A service does
+          not have to exist yet. At most 256.
+      tenant:
+        type: string
+        description: >-
+          The tenant a matching request is attributed to, 1 to 127 bytes.
+          The same namespace as API-key and JWT tenants: its limits are the
+          ones configured for that tenant.
+      allowed_models:
+        type: array
+        x-omitempty: true
+        items:
+          type: string
+        description: >-
+          The models a request admitted or held by this binding may name,
+          compared exactly. Empty or omitted allows any. At most 256.
+      enforce:
+        type: string
+        enum:
+          - advisory
+          - strict
+        description: >-
+          advisory (default): a request that presents a credential is
+          decided by it and the binding is only noted. strict: a credential
+          whose tenant is not the binding's is refused with 403
+          network_tenant_mismatch, and the model must also pass
+          allowed_models. In both, a request with no credential on a service
+          that does not require one is admitted as the binding's tenant.
+      credential:
+        type: string
+        enum:
+          - none
+          - network
+        description: >-
+          none (default): the binding never stands in for a credential.
+          network: on a service that requires a credential, a request that
+          presents none is admitted as the binding's tenant. Accepted with
+          an ingress_if match only; refused with a cidr match.
+      forward_identity:
+        type: boolean
+        description: >-
+          Forward the tenant upstream as X-Auth-Tenant. Stored and reported;
+          it does not change the upstream request yet. Default false.
+      priority_class:
+        type: string
+        enum:
+          - standard
+          - critical
+          - sheddable
+        description: >-
+          The priority class of the binding's requests. Stored and reported;
+          it does not change scheduling yet. Default standard.
+      fail_mode:
+        type: string
+        enum:
+          - neutral
+          - closed
+        description: >-
+          What the binding's services do with a request while the binding
+          lookup itself cannot answer (an internal fault, counted in
+          loxilb_ai_netid_resolver_faults_total). neutral (default): the
+          request is decided as if the service had no binding - it is never
+          admitted by its network, and a valid credential is not refused, so
+          a strict binding is not enforced during the fault. closed: every
+          request the lookup would have decided is refused with 503
+          netid_unavailable until it answers again. A service fails closed
+          when any binding that applies to it says closed.
 
   ApiKeyCreateRequest:
     type: object

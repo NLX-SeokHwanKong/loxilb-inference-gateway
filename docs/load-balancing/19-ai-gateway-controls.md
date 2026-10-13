@@ -202,8 +202,7 @@ How it behaves:
   estimate — and a ceiling the request declares — can be refused, exactly as before.
 - **A request admitted with less than the default is counted**, per service and by
   reason, in `loxilb_ai_reservation_clamped_total{service, reason}` and on the rule's
-  `GET` (`fc_effective.reservation_clamped_burst`, `reservation_clamped_budget`, and
-  their sum `reservation_clamped`):
+  `GET` (`fc_effective.reservation_clamped_burst` and `reservation_clamped_budget`):
   - `burst`: the default beside the prompt estimate is more than a quota bucket can ever
     hold, so the request is clamped even on an idle bucket. This does not pass by itself.
     Lower `ai_default_max_tokens`, or raise the tenant's `tokens_per_min` or its burst.

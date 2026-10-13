@@ -445,6 +445,10 @@ func configureAPI(api *operations.LoxilbRestAPIAPI) http.Handler {
 	api.AiPostConfigAiJwtauthprofileHandler = ai.PostConfigAiJwtauthprofileHandlerFunc(handler.ConfigPostJWTAuthProfile)
 	api.AiGetConfigAiJwtauthprofileAllHandler = ai.GetConfigAiJwtauthprofileAllHandlerFunc(handler.ConfigGetJWTAuthProfileAll)
 	api.AiDeleteConfigAiJwtauthprofileNameHandler = ai.DeleteConfigAiJwtauthprofileNameHandlerFunc(handler.ConfigDeleteJWTAuthProfile)
+	// AI Gateway network-identity bindings (tenant by source network)
+	api.AiPostConfigAiNetidentityHandler = ai.PostConfigAiNetidentityHandlerFunc(handler.ConfigPostNetIdentity)
+	api.AiGetConfigAiNetidentityAllHandler = ai.GetConfigAiNetidentityAllHandlerFunc(handler.ConfigGetNetIdentityAll)
+	api.AiDeleteConfigAiNetidentityNameHandler = ai.DeleteConfigAiNetidentityNameHandlerFunc(handler.ConfigDeleteNetIdentity)
 
 	api.AiGetConfigAiModelProfilesHandler = ai.GetConfigAiModelProfilesHandlerFunc(handler.ConfigGetAIModelProfiles)
 	api.AiGetConfigAiModelProfilesProfileIDHandler = ai.GetConfigAiModelProfilesProfileIDHandlerFunc(handler.ConfigGetAIModelProfileByID)

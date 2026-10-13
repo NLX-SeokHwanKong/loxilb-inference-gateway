@@ -4763,7 +4763,7 @@ func init() {
               "x-nullable": false
             },
             "ai_default_reservation": {
-              "description": "Whether a request that declares no completion ceiling (no max_tokens or max_completion_tokens, or a value that is not a positive whole number: negative, 0, a string, a float, an object or an array) reserves a default number of completion tokens against the token quotas at admission. off reserves the prompt estimate alone, so leaving the field out is the cheaper choice at admission. on reserves ai_default_max_tokens beside the prompt estimate, as a claim each quota bucket may shrink: it is cut to what the bucket can hold beside the prompt estimate and to what is left of it, down to nothing, and it is never the reason a request is refused - only the prompt estimate and a declared ceiling are. A request admitted with less than the default is counted in fc_effective.reservation_clamped and in loxilb_ai_reservation_clamped_total, by reason: burst (the default is more than a bucket can ever hold beside the prompt) or budget (the bucket's budget was already taken). The claim is released when the response is settled, as a declared ceiling's is. Nothing is written into the forwarded request, and a declared ceiling is never replaced. inherit, or omitted on create, runs on the process default (LLB_AI_DEFAULT_RESERVATION, else off). Replace and null semantics as fc_mode; a replace that changes nothing else applies in place, to requests admitted from then on. Read back only when declared; what is in force is fc_effective.default_reservation. The gate reserves before a rule is selected by host, path or model, so the value is per listener: on a VIP and port that several rules share, the value of the rule installed first on it is the one in force for all of them, as with api_key_auth. Declare the same value on each. A rule applied on a VIP and port whose rules resolve to different values is accepted, and the reply and the log carry a warning that names the value in effect; fc_effective shows that value on every rule.",
+              "description": "Whether a request that declares no completion ceiling (no max_tokens or max_completion_tokens, or a value that is not a positive whole number: negative, 0, a string, a float, an object or an array) reserves a default number of completion tokens against the token quotas at admission. off reserves the prompt estimate alone, so leaving the field out is the cheaper choice at admission. on reserves ai_default_max_tokens beside the prompt estimate, as a claim each quota bucket may shrink: it is cut to what the bucket can hold beside the prompt estimate and to what is left of it, down to nothing, and it is never the reason a request is refused - only the prompt estimate and a declared ceiling are. A request admitted with less than the default is counted in fc_effective.reservation_clamped_burst or reservation_clamped_budget and in loxilb_ai_reservation_clamped_total, by reason: burst (the default is more than a bucket can ever hold beside the prompt) or budget (the bucket's budget was already taken). The claim is released when the response is settled, as a declared ceiling's is. Nothing is written into the forwarded request, and a declared ceiling is never replaced. inherit, or omitted on create, runs on the process default (LLB_AI_DEFAULT_RESERVATION, else off). Replace and null semantics as fc_mode; a replace that changes nothing else applies in place, to requests admitted from then on. Read back only when declared; what is in force is fc_effective.default_reservation. The gate reserves before a rule is selected by host, path or model, so the value is per listener: on a VIP and port that several rules share, the value of the rule installed first on it is the one in force for all of them, as with api_key_auth. Declare the same value on each. A rule applied on a VIP and port whose rules resolve to different values is accepted, and the reply and the log carry a warning that names the value in effect; fc_effective shows that value on every rule.",
               "enum": [
                 "on",
                 "off",
@@ -5071,20 +5071,14 @@ func init() {
                   "type": "integer",
                   "x-omitempty": false
                 },
-                "reservation_clamped": {
-                  "description": "Requests admitted with less than default_max_tokens reserved because a quota bucket did not hold all of it, since the process started. The sum of reservation_clamped_burst and reservation_clamped_budget. Counted per service - every model pool of the same VIP and port reads the same number. Never a refusal.",
-                  "format": "int64",
-                  "type": "integer",
-                  "x-omitempty": false
-                },
                 "reservation_clamped_budget": {
-                  "description": "The part of reservation_clamped where the bucket's budget was already taken by other claims or by spend. Transient - it passes as the window refills.",
+                  "description": "Requests admitted with less than default_max_tokens reserved, since the process started, because the bucket's budget was already taken by other claims or by spend. Transient - it passes as the window refills. Counted per service, as reservation_clamped_burst. Never a refusal.",
                   "format": "int64",
                   "type": "integer",
                   "x-omitempty": false
                 },
                 "reservation_clamped_burst": {
-                  "description": "The part of reservation_clamped where default_max_tokens beside the prompt is more than a quota bucket can ever hold, so the request is clamped on an idle bucket too. A configuration to fix - lower the default or raise the quota or its burst. A request this applies to is counted here whatever the budgets held.",
+                  "description": "Requests admitted with less than default_max_tokens reserved, since the process started, because default_max_tokens beside the prompt is more than a quota bucket can ever hold, so the request is clamped on an idle bucket too. A configuration to fix - lower the default or raise the quota or its burst. A request this applies to is counted here whatever the budgets held. Counted per service - every model pool of the same VIP and port reads the same number. Never a refusal.",
                   "format": "int64",
                   "type": "integer",
                   "x-omitempty": false
@@ -6313,6 +6307,96 @@ func init() {
         "dev",
         "ipAddress",
         "macAddress"
+      ],
+      "type": "object"
+    },
+    "NetIdentityEntry": {
+      "description": "A network-identity binding: the tenant of the requests that reach an AI service from a network. A cidr match says where a request came from; it does not prove who sent it, and any host that can send from the range is attributed to the tenant. Use it for limits, fairness and records, never in place of a credential. An ingress_if match is as strong as the network boundary behind the interface. Where several bindings match a request, an ingress_if match wins over a cidr match, the longest prefix wins among cidr matches, and a binding that names the service wins over one that names none.",
+      "properties": {
+        "allowed_models": {
+          "description": "The models a request admitted or held by this binding may name, compared exactly. Empty or omitted allows any. At most 256.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-omitempty": true
+        },
+        "credential": {
+          "description": "none (default): the binding never stands in for a credential. network: on a service that requires a credential, a request that presents none is admitted as the binding's tenant. Accepted with an ingress_if match only; refused with a cidr match.",
+          "enum": [
+            "none",
+            "network"
+          ],
+          "type": "string"
+        },
+        "enforce": {
+          "description": "advisory (default): a request that presents a credential is decided by it and the binding is only noted. strict: a credential whose tenant is not the binding's is refused with 403 network_tenant_mismatch, and the model must also pass allowed_models. In both, a request with no credential on a service that does not require one is admitted as the binding's tenant.",
+          "enum": [
+            "advisory",
+            "strict"
+          ],
+          "type": "string"
+        },
+        "fail_mode": {
+          "description": "What the binding's services do with a request while the binding lookup itself cannot answer (an internal fault, counted in loxilb_ai_netid_resolver_faults_total). neutral (default): the request is decided as if the service had no binding - it is never admitted by its network, and a valid credential is not refused, so a strict binding is not enforced during the fault. closed: every request the lookup would have decided is refused with 503 netid_unavailable until it answers again. A service fails closed when any binding that applies to it says closed.",
+          "enum": [
+            "neutral",
+            "closed"
+          ],
+          "type": "string"
+        },
+        "forward_identity": {
+          "description": "Forward the tenant upstream as X-Auth-Tenant. Stored and reported; it does not change the upstream request yet. Default false.",
+          "type": "boolean"
+        },
+        "match": {
+          "description": "The source the binding applies to. Exactly one of cidr and ingress_if.",
+          "properties": {
+            "cidr": {
+              "description": "IPv4 networks in a.b.c.d/len form, without host bits, that the socket peer of the request is in. At most 256.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array",
+              "x-omitempty": true
+            },
+            "ingress_if": {
+              "description": "Name of the interface the connection arrived on. The name is stored, never an index. A name that does not exist on the node is accepted with a warning in the reply. Interface matching is not active yet: such a binding is stored and matches nothing.",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "name": {
+          "description": "Binding name, 1 to 63 characters of letters, digits, '-', '_' and '.', starting with a letter or digit. It is what request records carry.",
+          "type": "string"
+        },
+        "priority_class": {
+          "description": "The priority class of the binding's requests. Stored and reported; it does not change scheduling yet. Default standard.",
+          "enum": [
+            "standard",
+            "critical",
+            "sheddable"
+          ],
+          "type": "string"
+        },
+        "services": {
+          "description": "The AI services the binding applies to, each as VIP:port (IPv4). Empty or omitted applies it to every AI service. A service does not have to exist yet. At most 256.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-omitempty": true
+        },
+        "tenant": {
+          "description": "The tenant a matching request is attributed to, 1 to 127 bytes. The same namespace as API-key and JWT tenants: its limits are the ones configured for that tenant.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "match",
+        "tenant"
       ],
       "type": "object"
     },
@@ -9836,6 +9920,167 @@ func init() {
           }
         },
         "summary": "Get one published model-prompt profile",
+        "tags": [
+          "ai"
+        ]
+      }
+    },
+    "/config/ai/netidentity": {
+      "get": {
+        "description": "Returns every network-identity binding in name order, as stored: enumerated fields spelled out, addresses and services in their canonical form.",
+        "operationId": "getConfigAiNetidentityAll",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "properties": {
+                "netIdentityAttr": {
+                  "items": {
+                    "$ref": "#/definitions/NetIdentityEntry"
+                  },
+                  "type": "array"
+                }
+              },
+              "type": "object"
+            }
+          },
+          "401": {
+            "description": "Invalid authentication credentials",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "$ref": "#/responses/ManagementForbidden"
+          },
+          "500": {
+            "description": "Internal service error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Maintenance mode",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        },
+        "summary": "List network-identity bindings",
+        "tags": [
+          "ai"
+        ]
+      },
+      "post": {
+        "description": "Binds the requests that reach AI services from a network to a tenant. Posting an existing name replaces the binding. A binding applies from the next request, on connections that are already open as well. It is refused with 409 when another binding matches the same source on the same service as specifically and names another tenant. A binding is the configuration of the node it is posted to: it is not replicated to a high-availability peer.",
+        "operationId": "postConfigAiNetidentity",
+        "parameters": [
+          {
+            "description": "Attributes of the network-identity binding",
+            "in": "body",
+            "name": "attr",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/NetIdentityEntry"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/OperationResult"
+            }
+          },
+          "400": {
+            "description": "Malformed arguments for API call",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "401": {
+            "description": "Invalid authentication credentials",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "$ref": "#/responses/ManagementForbidden"
+          },
+          "409": {
+            "description": "Resource Conflict. Another binding maps the same source on the same service to another tenant",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "500": {
+            "description": "Internal service error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Maintenance mode",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        },
+        "summary": "Create or replace a network-identity binding",
+        "tags": [
+          "ai"
+        ]
+      }
+    },
+    "/config/ai/netidentity/{name}": {
+      "delete": {
+        "description": "Removes the named binding. Requests from its network are decided without it from the next request.",
+        "operationId": "deleteConfigAiNetidentityName",
+        "parameters": [
+          {
+            "description": "Name of the network-identity binding",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/OperationResult"
+            }
+          },
+          "401": {
+            "description": "Invalid authentication credentials",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "$ref": "#/responses/ManagementForbidden"
+          },
+          "404": {
+            "description": "Resource not found",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "500": {
+            "description": "Internal service error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Maintenance mode",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        },
+        "summary": "Delete a network-identity binding",
         "tags": [
           "ai"
         ]
@@ -22863,7 +23108,177 @@ func init() {
             }
           },
           "503": {
-            "description": "Credential store unavailable \u2014 the credential was never examined; retry after a moment",
+            "description": "Credential store unavailable — the credential was never examined; retry after a moment",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        }
+      }
+    },
+    "/config/ai/netidentity": {
+      "get": {
+        "description": "Returns every network-identity binding in name order, as stored: enumerated fields spelled out, addresses and services in their canonical form.",
+        "tags": [
+          "ai"
+        ],
+        "summary": "List network-identity bindings",
+        "operationId": "getConfigAiNetidentityAll",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "netIdentityAttr": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/definitions/NetIdentityEntry"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid authentication credentials",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "description": "Authenticated principal is not authorized for this operation",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "500": {
+            "description": "Internal service error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Maintenance mode",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        }
+      },
+      "post": {
+        "description": "Binds the requests that reach AI services from a network to a tenant. Posting an existing name replaces the binding. A binding applies from the next request, on connections that are already open as well. It is refused with 409 when another binding matches the same source on the same service as specifically and names another tenant. A binding is the configuration of the node it is posted to: it is not replicated to a high-availability peer.",
+        "tags": [
+          "ai"
+        ],
+        "summary": "Create or replace a network-identity binding",
+        "operationId": "postConfigAiNetidentity",
+        "parameters": [
+          {
+            "description": "Attributes of the network-identity binding",
+            "name": "attr",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/NetIdentityEntry"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/OperationResult"
+            }
+          },
+          "400": {
+            "description": "Malformed arguments for API call",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "401": {
+            "description": "Invalid authentication credentials",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "description": "Authenticated principal is not authorized for this operation",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "409": {
+            "description": "Resource Conflict. Another binding maps the same source on the same service to another tenant",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "500": {
+            "description": "Internal service error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Maintenance mode",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        }
+      }
+    },
+    "/config/ai/netidentity/{name}": {
+      "delete": {
+        "description": "Removes the named binding. Requests from its network are decided without it from the next request.",
+        "tags": [
+          "ai"
+        ],
+        "summary": "Delete a network-identity binding",
+        "operationId": "deleteConfigAiNetidentityName",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "Name of the network-identity binding",
+            "name": "name",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/OperationResult"
+            }
+          },
+          "401": {
+            "description": "Invalid authentication credentials",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "description": "Authenticated principal is not authorized for this operation",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "500": {
+            "description": "Internal service error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Maintenance mode",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -39970,7 +40385,7 @@ func init() {
               "x-nullable": false
             },
             "ai_default_reservation": {
-              "description": "Whether a request that declares no completion ceiling (no max_tokens or max_completion_tokens, or a value that is not a positive whole number: negative, 0, a string, a float, an object or an array) reserves a default number of completion tokens against the token quotas at admission. off reserves the prompt estimate alone, so leaving the field out is the cheaper choice at admission. on reserves ai_default_max_tokens beside the prompt estimate, as a claim each quota bucket may shrink: it is cut to what the bucket can hold beside the prompt estimate and to what is left of it, down to nothing, and it is never the reason a request is refused - only the prompt estimate and a declared ceiling are. A request admitted with less than the default is counted in fc_effective.reservation_clamped and in loxilb_ai_reservation_clamped_total, by reason: burst (the default is more than a bucket can ever hold beside the prompt) or budget (the bucket's budget was already taken). The claim is released when the response is settled, as a declared ceiling's is. Nothing is written into the forwarded request, and a declared ceiling is never replaced. inherit, or omitted on create, runs on the process default (LLB_AI_DEFAULT_RESERVATION, else off). Replace and null semantics as fc_mode; a replace that changes nothing else applies in place, to requests admitted from then on. Read back only when declared; what is in force is fc_effective.default_reservation. The gate reserves before a rule is selected by host, path or model, so the value is per listener: on a VIP and port that several rules share, the value of the rule installed first on it is the one in force for all of them, as with api_key_auth. Declare the same value on each. A rule applied on a VIP and port whose rules resolve to different values is accepted, and the reply and the log carry a warning that names the value in effect; fc_effective shows that value on every rule.",
+              "description": "Whether a request that declares no completion ceiling (no max_tokens or max_completion_tokens, or a value that is not a positive whole number: negative, 0, a string, a float, an object or an array) reserves a default number of completion tokens against the token quotas at admission. off reserves the prompt estimate alone, so leaving the field out is the cheaper choice at admission. on reserves ai_default_max_tokens beside the prompt estimate, as a claim each quota bucket may shrink: it is cut to what the bucket can hold beside the prompt estimate and to what is left of it, down to nothing, and it is never the reason a request is refused - only the prompt estimate and a declared ceiling are. A request admitted with less than the default is counted in fc_effective.reservation_clamped_burst or reservation_clamped_budget and in loxilb_ai_reservation_clamped_total, by reason: burst (the default is more than a bucket can ever hold beside the prompt) or budget (the bucket's budget was already taken). The claim is released when the response is settled, as a declared ceiling's is. Nothing is written into the forwarded request, and a declared ceiling is never replaced. inherit, or omitted on create, runs on the process default (LLB_AI_DEFAULT_RESERVATION, else off). Replace and null semantics as fc_mode; a replace that changes nothing else applies in place, to requests admitted from then on. Read back only when declared; what is in force is fc_effective.default_reservation. The gate reserves before a rule is selected by host, path or model, so the value is per listener: on a VIP and port that several rules share, the value of the rule installed first on it is the one in force for all of them, as with api_key_auth. Declare the same value on each. A rule applied on a VIP and port whose rules resolve to different values is accepted, and the reply and the log carry a warning that names the value in effect; fc_effective shows that value on every rule.",
               "type": "string",
               "enum": [
                 "on",
@@ -40276,23 +40691,17 @@ func init() {
                 "queued": {
                   "description": "Inference requests waiting for a unit right now.",
                   "type": "integer",
-                  "x-omitempty": false,
-                  "format": "int32"
-                },
-                "reservation_clamped": {
-                  "description": "Requests admitted with less than default_max_tokens reserved because a quota bucket did not hold all of it, since the process started. The sum of reservation_clamped_burst and reservation_clamped_budget. Counted per service - every model pool of the same VIP and port reads the same number. Never a refusal.",
-                  "type": "integer",
-                  "format": "int64",
+                  "format": "int32",
                   "x-omitempty": false
                 },
                 "reservation_clamped_budget": {
-                  "description": "The part of reservation_clamped where the bucket's budget was already taken by other claims or by spend. Transient - it passes as the window refills.",
+                  "description": "Requests admitted with less than default_max_tokens reserved, since the process started, because the bucket's budget was already taken by other claims or by spend. Transient - it passes as the window refills. Counted per service, as reservation_clamped_burst. Never a refusal.",
                   "type": "integer",
                   "format": "int64",
                   "x-omitempty": false
                 },
                 "reservation_clamped_burst": {
-                  "description": "The part of reservation_clamped where default_max_tokens beside the prompt is more than a quota bucket can ever hold, so the request is clamped on an idle bucket too. A configuration to fix - lower the default or raise the quota or its burst. A request this applies to is counted here whatever the budgets held.",
+                  "description": "Requests admitted with less than default_max_tokens reserved, since the process started, because default_max_tokens beside the prompt is more than a quota bucket can ever hold, so the request is clamped on an idle bucket too. A configuration to fix - lower the default or raise the quota or its burst. A request this applies to is counted here whatever the budgets held. Counted per service - every model pool of the same VIP and port reads the same number. Never a refusal.",
                   "type": "integer",
                   "format": "int64",
                   "x-omitempty": false
@@ -41203,7 +41612,7 @@ func init() {
           "x-nullable": false
         },
         "ai_default_reservation": {
-          "description": "Whether a request that declares no completion ceiling (no max_tokens or max_completion_tokens, or a value that is not a positive whole number: negative, 0, a string, a float, an object or an array) reserves a default number of completion tokens against the token quotas at admission. off reserves the prompt estimate alone, so leaving the field out is the cheaper choice at admission. on reserves ai_default_max_tokens beside the prompt estimate, as a claim each quota bucket may shrink: it is cut to what the bucket can hold beside the prompt estimate and to what is left of it, down to nothing, and it is never the reason a request is refused - only the prompt estimate and a declared ceiling are. A request admitted with less than the default is counted in fc_effective.reservation_clamped and in loxilb_ai_reservation_clamped_total, by reason: burst (the default is more than a bucket can ever hold beside the prompt) or budget (the bucket's budget was already taken). The claim is released when the response is settled, as a declared ceiling's is. Nothing is written into the forwarded request, and a declared ceiling is never replaced. inherit, or omitted on create, runs on the process default (LLB_AI_DEFAULT_RESERVATION, else off). Replace and null semantics as fc_mode; a replace that changes nothing else applies in place, to requests admitted from then on. Read back only when declared; what is in force is fc_effective.default_reservation. The gate reserves before a rule is selected by host, path or model, so the value is per listener: on a VIP and port that several rules share, the value of the rule installed first on it is the one in force for all of them, as with api_key_auth. Declare the same value on each. A rule applied on a VIP and port whose rules resolve to different values is accepted, and the reply and the log carry a warning that names the value in effect; fc_effective shows that value on every rule.",
+          "description": "Whether a request that declares no completion ceiling (no max_tokens or max_completion_tokens, or a value that is not a positive whole number: negative, 0, a string, a float, an object or an array) reserves a default number of completion tokens against the token quotas at admission. off reserves the prompt estimate alone, so leaving the field out is the cheaper choice at admission. on reserves ai_default_max_tokens beside the prompt estimate, as a claim each quota bucket may shrink: it is cut to what the bucket can hold beside the prompt estimate and to what is left of it, down to nothing, and it is never the reason a request is refused - only the prompt estimate and a declared ceiling are. A request admitted with less than the default is counted in fc_effective.reservation_clamped_burst or reservation_clamped_budget and in loxilb_ai_reservation_clamped_total, by reason: burst (the default is more than a bucket can ever hold beside the prompt) or budget (the bucket's budget was already taken). The claim is released when the response is settled, as a declared ceiling's is. Nothing is written into the forwarded request, and a declared ceiling is never replaced. inherit, or omitted on create, runs on the process default (LLB_AI_DEFAULT_RESERVATION, else off). Replace and null semantics as fc_mode; a replace that changes nothing else applies in place, to requests admitted from then on. Read back only when declared; what is in force is fc_effective.default_reservation. The gate reserves before a rule is selected by host, path or model, so the value is per listener: on a VIP and port that several rules share, the value of the rule installed first on it is the one in force for all of them, as with api_key_auth. Declare the same value on each. A rule applied on a VIP and port whose rules resolve to different values is accepted, and the reply and the log carry a warning that names the value in effect; fc_effective shows that value on every rule.",
           "type": "string",
           "enum": [
             "on",
@@ -41509,23 +41918,17 @@ func init() {
             "queued": {
               "description": "Inference requests waiting for a unit right now.",
               "type": "integer",
-              "x-omitempty": false,
-              "format": "int32"
-            },
-            "reservation_clamped": {
-              "description": "Requests admitted with less than default_max_tokens reserved because a quota bucket did not hold all of it, since the process started. The sum of reservation_clamped_burst and reservation_clamped_budget. Counted per service - every model pool of the same VIP and port reads the same number. Never a refusal.",
-              "type": "integer",
-              "format": "int64",
+              "format": "int32",
               "x-omitempty": false
             },
             "reservation_clamped_budget": {
-              "description": "The part of reservation_clamped where the bucket's budget was already taken by other claims or by spend. Transient - it passes as the window refills.",
+              "description": "Requests admitted with less than default_max_tokens reserved, since the process started, because the bucket's budget was already taken by other claims or by spend. Transient - it passes as the window refills. Counted per service, as reservation_clamped_burst. Never a refusal.",
               "type": "integer",
               "format": "int64",
               "x-omitempty": false
             },
             "reservation_clamped_burst": {
-              "description": "The part of reservation_clamped where default_max_tokens beside the prompt is more than a quota bucket can ever hold, so the request is clamped on an idle bucket too. A configuration to fix - lower the default or raise the quota or its burst. A request this applies to is counted here whatever the budgets held.",
+              "description": "Requests admitted with less than default_max_tokens reserved, since the process started, because default_max_tokens beside the prompt is more than a quota bucket can ever hold, so the request is clamped on an idle bucket too. A configuration to fix - lower the default or raise the quota or its burst. A request this applies to is counted here whatever the budgets held. Counted per service - every model pool of the same VIP and port reads the same number. Never a refusal.",
               "type": "integer",
               "format": "int64",
               "x-omitempty": false
@@ -42449,18 +42852,13 @@ func init() {
           "type": "integer",
           "format": "int32"
         },
-        "reservation_clamped": {
-          "description": "Requests admitted with less than default_max_tokens reserved because a quota bucket did not hold all of it, since the process started. The sum of reservation_clamped_burst and reservation_clamped_budget. Counted per service - every model pool of the same VIP and port reads the same number. Never a refusal.",
-          "type": "integer",
-          "format": "int64"
-        },
         "reservation_clamped_budget": {
-          "description": "The part of reservation_clamped where the bucket's budget was already taken by other claims or by spend. Transient - it passes as the window refills.",
+          "description": "Requests admitted with less than default_max_tokens reserved, since the process started, because the bucket's budget was already taken by other claims or by spend. Transient - it passes as the window refills. Counted per service, as reservation_clamped_burst. Never a refusal.",
           "type": "integer",
           "format": "int64"
         },
         "reservation_clamped_burst": {
-          "description": "The part of reservation_clamped where default_max_tokens beside the prompt is more than a quota bucket can ever hold, so the request is clamped on an idle bucket too. A configuration to fix - lower the default or raise the quota or its burst. A request this applies to is counted here whatever the budgets held.",
+          "description": "Requests admitted with less than default_max_tokens reserved, since the process started, because default_max_tokens beside the prompt is more than a quota bucket can ever hold, so the request is clamped on an idle bucket too. A configuration to fix - lower the default or raise the quota or its burst. A request this applies to is counted here whatever the budgets held. Counted per service - every model pool of the same VIP and port reads the same number. Never a refusal.",
           "type": "integer",
           "format": "int64"
         },
@@ -43388,6 +43786,114 @@ func init() {
         },
         "macAddress": {
           "description": "MAC address to neighbor",
+          "type": "string"
+        }
+      }
+    },
+    "NetIdentityEntry": {
+      "description": "A network-identity binding: the tenant of the requests that reach an AI service from a network. A cidr match says where a request came from; it does not prove who sent it, and any host that can send from the range is attributed to the tenant. Use it for limits, fairness and records, never in place of a credential. An ingress_if match is as strong as the network boundary behind the interface. Where several bindings match a request, an ingress_if match wins over a cidr match, the longest prefix wins among cidr matches, and a binding that names the service wins over one that names none.",
+      "type": "object",
+      "required": [
+        "name",
+        "match",
+        "tenant"
+      ],
+      "properties": {
+        "allowed_models": {
+          "description": "The models a request admitted or held by this binding may name, compared exactly. Empty or omitted allows any. At most 256.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-omitempty": true
+        },
+        "credential": {
+          "description": "none (default): the binding never stands in for a credential. network: on a service that requires a credential, a request that presents none is admitted as the binding's tenant. Accepted with an ingress_if match only; refused with a cidr match.",
+          "type": "string",
+          "enum": [
+            "none",
+            "network"
+          ]
+        },
+        "enforce": {
+          "description": "advisory (default): a request that presents a credential is decided by it and the binding is only noted. strict: a credential whose tenant is not the binding's is refused with 403 network_tenant_mismatch, and the model must also pass allowed_models. In both, a request with no credential on a service that does not require one is admitted as the binding's tenant.",
+          "type": "string",
+          "enum": [
+            "advisory",
+            "strict"
+          ]
+        },
+        "fail_mode": {
+          "description": "What the binding's services do with a request while the binding lookup itself cannot answer (an internal fault, counted in loxilb_ai_netid_resolver_faults_total). neutral (default): the request is decided as if the service had no binding - it is never admitted by its network, and a valid credential is not refused, so a strict binding is not enforced during the fault. closed: every request the lookup would have decided is refused with 503 netid_unavailable until it answers again. A service fails closed when any binding that applies to it says closed.",
+          "type": "string",
+          "enum": [
+            "neutral",
+            "closed"
+          ]
+        },
+        "forward_identity": {
+          "description": "Forward the tenant upstream as X-Auth-Tenant. Stored and reported; it does not change the upstream request yet. Default false.",
+          "type": "boolean"
+        },
+        "match": {
+          "description": "The source the binding applies to. Exactly one of cidr and ingress_if.",
+          "type": "object",
+          "properties": {
+            "cidr": {
+              "description": "IPv4 networks in a.b.c.d/len form, without host bits, that the socket peer of the request is in. At most 256.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "x-omitempty": true
+            },
+            "ingress_if": {
+              "description": "Name of the interface the connection arrived on. The name is stored, never an index. A name that does not exist on the node is accepted with a warning in the reply. Interface matching is not active yet: such a binding is stored and matches nothing.",
+              "type": "string"
+            }
+          }
+        },
+        "name": {
+          "description": "Binding name, 1 to 63 characters of letters, digits, '-', '_' and '.', starting with a letter or digit. It is what request records carry.",
+          "type": "string"
+        },
+        "priority_class": {
+          "description": "The priority class of the binding's requests. Stored and reported; it does not change scheduling yet. Default standard.",
+          "type": "string",
+          "enum": [
+            "standard",
+            "critical",
+            "sheddable"
+          ]
+        },
+        "services": {
+          "description": "The AI services the binding applies to, each as VIP:port (IPv4). Empty or omitted applies it to every AI service. A service does not have to exist yet. At most 256.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-omitempty": true
+        },
+        "tenant": {
+          "description": "The tenant a matching request is attributed to, 1 to 127 bytes. The same namespace as API-key and JWT tenants: its limits are the ones configured for that tenant.",
+          "type": "string"
+        }
+      }
+    },
+    "NetIdentityEntryMatch": {
+      "description": "The source the binding applies to. Exactly one of cidr and ingress_if.",
+      "type": "object",
+      "properties": {
+        "cidr": {
+          "description": "IPv4 networks in a.b.c.d/len form, without host bits, that the socket peer of the request is in. At most 256.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-omitempty": true
+        },
+        "ingress_if": {
+          "description": "Name of the interface the connection arrived on. The name is stored, never an index. A name that does not exist on the node is accepted with a warning in the reply. Interface matching is not active yet: such a binding is stored and matches nothing.",
           "type": "string"
         }
       }

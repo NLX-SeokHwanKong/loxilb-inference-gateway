@@ -161,6 +161,11 @@ var RouteLifecycles = []RouteLifecycle{
 	// state, public key sources only).
 	{Method: "post", Path: "/config/ai/jwtauthprofile", Class: ClassSnapshot, Area: DomainJWTAuthProfile, DesiredState: true},
 	{Method: "delete", Path: "/config/ai/jwtauthprofile/{name}", Class: ClassSnapshot, Area: DomainJWTAuthProfile, DesiredState: true},
+	// --- AI network-identity bindings: snapshot domain since schema 1.11
+	// (the tenant of requests by source network; in-memory desired state of
+	// this node).
+	{Method: "post", Path: "/config/ai/netidentity", Class: ClassSnapshot, Area: DomainNetIdentity, DesiredState: true},
+	{Method: "delete", Path: "/config/ai/netidentity/{name}", Class: ClassSnapshot, Area: DomainNetIdentity, DesiredState: true},
 	{Method: "post", Path: "/config/ai/apikey", Class: ClassExternalStore, Area: AreaAIKeys, DesiredState: true},
 	{Method: "patch", Path: "/config/ai/apikey/{key_id}", Class: ClassExternalStore, Area: AreaAIKeys, DesiredState: true},
 	{Method: "delete", Path: "/config/ai/apikey/{key_id}", Class: ClassExternalStore, Area: AreaAIKeys, DesiredState: true},
@@ -372,6 +377,7 @@ var snapshotDomainSet = map[string]bool{
 	DomainEndpoint:       true,
 	DomainJWTAuthProfile: true,
 	DomainHalfClose:      true,
+	DomainNetIdentity:    true,
 	DomainLoadBalancer:   true,
 	DomainKvExactBinding: true,
 	DomainL7Policy:       true,

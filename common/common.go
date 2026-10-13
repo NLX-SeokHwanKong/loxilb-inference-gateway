@@ -1765,15 +1765,14 @@ type FcEffectiveArg struct {
 	// default in tokens (0 while off). Both are what the gate runs the
 	// rule's VIP and port on, which is one value per listener: where the
 	// rule resolves to another, Source says "listener".
-	// ReservationClamped counts the requests of the service (every model
-	// pool of its VIP and port) whose default was admitted smaller than
-	// DefaultMaxTokens, since the process started; the two counts beside
-	// it split it by reason: Burst, the default beside the prompt is more
+	// ReservationClampedBurst and ReservationClampedBudget count the
+	// requests of the service (every model pool of its VIP and port) whose
+	// default was admitted smaller than DefaultMaxTokens, since the process
+	// started, by reason: Burst, the default beside the prompt is more
 	// than a quota bucket can ever hold; Budget, the bucket's budget was
 	// already taken.
 	DefaultReservation       string `json:"default_reservation"`
 	DefaultMaxTokens         uint32 `json:"default_max_tokens"`
-	ReservationClamped       uint64 `json:"reservation_clamped"`
 	ReservationClampedBurst  uint64 `json:"reservation_clamped_burst"`
 	ReservationClampedBudget uint64 `json:"reservation_clamped_budget"`
 	// ListenerDefaultTokens is the default reservation the data plane holds
@@ -2629,6 +2628,15 @@ type NetHookInterface interface {
 	// NetJWTAuthProfileDel removes a profile; refused while any LB rule
 	// references it.
 	NetJWTAuthProfileDel(name string) (int, error)
+	// NetAINetIdentityGet returns every network-identity binding, in name
+	// order, as it was stored.
+	NetAINetIdentityGet() ([]NetIdentityMod, error)
+	// NetAINetIdentityAdd creates or replaces a binding by name. It is
+	// refused when another binding matches the same source on the same
+	// service as specifically and names another tenant.
+	NetAINetIdentityAdd(*NetIdentityMod) (int, error)
+	// NetAINetIdentityDel removes a binding.
+	NetAINetIdentityDel(name string) (int, error)
 	NetCIStateMod(*HASMod) (int, error)
 	NetCIStateGet() ([]HASMod, error)
 	NetFwRuleAdd(*FwRuleMod) (int, error)

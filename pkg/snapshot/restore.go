@@ -675,6 +675,8 @@ func countDomain(name string, d *Domains) int {
 			return 1
 		}
 		return 0
+	case DomainNetIdentity:
+		return len(d.NetIdentity)
 	case DomainLoadBalancer:
 		return len(d.LoadBalancer)
 	case DomainFirewall:

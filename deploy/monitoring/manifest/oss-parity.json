@@ -1,17 +1,17 @@
 {
  "schema_version": 1,
  "provenance": {
-  "generated_at": "2026-10-12T23:57:00+00:00",
-  "source_revision": "0df0d9fd13f081cf6f62af81565802300bb2fcc3",
+  "generated_at": "2026-10-13T03:07:04+00:00",
+  "source_revision": "031059ca1a8c0bac47a90ac61e2ae12b8352e5d1",
   "upstream_repository": "https://github.com/loxilb-io/loxilb",
   "upstream_revision": "98487453eaf1853690de5928eab95a51817ba5d7"
  },
  "contract": {
-  "gateway_families": 327,
+  "gateway_families": 328,
   "upstream_families": 60,
   "present_identical": 35,
   "present_divergent": 0,
-  "absent": 292,
+  "absent": 293,
   "upstream_only": 25
  },
  "upstream_only": [
@@ -1021,6 +1021,19 @@
     "labels": [
      "model",
      "tenant"
+    ]
+   }
+  },
+  {
+   "name": "loxilb_ai_netid_resolver_faults_total",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "counter",
+    "labels": [
+     "service"
     ]
    }
   },

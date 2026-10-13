@@ -46,6 +46,12 @@ type Hooks interface {
 	NetJWTAuthProfileAdd(*cmn.JWTAuthProfileMod) (int, error)
 	NetJWTAuthProfileDel(name string) (int, error)
 
+	// netidentity (schema 1.11): network-identity bindings. Applied before
+	// loadbalancer (see Registry order). Add is an upsert.
+	NetAINetIdentityGet() ([]cmn.NetIdentityMod, error)
+	NetAINetIdentityAdd(*cmn.NetIdentityMod) (int, error)
+	NetAINetIdentityDel(name string) (int, error)
+
 	// loadbalancer (§4.1 #2)
 	NetLbRuleGet() ([]cmn.LbRuleMod, error)
 	NetLbRuleAdd(*cmn.LbRuleMod) (int, error)
@@ -228,6 +234,7 @@ var Registry = []DomainEntry{
 	{Name: DomainEndpoint, Get: getEndpoint, Apply: applyEndpoint, Delete: deleteEndpoint},
 	{Name: DomainJWTAuthProfile, Get: getJWTAuthProfile, Apply: applyJWTAuthProfile, Delete: deleteJWTAuthProfile},
 	{Name: DomainHalfClose, Get: getHalfClose, Apply: applyHalfClose, Delete: deleteHalfClose},
+	{Name: DomainNetIdentity, Get: getNetIdentity, Apply: applyNetIdentity, Delete: deleteNetIdentity},
 	{Name: DomainLoadBalancer, Get: getLoadBalancer, Apply: applyLoadBalancer, Delete: deleteLoadBalancer},
 	{Name: DomainKvExactBinding, Get: getKvExactBinding, Apply: applyKvExactBinding, Delete: deleteKvExactBinding},
 	{Name: DomainL7Policy, Get: getL7Policy, Apply: applyL7Policy, Delete: deleteL7Policy},
@@ -549,6 +556,62 @@ func deleteJWTAuthProfile(hooks Hooks) (int, error) {
 		p := &profiles[i]
 		if _, err := hooks.NetJWTAuthProfileDel(p.Name); err != nil {
 			errs = append(errs, fmt.Errorf("delete jwtauthprofile %q: %w", p.Name, err))
+			continue
+		}
+		n++
+	}
+	return n, errors.Join(errs...)
+}
+
+// ---------------------------------------------------------------------
+// netidentity (schema 1.11)
+//
+// Bindings apply before loadbalancer, so a restored service is bound from
+// its first request, and via the reversed DeleteOrder are deleted after the
+// rules: a service never outlives its bindings on the way down either. The
+// apply is in name order, and a document's bindings were accepted together
+// once, so none of them can conflict with another.
+// ---------------------------------------------------------------------
+
+func getNetIdentity(hooks Hooks, doc *Document) error {
+	bindings, err := hooks.NetAINetIdentityGet()
+	if err != nil {
+		return fmt.Errorf("get netidentity: %w", err)
+	}
+	doc.Domains.NetIdentity = bindings
+	return nil
+}
+
+func applyNetIdentity(hooks Hooks, doc *Document, tolerateExists bool) (int, int, error) {
+	n, skipped := 0, 0
+	for i := range doc.Domains.NetIdentity {
+		b := &doc.Domains.NetIdentity[i]
+		if _, err := hooks.NetAINetIdentityAdd(b); err != nil {
+			// Add is an upsert, so an exists-shaped error should not
+			// occur; the guard keeps the domain uniform with the others
+			// under tolerateExists replays anyway.
+			if tolerateExists && isIdempotentExists(err) {
+				skipped++
+				continue
+			}
+			return n, skipped, fmt.Errorf("apply netidentity %q: %w", b.Name, err)
+		}
+		n++
+	}
+	return n, skipped, nil
+}
+
+func deleteNetIdentity(hooks Hooks) (int, error) {
+	bindings, err := hooks.NetAINetIdentityGet()
+	if err != nil {
+		return 0, fmt.Errorf("delete netidentity: get: %w", err)
+	}
+	n := 0
+	var errs []error
+	for i := range bindings {
+		b := &bindings[i]
+		if _, err := hooks.NetAINetIdentityDel(b.Name); err != nil {
+			errs = append(errs, fmt.Errorf("delete netidentity %q: %w", b.Name, err))
 			continue
 		}
 		n++

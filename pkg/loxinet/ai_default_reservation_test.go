@@ -269,10 +269,9 @@ func TestReservationClampedCountIsPerServiceAndReason(t *testing.T) {
 	var eff cmn.FcEffectiveArg
 	aiDefaultResv{}.fillEffective(&eff, net.ParseIP("192.0.2.10"), 2050)
 	if eff.ReservationClampedBurst != reservationClampedCount(a, resvClampBurst) ||
-		eff.ReservationClampedBudget != reservationClampedCount(a, resvClampBudget) ||
-		eff.ReservationClamped != eff.ReservationClampedBurst+eff.ReservationClampedBudget {
-		t.Fatalf("read-back %d = %d burst + %d budget does not match the counts",
-			eff.ReservationClamped, eff.ReservationClampedBurst, eff.ReservationClampedBudget)
+		eff.ReservationClampedBudget != reservationClampedCount(a, resvClampBudget) {
+		t.Fatalf("read-back %d burst, %d budget does not match the counts",
+			eff.ReservationClampedBurst, eff.ReservationClampedBudget)
 	}
 }
 

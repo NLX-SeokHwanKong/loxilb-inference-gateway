@@ -48,6 +48,7 @@ type mockHooks struct {
 	fwRules   []cmn.FwRuleMod
 	policies  []cmn.PolMod
 	jwtProfs  []cmn.JWTAuthProfileMod
+	netIDs    []cmn.NetIdentityMod
 	mirrors   []cmn.MirrGetMod
 	sessions  []cmn.SessionMod
 	ulcl      []cmn.SessionUlClMod
@@ -647,6 +648,42 @@ func (m *mockHooks) NetJWTAuthProfileDel(name string) (int, error) {
 		}
 	}
 	m.jwtProfs = out
+	return 0, nil
+}
+
+func (m *mockHooks) NetAINetIdentityGet() ([]cmn.NetIdentityMod, error) {
+	m.log("NetAINetIdentityGet")
+	return resizeOverride(m, "NetAINetIdentityGet", func() []cmn.NetIdentityMod {
+		return append([]cmn.NetIdentityMod(nil), m.netIDs...)
+	}), nil
+}
+func (m *mockHooks) NetAINetIdentityAdd(p *cmn.NetIdentityMod) (int, error) {
+	m.log("NetAINetIdentityAdd:%s", p.Name)
+	if err := m.failIfConfigured("NetAINetIdentityAdd"); err != nil {
+		return -1, err
+	}
+	// Upsert semantics, mirroring the real hook.
+	for i := range m.netIDs {
+		if m.netIDs[i].Name == p.Name {
+			m.netIDs[i] = *p
+			return 0, nil
+		}
+	}
+	m.netIDs = append(m.netIDs, *p)
+	return 0, nil
+}
+func (m *mockHooks) NetAINetIdentityDel(name string) (int, error) {
+	m.log("NetAINetIdentityDel:%s", name)
+	if err := m.failIfConfigured("NetAINetIdentityDel"); err != nil {
+		return -1, err
+	}
+	out := m.netIDs[:0]
+	for _, x := range m.netIDs {
+		if x.Name != name {
+			out = append(out, x)
+		}
+	}
+	m.netIDs = out
 	return 0, nil
 }
 

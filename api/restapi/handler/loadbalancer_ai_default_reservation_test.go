@@ -96,7 +96,7 @@ func TestAIDefaultReservationReadBack(t *testing.T) {
 		ServIP: "10.10.10.254", ServPort: 2050, Proto: "tcp",
 		AIDefaultReservation: "on", AIDefaultMaxTokens: 2000,
 		FcEffective: &cmn.FcEffectiveArg{
-			Mode: "off", DefaultReservation: "on", DefaultMaxTokens: 2000, ReservationClamped: 7,
+			Mode: "off", DefaultReservation: "on", DefaultMaxTokens: 2000, ReservationClampedBurst: 3, ReservationClampedBudget: 4,
 			Source: cmn.FcEffectiveSource{DefaultReservation: "rule", DefaultMaxTokens: "rule"},
 		},
 	}}
@@ -106,7 +106,8 @@ func TestAIDefaultReservationReadBack(t *testing.T) {
 		t.Fatalf("declared values read back as %q / %d", sa.AiDefaultReservation, sa.AiDefaultMaxTokens)
 	}
 	eff := sa.FcEffective
-	if eff == nil || eff.DefaultReservation != "on" || eff.DefaultMaxTokens != 2000 || eff.ReservationClamped != 7 {
+	if eff == nil || eff.DefaultReservation != "on" || eff.DefaultMaxTokens != 2000 ||
+		eff.ReservationClampedBurst != 3 || eff.ReservationClampedBudget != 4 {
 		t.Fatalf("fc_effective read back as %+v", eff)
 	}
 	if eff.Source == nil || eff.Source.DefaultReservation != "rule" || eff.Source.DefaultMaxTokens != "rule" {
