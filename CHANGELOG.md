@@ -96,6 +96,17 @@ binary behaves exactly like upstream loxilb.
   must accept `"bearer"` (and `"network"`, written when a network-identity
   binding decided the tenant).
 
+- **The default reservation is per rule.** Where several rules share a VIP
+  and port (told apart by host, path or model), a request without
+  `max_tokens` now reserves by `ai_default_reservation` /
+  `ai_default_max_tokens` of the rule it routes to. Before, the rule
+  installed first on the listener decided for all of them. With it go the
+  reply text `Success; warning: ai_default_reservation: …` on a rule whose
+  neighbours resolve differently, and the value `listener` of
+  `fc_effective.source.default_reservation` / `.default_max_tokens`: a
+  rule's read-back is its own. A client that matched either should stop.
+  A request an L7 policy forwards to another pool reserves by the rule its
+  host, path and model select.
 - **Log calls no longer wait for the log's device.** The gateway's log and
   the data-plane log are written by one writer each, from an in-memory queue;
   a worker thread that logs copies its line and returns. When the device is

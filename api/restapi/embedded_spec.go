@@ -4992,13 +4992,13 @@ func init() {
                   "x-omitempty": false
                 },
                 "default_max_tokens": {
-                  "description": "The default reservation in tokens in force on this rule's VIP and port; 0 while default_reservation is off. Per VIP and port, as default_reservation.",
+                  "description": "The default reservation in tokens in force for requests that route to this rule; 0 while default_reservation is off.",
                   "format": "int32",
                   "type": "integer",
                   "x-omitempty": false
                 },
                 "default_reservation": {
-                  "description": "Whether a request without a declared max_tokens reserves a default for its completion, as the gate runs this rule's VIP and port. One value is in force per VIP and port - the first-installed rule's; where this rule resolves to another, source.default_reservation is listener.",
+                  "description": "Whether a request without a declared max_tokens that routes to this rule reserves a default for its completion. Each rule of a VIP and port has its own value - the gate takes it from the rule the request's host, path and model select.",
                   "enum": [
                     "on",
                     "off"
@@ -5132,7 +5132,7 @@ func init() {
                   "x-omitempty": false
                 },
                 "source": {
-                  "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default). default_reservation and default_max_tokens can also read listener: the value in force is the one of the rule installed first on the VIP and port, and this rule resolves to another.",
+                  "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default).",
                   "properties": {
                     "adaptive": {
                       "enum": [
@@ -5154,8 +5154,7 @@ func init() {
                       "enum": [
                         "rule",
                         "env",
-                        "default",
-                        "listener"
+                        "default"
                       ],
                       "type": "string"
                     },
@@ -5163,8 +5162,7 @@ func init() {
                       "enum": [
                         "rule",
                         "env",
-                        "default",
-                        "listener"
+                        "default"
                       ],
                       "type": "string"
                     },
@@ -40681,13 +40679,13 @@ func init() {
                   "format": "int32"
                 },
                 "default_max_tokens": {
-                  "description": "The default reservation in tokens in force on this rule's VIP and port; 0 while default_reservation is off. Per VIP and port, as default_reservation.",
+                  "description": "The default reservation in tokens in force for requests that route to this rule; 0 while default_reservation is off.",
                   "type": "integer",
                   "format": "int32",
                   "x-omitempty": false
                 },
                 "default_reservation": {
-                  "description": "Whether a request without a declared max_tokens reserves a default for its completion, as the gate runs this rule's VIP and port. One value is in force per VIP and port - the first-installed rule's; where this rule resolves to another, source.default_reservation is listener.",
+                  "description": "Whether a request without a declared max_tokens that routes to this rule reserves a default for its completion. Each rule of a VIP and port has its own value - the gate takes it from the rule the request's host, path and model select.",
                   "type": "string",
                   "enum": [
                     "on",
@@ -40797,7 +40795,7 @@ func init() {
                   "x-omitempty": false
                 },
                 "source": {
-                  "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default). default_reservation and default_max_tokens can also read listener: the value in force is the one of the rule installed first on the VIP and port, and this rule resolves to another.",
+                  "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default).",
                   "type": "object",
                   "properties": {
                     "adaptive": {
@@ -40821,8 +40819,7 @@ func init() {
                       "enum": [
                         "rule",
                         "env",
-                        "default",
-                        "listener"
+                        "default"
                       ]
                     },
                     "default_reservation": {
@@ -40830,8 +40827,7 @@ func init() {
                       "enum": [
                         "rule",
                         "env",
-                        "default",
-                        "listener"
+                        "default"
                       ]
                     },
                     "ep_max_inflight": {
@@ -41932,13 +41928,13 @@ func init() {
               "format": "int32"
             },
             "default_max_tokens": {
-              "description": "The default reservation in tokens in force on this rule's VIP and port; 0 while default_reservation is off. Per VIP and port, as default_reservation.",
+              "description": "The default reservation in tokens in force for requests that route to this rule; 0 while default_reservation is off.",
               "type": "integer",
               "format": "int32",
               "x-omitempty": false
             },
             "default_reservation": {
-              "description": "Whether a request without a declared max_tokens reserves a default for its completion, as the gate runs this rule's VIP and port. One value is in force per VIP and port - the first-installed rule's; where this rule resolves to another, source.default_reservation is listener.",
+              "description": "Whether a request without a declared max_tokens that routes to this rule reserves a default for its completion. Each rule of a VIP and port has its own value - the gate takes it from the rule the request's host, path and model select.",
               "type": "string",
               "enum": [
                 "on",
@@ -42048,7 +42044,7 @@ func init() {
               "x-omitempty": false
             },
             "source": {
-              "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default). default_reservation and default_max_tokens can also read listener: the value in force is the one of the rule installed first on the VIP and port, and this rule resolves to another.",
+              "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default).",
               "type": "object",
               "properties": {
                 "adaptive": {
@@ -42072,8 +42068,7 @@ func init() {
                   "enum": [
                     "rule",
                     "env",
-                    "default",
-                    "listener"
+                    "default"
                   ]
                 },
                 "default_reservation": {
@@ -42081,8 +42076,7 @@ func init() {
                   "enum": [
                     "rule",
                     "env",
-                    "default",
-                    "listener"
+                    "default"
                   ]
                 },
                 "ep_max_inflight": {
@@ -42897,12 +42891,12 @@ func init() {
           "format": "int32"
         },
         "default_max_tokens": {
-          "description": "The default reservation in tokens in force on this rule's VIP and port; 0 while default_reservation is off. Per VIP and port, as default_reservation.",
+          "description": "The default reservation in tokens in force for requests that route to this rule; 0 while default_reservation is off.",
           "type": "integer",
           "format": "int32"
         },
         "default_reservation": {
-          "description": "Whether a request without a declared max_tokens reserves a default for its completion, as the gate runs this rule's VIP and port. One value is in force per VIP and port - the first-installed rule's; where this rule resolves to another, source.default_reservation is listener.",
+          "description": "Whether a request without a declared max_tokens that routes to this rule reserves a default for its completion. Each rule of a VIP and port has its own value - the gate takes it from the rule the request's host, path and model select.",
           "type": "string",
           "enum": [
             "on",
@@ -42998,7 +42992,7 @@ func init() {
           "type": "boolean"
         },
         "source": {
-          "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default). default_reservation and default_max_tokens can also read listener: the value in force is the one of the rule installed first on the VIP and port, and this rule resolves to another.",
+          "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default).",
           "type": "object",
           "properties": {
             "adaptive": {
@@ -43022,8 +43016,7 @@ func init() {
               "enum": [
                 "rule",
                 "env",
-                "default",
-                "listener"
+                "default"
               ]
             },
             "default_reservation": {
@@ -43031,8 +43024,7 @@ func init() {
               "enum": [
                 "rule",
                 "env",
-                "default",
-                "listener"
+                "default"
               ]
             },
             "ep_max_inflight": {
@@ -43189,7 +43181,7 @@ func init() {
       }
     },
     "LoadbalanceEntryServiceArgumentsFcEffectiveSource": {
-      "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default). default_reservation and default_max_tokens can also read listener: the value in force is the one of the rule installed first on the VIP and port, and this rule resolves to another.",
+      "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default).",
       "type": "object",
       "properties": {
         "adaptive": {
@@ -43213,8 +43205,7 @@ func init() {
           "enum": [
             "rule",
             "env",
-            "default",
-            "listener"
+            "default"
           ]
         },
         "default_reservation": {
@@ -43222,8 +43213,7 @@ func init() {
           "enum": [
             "rule",
             "env",
-            "default",
-            "listener"
+            "default"
           ]
         },
         "ep_max_inflight": {

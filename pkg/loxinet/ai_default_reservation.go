@@ -17,19 +17,15 @@
 package loxinet
 
 import (
-	"fmt"
 	"net"
 	"os"
-	"slices"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 
 	prom "github.com/loxilb-io/loxilb/api/prometheus"
 	cmn "github.com/loxilb-io/loxilb/common"
 	rl "github.com/loxilb-io/loxilb/pkg/ratelimit"
-	tk "github.com/loxilb-io/loxilib"
 )
 
 // aiDefaultResv is a rule's default reservation as it was declared: the
@@ -104,19 +100,11 @@ func (c aiDefaultResv) tokensInForce() uint32 {
 }
 
 // fillEffective writes the default reservation in force into a rule's
-// read-back, with the clamped counts of the rule's service.
-//
-// The gate reserves before a rule is selected, so one value is in force per
-// VIP and port: the first-installed rule's. Where the data plane reports
-// that value (eff.ListenerDefaultTokens) and it is not what this rule
-// resolves to, the read-back shows the listener's, with the source
-// "listener"; the rule's own two fields keep what it declares.
+// read-back, with the clamped counts of the rule's service. The gate takes
+// the value from the rule a request routes to, so what a rule resolves to
+// is what is in force for its requests.
 func (c aiDefaultResv) fillEffective(eff *cmn.FcEffectiveArg, vip net.IP, port uint16) {
 	on, tokens, modeSrc, tokensSrc := c.inForce()
-	if l := eff.ListenerDefaultTokens; l != nil && *l != tokens {
-		tokens, on = *l, *l != 0
-		modeSrc, tokensSrc = cmn.AIDefaultSourceListener, cmn.AIDefaultSourceListener
-	}
 	eff.DefaultReservation = cmn.AIDefaultReservationOff
 	if on {
 		eff.DefaultReservation = cmn.AIDefaultReservationOn
@@ -128,103 +116,6 @@ func (c aiDefaultResv) fillEffective(eff *cmn.FcEffectiveArg, vip net.IP, port u
 	eff.ReservationClampedBurst = reservationClampedCount(svc, resvClampBurst)
 	eff.ReservationClampedBudget = reservationClampedCount(svc, resvClampBudget)
 	fillReservationsHeld(eff, getGlobalRL(), svc)
-}
-
-// aiDefaultTokensWord spells a default reservation in force for a message.
-func aiDefaultTokensWord(tokens uint32) string {
-	if tokens == 0 {
-		return "off"
-	}
-	return strconv.FormatUint(uint64(tokens), 10) + " tokens"
-}
-
-// aiDefaultResvListenerWarning is the text for a VIP and port whose rules
-// resolve to different default reservations: only one is in force there,
-// and a rule that declares another does not get it. resolved holds what
-// each rule of the listener resolves to; listener is the value the data
-// plane runs the listener on, when it could be read. Advice, never a
-// refusal. Empty when the rules agree.
-func aiDefaultResvListenerWarning(svc string, resolved []uint32, listener uint32, known bool) string {
-	distinct := slices.Clone(resolved)
-	slices.Sort(distinct)
-	distinct = slices.Compact(distinct)
-	if len(distinct) < 2 {
-		return ""
-	}
-	words := make([]string, len(distinct))
-	for i, v := range distinct {
-		words[i] = aiDefaultTokensWord(v)
-	}
-	inEffect := "the first-installed rule's value is in effect for all of them"
-	if known {
-		inEffect = aiDefaultTokensWord(listener) + " is in effect for all of them (the first-installed rule's)"
-	}
-	return fmt.Sprintf("ai_default_reservation: the rules on %s resolve to different default reservations (%s); "+
-		"the default reservation is per listener, and %s",
-		svc, strings.Join(words, ", "), inEffect)
-}
-
-// NetAIDefaultReservationWarning returns the per-listener warning for a rule
-// that was just applied, and logs it: another rule on the same VIP and port
-// resolves to a different default reservation.
-func (na *NetAPIStruct) NetAIDefaultReservationWarning(lm *cmn.LbRuleMod) string {
-	if lm == nil {
-		return ""
-	}
-	vip := net.ParseIP(lm.Serv.ServIP)
-	if vip == nil || vip.To4() == nil {
-		return ""
-	}
-	mh.mtx.Lock()
-	defer mh.mtx.Unlock()
-	if mh.zr == nil || mh.zr.Rules == nil {
-		return ""
-	}
-	resolved, listener, known := mh.zr.Rules.aiDefaultResvOnListener(vip, lm.Serv.ServPort, lm.Serv.Proto)
-	msg := aiDefaultResvListenerWarning(aiServiceIdent(vip, lm.Serv.ServPort), resolved, listener, known)
-	if msg != "" {
-		tk.LogIt(tk.LogWarning, "[AIGateway] rule %s:%d: %s\n", lm.Serv.ServIP, lm.Serv.ServPort, msg)
-	}
-	return msg
-}
-
-// aiDefaultResvOnListener collects what every AI-gateway rule on a VIP, port
-// and protocol resolves its default reservation to, and the value the data
-// plane runs the listener on (known is false where it cannot be read).
-func (R *RuleH) aiDefaultResvOnListener(vip net.IP, port uint16, proto string) (resolved []uint32, listener uint32, known bool) {
-	for _, data := range R.tables[RtLB].eMap {
-		if !data.tuples.l3Dst.addr.IP.Equal(vip) || data.tuples.l4Dst.valMin != port ||
-			lbProtoWord(data.tuples.l4Prot.val) != proto || !data.aiGwMode() {
-			continue
-		}
-		resolved = append(resolved, data.aiDefaultResv.tokensInForce())
-		if known || mh.dpEbpf == nil {
-			continue
-		}
-		if eff, ok := mh.dpEbpf.DpFcStateGet(data.tuples.l3Dst.addr.IP, data.tuples.l4Dst.valMin,
-			uint8(data.tuples.l4Prot.val), data.tuples.path, data.tuples.pathPrefix,
-			data.tuples.modelName); ok && eff.ListenerDefaultTokens != nil {
-			listener, known = *eff.ListenerDefaultTokens, true
-		}
-	}
-	return resolved, listener, known
-}
-
-// lbProtoWord is a rule's protocol number as the API spells it.
-func lbProtoWord(p uint8) string {
-	switch p {
-	case 6:
-		return "tcp"
-	case 17:
-		return "udp"
-	case 1:
-		return "icmp"
-	case 132:
-		return "sctp"
-	case 0:
-		return "none"
-	}
-	return ""
 }
 
 // aiServiceIdent is the data plane's service identity of a listener

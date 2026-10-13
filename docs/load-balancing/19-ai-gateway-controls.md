@@ -243,21 +243,14 @@ back: its buckets must read what they read before it.
   when there are more. This is a management read-back only. It is not exported to
   Prometheus, because it is per tenant.
 
-**Per listener until per-rule lands.** The gateway reserves before it selects a rule by
-host, path or model, so one default reservation is in force per listener (VIP and port):
-where several rules share one (model-name routing, for example), the value of the rule
-installed first on it applies to all of them, as with `api_key_auth`. Declare the same
-value on each rule of such a service. Two things keep a difference from going unnoticed:
-
-- **A warning when the rule is applied.** If the rules on the VIP and port resolve to
-  different default reservations, the rule is still accepted, and the reply reads
-  `Success; warning: ai_default_reservation: …` with the values the rules resolve to and
-  the one in effect. The same text is logged at warning level.
-- **The read-back shows what is in effect.** `fc_effective.default_reservation` and
-  `default_max_tokens` are the listener's value on every rule of the VIP and port, and
-  their `source` entries read `listener` on a rule that resolves to something else
-  (otherwise `rule`, `env` or `default`, as that rule resolves it). The rule's own
-  `ai_default_reservation` and `ai_default_max_tokens` keep showing what it declares.
+**Per rule.** Where several rules share one listener (VIP and port) and are told apart
+by host, path or model, each has its own default reservation: the gateway takes the
+value from the rule the request routes to, by the same host, path and model lookup that
+selects the pool. Two rules on one listener may therefore declare different values, and
+`fc_effective.default_reservation` / `default_max_tokens` on a rule are what applies to
+that rule's requests (`source` reads `rule`, `env` or `default`). One exception: a
+request an L7 policy forwards to another pool reserves by the rule its host, path and
+model select, not by the pool the policy picked.
 
 Both fields follow the replace rules of the
 `fc_*` fields: omitted on a replace keeps the stored value, `inherit` and `0` return to the

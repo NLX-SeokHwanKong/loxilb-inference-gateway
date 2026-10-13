@@ -1791,10 +1791,6 @@ type FcEffectiveArg struct {
 	ReservationHeldClaims    uint64          `json:"reservation_held_claims"`
 	ReservationHeldTruncated bool            `json:"reservation_held_truncated"`
 	ReservationHeld          []FcResvHeldArg `json:"reservation_held"`
-	// ListenerDefaultTokens is the default reservation the data plane holds
-	// on the listener's first pool, nil where it was not read. An input to
-	// the three fields above, not part of the read-back.
-	ListenerDefaultTokens *uint32 `json:"-"`
 	// Source names where each value in force came from: "rule", "env" or
 	// "default".
 	Source FcEffectiveSource `json:"source"`

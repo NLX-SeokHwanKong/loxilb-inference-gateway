@@ -2904,10 +2904,10 @@ type LoadbalanceEntryServiceArgumentsFcEffective struct {
 	// Per-endpoint ceiling for decode legs; 0 is unlimited.
 	DecodeMaxInflight int32 `json:"decode_max_inflight"`
 
-	// The default reservation in tokens in force on this rule's VIP and port; 0 while default_reservation is off. Per VIP and port, as default_reservation.
+	// The default reservation in tokens in force for requests that route to this rule; 0 while default_reservation is off.
 	DefaultMaxTokens int32 `json:"default_max_tokens"`
 
-	// Whether a request without a declared max_tokens reserves a default for its completion, as the gate runs this rule's VIP and port. One value is in force per VIP and port - the first-installed rule's; where this rule resolves to another, source.default_reservation is listener.
+	// Whether a request without a declared max_tokens that routes to this rule reserves a default for its completion. Each rule of a VIP and port has its own value - the gate takes it from the rule the request's host, path and model select.
 	// Enum: [on off]
 	DefaultReservation string `json:"default_reservation,omitempty"`
 
@@ -3475,7 +3475,7 @@ func (m *LoadbalanceEntryServiceArgumentsFcEffectiveReservationHeldItems0) Unmar
 	return nil
 }
 
-// LoadbalanceEntryServiceArgumentsFcEffectiveSource Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default). default_reservation and default_max_tokens can also read listener: the value in force is the one of the rule installed first on the VIP and port, and this rule resolves to another.
+// LoadbalanceEntryServiceArgumentsFcEffectiveSource Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default).
 //
 // swagger:model LoadbalanceEntryServiceArgumentsFcEffectiveSource
 type LoadbalanceEntryServiceArgumentsFcEffectiveSource struct {
@@ -3489,11 +3489,11 @@ type LoadbalanceEntryServiceArgumentsFcEffectiveSource struct {
 	DecodeMaxInflight string `json:"decode_max_inflight,omitempty"`
 
 	// default max tokens
-	// Enum: [rule env default listener]
+	// Enum: [rule env default]
 	DefaultMaxTokens string `json:"default_max_tokens,omitempty"`
 
 	// default reservation
-	// Enum: [rule env default listener]
+	// Enum: [rule env default]
 	DefaultReservation string `json:"default_reservation,omitempty"`
 
 	// ep max inflight
@@ -3705,7 +3705,7 @@ var loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeDefaultMaxTokensPropEnu
 
 func init() {
 	var res []string
-	if err := json.Unmarshal([]byte(`["rule","env","default","listener"]`), &res); err != nil {
+	if err := json.Unmarshal([]byte(`["rule","env","default"]`), &res); err != nil {
 		panic(err)
 	}
 	for _, v := range res {
@@ -3723,9 +3723,6 @@ const (
 
 	// LoadbalanceEntryServiceArgumentsFcEffectiveSourceDefaultMaxTokensDefault captures enum value "default"
 	LoadbalanceEntryServiceArgumentsFcEffectiveSourceDefaultMaxTokensDefault string = "default"
-
-	// LoadbalanceEntryServiceArgumentsFcEffectiveSourceDefaultMaxTokensListener captures enum value "listener"
-	LoadbalanceEntryServiceArgumentsFcEffectiveSourceDefaultMaxTokensListener string = "listener"
 )
 
 // prop value enum
@@ -3753,7 +3750,7 @@ var loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeDefaultReservationPropE
 
 func init() {
 	var res []string
-	if err := json.Unmarshal([]byte(`["rule","env","default","listener"]`), &res); err != nil {
+	if err := json.Unmarshal([]byte(`["rule","env","default"]`), &res); err != nil {
 		panic(err)
 	}
 	for _, v := range res {
@@ -3771,9 +3768,6 @@ const (
 
 	// LoadbalanceEntryServiceArgumentsFcEffectiveSourceDefaultReservationDefault captures enum value "default"
 	LoadbalanceEntryServiceArgumentsFcEffectiveSourceDefaultReservationDefault string = "default"
-
-	// LoadbalanceEntryServiceArgumentsFcEffectiveSourceDefaultReservationListener captures enum value "listener"
-	LoadbalanceEntryServiceArgumentsFcEffectiveSourceDefaultReservationListener string = "listener"
 )
 
 // prop value enum

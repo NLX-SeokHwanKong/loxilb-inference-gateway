@@ -88,9 +88,7 @@ func (e *DpEbpfH) DpFcStateGet(svcIP net.IP, svcPort uint16, proto uint8,
 	if int(st.mode) < len(fcModeNames) {
 		mode = fcModeNames[st.mode]
 	}
-	listenerDefault := uint32(st.listener_default_tokens)
 	return cmn.FcEffectiveArg{
-		ListenerDefaultTokens:   &listenerDefault,
 		Mode:                    mode,
 		MaxOutstanding:          uint32(st.max_outstanding),
 		EpMaxInflight:           uint32(st.ep_cap[0]),

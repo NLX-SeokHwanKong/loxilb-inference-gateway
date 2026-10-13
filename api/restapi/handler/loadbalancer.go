@@ -380,16 +380,10 @@ func ConfigPostLoadbalancer(params operations.PostConfigLoadbalancerParams, prin
 	}
 	// The rule is in. What is worth saying about it goes into the same
 	// reply and refuses nothing: a tenant share on a node that knows more
-	// tenants than a pool tracks, and a default reservation that differs
-	// from another rule's on the same VIP and port.
+	// tenants than a pool tracks.
 	var warnings []string
 	if w, ok := ApiHooks.(fcTenantSlotsWarner); ok {
 		if msg := w.NetFcTenantSlotsWarning(&lbRules); msg != "" {
-			warnings = append(warnings, msg)
-		}
-	}
-	if w, ok := ApiHooks.(aiDefaultReservationWarner); ok {
-		if msg := w.NetAIDefaultReservationWarning(&lbRules); msg != "" {
 			warnings = append(warnings, msg)
 		}
 	}
@@ -403,12 +397,6 @@ func ConfigPostLoadbalancer(params operations.PostConfigLoadbalancerParams, prin
 // rule's tenant share outgrows the tenant table.
 type fcTenantSlotsWarner interface {
 	NetFcTenantSlotsWarning(*cmn.LbRuleMod) string
-}
-
-// aiDefaultReservationWarner is the part of the net layer that knows whether
-// the rules sharing a VIP and port agree on their default reservation.
-type aiDefaultReservationWarner interface {
-	NetAIDefaultReservationWarning(*cmn.LbRuleMod) string
 }
 
 func ConfigDeleteLoadbalancer(params operations.DeleteConfigLoadbalancerHosturlHosturlExternalipaddressIPAddressPortPortProtocolProtoParams, principal interface{}) middleware.Responder {

@@ -18,8 +18,6 @@ package loxinet
 
 import (
 	"net"
-	"slices"
-	"strings"
 	"testing"
 
 	cmn "github.com/loxilb-io/loxilb/common"
@@ -316,32 +314,29 @@ func TestClampReason(t *testing.T) {
 	}
 }
 
-// TestFillEffectiveShowsTheListenersValue: the read-back is what the gate
-// runs the VIP and port on. A rule that resolves to another value sees the
-// listener's, sourced "listener"; one that agrees keeps its own sources.
-func TestFillEffectiveShowsTheListenersValue(t *testing.T) {
+// TestFillEffectiveIsTheRulesOwn: the gate takes the default reservation
+// from the rule a request routes to, so the read-back of a rule is what
+// that rule resolves to, with its own sources, whatever its neighbours on
+// the same VIP and port declare.
+func TestFillEffectiveIsTheRulesOwn(t *testing.T) {
 	t.Setenv(cmn.AIDefaultReservationEnv, "")
 	t.Setenv(cmn.AIDefaultMaxTokensEnv, "")
 	vip := net.ParseIP("192.0.2.78")
-	u := func(v uint32) *uint32 { return &v }
 	cases := []struct {
 		name               string
 		rule               aiDefaultResv
-		listener           *uint32
 		word               string
 		tokens             uint32
 		modeSrc, tokensSrc string
 	}{
-		{"not read: the rule's own", aiDefaultResv{mode: cmn.AIDefaultReservationRuleOn, maxTokens: 256}, nil, "on", 256, "rule", "rule"},
-		{"agrees", aiDefaultResv{mode: cmn.AIDefaultReservationRuleOn, maxTokens: 256}, u(256), "on", 256, "rule", "rule"},
-		{"listener holds another value", aiDefaultResv{mode: cmn.AIDefaultReservationRuleOn, maxTokens: 256}, u(512), "on", 512, "listener", "listener"},
-		{"listener is off, rule declares on", aiDefaultResv{mode: cmn.AIDefaultReservationRuleOn, maxTokens: 256}, u(0), "off", 0, "listener", "listener"},
-		{"listener is on, rule declares nothing", aiDefaultResv{}, u(512), "on", 512, "listener", "listener"},
-		{"both off", aiDefaultResv{}, u(0), "off", 0, "default", "default"},
+		{"declared on with a value", aiDefaultResv{mode: cmn.AIDefaultReservationRuleOn, maxTokens: 256}, "on", 256, "rule", "rule"},
+		{"declared on, built-in value", aiDefaultResv{mode: cmn.AIDefaultReservationRuleOn}, "on", cmn.AIDefaultMaxTokensBuiltin, "rule", "default"},
+		{"declared off", aiDefaultResv{mode: cmn.AIDefaultReservationRuleOff, maxTokens: 256}, "off", 0, "rule", "rule"},
+		{"nothing declared", aiDefaultResv{}, "off", 0, "default", "default"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			eff := cmn.FcEffectiveArg{ListenerDefaultTokens: c.listener}
+			var eff cmn.FcEffectiveArg
 			c.rule.fillEffective(&eff, vip, 2050)
 			if eff.DefaultReservation != c.word || eff.DefaultMaxTokens != c.tokens ||
 				eff.Source.DefaultReservation != c.modeSrc || eff.Source.DefaultMaxTokens != c.tokensSrc {
@@ -350,32 +345,6 @@ func TestFillEffectiveShowsTheListenersValue(t *testing.T) {
 					c.word, c.tokens, c.modeSrc, c.tokensSrc)
 			}
 		})
-	}
-}
-
-// TestAIDefaultResvListenerWarning: silent while the rules of a VIP and port
-// agree; otherwise it lists what they resolve to and names the value in
-// effect when the data plane's could be read.
-func TestAIDefaultResvListenerWarning(t *testing.T) {
-	const svc = "192.0.2.79:2050"
-	for _, agree := range [][]uint32{nil, {512}, {512, 512, 512}, {0, 0}} {
-		if msg := aiDefaultResvListenerWarning(svc, agree, 512, true); msg != "" {
-			t.Fatalf("rules %v agree, yet: %s", agree, msg)
-		}
-	}
-	msg := aiDefaultResvListenerWarning(svc, []uint32{512, 256, 512, 0}, 512, true)
-	for _, want := range []string{"ai_default_reservation", svc, "(off, 256 tokens, 512 tokens)", "per listener",
-		"512 tokens is in effect for all of them"} {
-		if !strings.Contains(msg, want) {
-			t.Fatalf("warning lacks %q: %s", want, msg)
-		}
-	}
-	if msg := aiDefaultResvListenerWarning(svc, []uint32{256, 0}, 0, true); !strings.Contains(msg, "off is in effect for all of them") {
-		t.Fatalf("a listener that is off is not named: %s", msg)
-	}
-	msg = aiDefaultResvListenerWarning(svc, []uint32{256, 512}, 0, false)
-	if !strings.Contains(msg, "the first-installed rule's value is in effect") || strings.Contains(msg, "off is in effect") {
-		t.Fatalf("with the listener unread the warning must not name a value: %s", msg)
 	}
 }
 
@@ -482,81 +451,5 @@ func TestAIDefaultResvInForce(t *testing.T) {
 				t.Fatalf("read-back %+v / %+v", eff, eff.Source)
 			}
 		})
-	}
-}
-
-func resvListenerRule(model, ip string, port uint16, proto uint8, sse bool, resv aiDefaultResv) *ruleEnt {
-	return &ruleEnt{
-		tuples: ruleTuples{
-			l3Dst:     ruleIPTuple{net.IPNet{IP: net.ParseIP(ip), Mask: net.CIDRMask(32, 32)}},
-			l4Prot:    rule8Tuple{proto, 0xff},
-			l4Dst:     rule16RTuple{port, port, true},
-			modelName: model,
-		},
-		sseMode:       sse,
-		aiDefaultResv: resv,
-	}
-}
-
-// TestAIDefaultResvOnListener: the warning looks at the AI-gateway rules of
-// one VIP, port and protocol, and at no other rule; with no data plane to
-// read, it does not name a value in effect.
-func TestAIDefaultResvOnListener(t *testing.T) {
-	t.Setenv(cmn.AIDefaultReservationEnv, "")
-	t.Setenv(cmn.AIDefaultMaxTokensEnv, "")
-	savedZr, savedDp := mh.zr, mh.dpEbpf
-	defer func() { mh.zr, mh.dpEbpf = savedZr, savedDp }()
-	mh.dpEbpf = nil
-
-	on := func(n uint32) aiDefaultResv {
-		return aiDefaultResv{mode: cmn.AIDefaultReservationRuleOn, maxTokens: n}
-	}
-	R := &RuleH{}
-	R.tables[RtLB].eMap = map[string]*ruleEnt{
-		"a":         resvListenerRule("model-a", "192.0.2.80", 2050, 6, true, on(800)),
-		"b":         resvListenerRule("model-b", "192.0.2.80", 2050, 6, true, on(256)),
-		"c":         resvListenerRule("model-c", "192.0.2.80", 2050, 6, true, aiDefaultResv{}),
-		"otherport": resvListenerRule("model-a", "192.0.2.80", 2051, 6, true, on(4000)),
-		"othervip":  resvListenerRule("model-a", "192.0.2.81", 2050, 6, true, on(4000)),
-		"otherprot": resvListenerRule("model-a", "192.0.2.80", 2050, 132, true, on(4000)),
-		"notai":     resvListenerRule("", "192.0.2.80", 2050, 6, false, on(4000)),
-	}
-	mh.zr = &Zone{Rules: R}
-
-	resolved, _, known := R.aiDefaultResvOnListener(net.ParseIP("192.0.2.80"), 2050, "tcp")
-	slices.Sort(resolved)
-	if known || !slices.Equal(resolved, []uint32{0, 256, 800}) {
-		t.Fatalf("resolved=%v known=%v, want the three AI rules of the listener (0, 256, 800), unread", resolved, known)
-	}
-	if resolved, _, _ := R.aiDefaultResvOnListener(net.ParseIP("192.0.2.80"), 2051, "tcp"); !slices.Equal(resolved, []uint32{4000}) {
-		t.Fatalf("the other port resolves %v, want its one rule", resolved)
-	}
-	if resolved, _, _ := R.aiDefaultResvOnListener(net.ParseIP("192.0.2.80"), 2050, "udp"); len(resolved) != 0 {
-		t.Fatalf("a protocol with no rule resolves %v", resolved)
-	}
-
-	na := &NetAPIStruct{}
-	msg := na.NetAIDefaultReservationWarning(&cmn.LbRuleMod{Serv: cmn.LbServiceArg{ServIP: "192.0.2.80", ServPort: 2050, Proto: "tcp"}})
-	for _, want := range []string{"192.0.2.80:2050", "(off, 256 tokens, 800 tokens)", "the first-installed rule's value is in effect"} {
-		if !strings.Contains(msg, want) {
-			t.Fatalf("warning lacks %q: %s", want, msg)
-		}
-	}
-	for _, quiet := range []*cmn.LbRuleMod{
-		nil,
-		{Serv: cmn.LbServiceArg{ServIP: "192.0.2.80", ServPort: 2051, Proto: "tcp"}},
-		{Serv: cmn.LbServiceArg{ServIP: "192.0.2.99", ServPort: 2050, Proto: "tcp"}},
-		{Serv: cmn.LbServiceArg{ServIP: "2001:db8::1", ServPort: 2050, Proto: "tcp"}},
-		{Serv: cmn.LbServiceArg{ServIP: "not-an-address", ServPort: 2050, Proto: "tcp"}},
-	} {
-		if msg := na.NetAIDefaultReservationWarning(quiet); msg != "" {
-			t.Fatalf("%+v: got %q, want no warning", quiet, msg)
-		}
-	}
-
-	for p, w := range map[uint8]string{6: "tcp", 17: "udp", 1: "icmp", 132: "sctp", 0: "none", 99: ""} {
-		if got := lbProtoWord(p); got != w {
-			t.Fatalf("lbProtoWord(%d) = %q, want %q", p, got, w)
-		}
 	}
 }
