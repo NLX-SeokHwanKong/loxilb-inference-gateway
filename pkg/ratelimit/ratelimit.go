@@ -752,6 +752,31 @@ func (s *RateLimiterStore) ReservedTokens(key string) int64 {
 	return 0
 }
 
+// ReservedNow is ReservedTokens for a reader that cannot know which minute
+// a claim was made in. It returns the tokens outstanding reservations hold
+// on the key in the current epoch, and whether the key has an entry at all.
+// A claim left from an earlier epoch reads as 0: the next reservation on
+// the entry zeroes it before it is counted against anything, so it holds
+// nothing. Read-only; the epoch and the count are two loads, which a
+// reservation may run between.
+func (s *RateLimiterStore) ReservedNow(key string) (tokens int64, ok bool) {
+	v, found := s.quotaMap.Load(key)
+	if !found {
+		return 0, false
+	}
+	e := v.(*tokenWindowEntry)
+	if atomic.LoadInt64(&e.reservedEpoch) != currentQuotaEpoch.Load() {
+		return 0, true
+	}
+	return atomic.LoadInt64(&e.reserved), true
+}
+
+// QuotaEpoch returns the minute reservations are being made in now: the tag
+// ReserveTokens hands out, and the epoch ReservedNow reads.
+func QuotaEpoch() int64 {
+	return currentQuotaEpoch.Load()
+}
+
 // reservedSubClamp releases amt from e.reserved without letting it go
 // negative. The CAS loop matters: an epoch advance can zero the counter
 // between the load and the store, and a blind AddInt64(-amt) would push it

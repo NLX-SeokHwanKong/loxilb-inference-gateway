@@ -80,6 +80,11 @@ const (
 	AuthMTLS    AuthMode = "mtls"
 	AuthSession AuthMode = "session"
 	AuthNone    AuthMode = "none"
+	// AuthNetwork is a data-path request whose tenant was decided by a
+	// network-identity binding of its source and by no credential. It says
+	// where the request came from, as far as the network can vouch for
+	// that; it is not proof of who sent it.
+	AuthNetwork AuthMode = "network"
 )
 
 // Reason is the closed vocabulary of outcome.reason. It is the only
@@ -132,6 +137,12 @@ type Actor struct {
 	User   string
 	Role   string
 	Tenant string
+	// NetIdentity is the network-identity binding that matched the
+	// request's source. With Auth network it is what decided Tenant; beside
+	// a credential it is the binding the credential was matched against,
+	// and on a refusal it may be the binding that refused it. Empty when no
+	// binding matched.
+	NetIdentity string
 	// Remote is the direct peer address.
 	Remote string
 	// Origin is the address the request is ATTRIBUTED to: the peer at the

@@ -1775,6 +1775,23 @@ type FcEffectiveArg struct {
 	DefaultMaxTokens         uint32 `json:"default_max_tokens"`
 	ReservationClampedBurst  uint64 `json:"reservation_clamped_burst"`
 	ReservationClampedBudget uint64 `json:"reservation_clamped_budget"`
+	// The token reservations outstanding right now on the quota buckets
+	// the service's requests reserve on: what admitted requests hold and
+	// have not settled. ReservationEpoch is the minute the read is of; a
+	// claim does not outlive its minute. ReservationHeld lists the buckets
+	// holding a claim, largest first, at most FcResvHeldMax of them
+	// (ReservationHeldTruncated says more exist); ReservationHeldBuckets
+	// counts them all and ReservationHeldClaims sums their claims. A
+	// request holds one claim on every bucket of its ladder, so the sum
+	// counts a request's reservation once per bucket: it is not the tokens
+	// in flight, and it is zero exactly when nothing is held. A
+	// tenant's bucket is shared by every service the tenant uses and reads
+	// the same on each. Management read-back only; not exported as metrics.
+	ReservationEpoch         int64           `json:"reservation_epoch"`
+	ReservationHeldClaims    uint64          `json:"reservation_held_claims"`
+	ReservationHeldBuckets   uint32          `json:"reservation_held_buckets"`
+	ReservationHeldTruncated bool            `json:"reservation_held_truncated"`
+	ReservationHeld          []FcResvHeldArg `json:"reservation_held"`
 	// ListenerDefaultTokens is the default reservation the data plane holds
 	// on the listener's first pool, nil where it was not read. An input to
 	// the three fields above, not part of the read-back.
@@ -1782,6 +1799,29 @@ type FcEffectiveArg struct {
 	// Source names where each value in force came from: "rule", "env" or
 	// "default".
 	Source FcEffectiveSource `json:"source"`
+}
+
+// FcResvHeldMax - the most buckets one read-back lists.
+const FcResvHeldMax = 64
+
+// The quota-bucket kinds of FcResvHeldArg.Kind: the levels of the ladder a
+// request's reservation lands on.
+const (
+	FcResvBucketTenant      = "tenant"
+	FcResvBucketTenantModel = "tenant_model"
+	FcResvBucketUser        = "user"
+	FcResvBucketUserModel   = "user_model"
+	FcResvBucketKey         = "key"
+	FcResvBucketService     = "service"
+)
+
+// FcResvHeldArg - one quota bucket holding a token reservation. Bucket is
+// the bucket's key as the quota store names it: identifiers (tenant, user,
+// model, key id, service), never a credential.
+type FcResvHeldArg struct {
+	Kind   string `json:"kind"`
+	Bucket string `json:"bucket"`
+	Tokens uint64 `json:"tokens"`
 }
 
 // FcEffectiveSource - the origin of each value in FcEffectiveArg.

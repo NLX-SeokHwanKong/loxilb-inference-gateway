@@ -945,3 +945,39 @@ func TestIsTokenQuotaExceededUsesStoredBurst(t *testing.T) {
 		t.Fatal("gate read the default capacity instead of the tenant's stored one")
 	}
 }
+
+// ReservedNow reads the claim of the current minute only: a claim left from
+// an earlier minute holds nothing, and reads as nothing before the next
+// reservation has zeroed it.
+func TestReservedNowReadsTheCurrentEpochOnly(t *testing.T) {
+	s := New()
+	if got, ok := s.ReservedNow("t-now-none"); ok || got != 0 {
+		t.Fatalf("no entry: %d %v", got, ok)
+	}
+	allowed, _, epoch := s.ReserveTokens("t-now", 400, 1000, 0)
+	if !allowed || epoch == 0 || epoch != QuotaEpoch() {
+		t.Fatalf("reserve: allowed=%v epoch=%d, store in %d", allowed, epoch, QuotaEpoch())
+	}
+	if got, ok := s.ReservedNow("t-now"); !ok || got != 400 {
+		t.Fatalf("ReservedNow = %d %v, want 400", got, ok)
+	}
+
+	// The minute turns and nothing touches the entry: the counter still
+	// holds the old claim, and the read does not show it.
+	v, _ := s.quotaMap.Load("t-now")
+	e := v.(*tokenWindowEntry)
+	atomic.StoreInt64(&e.reservedEpoch, epoch-1)
+	if got := s.ReservedTokens("t-now"); got != 400 {
+		t.Fatalf("the raw counter reads %d, want the stale 400", got)
+	}
+	if got, ok := s.ReservedNow("t-now"); !ok || got != 0 {
+		t.Fatalf("ReservedNow of an earlier minute's claim = %d %v, want 0 and present", got, ok)
+	}
+	// The next reservation zeroes it, and only the new claim is held.
+	if allowed, _, _ := s.ReserveTokens("t-now", 50, 1000, 0); !allowed {
+		t.Fatal("reserve after the minute turned")
+	}
+	if got, _ := s.ReservedNow("t-now"); got != 50 {
+		t.Fatalf("ReservedNow = %d, want 50: the old claim must be gone", got)
+	}
+}

@@ -86,6 +86,7 @@ func (e *encoder) encode(r *Record, st stamp) ([]byte, error) {
 	b = appendOptField(b, "user", r.Actor.User)
 	b = appendOptField(b, "role", r.Actor.Role)
 	b = appendOptField(b, "tenant", r.Actor.Tenant)
+	b = appendOptField(b, "net_identity", r.Actor.NetIdentity)
 	b = appendOptField(b, "remote", r.Actor.Remote)
 	b = appendOptField(b, "origin_ip", r.Actor.Origin)
 	// The hop count is written only where an origin was derived, so it

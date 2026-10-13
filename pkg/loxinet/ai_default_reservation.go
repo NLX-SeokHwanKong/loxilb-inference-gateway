@@ -127,6 +127,7 @@ func (c aiDefaultResv) fillEffective(eff *cmn.FcEffectiveArg, vip net.IP, port u
 	svc := aiServiceIdent(vip, port)
 	eff.ReservationClampedBurst = reservationClampedCount(svc, resvClampBurst)
 	eff.ReservationClampedBudget = reservationClampedCount(svc, resvClampBudget)
+	fillReservationsHeld(eff, getGlobalRL(), svc)
 }
 
 // aiDefaultTokensWord spells a default reservation in force for a message.
@@ -328,6 +329,9 @@ func tokenQuotaReserveElasticReason(svc rateLimitService, store *rl.RateLimiterS
 		left = min(left, max(bGranted-firm, 0))
 		if resEpoch == 0 {
 			resEpoch = bEpoch
+		}
+		if bEpoch != 0 {
+			noteReservedBucket(svcIdent, b)
 		}
 	}
 	granted = firm + left

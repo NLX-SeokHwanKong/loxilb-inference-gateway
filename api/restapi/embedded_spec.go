@@ -5083,6 +5083,60 @@ func init() {
                   "type": "integer",
                   "x-omitempty": false
                 },
+                "reservation_epoch": {
+                  "description": "The minute (Unix time divided by 60) the reservation_held_* fields below are a reading of. A token reservation belongs to the minute it was made in and does not outlive it - a request that ended without settling leaves its claim until the minute turns, and no longer. Compare two readings only when this value is the same in both.",
+                  "format": "int64",
+                  "type": "integer",
+                  "x-omitempty": false
+                },
+                "reservation_held": {
+                  "description": "The quota buckets holding a reservation right now, largest first, at most 64. Empty when nothing is held. A bucket not listed holds nothing unless reservation_held_truncated is true.",
+                  "items": {
+                    "properties": {
+                      "bucket": {
+                        "description": "The bucket's key in the quota store. It is built from identifiers only (tenant, user, model, key id, service) and never holds a credential.",
+                        "type": "string"
+                      },
+                      "kind": {
+                        "description": "Which quota the bucket belongs to - the tenant's, the tenant's for one model, a user's, a user's for one model, an API key's own, or the service's shared keyless quota.",
+                        "enum": [
+                          "tenant",
+                          "tenant_model",
+                          "user",
+                          "user_model",
+                          "key",
+                          "service"
+                        ],
+                        "type": "string"
+                      },
+                      "tokens": {
+                        "description": "Tokens reserved on the bucket and not yet settled.",
+                        "format": "int64",
+                        "type": "integer",
+                        "x-omitempty": false
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "reservation_held_buckets": {
+                  "description": "How many quota buckets hold a reservation right now, among those this service's requests reserve on. reservation_held lists them.",
+                  "format": "int32",
+                  "type": "integer",
+                  "x-omitempty": false
+                },
+                "reservation_held_claims": {
+                  "description": "The token claims that admitted requests hold right now and have not settled, summed over the quota buckets this service's requests reserve on. A request holds one claim, for the tokens it reserved, on every quota bucket that applies to it (tenant, tenant and model, user, user and model, key, service), so its reservation is counted once per bucket - this is a sum of claims and not the number of tokens in flight, and it is zero exactly when nothing is held. A tenant's bucket is shared by every service the tenant uses and is counted on each of them. Read from the quota store's own counter. Management read-back only - not exported as a metric.",
+                  "format": "int64",
+                  "type": "integer",
+                  "x-omitempty": false
+                },
+                "reservation_held_truncated": {
+                  "description": "true when reservation_held does not list every bucket holding a reservation - more than 64 hold one, or the service has reserved on more buckets than the gateway tracks for it (4096). reservation_held_claims and reservation_held_buckets cover the tracked buckets in either case.",
+                  "type": "boolean",
+                  "x-omitempty": false
+                },
                 "source": {
                   "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default). default_reservation and default_max_tokens can also read listener: the value in force is the one of the rule installed first on the VIP and port, and this rule resolves to another.",
                   "properties": {
@@ -6338,7 +6392,7 @@ func init() {
           "type": "string"
         },
         "fail_mode": {
-          "description": "What the binding's services do with a request while the binding lookup itself cannot answer (an internal fault, counted in loxilb_ai_netid_resolver_faults_total). neutral (default): the request is decided as if the service had no binding - it is never admitted by its network, and a valid credential is not refused, so a strict binding is not enforced during the fault. closed: every request the lookup would have decided is refused with 503 netid_unavailable until it answers again. A service fails closed when any binding that applies to it says closed.",
+          "description": "What the binding's services do with a request while the binding lookup itself cannot answer (an internal fault, counted in loxilb_ai_netid_resolver_faults_total). neutral (default): the request is decided as if the service had no binding - it is never admitted by its network, and a valid credential is not refused, so a strict binding is not enforced during the fault. closed: every request the lookup would have decided is refused with 503 netid_unavailable until it answers again. The setting is per service in effect, not per binding: a service fails closed when any binding that applies to it says closed, whether that binding names the service or names none, and then it does so for every source. When the bindings that apply to a service disagree, the reply to the POST is \"Success; warning: fail_mode: ...\" and names them.",
           "enum": [
             "neutral",
             "closed"
@@ -40706,6 +40760,36 @@ func init() {
                   "format": "int64",
                   "x-omitempty": false
                 },
+                "reservation_epoch": {
+                  "description": "The minute (Unix time divided by 60) the reservation_held_* fields below are a reading of. A token reservation belongs to the minute it was made in and does not outlive it - a request that ended without settling leaves its claim until the minute turns, and no longer. Compare two readings only when this value is the same in both.",
+                  "type": "integer",
+                  "format": "int64",
+                  "x-omitempty": false
+                },
+                "reservation_held": {
+                  "description": "The quota buckets holding a reservation right now, largest first, at most 64. Empty when nothing is held. A bucket not listed holds nothing unless reservation_held_truncated is true.",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/definitions/LoadbalanceEntryServiceArgumentsFcEffectiveReservationHeldItems0"
+                  }
+                },
+                "reservation_held_buckets": {
+                  "description": "How many quota buckets hold a reservation right now, among those this service's requests reserve on. reservation_held lists them.",
+                  "type": "integer",
+                  "format": "int32",
+                  "x-omitempty": false
+                },
+                "reservation_held_claims": {
+                  "description": "The token claims that admitted requests hold right now and have not settled, summed over the quota buckets this service's requests reserve on. A request holds one claim, for the tokens it reserved, on every quota bucket that applies to it (tenant, tenant and model, user, user and model, key, service), so its reservation is counted once per bucket - this is a sum of claims and not the number of tokens in flight, and it is zero exactly when nothing is held. A tenant's bucket is shared by every service the tenant uses and is counted on each of them. Read from the quota store's own counter. Management read-back only - not exported as a metric.",
+                  "type": "integer",
+                  "format": "int64",
+                  "x-omitempty": false
+                },
+                "reservation_held_truncated": {
+                  "description": "true when reservation_held does not list every bucket holding a reservation - more than 64 hold one, or the service has reserved on more buckets than the gateway tracks for it (4096). reservation_held_claims and reservation_held_buckets cover the tracked buckets in either case.",
+                  "type": "boolean",
+                  "x-omitempty": false
+                },
                 "source": {
                   "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default). default_reservation and default_max_tokens can also read listener: the value in force is the one of the rule installed first on the VIP and port, and this rule resolves to another.",
                   "type": "object",
@@ -41933,6 +42017,36 @@ func init() {
               "format": "int64",
               "x-omitempty": false
             },
+            "reservation_epoch": {
+              "description": "The minute (Unix time divided by 60) the reservation_held_* fields below are a reading of. A token reservation belongs to the minute it was made in and does not outlive it - a request that ended without settling leaves its claim until the minute turns, and no longer. Compare two readings only when this value is the same in both.",
+              "type": "integer",
+              "format": "int64",
+              "x-omitempty": false
+            },
+            "reservation_held": {
+              "description": "The quota buckets holding a reservation right now, largest first, at most 64. Empty when nothing is held. A bucket not listed holds nothing unless reservation_held_truncated is true.",
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/LoadbalanceEntryServiceArgumentsFcEffectiveReservationHeldItems0"
+              }
+            },
+            "reservation_held_buckets": {
+              "description": "How many quota buckets hold a reservation right now, among those this service's requests reserve on. reservation_held lists them.",
+              "type": "integer",
+              "format": "int32",
+              "x-omitempty": false
+            },
+            "reservation_held_claims": {
+              "description": "The token claims that admitted requests hold right now and have not settled, summed over the quota buckets this service's requests reserve on. A request holds one claim, for the tokens it reserved, on every quota bucket that applies to it (tenant, tenant and model, user, user and model, key, service), so its reservation is counted once per bucket - this is a sum of claims and not the number of tokens in flight, and it is zero exactly when nothing is held. A tenant's bucket is shared by every service the tenant uses and is counted on each of them. Read from the quota store's own counter. Management read-back only - not exported as a metric.",
+              "type": "integer",
+              "format": "int64",
+              "x-omitempty": false
+            },
+            "reservation_held_truncated": {
+              "description": "true when reservation_held does not list every bucket holding a reservation - more than 64 hold one, or the service has reserved on more buckets than the gateway tracks for it (4096). reservation_held_claims and reservation_held_buckets cover the tracked buckets in either case.",
+              "type": "boolean",
+              "x-omitempty": false
+            },
             "source": {
               "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default). default_reservation and default_max_tokens can also read listener: the value in force is the one of the rule installed first on the VIP and port, and this rule resolves to another.",
               "type": "object",
@@ -42862,6 +42976,32 @@ func init() {
           "type": "integer",
           "format": "int64"
         },
+        "reservation_epoch": {
+          "description": "The minute (Unix time divided by 60) the reservation_held_* fields below are a reading of. A token reservation belongs to the minute it was made in and does not outlive it - a request that ended without settling leaves its claim until the minute turns, and no longer. Compare two readings only when this value is the same in both.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "reservation_held": {
+          "description": "The quota buckets holding a reservation right now, largest first, at most 64. Empty when nothing is held. A bucket not listed holds nothing unless reservation_held_truncated is true.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/LoadbalanceEntryServiceArgumentsFcEffectiveReservationHeldItems0"
+          }
+        },
+        "reservation_held_buckets": {
+          "description": "How many quota buckets hold a reservation right now, among those this service's requests reserve on. reservation_held lists them.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "reservation_held_claims": {
+          "description": "The token claims that admitted requests hold right now and have not settled, summed over the quota buckets this service's requests reserve on. A request holds one claim, for the tokens it reserved, on every quota bucket that applies to it (tenant, tenant and model, user, user and model, key, service), so its reservation is counted once per bucket - this is a sum of claims and not the number of tokens in flight, and it is zero exactly when nothing is held. A tenant's bucket is shared by every service the tenant uses and is counted on each of them. Read from the quota store's own counter. Management read-back only - not exported as a metric.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "reservation_held_truncated": {
+          "description": "true when reservation_held does not list every bucket holding a reservation - more than 64 hold one, or the service has reserved on more buckets than the gateway tracks for it (4096). reservation_held_claims and reservation_held_buckets cover the tracked buckets in either case.",
+          "type": "boolean"
+        },
         "source": {
           "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default). default_reservation and default_max_tokens can also read listener: the value in force is the one of the rule installed first on the VIP and port, and this rule resolves to another.",
           "type": "object",
@@ -43025,6 +43165,33 @@ func init() {
         }
       },
       "readOnly": true
+    },
+    "LoadbalanceEntryServiceArgumentsFcEffectiveReservationHeldItems0": {
+      "type": "object",
+      "properties": {
+        "bucket": {
+          "description": "The bucket's key in the quota store. It is built from identifiers only (tenant, user, model, key id, service) and never holds a credential.",
+          "type": "string"
+        },
+        "kind": {
+          "description": "Which quota the bucket belongs to - the tenant's, the tenant's for one model, a user's, a user's for one model, an API key's own, or the service's shared keyless quota.",
+          "type": "string",
+          "enum": [
+            "tenant",
+            "tenant_model",
+            "user",
+            "user_model",
+            "key",
+            "service"
+          ]
+        },
+        "tokens": {
+          "description": "Tokens reserved on the bucket and not yet settled.",
+          "type": "integer",
+          "format": "int64",
+          "x-omitempty": false
+        }
+      }
     },
     "LoadbalanceEntryServiceArgumentsFcEffectiveSource": {
       "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default). default_reservation and default_max_tokens can also read listener: the value in force is the one of the rule installed first on the VIP and port, and this rule resolves to another.",
@@ -43824,7 +43991,7 @@ func init() {
           ]
         },
         "fail_mode": {
-          "description": "What the binding's services do with a request while the binding lookup itself cannot answer (an internal fault, counted in loxilb_ai_netid_resolver_faults_total). neutral (default): the request is decided as if the service had no binding - it is never admitted by its network, and a valid credential is not refused, so a strict binding is not enforced during the fault. closed: every request the lookup would have decided is refused with 503 netid_unavailable until it answers again. A service fails closed when any binding that applies to it says closed.",
+          "description": "What the binding's services do with a request while the binding lookup itself cannot answer (an internal fault, counted in loxilb_ai_netid_resolver_faults_total). neutral (default): the request is decided as if the service had no binding - it is never admitted by its network, and a valid credential is not refused, so a strict binding is not enforced during the fault. closed: every request the lookup would have decided is refused with 503 netid_unavailable until it answers again. The setting is per service in effect, not per binding: a service fails closed when any binding that applies to it says closed, whether that binding names the service or names none, and then it does so for every source. When the bindings that apply to a service disagree, the reply to the POST is \"Success; warning: fail_mode: ...\" and names them.",
           "type": "string",
           "enum": [
             "neutral",

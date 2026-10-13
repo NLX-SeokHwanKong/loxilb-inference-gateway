@@ -1042,6 +1042,9 @@ func tokenQuotaReserveInternal(svc rateLimitService, store *rl.RateLimiterStore,
 		if resEpoch == 0 {
 			resEpoch = bEpoch
 		}
+		if bEpoch != 0 {
+			noteReservedBucket(svcIdent, b)
+		}
 	}
 	return true, 0, resEpoch
 }
@@ -1103,6 +1106,8 @@ type quotaBucket struct {
 	key      string
 	tpm      int
 	burstPct int
+	// kind names the ladder level, for the reservation read-back.
+	kind string
 }
 
 // quotaBucketsFor resolves the token buckets a request's spend lands on, in
@@ -1139,11 +1144,11 @@ func quotaBucketsFor(svc rateLimitService, tenantID, modelName, userID, keyID, s
 			tenantTPM = defaults.tenantTPM
 		}
 		if tenantTPM > 0 {
-			out = append(out, quotaBucket{key: tenantID, tpm: tenantTPM, burstPct: burstPct})
+			out = append(out, quotaBucket{key: tenantID, tpm: tenantTPM, burstPct: burstPct, kind: cmn.FcResvBucketTenant})
 		}
 		if modelName != "" {
 			if modelTPM, err := svc.GetTenantModelRateLimit(tenantID, modelName); err == nil && modelTPM > 0 {
-				out = append(out, quotaBucket{key: modelQuotaKey(tenantID, modelName), tpm: modelTPM, burstPct: burstPct})
+				out = append(out, quotaBucket{key: modelQuotaKey(tenantID, modelName), tpm: modelTPM, burstPct: burstPct, kind: cmn.FcResvBucketTenantModel})
 			}
 		}
 	}
@@ -1156,21 +1161,21 @@ func quotaBucketsFor(svc rateLimitService, tenantID, modelName, userID, keyID, s
 			userTPM = defaults.userTPM
 		}
 		if userTPM > 0 {
-			out = append(out, quotaBucket{key: rl.UserQuotaKey(tenantID, userID), tpm: userTPM, burstPct: burstPct})
+			out = append(out, quotaBucket{key: rl.UserQuotaKey(tenantID, userID), tpm: userTPM, burstPct: burstPct, kind: cmn.FcResvBucketUser})
 		}
 		if modelName != "" {
 			if umTPM, err := svc.GetUserModelRateLimit(tenantID, userID, modelName); err == nil && umTPM > 0 {
-				out = append(out, quotaBucket{key: rl.UserModelQuotaKey(tenantID, userID, modelName), tpm: umTPM, burstPct: burstPct})
+				out = append(out, quotaBucket{key: rl.UserModelQuotaKey(tenantID, userID, modelName), tpm: umTPM, burstPct: burstPct, kind: cmn.FcResvBucketUserModel})
 			}
 		}
 	}
 	if keyID != "" {
 		if key, err := svc.GetAPIKeyByID(keyID); err == nil && key.TokensPerMin > 0 {
-			out = append(out, quotaBucket{key: rl.KeyQuotaKey(keyID), tpm: key.TokensPerMin, burstPct: burstPct})
+			out = append(out, quotaBucket{key: rl.KeyQuotaKey(keyID), tpm: key.TokensPerMin, burstPct: burstPct, kind: cmn.FcResvBucketKey})
 		}
 	}
 	if svcIdent != "" && defaults.vipTPM > 0 {
-		out = append(out, quotaBucket{key: rl.VipSharedQuotaKey(svcIdent), tpm: defaults.vipTPM, burstPct: 0})
+		out = append(out, quotaBucket{key: rl.VipSharedQuotaKey(svcIdent), tpm: defaults.vipTPM, burstPct: 0, kind: cmn.FcResvBucketService})
 	}
 	return out
 }
@@ -1396,10 +1401,12 @@ func llb_ai_token_quota_reserve(tenantID *C.char, modelName *C.char, userID *C.c
 // with the refusal record if the gate turned it away, so the three can be
 // joined on a key rather than guessed at by timestamp. producerID is the
 // emitting thread's worker identity, negative on the teardown path that
-// releases a reservation off a worker.
+// releases a reservation off a worker. authSrc and netIdentity carry the
+// meanings llb_ai_record_request documents, so a request's charge names the
+// actor its completion does.
 //
 //export llb_ai_token_quota_consume
-func llb_ai_token_quota_consume(tenantID *C.char, modelName *C.char, userID *C.char, keyID *C.char, svcIdent *C.char, promptTokens C.int, completTokens C.int, estimated C.int, reservedToks C.int, resEpoch C.longlong, requestID *C.char, producerID C.int, result *C.ai_gw_decision_t) (ret C.int) {
+func llb_ai_token_quota_consume(tenantID *C.char, modelName *C.char, userID *C.char, keyID *C.char, svcIdent *C.char, promptTokens C.int, completTokens C.int, estimated C.int, reservedToks C.int, resEpoch C.longlong, requestID *C.char, producerID C.int, authSrc C.int, netIdentity *C.char, result *C.ai_gw_decision_t) (ret C.int) {
 	// Fail-open on panic: the response is already served, so accounting must
 	// never take down the datapath — the quota simply misses this response.
 	defer func() {
@@ -1455,6 +1462,9 @@ func llb_ai_token_quota_consume(tenantID *C.char, modelName *C.char, userID *C.c
 		ResEpoch:  int64(resEpoch),
 		Allowed:   allowed,
 		WorkerID:  int(producerID),
+
+		AuthSrc:     int(authSrc),
+		NetIdentity: C.GoString(netIdentity),
 	})
 
 	if !allowed {
@@ -1632,14 +1642,23 @@ func llb_ai_stream_end(tenantID *C.char, modelName *C.char) C.int {
 //	               peer
 //	trustedHops:   how many of our own hops the attribution walk stepped
 //	               past; read only as a pair with originIP
+//	authSrc:       what decided the tenant: 0 a credential (or nothing), 1 a
+//	               network-identity binding
+//	netIdentity:   the binding that matched the request's source, "" when
+//	               none did; set with authSrc 0 when a credential decided
+//	               and the binding only matched beside it
 //
 //export llb_ai_record_request
-func llb_ai_record_request(tenantID *C.char, modelName *C.char, statusCode C.int, latencyMs C.int64_t, promptTokens C.int, completTokens C.int, streamStart C.int, streamEnd C.int, errorCode *C.char, requestID *C.char, userID *C.char, keyID *C.char, svcIdent *C.char, isStream C.int, producerID C.int, clientIP *C.char, originIP *C.char, trustedHops C.int) {
+func llb_ai_record_request(tenantID *C.char, modelName *C.char, statusCode C.int, latencyMs C.int64_t, promptTokens C.int, completTokens C.int, streamStart C.int, streamEnd C.int, errorCode *C.char, requestID *C.char, userID *C.char, keyID *C.char, svcIdent *C.char, isStream C.int, producerID C.int, clientIP *C.char, originIP *C.char, trustedHops C.int, authSrc C.int, netIdentity *C.char) {
 	defer cgoRecover("llb_ai_record_request")
 	tenantIDStr := C.GoString(tenantID)
 	modelNameStr := C.GoString(modelName)
+	netIdentityStr := C.GoString(netIdentity)
 
 	prom.RecordAIRequest(tenantIDStr, modelNameStr, int(statusCode), int64(latencyMs))
+	if netIdentityStr != "" {
+		prom.RecordNetIDRequest(netIdentityStr, tenantIDStr, netIDCompleteOutcome(int(authSrc)))
+	}
 
 	// The trail is written after the metric on purpose: the metric is what
 	// the existing alerting reads, and it must not be skipped because the
@@ -1662,27 +1681,47 @@ func llb_ai_record_request(tenantID *C.char, modelName *C.char, statusCode C.int
 		ClientIP:    C.GoString(clientIP),
 		OriginIP:    C.GoString(originIP),
 		TrustedHops: int(trustedHops),
+
+		AuthSrc:     int(authSrc),
+		NetIdentity: netIdentityStr,
 	})
+}
+
+// netIDCompleteOutcome names, for the binding's request counter, what the
+// binding did for a request that was admitted: it decided the tenant, or
+// it matched beside a credential that did.
+func netIDCompleteOutcome(authSrc int) string {
+	if authSrc == aiAuthSrcNetwork {
+		return prom.NetIDOutcomeAdmitted
+	}
+	return prom.NetIDOutcomeMatched
 }
 
 // llb_ai_record_deny records one request the admission gate refused.
 //
 // The C gate calls this once per refusal from its single verdict frame, so
 // an arm added to the decision cannot refuse a request unrecorded. There
-// is no metric here: the deny counters are already raised on the export
-// that produced the decision; counting it twice would double every denial
-// rate. The attribution triple carries the meanings llb_ai_record_request
+// is no request metric here: the deny counters are already raised on the
+// export that produced the decision; counting it twice would double every
+// denial rate. The one counter raised is the binding's own, when the
+// refused request's source matched one. The attribution triple carries the meanings llb_ai_record_request
 // documents; note the gate runs BEFORE the header splice, so on a refused
 // request originIP is normally "" -- nothing derived -- while clientIP is
 // always known.
 //
 //export llb_ai_record_deny
-func llb_ai_record_deny(requestID *C.char, producerID C.int, svcIdent *C.char, modelName *C.char, tenantID *C.char, keyID *C.char, userID *C.char, stage C.int, httpStatus C.int, errorCode *C.char, clientIP *C.char, originIP *C.char, trustedHops C.int) {
+func llb_ai_record_deny(requestID *C.char, producerID C.int, svcIdent *C.char, modelName *C.char, tenantID *C.char, keyID *C.char, userID *C.char, stage C.int, httpStatus C.int, errorCode *C.char, clientIP *C.char, originIP *C.char, trustedHops C.int, authSrc C.int, netIdentity *C.char) {
 	defer cgoRecover("llb_ai_record_deny")
+	tenantIDStr := C.GoString(tenantID)
+	netIdentityStr := C.GoString(netIdentity)
+
+	if netIdentityStr != "" {
+		prom.RecordNetIDRequest(netIdentityStr, tenantIDStr, prom.NetIDOutcomeDenied)
+	}
 
 	emitAIDeny(aiDenyRecord{
 		RequestID:  C.GoString(requestID),
-		TenantID:   C.GoString(tenantID),
+		TenantID:   tenantIDStr,
 		UserID:     C.GoString(userID),
 		KeyID:      C.GoString(keyID),
 		SvcIdent:   C.GoString(svcIdent),
@@ -1695,6 +1734,9 @@ func llb_ai_record_deny(requestID *C.char, producerID C.int, svcIdent *C.char, m
 		ClientIP:    C.GoString(clientIP),
 		OriginIP:    C.GoString(originIP),
 		TrustedHops: int(trustedHops),
+
+		AuthSrc:     int(authSrc),
+		NetIdentity: netIdentityStr,
 	})
 }
 

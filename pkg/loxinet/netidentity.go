@@ -445,14 +445,102 @@ func (h *NetIdentityH) BindingWarning(pm *cmn.NetIdentityMod) string {
 	if pm == nil {
 		return ""
 	}
-	ifName := strings.TrimSpace(pm.Match.IngressIf)
-	if ifName == "" {
+	var msgs []string
+	if ifName := strings.TrimSpace(pm.Match.IngressIf); ifName != "" {
+		if _, ok := h.ifIndex(ifName); !ok {
+			msgs = append(msgs, fmt.Sprintf("match.ingress_if: no interface %q on this node; the binding matches nothing until it exists", ifName))
+		}
+	}
+	if nm, err := netidNormalize(pm); err == nil {
+		h.mu.Lock()
+		msg := netidFailModeWarning(h.bindings, &nm)
+		h.mu.Unlock()
+		if msg != "" {
+			msgs = append(msgs, msg)
+		}
+	}
+	// Each warning after its own marker, as a rule reply carries several.
+	return strings.Join(msgs, "; warning: ")
+}
+
+// netidFailModeWarning is the text for a binding whose fail_mode is not the
+// one of every other binding that applies to the same service. The flag is
+// per service: one binding that says closed, naming the service or naming
+// none, makes the service fail closed for every source. Empty when the
+// bindings agree.
+func netidFailModeWarning(bindings map[string]cmn.NetIdentityMod, nm *cmn.NetIdentityMod) string {
+	applies := func(b *cmn.NetIdentityMod, svc string) bool {
+		if len(b.Services) == 0 {
+			return true
+		}
+		for _, s := range b.Services {
+			if s == svc {
+				return true
+			}
+		}
+		return false
+	}
+	// The services to look at: the binding's own, or, for a binding of
+	// every service, each service any binding names, and "" for the
+	// bindings of every service among themselves.
+	svcs := append([]string(nil), nm.Services...)
+	if len(svcs) == 0 {
+		seen := map[string]bool{"": true}
+		svcs = append(svcs, "")
+		for _, b := range bindings {
+			for _, s := range b.Services {
+				if !seen[s] {
+					seen[s] = true
+					svcs = append(svcs, s)
+				}
+			}
+		}
+	}
+	sort.Strings(svcs)
+
+	var first string
+	var closed, neutral []string
+	split := 0
+	for _, svc := range svcs {
+		var c, n []string
+		for name, b := range bindings {
+			b := b
+			if svc == "" && len(b.Services) != 0 {
+				continue
+			}
+			if svc != "" && !applies(&b, svc) {
+				continue
+			}
+			if b.FailMode == cmn.NetIdentityFailClosed {
+				c = append(c, name)
+			} else {
+				n = append(n, name)
+			}
+		}
+		if len(c) == 0 || len(n) == 0 {
+			continue
+		}
+		if split == 0 {
+			first, closed, neutral = svc, c, n
+		}
+		split++
+	}
+	if split == 0 {
 		return ""
 	}
-	if _, ok := h.ifIndex(ifName); ok {
-		return ""
+	sort.Strings(closed)
+	sort.Strings(neutral)
+	where := first
+	if where == "" {
+		where = "every AI service"
 	}
-	return fmt.Sprintf("match.ingress_if: no interface %q on this node; the binding matches nothing until it exists", ifName)
+	more := ""
+	if split > 1 {
+		more = fmt.Sprintf(" (and on %d more)", split-1)
+	}
+	return fmt.Sprintf("fail_mode: the bindings that apply to %s disagree (closed: %s; neutral: %s)%s; "+
+		"fail_mode is per service, and a service fails closed when any binding that applies to it says closed",
+		where, strings.Join(closed, ", "), strings.Join(neutral, ", "), more)
 }
 
 // resolve answers the gate. ok is false when there is no snapshot to read,

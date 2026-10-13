@@ -31,7 +31,7 @@ type NetIdentityEntry struct {
 	// Enum: [advisory strict]
 	Enforce string `json:"enforce,omitempty"`
 
-	// What the binding's services do with a request while the binding lookup itself cannot answer (an internal fault, counted in loxilb_ai_netid_resolver_faults_total). neutral (default): the request is decided as if the service had no binding - it is never admitted by its network, and a valid credential is not refused, so a strict binding is not enforced during the fault. closed: every request the lookup would have decided is refused with 503 netid_unavailable until it answers again. A service fails closed when any binding that applies to it says closed.
+	// What the binding's services do with a request while the binding lookup itself cannot answer (an internal fault, counted in loxilb_ai_netid_resolver_faults_total). neutral (default): the request is decided as if the service had no binding - it is never admitted by its network, and a valid credential is not refused, so a strict binding is not enforced during the fault. closed: every request the lookup would have decided is refused with 503 netid_unavailable until it answers again. The setting is per service in effect, not per binding: a service fails closed when any binding that applies to it says closed, whether that binding names the service or names none, and then it does so for every source. When the bindings that apply to a service disagree, the reply to the POST is "Success; warning: fail_mode: ..." and names them.
 	// Enum: [neutral closed]
 	FailMode string `json:"fail_mode,omitempty"`
 

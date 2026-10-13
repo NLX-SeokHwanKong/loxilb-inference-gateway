@@ -2951,6 +2951,21 @@ type LoadbalanceEntryServiceArgumentsFcEffective struct {
 	// Requests admitted with less than default_max_tokens reserved, since the process started, because default_max_tokens beside the prompt is more than a quota bucket can ever hold, so the request is clamped on an idle bucket too. A configuration to fix - lower the default or raise the quota or its burst. A request this applies to is counted here whatever the budgets held. Counted per service - every model pool of the same VIP and port reads the same number. Never a refusal.
 	ReservationClampedBurst int64 `json:"reservation_clamped_burst"`
 
+	// The minute (Unix time divided by 60) the reservation_held_* fields below are a reading of. A token reservation belongs to the minute it was made in and does not outlive it - a request that ended without settling leaves its claim until the minute turns, and no longer. Compare two readings only when this value is the same in both.
+	ReservationEpoch int64 `json:"reservation_epoch"`
+
+	// The quota buckets holding a reservation right now, largest first, at most 64. Empty when nothing is held. A bucket not listed holds nothing unless reservation_held_truncated is true.
+	ReservationHeld []*LoadbalanceEntryServiceArgumentsFcEffectiveReservationHeldItems0 `json:"reservation_held"`
+
+	// How many quota buckets hold a reservation right now, among those this service's requests reserve on. reservation_held lists them.
+	ReservationHeldBuckets int32 `json:"reservation_held_buckets"`
+
+	// The token claims that admitted requests hold right now and have not settled, summed over the quota buckets this service's requests reserve on. A request holds one claim, for the tokens it reserved, on every quota bucket that applies to it (tenant, tenant and model, user, user and model, key, service), so its reservation is counted once per bucket - this is a sum of claims and not the number of tokens in flight, and it is zero exactly when nothing is held. A tenant's bucket is shared by every service the tenant uses and is counted on each of them. Read from the quota store's own counter. Management read-back only - not exported as a metric.
+	ReservationHeldClaims int64 `json:"reservation_held_claims"`
+
+	// true when reservation_held does not list every bucket holding a reservation - more than 64 hold one, or the service has reserved on more buckets than the gateway tracks for it (4096). reservation_held_claims and reservation_held_buckets cover the tracked buckets in either case.
+	ReservationHeldTruncated bool `json:"reservation_held_truncated"`
+
 	// source
 	Source *LoadbalanceEntryServiceArgumentsFcEffectiveSource `json:"source,omitempty"`
 
@@ -2997,6 +3012,10 @@ func (m *LoadbalanceEntryServiceArgumentsFcEffective) Validate(formats strfmt.Re
 	}
 
 	if err := m.validateExposeHeaders(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := m.validateReservationHeld(formats); err != nil {
 		res = append(res, err)
 	}
 
@@ -3235,6 +3254,32 @@ func (m *LoadbalanceEntryServiceArgumentsFcEffective) validateExposeHeaders(form
 	return nil
 }
 
+func (m *LoadbalanceEntryServiceArgumentsFcEffective) validateReservationHeld(formats strfmt.Registry) error {
+	if swag.IsZero(m.ReservationHeld) { // not required
+		return nil
+	}
+
+	for i := 0; i < len(m.ReservationHeld); i++ {
+		if swag.IsZero(m.ReservationHeld[i]) { // not required
+			continue
+		}
+
+		if m.ReservationHeld[i] != nil {
+			if err := m.ReservationHeld[i].Validate(formats); err != nil {
+				if ve, ok := err.(*errors.Validation); ok {
+					return ve.ValidateName("serviceArguments" + "." + "fc_effective" + "." + "reservation_held" + "." + strconv.Itoa(i))
+				} else if ce, ok := err.(*errors.CompositeError); ok {
+					return ce.ValidateName("serviceArguments" + "." + "fc_effective" + "." + "reservation_held" + "." + strconv.Itoa(i))
+				}
+				return err
+			}
+		}
+
+	}
+
+	return nil
+}
+
 func (m *LoadbalanceEntryServiceArgumentsFcEffective) validateSource(formats strfmt.Registry) error {
 	if swag.IsZero(m.Source) { // not required
 		return nil
@@ -3258,6 +3303,10 @@ func (m *LoadbalanceEntryServiceArgumentsFcEffective) validateSource(formats str
 func (m *LoadbalanceEntryServiceArgumentsFcEffective) ContextValidate(ctx context.Context, formats strfmt.Registry) error {
 	var res []error
 
+	if err := m.contextValidateReservationHeld(ctx, formats); err != nil {
+		res = append(res, err)
+	}
+
 	if err := m.contextValidateSource(ctx, formats); err != nil {
 		res = append(res, err)
 	}
@@ -3265,6 +3314,26 @@ func (m *LoadbalanceEntryServiceArgumentsFcEffective) ContextValidate(ctx contex
 	if len(res) > 0 {
 		return errors.CompositeValidationError(res...)
 	}
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArgumentsFcEffective) contextValidateReservationHeld(ctx context.Context, formats strfmt.Registry) error {
+
+	for i := 0; i < len(m.ReservationHeld); i++ {
+
+		if m.ReservationHeld[i] != nil {
+			if err := m.ReservationHeld[i].ContextValidate(ctx, formats); err != nil {
+				if ve, ok := err.(*errors.Validation); ok {
+					return ve.ValidateName("serviceArguments" + "." + "fc_effective" + "." + "reservation_held" + "." + strconv.Itoa(i))
+				} else if ce, ok := err.(*errors.CompositeError); ok {
+					return ce.ValidateName("serviceArguments" + "." + "fc_effective" + "." + "reservation_held" + "." + strconv.Itoa(i))
+				}
+				return err
+			}
+		}
+
+	}
+
 	return nil
 }
 
@@ -3295,6 +3364,113 @@ func (m *LoadbalanceEntryServiceArgumentsFcEffective) MarshalBinary() ([]byte, e
 // UnmarshalBinary interface implementation
 func (m *LoadbalanceEntryServiceArgumentsFcEffective) UnmarshalBinary(b []byte) error {
 	var res LoadbalanceEntryServiceArgumentsFcEffective
+	if err := swag.ReadJSON(b, &res); err != nil {
+		return err
+	}
+	*m = res
+	return nil
+}
+
+// LoadbalanceEntryServiceArgumentsFcEffectiveReservationHeldItems0 loadbalance entry service arguments fc effective reservation held items0
+//
+// swagger:model LoadbalanceEntryServiceArgumentsFcEffectiveReservationHeldItems0
+type LoadbalanceEntryServiceArgumentsFcEffectiveReservationHeldItems0 struct {
+
+	// The bucket's key in the quota store. It is built from identifiers only (tenant, user, model, key id, service) and never holds a credential.
+	Bucket string `json:"bucket,omitempty"`
+
+	// Which quota the bucket belongs to - the tenant's, the tenant's for one model, a user's, a user's for one model, an API key's own, or the service's shared keyless quota.
+	// Enum: [tenant tenant_model user user_model key service]
+	Kind string `json:"kind,omitempty"`
+
+	// Tokens reserved on the bucket and not yet settled.
+	Tokens int64 `json:"tokens"`
+}
+
+// Validate validates this loadbalance entry service arguments fc effective reservation held items0
+func (m *LoadbalanceEntryServiceArgumentsFcEffectiveReservationHeldItems0) Validate(formats strfmt.Registry) error {
+	var res []error
+
+	if err := m.validateKind(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if len(res) > 0 {
+		return errors.CompositeValidationError(res...)
+	}
+	return nil
+}
+
+var loadbalanceEntryServiceArgumentsFcEffectiveReservationHeldItems0TypeKindPropEnum []interface{}
+
+func init() {
+	var res []string
+	if err := json.Unmarshal([]byte(`["tenant","tenant_model","user","user_model","key","service"]`), &res); err != nil {
+		panic(err)
+	}
+	for _, v := range res {
+		loadbalanceEntryServiceArgumentsFcEffectiveReservationHeldItems0TypeKindPropEnum = append(loadbalanceEntryServiceArgumentsFcEffectiveReservationHeldItems0TypeKindPropEnum, v)
+	}
+}
+
+const (
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveReservationHeldItems0KindTenant captures enum value "tenant"
+	LoadbalanceEntryServiceArgumentsFcEffectiveReservationHeldItems0KindTenant string = "tenant"
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveReservationHeldItems0KindTenantModel captures enum value "tenant_model"
+	LoadbalanceEntryServiceArgumentsFcEffectiveReservationHeldItems0KindTenantModel string = "tenant_model"
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveReservationHeldItems0KindUser captures enum value "user"
+	LoadbalanceEntryServiceArgumentsFcEffectiveReservationHeldItems0KindUser string = "user"
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveReservationHeldItems0KindUserModel captures enum value "user_model"
+	LoadbalanceEntryServiceArgumentsFcEffectiveReservationHeldItems0KindUserModel string = "user_model"
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveReservationHeldItems0KindKey captures enum value "key"
+	LoadbalanceEntryServiceArgumentsFcEffectiveReservationHeldItems0KindKey string = "key"
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveReservationHeldItems0KindService captures enum value "service"
+	LoadbalanceEntryServiceArgumentsFcEffectiveReservationHeldItems0KindService string = "service"
+)
+
+// prop value enum
+func (m *LoadbalanceEntryServiceArgumentsFcEffectiveReservationHeldItems0) validateKindEnum(path, location string, value string) error {
+	if err := validate.EnumCase(path, location, value, loadbalanceEntryServiceArgumentsFcEffectiveReservationHeldItems0TypeKindPropEnum, true); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArgumentsFcEffectiveReservationHeldItems0) validateKind(formats strfmt.Registry) error {
+	if swag.IsZero(m.Kind) { // not required
+		return nil
+	}
+
+	// value enum
+	if err := m.validateKindEnum("kind", "body", m.Kind); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// ContextValidate validates this loadbalance entry service arguments fc effective reservation held items0 based on context it is used
+func (m *LoadbalanceEntryServiceArgumentsFcEffectiveReservationHeldItems0) ContextValidate(ctx context.Context, formats strfmt.Registry) error {
+	return nil
+}
+
+// MarshalBinary interface implementation
+func (m *LoadbalanceEntryServiceArgumentsFcEffectiveReservationHeldItems0) MarshalBinary() ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	return swag.WriteJSON(m)
+}
+
+// UnmarshalBinary interface implementation
+func (m *LoadbalanceEntryServiceArgumentsFcEffectiveReservationHeldItems0) UnmarshalBinary(b []byte) error {
+	var res LoadbalanceEntryServiceArgumentsFcEffectiveReservationHeldItems0
 	if err := swag.ReadJSON(b, &res); err != nil {
 		return err
 	}

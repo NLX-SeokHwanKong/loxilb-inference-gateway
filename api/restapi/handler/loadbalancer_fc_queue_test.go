@@ -199,7 +199,7 @@ func TestFcQueueReadBack(t *testing.T) {
 	}
 	for _, key := range []string{"max_outstanding", "ep_max_inflight", "prefill_max_inflight", "decode_max_inflight",
 		"queue_depth", "queue_wait_ms", "inflight", "queued", "queue_memory_bound_mib", "telemetry_stale_ms",
-		"warmup_ms", "ttft_target_ms", "effective_max_outstanding", "warming_endpoints", "tenant_max_share_pct", "tenants_active", "tenant_slots", "default_max_tokens", "reservation_clamped_burst", "reservation_clamped_budget"} {
+		"warmup_ms", "ttft_target_ms", "effective_max_outstanding", "warming_endpoints", "tenant_max_share_pct", "tenants_active", "tenant_slots", "default_max_tokens", "reservation_clamped_burst", "reservation_clamped_budget", "reservation_epoch", "reservation_held_claims", "reservation_held_buckets"} {
 		if value, present := eff[key]; !present || value != float64(0) {
 			t.Errorf("installed fc_effective.%s = %v present=%t, want explicit zero", key, value, present)
 		}

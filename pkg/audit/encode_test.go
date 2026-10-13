@@ -418,3 +418,46 @@ func TestEncodeOriginFieldsAreAddOnly(t *testing.T) {
 		t.Errorf("hop count written with no origin derived: %s", got)
 	}
 }
+
+// TestEncodeNetIdentityIsAddOnly states the network-identity addition on the
+// wire: the key is absent from a record no binding matched, so every
+// existing record is byte-for-byte what it was, and present beside either
+// auth mode when one did.
+func TestEncodeNetIdentityIsAddOnly(t *testing.T) {
+	e := newEncoder()
+
+	got, err := e.encode(goldenData(), goldenStamp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(got), `"net_identity"`) {
+		t.Errorf("record with no binding carries net_identity: %s", got)
+	}
+
+	// The binding decided the tenant.
+	r := goldenData()
+	r.Actor = Actor{Auth: AuthNetwork, Tenant: "line-1-tenant", NetIdentity: "line-1", Remote: "10.20.0.7"}
+	got, err = e.encode(r, goldenStamp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !json.Valid(got) {
+		t.Fatalf("not valid JSON: %s", got)
+	}
+	if want := `"actor":{"auth":"network","tenant":"line-1-tenant","net_identity":"line-1","remote":"10.20.0.7"}`; !strings.Contains(string(got), want) {
+		t.Errorf("missing %s: %s", want, got)
+	}
+
+	// A key decided and the binding matched beside it.
+	r = goldenData()
+	r.Actor.NetIdentity = "line-1"
+	got, err = e.encode(r, goldenStamp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"auth":"apikey"`, `"key_id":"k-17"`, `"net_identity":"line-1"`} {
+		if !strings.Contains(string(got), want) {
+			t.Errorf("missing %s: %s", want, got)
+		}
+	}
+}

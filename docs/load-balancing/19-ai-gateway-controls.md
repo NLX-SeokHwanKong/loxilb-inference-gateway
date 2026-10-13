@@ -221,6 +221,28 @@ How it behaves:
 - The built-in `512` is an estimate of a typical completion, not a measured one. Set
   `ai_default_max_tokens` to what your clients' completions look like.
 
+**What is reserved right now.** The rule's `GET` also shows the reservations that
+admitted requests hold and have not settled, read from the quota store itself
+(`fc_effective.reservation_held_claims`, `reservation_held_buckets`, and the list
+`reservation_held` with each bucket's `kind`, `bucket` and `tokens`). Read it to see
+which tenants hold budget on a service at this moment, or to check that a request
+that ended — completed, refused, cancelled, timed out in the queue — gave its claim
+back: its buckets must read what they read before it.
+
+- A request holds its claim on every quota bucket that applies to it (the tenant's,
+  the tenant's for the model, the user's, the key's, the service's shared keyless one),
+  so `reservation_held_claims` — the sum of those claims — counts a request's
+  reservation once per bucket. It is zero exactly when nothing is held; it is not the
+  number of tokens in flight.
+- A tenant's bucket belongs to the tenant, not to a service: every service the tenant
+  has used shows it, with the same number.
+- A reservation belongs to the minute it was made in (`reservation_epoch`) and is
+  dropped when the minute turns, whether or not its request has ended. Compare two
+  readings only inside one minute.
+- The list holds at most 64 buckets, largest first; `reservation_held_truncated` says
+  when there are more. This is a management read-back only. It is not exported to
+  Prometheus, because it is per tenant.
+
 **Per listener until per-rule lands.** The gateway reserves before it selects a rule by
 host, path or model, so one default reservation is in force per listener (VIP and port):
 where several rules share one (model-name routing, for example), the value of the rule
