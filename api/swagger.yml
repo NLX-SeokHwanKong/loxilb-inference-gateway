@@ -10958,7 +10958,9 @@ definitions:
               request is refused - only the prompt estimate and a declared
               ceiling are. A request admitted with less than the default is
               counted in fc_effective.reservation_clamped and in
-              loxilb_ai_reservation_clamped_total. The claim is released when
+              loxilb_ai_reservation_clamped_total, by reason: burst (the
+              default is more than a bucket can ever hold beside the prompt)
+              or budget (the bucket's budget was already taken). The claim is released when
               the response is settled, as a declared ceiling's is. Nothing is
               written into the forwarded request, and a declared ceiling is
               never replaced. inherit, or omitted on create, runs on the process
@@ -10967,9 +10969,13 @@ definitions:
               in place, to requests admitted from then on. Read back only when
               declared; what is in force is fc_effective.default_reservation.
               The gate reserves before a rule is selected by host, path or
-              model, so on a VIP and port that several rules share, the value
-              of the rule installed first on it is the one in force for all of
-              them, as with api_key_auth: declare the same value on each.
+              model, so the value is per listener: on a VIP and port that
+              several rules share, the value of the rule installed first on it
+              is the one in force for all of them, as with api_key_auth.
+              Declare the same value on each. A rule applied on a VIP and port
+              whose rules resolve to different values is accepted, and the
+              reply and the log carry a warning that names the value in
+              effect; fc_effective shows that value on every rule.
           ai_default_max_tokens:
             type: integer
             format: int32
@@ -11113,23 +11119,36 @@ definitions:
               default_reservation:
                 type: string
                 enum: ["on", "off"]
-                description: Whether a request without a declared max_tokens reserves a default for its completion (ai_default_reservation as this rule resolves it; on a VIP and port shared by several rules the gate uses the first-installed rule's).
+                description: Whether a request without a declared max_tokens reserves a default for its completion, as the gate runs this rule's VIP and port. One value is in force per VIP and port - the first-installed rule's; where this rule resolves to another, source.default_reservation is listener.
               default_max_tokens:
                 type: integer
                 x-omitempty: false
                 format: int32
-                description: The default reservation in tokens; 0 while default_reservation is off.
+                description: The default reservation in tokens in force on this rule's VIP and port; 0 while default_reservation is off. Per VIP and port, as default_reservation.
               reservation_clamped:
                 type: integer
                 x-omitempty: false
                 format: int64
-                description: Requests admitted with less than default_max_tokens reserved because a quota bucket did not hold all of it, since the process started. Counted per service - every model pool of the same VIP and port reads the same number. Never a refusal.
+                description: Requests admitted with less than default_max_tokens reserved because a quota bucket did not hold all of it, since the process started. The sum of reservation_clamped_burst and reservation_clamped_budget. Counted per service - every model pool of the same VIP and port reads the same number. Never a refusal.
+              reservation_clamped_burst:
+                type: integer
+                x-omitempty: false
+                format: int64
+                description: The part of reservation_clamped where default_max_tokens beside the prompt is more than a quota bucket can ever hold, so the request is clamped on an idle bucket too. A configuration to fix - lower the default or raise the quota or its burst. A request this applies to is counted here whatever the budgets held.
+              reservation_clamped_budget:
+                type: integer
+                x-omitempty: false
+                format: int64
+                description: The part of reservation_clamped where the bucket's budget was already taken by other claims or by spend. Transient - it passes as the window refills.
               source:
                 type: object
                 description: >-
                   Where each value in force came from: rule (the rule's own
                   declaration), env (the process environment, LLB_FC_*) or default
-                  (the product default).
+                  (the product default). default_reservation and
+                  default_max_tokens can also read listener: the value in force
+                  is the one of the rule installed first on the VIP and port,
+                  and this rule resolves to another.
                 properties:
                   mode:
                     type: string
@@ -11172,10 +11191,10 @@ definitions:
                     enum: [rule, env, default]
                   default_reservation:
                     type: string
-                    enum: [rule, env, default]
+                    enum: [rule, env, default, listener]
                   default_max_tokens:
                     type: string
-                    enum: [rule, env, default]
+                    enum: [rule, env, default, listener]
           kvExactMode:
             type: integer
             format: int64

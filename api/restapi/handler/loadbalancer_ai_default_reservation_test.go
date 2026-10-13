@@ -113,3 +113,53 @@ func TestAIDefaultReservationReadBack(t *testing.T) {
 		t.Fatalf("fc_effective.source read back as %+v", eff.Source)
 	}
 }
+
+type resvWarningHook struct {
+	warningLbAddHook
+	resvMsg   string
+	resvAsked *cmn.LbRuleMod
+}
+
+func (s *resvWarningHook) NetAIDefaultReservationWarning(m *cmn.LbRuleMod) string {
+	s.resvAsked = m
+	return s.resvMsg
+}
+
+// A rule whose default reservation differs from another rule's on the same
+// VIP and port is still applied: the reply carries the warning in its result
+// text, after the tenant-table warning when both apply, and a refused rule
+// is not asked about.
+func TestAIDefaultReservationWarningRidesTheSuccessReply(t *testing.T) {
+	prev := ApiHooks
+	defer func() { ApiHooks = prev }()
+	raw := sprintfBody(connectionLimitCreateBody, `,"ai_default_reservation":"on","ai_default_max_tokens":256`)
+
+	result := func(res interface{}) string {
+		rr, ok := res.(*ResultResponse)
+		if !ok {
+			t.Fatalf("answered %#v, want a result reply", res)
+		}
+		return rr.Result
+	}
+
+	only := &resvWarningHook{resvMsg: "ai_default_reservation: 512 tokens is in effect"}
+	ApiHooks = only
+	if got := result(ConfigPostLoadbalancer(connectionLimitCreateParams(t, raw), nil)); got != "Success; warning: ai_default_reservation: 512 tokens is in effect" {
+		t.Errorf("with the listener warning: result %q", got)
+	}
+	if only.captured == nil || only.resvAsked == nil || only.resvAsked.Serv.AIDefaultMaxTokens != 256 {
+		t.Errorf("the rule was not applied and then asked about: applied=%v asked=%v", only.captured != nil, only.resvAsked)
+	}
+
+	both := &resvWarningHook{resvMsg: "listener differs"}
+	both.msg = "300 tenants are known"
+	ApiHooks = both
+	if got := result(ConfigPostLoadbalancer(connectionLimitCreateParams(t, raw), nil)); got != "Success; warning: 300 tenants are known; warning: listener differs" {
+		t.Errorf("with both warnings: result %q", got)
+	}
+
+	ApiHooks = &resvWarningHook{}
+	if got := result(ConfigPostLoadbalancer(connectionLimitCreateParams(t, raw), nil)); got != "Success" {
+		t.Errorf("nothing to warn about: result %q", got)
+	}
+}

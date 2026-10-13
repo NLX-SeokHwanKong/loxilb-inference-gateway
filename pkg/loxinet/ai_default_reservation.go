@@ -17,15 +17,19 @@
 package loxinet
 
 import (
+	"fmt"
 	"net"
 	"os"
+	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 
 	prom "github.com/loxilb-io/loxilb/api/prometheus"
 	cmn "github.com/loxilb-io/loxilb/common"
 	rl "github.com/loxilb-io/loxilb/pkg/ratelimit"
+	tk "github.com/loxilb-io/loxilib"
 )
 
 // aiDefaultResv is a rule's default reservation as it was declared: the
@@ -99,10 +103,20 @@ func (c aiDefaultResv) tokensInForce() uint32 {
 	return tokens
 }
 
-// fillEffective writes the default reservation in force on a rule into its
-// read-back, with the clamped count of the rule's service.
+// fillEffective writes the default reservation in force into a rule's
+// read-back, with the clamped counts of the rule's service.
+//
+// The gate reserves before a rule is selected, so one value is in force per
+// VIP and port: the first-installed rule's. Where the data plane reports
+// that value (eff.ListenerDefaultTokens) and it is not what this rule
+// resolves to, the read-back shows the listener's, with the source
+// "listener"; the rule's own two fields keep what it declares.
 func (c aiDefaultResv) fillEffective(eff *cmn.FcEffectiveArg, vip net.IP, port uint16) {
 	on, tokens, modeSrc, tokensSrc := c.inForce()
+	if l := eff.ListenerDefaultTokens; l != nil && *l != tokens {
+		tokens, on = *l, *l != 0
+		modeSrc, tokensSrc = cmn.AIDefaultSourceListener, cmn.AIDefaultSourceListener
+	}
 	eff.DefaultReservation = cmn.AIDefaultReservationOff
 	if on {
 		eff.DefaultReservation = cmn.AIDefaultReservationOn
@@ -110,7 +124,107 @@ func (c aiDefaultResv) fillEffective(eff *cmn.FcEffectiveArg, vip net.IP, port u
 	eff.DefaultMaxTokens = tokens
 	eff.Source.DefaultReservation = modeSrc
 	eff.Source.DefaultMaxTokens = tokensSrc
-	eff.ReservationClamped = reservationClampedCount(aiServiceIdent(vip, port))
+	svc := aiServiceIdent(vip, port)
+	eff.ReservationClampedBurst = reservationClampedCount(svc, resvClampBurst)
+	eff.ReservationClampedBudget = reservationClampedCount(svc, resvClampBudget)
+	eff.ReservationClamped = eff.ReservationClampedBurst + eff.ReservationClampedBudget
+}
+
+// aiDefaultTokensWord spells a default reservation in force for a message.
+func aiDefaultTokensWord(tokens uint32) string {
+	if tokens == 0 {
+		return "off"
+	}
+	return strconv.FormatUint(uint64(tokens), 10) + " tokens"
+}
+
+// aiDefaultResvListenerWarning is the text for a VIP and port whose rules
+// resolve to different default reservations: only one is in force there,
+// and a rule that declares another does not get it. resolved holds what
+// each rule of the listener resolves to; listener is the value the data
+// plane runs the listener on, when it could be read. Advice, never a
+// refusal. Empty when the rules agree.
+func aiDefaultResvListenerWarning(svc string, resolved []uint32, listener uint32, known bool) string {
+	distinct := slices.Clone(resolved)
+	slices.Sort(distinct)
+	distinct = slices.Compact(distinct)
+	if len(distinct) < 2 {
+		return ""
+	}
+	words := make([]string, len(distinct))
+	for i, v := range distinct {
+		words[i] = aiDefaultTokensWord(v)
+	}
+	inEffect := "the first-installed rule's value is in effect for all of them"
+	if known {
+		inEffect = aiDefaultTokensWord(listener) + " is in effect for all of them (the first-installed rule's)"
+	}
+	return fmt.Sprintf("ai_default_reservation: the rules on %s resolve to different default reservations (%s); "+
+		"the default reservation is per listener, and %s",
+		svc, strings.Join(words, ", "), inEffect)
+}
+
+// NetAIDefaultReservationWarning returns the per-listener warning for a rule
+// that was just applied, and logs it: another rule on the same VIP and port
+// resolves to a different default reservation.
+func (na *NetAPIStruct) NetAIDefaultReservationWarning(lm *cmn.LbRuleMod) string {
+	if lm == nil {
+		return ""
+	}
+	vip := net.ParseIP(lm.Serv.ServIP)
+	if vip == nil || vip.To4() == nil {
+		return ""
+	}
+	mh.mtx.Lock()
+	defer mh.mtx.Unlock()
+	if mh.zr == nil || mh.zr.Rules == nil {
+		return ""
+	}
+	resolved, listener, known := mh.zr.Rules.aiDefaultResvOnListener(vip, lm.Serv.ServPort, lm.Serv.Proto)
+	msg := aiDefaultResvListenerWarning(aiServiceIdent(vip, lm.Serv.ServPort), resolved, listener, known)
+	if msg != "" {
+		tk.LogIt(tk.LogWarning, "[AIGateway] rule %s:%d: %s\n", lm.Serv.ServIP, lm.Serv.ServPort, msg)
+	}
+	return msg
+}
+
+// aiDefaultResvOnListener collects what every AI-gateway rule on a VIP, port
+// and protocol resolves its default reservation to, and the value the data
+// plane runs the listener on (known is false where it cannot be read).
+func (R *RuleH) aiDefaultResvOnListener(vip net.IP, port uint16, proto string) (resolved []uint32, listener uint32, known bool) {
+	for _, data := range R.tables[RtLB].eMap {
+		if !data.tuples.l3Dst.addr.IP.Equal(vip) || data.tuples.l4Dst.valMin != port ||
+			lbProtoWord(data.tuples.l4Prot.val) != proto || !data.aiGwMode() {
+			continue
+		}
+		resolved = append(resolved, data.aiDefaultResv.tokensInForce())
+		if known || mh.dpEbpf == nil {
+			continue
+		}
+		if eff, ok := mh.dpEbpf.DpFcStateGet(data.tuples.l3Dst.addr.IP, data.tuples.l4Dst.valMin,
+			uint8(data.tuples.l4Prot.val), data.tuples.path, data.tuples.pathPrefix,
+			data.tuples.modelName); ok && eff.ListenerDefaultTokens != nil {
+			listener, known = *eff.ListenerDefaultTokens, true
+		}
+	}
+	return resolved, listener, known
+}
+
+// lbProtoWord is a rule's protocol number as the API spells it.
+func lbProtoWord(p uint8) string {
+	switch p {
+	case 6:
+		return "tcp"
+	case 17:
+		return "udp"
+	case 1:
+		return "icmp"
+	case 132:
+		return "sctp"
+	case 0:
+		return "none"
+	}
+	return ""
 }
 
 // aiServiceIdent is the data plane's service identity of a listener
@@ -142,6 +256,41 @@ func aiServiceIdent(vip net.IP, port uint16) string {
 // request holds less than the default it asked for). resEpoch is 0 when
 // nothing is held on any bucket.
 func tokenQuotaReserveElasticInternal(svc rateLimitService, store *rl.RateLimiterStore, tenantID, modelName, userID, keyID, svcIdent string, firm, elastic int) (allowed bool, retrySecs int, resEpoch int64, granted int, clamped bool) {
+	allowed, retrySecs, resEpoch, granted, why := tokenQuotaReserveElasticReason(svc, store, tenantID, modelName, userID, keyID, svcIdent, firm, elastic)
+	return allowed, retrySecs, resEpoch, granted, why != resvClampNone
+}
+
+// resvClamp says why a default reservation was admitted smaller than the
+// default.
+type resvClamp uint8
+
+const (
+	resvClampNone resvClamp = iota
+	// resvClampBudget: a bucket's budget was already taken by other
+	// claims or by spend. Passes as the window refills.
+	resvClampBudget
+	// resvClampBurst: the default beside the prompt is more than a bucket
+	// can ever hold, so the same request is clamped on an idle bucket too.
+	// A configuration to fix: the default is too large for that quota.
+	resvClampBurst
+)
+
+// The reason label values of loxilb_ai_reservation_clamped_total.
+func (c resvClamp) String() string {
+	switch c {
+	case resvClampBudget:
+		return prom.ReservationClampBudget
+	case resvClampBurst:
+		return prom.ReservationClampBurst
+	}
+	return ""
+}
+
+// tokenQuotaReserveElasticReason is tokenQuotaReserveElasticInternal with the
+// reason for a clamp in place of the flag. Burst wins where both apply: a
+// request that an idle bucket would clamp is the persistent case, whatever
+// the budgets held at that moment.
+func tokenQuotaReserveElasticReason(svc rateLimitService, store *rl.RateLimiterStore, tenantID, modelName, userID, keyID, svcIdent string, firm, elastic int) (allowed bool, retrySecs int, resEpoch int64, granted int, why resvClamp) {
 	if firm < 0 {
 		firm = 0
 	}
@@ -150,19 +299,23 @@ func tokenQuotaReserveElasticInternal(svc rateLimitService, store *rl.RateLimite
 		if allowed && resEpoch != 0 {
 			granted = firm
 		}
-		return allowed, retrySecs, resEpoch, granted, false
+		return allowed, retrySecs, resEpoch, granted, resvClampNone
 	}
 	if tenantID == "" && svcIdent == "" {
-		return true, 0, 0, 0, false
+		return true, 0, 0, 0, resvClampNone
 	}
 	buckets := quotaBucketsFor(svc, tenantID, modelName, userID, keyID, svcIdent)
 	if len(buckets) == 0 {
-		return true, 0, 0, 0, false
+		return true, 0, 0, 0, resvClampNone
 	}
 
 	left := elastic
 	held := make([]int, len(buckets))
+	overBurst := false
 	for i, b := range buckets {
+		if burst := rl.BurstTokens(b.tpm, b.burstPct); burst > 0 && int64(firm)+int64(elastic) > burst {
+			overBurst = true
+		}
 		bAllowed, bRetry, bEpoch, bGranted := store.ReserveTokensElastic(b.key, firm, left, b.tpm, b.burstPct)
 		if !bAllowed {
 			// The firm part did not fit this bucket: today's denial, and
@@ -170,7 +323,7 @@ func tokenQuotaReserveElasticInternal(svc rateLimitService, store *rl.RateLimite
 			for j := range i {
 				store.ReleaseReservation(buckets[j].key, held[j], resEpoch)
 			}
-			return false, bRetry, 0, 0, false
+			return false, bRetry, 0, 0, resvClampNone
 		}
 		held[i] = bGranted
 		left = min(left, max(bGranted-firm, 0))
@@ -184,32 +337,44 @@ func tokenQuotaReserveElasticInternal(svc rateLimitService, store *rl.RateLimite
 			store.ReleaseReservation(b.key, held[i]-granted, resEpoch)
 		}
 	}
-	if granted == 0 {
-		return true, 0, 0, 0, true
+	if left < elastic {
+		why = resvClampBudget
+		if overBurst {
+			why = resvClampBurst
+		}
 	}
-	return true, 0, resEpoch, granted, left < elastic
+	if granted == 0 {
+		return true, 0, 0, 0, why
+	}
+	return true, 0, resEpoch, granted, why
 }
 
-// aiReservationClamped counts, per service ("VIP:port"), the requests whose
-// default reservation was admitted with less than the default: the read
-// side of the rule's reservation_clamped read-back. The Prometheus counter
-// is incremented beside it.
-var aiReservationClamped sync.Map // service identity -> *atomic.Uint64
+// aiReservationClamped counts, per service ("VIP:port") and reason, the
+// requests whose default reservation was admitted with less than the
+// default: the read side of the rule's reservation_clamped_* read-back. The
+// Prometheus counter is incremented beside it.
+var aiReservationClamped sync.Map // service identity -> *[resvClampBurst + 1]atomic.Uint64
 
-func noteReservationClamped(svcIdent string) {
+func noteReservationClamped(svcIdent string, why resvClamp) {
+	if why != resvClampBudget && why != resvClampBurst {
+		return
+	}
 	v, ok := aiReservationClamped.Load(svcIdent)
 	if !ok {
-		v, _ = aiReservationClamped.LoadOrStore(svcIdent, new(atomic.Uint64))
+		v, _ = aiReservationClamped.LoadOrStore(svcIdent, new([resvClampBurst + 1]atomic.Uint64))
 	}
-	v.(*atomic.Uint64).Add(1)
-	prom.RecordReservationClamped(svcIdent)
+	v.(*[resvClampBurst + 1]atomic.Uint64)[why].Add(1)
+	prom.RecordReservationClamped(svcIdent, why.String())
 }
 
 // reservationClampedCount - the clamped default reservations counted on a
-// service since the process started.
-func reservationClampedCount(svcIdent string) uint64 {
+// service for one reason since the process started.
+func reservationClampedCount(svcIdent string, why resvClamp) uint64 {
+	if why != resvClampBudget && why != resvClampBurst {
+		return 0
+	}
 	if v, ok := aiReservationClamped.Load(svcIdent); ok {
-		return v.(*atomic.Uint64).Load()
+		return v.(*[resvClampBurst + 1]atomic.Uint64)[why].Load()
 	}
 	return 0
 }

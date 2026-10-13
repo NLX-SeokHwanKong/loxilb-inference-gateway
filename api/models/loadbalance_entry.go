@@ -662,7 +662,7 @@ type LoadbalanceEntryServiceArguments struct {
 	// Minimum: 0
 	AiDefaultMaxTokens int32 `json:"ai_default_max_tokens,omitempty"`
 
-	// Whether a request that declares no completion ceiling (no max_tokens or max_completion_tokens, or a value that is not a positive whole number: negative, 0, a string, a float, an object or an array) reserves a default number of completion tokens against the token quotas at admission. off reserves the prompt estimate alone, so leaving the field out is the cheaper choice at admission. on reserves ai_default_max_tokens beside the prompt estimate, as a claim each quota bucket may shrink: it is cut to what the bucket can hold beside the prompt estimate and to what is left of it, down to nothing, and it is never the reason a request is refused - only the prompt estimate and a declared ceiling are. A request admitted with less than the default is counted in fc_effective.reservation_clamped and in loxilb_ai_reservation_clamped_total. The claim is released when the response is settled, as a declared ceiling's is. Nothing is written into the forwarded request, and a declared ceiling is never replaced. inherit, or omitted on create, runs on the process default (LLB_AI_DEFAULT_RESERVATION, else off). Replace and null semantics as fc_mode; a replace that changes nothing else applies in place, to requests admitted from then on. Read back only when declared; what is in force is fc_effective.default_reservation. The gate reserves before a rule is selected by host, path or model, so on a VIP and port that several rules share, the value of the rule installed first on it is the one in force for all of them, as with api_key_auth: declare the same value on each.
+	// Whether a request that declares no completion ceiling (no max_tokens or max_completion_tokens, or a value that is not a positive whole number: negative, 0, a string, a float, an object or an array) reserves a default number of completion tokens against the token quotas at admission. off reserves the prompt estimate alone, so leaving the field out is the cheaper choice at admission. on reserves ai_default_max_tokens beside the prompt estimate, as a claim each quota bucket may shrink: it is cut to what the bucket can hold beside the prompt estimate and to what is left of it, down to nothing, and it is never the reason a request is refused - only the prompt estimate and a declared ceiling are. A request admitted with less than the default is counted in fc_effective.reservation_clamped and in loxilb_ai_reservation_clamped_total, by reason: burst (the default is more than a bucket can ever hold beside the prompt) or budget (the bucket's budget was already taken). The claim is released when the response is settled, as a declared ceiling's is. Nothing is written into the forwarded request, and a declared ceiling is never replaced. inherit, or omitted on create, runs on the process default (LLB_AI_DEFAULT_RESERVATION, else off). Replace and null semantics as fc_mode; a replace that changes nothing else applies in place, to requests admitted from then on. Read back only when declared; what is in force is fc_effective.default_reservation. The gate reserves before a rule is selected by host, path or model, so the value is per listener: on a VIP and port that several rules share, the value of the rule installed first on it is the one in force for all of them, as with api_key_auth. Declare the same value on each. A rule applied on a VIP and port whose rules resolve to different values is accepted, and the reply and the log carry a warning that names the value in effect; fc_effective shows that value on every rule.
 	// Enum: [on off inherit]
 	AiDefaultReservation string `json:"ai_default_reservation,omitempty"`
 
@@ -2904,10 +2904,10 @@ type LoadbalanceEntryServiceArgumentsFcEffective struct {
 	// Per-endpoint ceiling for decode legs; 0 is unlimited.
 	DecodeMaxInflight int32 `json:"decode_max_inflight"`
 
-	// The default reservation in tokens; 0 while default_reservation is off.
+	// The default reservation in tokens in force on this rule's VIP and port; 0 while default_reservation is off. Per VIP and port, as default_reservation.
 	DefaultMaxTokens int32 `json:"default_max_tokens"`
 
-	// Whether a request without a declared max_tokens reserves a default for its completion (ai_default_reservation as this rule resolves it; on a VIP and port shared by several rules the gate uses the first-installed rule's).
+	// Whether a request without a declared max_tokens reserves a default for its completion, as the gate runs this rule's VIP and port. One value is in force per VIP and port - the first-installed rule's; where this rule resolves to another, source.default_reservation is listener.
 	// Enum: [on off]
 	DefaultReservation string `json:"default_reservation,omitempty"`
 
@@ -2945,8 +2945,14 @@ type LoadbalanceEntryServiceArgumentsFcEffective struct {
 	// Inference requests waiting for a unit right now.
 	Queued int32 `json:"queued"`
 
-	// Requests admitted with less than default_max_tokens reserved because a quota bucket did not hold all of it, since the process started. Counted per service - every model pool of the same VIP and port reads the same number. Never a refusal.
+	// Requests admitted with less than default_max_tokens reserved because a quota bucket did not hold all of it, since the process started. The sum of reservation_clamped_burst and reservation_clamped_budget. Counted per service - every model pool of the same VIP and port reads the same number. Never a refusal.
 	ReservationClamped int64 `json:"reservation_clamped"`
+
+	// The part of reservation_clamped where the bucket's budget was already taken by other claims or by spend. Transient - it passes as the window refills.
+	ReservationClampedBudget int64 `json:"reservation_clamped_budget"`
+
+	// The part of reservation_clamped where default_max_tokens beside the prompt is more than a quota bucket can ever hold, so the request is clamped on an idle bucket too. A configuration to fix - lower the default or raise the quota or its burst. A request this applies to is counted here whatever the budgets held.
+	ReservationClampedBurst int64 `json:"reservation_clamped_burst"`
 
 	// source
 	Source *LoadbalanceEntryServiceArgumentsFcEffectiveSource `json:"source,omitempty"`
@@ -3299,7 +3305,7 @@ func (m *LoadbalanceEntryServiceArgumentsFcEffective) UnmarshalBinary(b []byte) 
 	return nil
 }
 
-// LoadbalanceEntryServiceArgumentsFcEffectiveSource Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default).
+// LoadbalanceEntryServiceArgumentsFcEffectiveSource Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default). default_reservation and default_max_tokens can also read listener: the value in force is the one of the rule installed first on the VIP and port, and this rule resolves to another.
 //
 // swagger:model LoadbalanceEntryServiceArgumentsFcEffectiveSource
 type LoadbalanceEntryServiceArgumentsFcEffectiveSource struct {
@@ -3313,11 +3319,11 @@ type LoadbalanceEntryServiceArgumentsFcEffectiveSource struct {
 	DecodeMaxInflight string `json:"decode_max_inflight,omitempty"`
 
 	// default max tokens
-	// Enum: [rule env default]
+	// Enum: [rule env default listener]
 	DefaultMaxTokens string `json:"default_max_tokens,omitempty"`
 
 	// default reservation
-	// Enum: [rule env default]
+	// Enum: [rule env default listener]
 	DefaultReservation string `json:"default_reservation,omitempty"`
 
 	// ep max inflight
@@ -3529,7 +3535,7 @@ var loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeDefaultMaxTokensPropEnu
 
 func init() {
 	var res []string
-	if err := json.Unmarshal([]byte(`["rule","env","default"]`), &res); err != nil {
+	if err := json.Unmarshal([]byte(`["rule","env","default","listener"]`), &res); err != nil {
 		panic(err)
 	}
 	for _, v := range res {
@@ -3547,6 +3553,9 @@ const (
 
 	// LoadbalanceEntryServiceArgumentsFcEffectiveSourceDefaultMaxTokensDefault captures enum value "default"
 	LoadbalanceEntryServiceArgumentsFcEffectiveSourceDefaultMaxTokensDefault string = "default"
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveSourceDefaultMaxTokensListener captures enum value "listener"
+	LoadbalanceEntryServiceArgumentsFcEffectiveSourceDefaultMaxTokensListener string = "listener"
 )
 
 // prop value enum
@@ -3574,7 +3583,7 @@ var loadbalanceEntryServiceArgumentsFcEffectiveSourceTypeDefaultReservationPropE
 
 func init() {
 	var res []string
-	if err := json.Unmarshal([]byte(`["rule","env","default"]`), &res); err != nil {
+	if err := json.Unmarshal([]byte(`["rule","env","default","listener"]`), &res); err != nil {
 		panic(err)
 	}
 	for _, v := range res {
@@ -3592,6 +3601,9 @@ const (
 
 	// LoadbalanceEntryServiceArgumentsFcEffectiveSourceDefaultReservationDefault captures enum value "default"
 	LoadbalanceEntryServiceArgumentsFcEffectiveSourceDefaultReservationDefault string = "default"
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveSourceDefaultReservationListener captures enum value "listener"
+	LoadbalanceEntryServiceArgumentsFcEffectiveSourceDefaultReservationListener string = "listener"
 )
 
 // prop value enum

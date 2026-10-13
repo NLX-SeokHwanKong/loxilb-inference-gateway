@@ -1337,7 +1337,7 @@ func llb_ai_token_quota_reserve(tenantID *C.char, modelName *C.char, userID *C.c
 	}
 
 	store := getGlobalRL()
-	allowed, retrySecs, epoch, held, clamped := tokenQuotaReserveElasticInternal(svc, store, tenant, C.GoString(modelName), C.GoString(userID), C.GoString(keyID), service, want, elastic)
+	allowed, retrySecs, epoch, held, clamped := tokenQuotaReserveElasticReason(svc, store, tenant, C.GoString(modelName), C.GoString(userID), C.GoString(keyID), service, want, elastic)
 	if !allowed {
 		if result != nil {
 			result.decision = 3
@@ -1350,8 +1350,8 @@ func llb_ai_token_quota_reserve(tenantID *C.char, modelName *C.char, userID *C.c
 			tenant, want, C.GoString(modelName))
 		return -1
 	}
-	if clamped {
-		noteReservationClamped(service)
+	if clamped != resvClampNone {
+		noteReservationClamped(service, clamped)
 	}
 	if resEpoch != nil {
 		*resEpoch = C.longlong(epoch)

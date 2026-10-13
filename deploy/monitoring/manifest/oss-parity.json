@@ -1,8 +1,8 @@
 {
  "schema_version": 1,
  "provenance": {
-  "generated_at": "2026-10-12T22:38:12+00:00",
-  "source_revision": "d939389f0bc25ea84e62e3abe6f3d4d1e2fc7f53",
+  "generated_at": "2026-10-12T23:57:00+00:00",
+  "source_revision": "0df0d9fd13f081cf6f62af81565802300bb2fcc3",
   "upstream_repository": "https://github.com/loxilb-io/loxilb",
   "upstream_revision": "98487453eaf1853690de5928eab95a51817ba5d7"
  },
@@ -1195,6 +1195,7 @@
    "gateway": {
     "type": "counter",
     "labels": [
+     "reason",
      "service"
     ]
    }

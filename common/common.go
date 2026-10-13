@@ -1762,13 +1762,24 @@ type FcEffectiveArg struct {
 	ExposeHeaders string `json:"expose_headers"`
 	// DefaultReservation is "on" when a request without max_tokens reserves
 	// a default for its completion, else "off"; DefaultMaxTokens is that
-	// default in tokens (0 while off). ReservationClamped counts the
-	// requests of the service (every model pool of its VIP and port) whose
-	// default was admitted smaller than DefaultMaxTokens, since the process
-	// started.
-	DefaultReservation string `json:"default_reservation"`
-	DefaultMaxTokens   uint32 `json:"default_max_tokens"`
-	ReservationClamped uint64 `json:"reservation_clamped"`
+	// default in tokens (0 while off). Both are what the gate runs the
+	// rule's VIP and port on, which is one value per listener: where the
+	// rule resolves to another, Source says "listener".
+	// ReservationClamped counts the requests of the service (every model
+	// pool of its VIP and port) whose default was admitted smaller than
+	// DefaultMaxTokens, since the process started; the two counts beside
+	// it split it by reason: Burst, the default beside the prompt is more
+	// than a quota bucket can ever hold; Budget, the bucket's budget was
+	// already taken.
+	DefaultReservation       string `json:"default_reservation"`
+	DefaultMaxTokens         uint32 `json:"default_max_tokens"`
+	ReservationClamped       uint64 `json:"reservation_clamped"`
+	ReservationClampedBurst  uint64 `json:"reservation_clamped_burst"`
+	ReservationClampedBudget uint64 `json:"reservation_clamped_budget"`
+	// ListenerDefaultTokens is the default reservation the data plane holds
+	// on the listener's first pool, nil where it was not read. An input to
+	// the three fields above, not part of the read-back.
+	ListenerDefaultTokens *uint32 `json:"-"`
 	// Source names where each value in force came from: "rule", "env" or
 	// "default".
 	Source FcEffectiveSource `json:"source"`

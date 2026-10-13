@@ -378,12 +378,23 @@ func ConfigPostLoadbalancer(params operations.PostConfigLoadbalancerParams, prin
 		tk.LogIt(tk.LogDebug, "api: Error occur : %v\n", err)
 		return &ErrorResponse{Payload: ResultErrorResponseError(err)}
 	}
-	// The rule is in. A tenant share on a node that knows more tenants than
-	// a pool tracks is worth saying, in the same reply, and refuses nothing.
+	// The rule is in. What is worth saying about it goes into the same
+	// reply and refuses nothing: a tenant share on a node that knows more
+	// tenants than a pool tracks, and a default reservation that differs
+	// from another rule's on the same VIP and port.
+	var warnings []string
 	if w, ok := ApiHooks.(fcTenantSlotsWarner); ok {
 		if msg := w.NetFcTenantSlotsWarning(&lbRules); msg != "" {
-			return &ResultResponse{Result: "Success; warning: " + msg}
+			warnings = append(warnings, msg)
 		}
+	}
+	if w, ok := ApiHooks.(aiDefaultReservationWarner); ok {
+		if msg := w.NetAIDefaultReservationWarning(&lbRules); msg != "" {
+			warnings = append(warnings, msg)
+		}
+	}
+	if len(warnings) != 0 {
+		return &ResultResponse{Result: "Success; warning: " + strings.Join(warnings, "; warning: ")}
 	}
 	return &ResultResponse{Result: "Success"}
 }
@@ -392,6 +403,12 @@ func ConfigPostLoadbalancer(params operations.PostConfigLoadbalancerParams, prin
 // rule's tenant share outgrows the tenant table.
 type fcTenantSlotsWarner interface {
 	NetFcTenantSlotsWarning(*cmn.LbRuleMod) string
+}
+
+// aiDefaultReservationWarner is the part of the net layer that knows whether
+// the rules sharing a VIP and port agree on their default reservation.
+type aiDefaultReservationWarner interface {
+	NetAIDefaultReservationWarning(*cmn.LbRuleMod) string
 }
 
 func ConfigDeleteLoadbalancer(params operations.DeleteConfigLoadbalancerHosturlHosturlExternalipaddressIPAddressPortPortProtocolProtoParams, principal interface{}) middleware.Responder {
@@ -755,31 +772,33 @@ func serializeLBRule(lb cmn.LbRuleMod) *models.LoadbalanceEntry {
 	tmpSvc.AiDefaultMaxTokens = int32(lb.Serv.AIDefaultMaxTokens)
 	if eff := lb.Serv.FcEffective; eff != nil {
 		tmpSvc.FcEffective = &models.LoadbalanceEntryServiceArgumentsFcEffective{
-			Mode:                    eff.Mode,
-			MaxOutstanding:          int32(eff.MaxOutstanding),
-			EpMaxInflight:           int32(eff.EpMaxInflight),
-			PrefillMaxInflight:      int32(eff.PrefillMaxInflight),
-			DecodeMaxInflight:       int32(eff.DecodeMaxInflight),
-			QueueDepth:              int32(eff.QueueDepth),
-			QueueWaitMs:             int32(eff.QueueWaitMs),
-			Inflight:                int32(eff.Inflight),
-			Queued:                  int32(eff.Queued),
-			QueueMemoryBoundMib:     int64(eff.QueueMemoryBoundMib),
-			TelemetryStaleMs:        int32(eff.TelemetryStaleMs),
-			Adaptive:                eff.Adaptive,
-			WarmupMs:                int32(eff.WarmupMs),
-			TtftTargetMs:            int32(eff.TtftTargetMs),
-			EffectiveMaxOutstanding: int32(eff.EffectiveMaxOutstanding),
-			AdaptState:              eff.AdaptState,
-			AdaptReason:             eff.AdaptReason,
-			WarmingEndpoints:        int32(eff.WarmingEndpoints),
-			TenantMaxSharePct:       int32(eff.TenantMaxSharePct),
-			TenantsActive:           int32(eff.TenantsActive),
-			TenantSlots:             int32(eff.TenantSlots),
-			ExposeHeaders:           eff.ExposeHeaders,
-			DefaultReservation:      eff.DefaultReservation,
-			DefaultMaxTokens:        int32(eff.DefaultMaxTokens),
-			ReservationClamped:      int64(eff.ReservationClamped),
+			Mode:                     eff.Mode,
+			MaxOutstanding:           int32(eff.MaxOutstanding),
+			EpMaxInflight:            int32(eff.EpMaxInflight),
+			PrefillMaxInflight:       int32(eff.PrefillMaxInflight),
+			DecodeMaxInflight:        int32(eff.DecodeMaxInflight),
+			QueueDepth:               int32(eff.QueueDepth),
+			QueueWaitMs:              int32(eff.QueueWaitMs),
+			Inflight:                 int32(eff.Inflight),
+			Queued:                   int32(eff.Queued),
+			QueueMemoryBoundMib:      int64(eff.QueueMemoryBoundMib),
+			TelemetryStaleMs:         int32(eff.TelemetryStaleMs),
+			Adaptive:                 eff.Adaptive,
+			WarmupMs:                 int32(eff.WarmupMs),
+			TtftTargetMs:             int32(eff.TtftTargetMs),
+			EffectiveMaxOutstanding:  int32(eff.EffectiveMaxOutstanding),
+			AdaptState:               eff.AdaptState,
+			AdaptReason:              eff.AdaptReason,
+			WarmingEndpoints:         int32(eff.WarmingEndpoints),
+			TenantMaxSharePct:        int32(eff.TenantMaxSharePct),
+			TenantsActive:            int32(eff.TenantsActive),
+			TenantSlots:              int32(eff.TenantSlots),
+			ExposeHeaders:            eff.ExposeHeaders,
+			DefaultReservation:       eff.DefaultReservation,
+			DefaultMaxTokens:         int32(eff.DefaultMaxTokens),
+			ReservationClamped:       int64(eff.ReservationClamped),
+			ReservationClampedBurst:  int64(eff.ReservationClampedBurst),
+			ReservationClampedBudget: int64(eff.ReservationClampedBudget),
 			Source: &models.LoadbalanceEntryServiceArgumentsFcEffectiveSource{
 				Mode:               eff.Source.Mode,
 				MaxOutstanding:     eff.Source.MaxOutstanding,

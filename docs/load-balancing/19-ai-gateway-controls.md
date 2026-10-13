@@ -200,10 +200,19 @@ How it behaves:
   each quota bucket cuts it to what it can hold: to the bucket's capacity less the prompt
   estimate, and to what earlier reservations have left, down to nothing. Only the prompt
   estimate — and a ceiling the request declares — can be refused, exactly as before.
-- **A request admitted with less than the default is counted**, per service, in
-  `fc_effective.reservation_clamped` on the rule's `GET` and in
-  `loxilb_ai_reservation_clamped_total{service}`. A count that keeps rising means the
-  default is large for the budgets on that service, or the budgets are tight.
+- **A request admitted with less than the default is counted**, per service and by
+  reason, in `loxilb_ai_reservation_clamped_total{service, reason}` and on the rule's
+  `GET` (`fc_effective.reservation_clamped_burst`, `reservation_clamped_budget`, and
+  their sum `reservation_clamped`):
+  - `burst`: the default beside the prompt estimate is more than a quota bucket can ever
+    hold, so the request is clamped even on an idle bucket. This does not pass by itself.
+    Lower `ai_default_max_tokens`, or raise the tenant's `tokens_per_min` or its burst.
+    Alert on this one.
+  - `budget`: the bucket's budget was already taken by other reservations or by spend.
+    It passes as the minute refills; a count that keeps rising means the budgets are
+    tight for the traffic.
+
+  A request both apply to is counted as `burst`.
 - **It sizes the reservation only.** Nothing is written into the request, a declared
   ceiling is never replaced, and the response is charged for its real usage as before.
 - **It narrows the gap, it does not close it.** When a bucket is nearly empty the default
@@ -213,13 +222,23 @@ How it behaves:
 - The built-in `512` is an estimate of a typical completion, not a measured one. Set
   `ai_default_max_tokens` to what your clients' completions look like.
 
-**One value per VIP and port.** The gateway reserves before it selects a rule by host,
-path or model, so where several rules share a VIP and port (model-name routing, for
-example) the value of the rule installed first on it is in force for all of them, as with
-`api_key_auth`. Declare the same value on each rule of such a service.
+**Per listener until per-rule lands.** The gateway reserves before it selects a rule by
+host, path or model, so one default reservation is in force per listener (VIP and port):
+where several rules share one (model-name routing, for example), the value of the rule
+installed first on it applies to all of them, as with `api_key_auth`. Declare the same
+value on each rule of such a service. Two things keep a difference from going unnoticed:
 
-`fc_effective.default_reservation`, `default_max_tokens` and their `source` entries
-(`rule`, `env`, `default`) say what each rule resolves to. Both fields follow the replace rules of the
+- **A warning when the rule is applied.** If the rules on the VIP and port resolve to
+  different default reservations, the rule is still accepted, and the reply reads
+  `Success; warning: ai_default_reservation: …` with the values the rules resolve to and
+  the one in effect. The same text is logged at warning level.
+- **The read-back shows what is in effect.** `fc_effective.default_reservation` and
+  `default_max_tokens` are the listener's value on every rule of the VIP and port, and
+  their `source` entries read `listener` on a rule that resolves to something else
+  (otherwise `rule`, `env` or `default`, as that rule resolves it). The rule's own
+  `ai_default_reservation` and `ai_default_max_tokens` keep showing what it declares.
+
+Both fields follow the replace rules of the
 `fc_*` fields: omitted on a replace keeps the stored value, `inherit` and `0` return to the
 process default, `null` is refused, and a replace that changes nothing else applies in
 place, to requests admitted from then on. A streamed request body whose `max_tokens` the

@@ -4763,7 +4763,7 @@ func init() {
               "x-nullable": false
             },
             "ai_default_reservation": {
-              "description": "Whether a request that declares no completion ceiling (no max_tokens or max_completion_tokens, or a value that is not a positive whole number: negative, 0, a string, a float, an object or an array) reserves a default number of completion tokens against the token quotas at admission. off reserves the prompt estimate alone, so leaving the field out is the cheaper choice at admission. on reserves ai_default_max_tokens beside the prompt estimate, as a claim each quota bucket may shrink: it is cut to what the bucket can hold beside the prompt estimate and to what is left of it, down to nothing, and it is never the reason a request is refused - only the prompt estimate and a declared ceiling are. A request admitted with less than the default is counted in fc_effective.reservation_clamped and in loxilb_ai_reservation_clamped_total. The claim is released when the response is settled, as a declared ceiling's is. Nothing is written into the forwarded request, and a declared ceiling is never replaced. inherit, or omitted on create, runs on the process default (LLB_AI_DEFAULT_RESERVATION, else off). Replace and null semantics as fc_mode; a replace that changes nothing else applies in place, to requests admitted from then on. Read back only when declared; what is in force is fc_effective.default_reservation. The gate reserves before a rule is selected by host, path or model, so on a VIP and port that several rules share, the value of the rule installed first on it is the one in force for all of them, as with api_key_auth: declare the same value on each.",
+              "description": "Whether a request that declares no completion ceiling (no max_tokens or max_completion_tokens, or a value that is not a positive whole number: negative, 0, a string, a float, an object or an array) reserves a default number of completion tokens against the token quotas at admission. off reserves the prompt estimate alone, so leaving the field out is the cheaper choice at admission. on reserves ai_default_max_tokens beside the prompt estimate, as a claim each quota bucket may shrink: it is cut to what the bucket can hold beside the prompt estimate and to what is left of it, down to nothing, and it is never the reason a request is refused - only the prompt estimate and a declared ceiling are. A request admitted with less than the default is counted in fc_effective.reservation_clamped and in loxilb_ai_reservation_clamped_total, by reason: burst (the default is more than a bucket can ever hold beside the prompt) or budget (the bucket's budget was already taken). The claim is released when the response is settled, as a declared ceiling's is. Nothing is written into the forwarded request, and a declared ceiling is never replaced. inherit, or omitted on create, runs on the process default (LLB_AI_DEFAULT_RESERVATION, else off). Replace and null semantics as fc_mode; a replace that changes nothing else applies in place, to requests admitted from then on. Read back only when declared; what is in force is fc_effective.default_reservation. The gate reserves before a rule is selected by host, path or model, so the value is per listener: on a VIP and port that several rules share, the value of the rule installed first on it is the one in force for all of them, as with api_key_auth. Declare the same value on each. A rule applied on a VIP and port whose rules resolve to different values is accepted, and the reply and the log carry a warning that names the value in effect; fc_effective shows that value on every rule.",
               "enum": [
                 "on",
                 "off",
@@ -4992,13 +4992,13 @@ func init() {
                   "x-omitempty": false
                 },
                 "default_max_tokens": {
-                  "description": "The default reservation in tokens; 0 while default_reservation is off.",
+                  "description": "The default reservation in tokens in force on this rule's VIP and port; 0 while default_reservation is off. Per VIP and port, as default_reservation.",
                   "format": "int32",
                   "type": "integer",
                   "x-omitempty": false
                 },
                 "default_reservation": {
-                  "description": "Whether a request without a declared max_tokens reserves a default for its completion (ai_default_reservation as this rule resolves it; on a VIP and port shared by several rules the gate uses the first-installed rule's).",
+                  "description": "Whether a request without a declared max_tokens reserves a default for its completion, as the gate runs this rule's VIP and port. One value is in force per VIP and port - the first-installed rule's; where this rule resolves to another, source.default_reservation is listener.",
                   "enum": [
                     "on",
                     "off"
@@ -5072,13 +5072,25 @@ func init() {
                   "x-omitempty": false
                 },
                 "reservation_clamped": {
-                  "description": "Requests admitted with less than default_max_tokens reserved because a quota bucket did not hold all of it, since the process started. Counted per service - every model pool of the same VIP and port reads the same number. Never a refusal.",
+                  "description": "Requests admitted with less than default_max_tokens reserved because a quota bucket did not hold all of it, since the process started. The sum of reservation_clamped_burst and reservation_clamped_budget. Counted per service - every model pool of the same VIP and port reads the same number. Never a refusal.",
+                  "format": "int64",
+                  "type": "integer",
+                  "x-omitempty": false
+                },
+                "reservation_clamped_budget": {
+                  "description": "The part of reservation_clamped where the bucket's budget was already taken by other claims or by spend. Transient - it passes as the window refills.",
+                  "format": "int64",
+                  "type": "integer",
+                  "x-omitempty": false
+                },
+                "reservation_clamped_burst": {
+                  "description": "The part of reservation_clamped where default_max_tokens beside the prompt is more than a quota bucket can ever hold, so the request is clamped on an idle bucket too. A configuration to fix - lower the default or raise the quota or its burst. A request this applies to is counted here whatever the budgets held.",
                   "format": "int64",
                   "type": "integer",
                   "x-omitempty": false
                 },
                 "source": {
-                  "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default).",
+                  "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default). default_reservation and default_max_tokens can also read listener: the value in force is the one of the rule installed first on the VIP and port, and this rule resolves to another.",
                   "properties": {
                     "adaptive": {
                       "enum": [
@@ -5100,7 +5112,8 @@ func init() {
                       "enum": [
                         "rule",
                         "env",
-                        "default"
+                        "default",
+                        "listener"
                       ],
                       "type": "string"
                     },
@@ -5108,7 +5121,8 @@ func init() {
                       "enum": [
                         "rule",
                         "env",
-                        "default"
+                        "default",
+                        "listener"
                       ],
                       "type": "string"
                     },
@@ -39956,7 +39970,7 @@ func init() {
               "x-nullable": false
             },
             "ai_default_reservation": {
-              "description": "Whether a request that declares no completion ceiling (no max_tokens or max_completion_tokens, or a value that is not a positive whole number: negative, 0, a string, a float, an object or an array) reserves a default number of completion tokens against the token quotas at admission. off reserves the prompt estimate alone, so leaving the field out is the cheaper choice at admission. on reserves ai_default_max_tokens beside the prompt estimate, as a claim each quota bucket may shrink: it is cut to what the bucket can hold beside the prompt estimate and to what is left of it, down to nothing, and it is never the reason a request is refused - only the prompt estimate and a declared ceiling are. A request admitted with less than the default is counted in fc_effective.reservation_clamped and in loxilb_ai_reservation_clamped_total. The claim is released when the response is settled, as a declared ceiling's is. Nothing is written into the forwarded request, and a declared ceiling is never replaced. inherit, or omitted on create, runs on the process default (LLB_AI_DEFAULT_RESERVATION, else off). Replace and null semantics as fc_mode; a replace that changes nothing else applies in place, to requests admitted from then on. Read back only when declared; what is in force is fc_effective.default_reservation. The gate reserves before a rule is selected by host, path or model, so on a VIP and port that several rules share, the value of the rule installed first on it is the one in force for all of them, as with api_key_auth: declare the same value on each.",
+              "description": "Whether a request that declares no completion ceiling (no max_tokens or max_completion_tokens, or a value that is not a positive whole number: negative, 0, a string, a float, an object or an array) reserves a default number of completion tokens against the token quotas at admission. off reserves the prompt estimate alone, so leaving the field out is the cheaper choice at admission. on reserves ai_default_max_tokens beside the prompt estimate, as a claim each quota bucket may shrink: it is cut to what the bucket can hold beside the prompt estimate and to what is left of it, down to nothing, and it is never the reason a request is refused - only the prompt estimate and a declared ceiling are. A request admitted with less than the default is counted in fc_effective.reservation_clamped and in loxilb_ai_reservation_clamped_total, by reason: burst (the default is more than a bucket can ever hold beside the prompt) or budget (the bucket's budget was already taken). The claim is released when the response is settled, as a declared ceiling's is. Nothing is written into the forwarded request, and a declared ceiling is never replaced. inherit, or omitted on create, runs on the process default (LLB_AI_DEFAULT_RESERVATION, else off). Replace and null semantics as fc_mode; a replace that changes nothing else applies in place, to requests admitted from then on. Read back only when declared; what is in force is fc_effective.default_reservation. The gate reserves before a rule is selected by host, path or model, so the value is per listener: on a VIP and port that several rules share, the value of the rule installed first on it is the one in force for all of them, as with api_key_auth. Declare the same value on each. A rule applied on a VIP and port whose rules resolve to different values is accepted, and the reply and the log carry a warning that names the value in effect; fc_effective shows that value on every rule.",
               "type": "string",
               "enum": [
                 "on",
@@ -40186,13 +40200,13 @@ func init() {
                   "format": "int32"
                 },
                 "default_max_tokens": {
-                  "description": "The default reservation in tokens; 0 while default_reservation is off.",
+                  "description": "The default reservation in tokens in force on this rule's VIP and port; 0 while default_reservation is off. Per VIP and port, as default_reservation.",
                   "type": "integer",
                   "format": "int32",
                   "x-omitempty": false
                 },
                 "default_reservation": {
-                  "description": "Whether a request without a declared max_tokens reserves a default for its completion (ai_default_reservation as this rule resolves it; on a VIP and port shared by several rules the gate uses the first-installed rule's).",
+                  "description": "Whether a request without a declared max_tokens reserves a default for its completion, as the gate runs this rule's VIP and port. One value is in force per VIP and port - the first-installed rule's; where this rule resolves to another, source.default_reservation is listener.",
                   "type": "string",
                   "enum": [
                     "on",
@@ -40266,13 +40280,25 @@ func init() {
                   "format": "int32"
                 },
                 "reservation_clamped": {
-                  "description": "Requests admitted with less than default_max_tokens reserved because a quota bucket did not hold all of it, since the process started. Counted per service - every model pool of the same VIP and port reads the same number. Never a refusal.",
+                  "description": "Requests admitted with less than default_max_tokens reserved because a quota bucket did not hold all of it, since the process started. The sum of reservation_clamped_burst and reservation_clamped_budget. Counted per service - every model pool of the same VIP and port reads the same number. Never a refusal.",
+                  "type": "integer",
+                  "format": "int64",
+                  "x-omitempty": false
+                },
+                "reservation_clamped_budget": {
+                  "description": "The part of reservation_clamped where the bucket's budget was already taken by other claims or by spend. Transient - it passes as the window refills.",
+                  "type": "integer",
+                  "format": "int64",
+                  "x-omitempty": false
+                },
+                "reservation_clamped_burst": {
+                  "description": "The part of reservation_clamped where default_max_tokens beside the prompt is more than a quota bucket can ever hold, so the request is clamped on an idle bucket too. A configuration to fix - lower the default or raise the quota or its burst. A request this applies to is counted here whatever the budgets held.",
                   "type": "integer",
                   "format": "int64",
                   "x-omitempty": false
                 },
                 "source": {
-                  "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default).",
+                  "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default). default_reservation and default_max_tokens can also read listener: the value in force is the one of the rule installed first on the VIP and port, and this rule resolves to another.",
                   "type": "object",
                   "properties": {
                     "adaptive": {
@@ -40296,7 +40322,8 @@ func init() {
                       "enum": [
                         "rule",
                         "env",
-                        "default"
+                        "default",
+                        "listener"
                       ]
                     },
                     "default_reservation": {
@@ -40304,7 +40331,8 @@ func init() {
                       "enum": [
                         "rule",
                         "env",
-                        "default"
+                        "default",
+                        "listener"
                       ]
                     },
                     "ep_max_inflight": {
@@ -41175,7 +41203,7 @@ func init() {
           "x-nullable": false
         },
         "ai_default_reservation": {
-          "description": "Whether a request that declares no completion ceiling (no max_tokens or max_completion_tokens, or a value that is not a positive whole number: negative, 0, a string, a float, an object or an array) reserves a default number of completion tokens against the token quotas at admission. off reserves the prompt estimate alone, so leaving the field out is the cheaper choice at admission. on reserves ai_default_max_tokens beside the prompt estimate, as a claim each quota bucket may shrink: it is cut to what the bucket can hold beside the prompt estimate and to what is left of it, down to nothing, and it is never the reason a request is refused - only the prompt estimate and a declared ceiling are. A request admitted with less than the default is counted in fc_effective.reservation_clamped and in loxilb_ai_reservation_clamped_total. The claim is released when the response is settled, as a declared ceiling's is. Nothing is written into the forwarded request, and a declared ceiling is never replaced. inherit, or omitted on create, runs on the process default (LLB_AI_DEFAULT_RESERVATION, else off). Replace and null semantics as fc_mode; a replace that changes nothing else applies in place, to requests admitted from then on. Read back only when declared; what is in force is fc_effective.default_reservation. The gate reserves before a rule is selected by host, path or model, so on a VIP and port that several rules share, the value of the rule installed first on it is the one in force for all of them, as with api_key_auth: declare the same value on each.",
+          "description": "Whether a request that declares no completion ceiling (no max_tokens or max_completion_tokens, or a value that is not a positive whole number: negative, 0, a string, a float, an object or an array) reserves a default number of completion tokens against the token quotas at admission. off reserves the prompt estimate alone, so leaving the field out is the cheaper choice at admission. on reserves ai_default_max_tokens beside the prompt estimate, as a claim each quota bucket may shrink: it is cut to what the bucket can hold beside the prompt estimate and to what is left of it, down to nothing, and it is never the reason a request is refused - only the prompt estimate and a declared ceiling are. A request admitted with less than the default is counted in fc_effective.reservation_clamped and in loxilb_ai_reservation_clamped_total, by reason: burst (the default is more than a bucket can ever hold beside the prompt) or budget (the bucket's budget was already taken). The claim is released when the response is settled, as a declared ceiling's is. Nothing is written into the forwarded request, and a declared ceiling is never replaced. inherit, or omitted on create, runs on the process default (LLB_AI_DEFAULT_RESERVATION, else off). Replace and null semantics as fc_mode; a replace that changes nothing else applies in place, to requests admitted from then on. Read back only when declared; what is in force is fc_effective.default_reservation. The gate reserves before a rule is selected by host, path or model, so the value is per listener: on a VIP and port that several rules share, the value of the rule installed first on it is the one in force for all of them, as with api_key_auth. Declare the same value on each. A rule applied on a VIP and port whose rules resolve to different values is accepted, and the reply and the log carry a warning that names the value in effect; fc_effective shows that value on every rule.",
           "type": "string",
           "enum": [
             "on",
@@ -41405,13 +41433,13 @@ func init() {
               "format": "int32"
             },
             "default_max_tokens": {
-              "description": "The default reservation in tokens; 0 while default_reservation is off.",
+              "description": "The default reservation in tokens in force on this rule's VIP and port; 0 while default_reservation is off. Per VIP and port, as default_reservation.",
               "type": "integer",
               "format": "int32",
               "x-omitempty": false
             },
             "default_reservation": {
-              "description": "Whether a request without a declared max_tokens reserves a default for its completion (ai_default_reservation as this rule resolves it; on a VIP and port shared by several rules the gate uses the first-installed rule's).",
+              "description": "Whether a request without a declared max_tokens reserves a default for its completion, as the gate runs this rule's VIP and port. One value is in force per VIP and port - the first-installed rule's; where this rule resolves to another, source.default_reservation is listener.",
               "type": "string",
               "enum": [
                 "on",
@@ -41485,13 +41513,25 @@ func init() {
               "format": "int32"
             },
             "reservation_clamped": {
-              "description": "Requests admitted with less than default_max_tokens reserved because a quota bucket did not hold all of it, since the process started. Counted per service - every model pool of the same VIP and port reads the same number. Never a refusal.",
+              "description": "Requests admitted with less than default_max_tokens reserved because a quota bucket did not hold all of it, since the process started. The sum of reservation_clamped_burst and reservation_clamped_budget. Counted per service - every model pool of the same VIP and port reads the same number. Never a refusal.",
+              "type": "integer",
+              "format": "int64",
+              "x-omitempty": false
+            },
+            "reservation_clamped_budget": {
+              "description": "The part of reservation_clamped where the bucket's budget was already taken by other claims or by spend. Transient - it passes as the window refills.",
+              "type": "integer",
+              "format": "int64",
+              "x-omitempty": false
+            },
+            "reservation_clamped_burst": {
+              "description": "The part of reservation_clamped where default_max_tokens beside the prompt is more than a quota bucket can ever hold, so the request is clamped on an idle bucket too. A configuration to fix - lower the default or raise the quota or its burst. A request this applies to is counted here whatever the budgets held.",
               "type": "integer",
               "format": "int64",
               "x-omitempty": false
             },
             "source": {
-              "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default).",
+              "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default). default_reservation and default_max_tokens can also read listener: the value in force is the one of the rule installed first on the VIP and port, and this rule resolves to another.",
               "type": "object",
               "properties": {
                 "adaptive": {
@@ -41515,7 +41555,8 @@ func init() {
                   "enum": [
                     "rule",
                     "env",
-                    "default"
+                    "default",
+                    "listener"
                   ]
                 },
                 "default_reservation": {
@@ -41523,7 +41564,8 @@ func init() {
                   "enum": [
                     "rule",
                     "env",
-                    "default"
+                    "default",
+                    "listener"
                   ]
                 },
                 "ep_max_inflight": {
@@ -42338,12 +42380,12 @@ func init() {
           "format": "int32"
         },
         "default_max_tokens": {
-          "description": "The default reservation in tokens; 0 while default_reservation is off.",
+          "description": "The default reservation in tokens in force on this rule's VIP and port; 0 while default_reservation is off. Per VIP and port, as default_reservation.",
           "type": "integer",
           "format": "int32"
         },
         "default_reservation": {
-          "description": "Whether a request without a declared max_tokens reserves a default for its completion (ai_default_reservation as this rule resolves it; on a VIP and port shared by several rules the gate uses the first-installed rule's).",
+          "description": "Whether a request without a declared max_tokens reserves a default for its completion, as the gate runs this rule's VIP and port. One value is in force per VIP and port - the first-installed rule's; where this rule resolves to another, source.default_reservation is listener.",
           "type": "string",
           "enum": [
             "on",
@@ -42408,12 +42450,22 @@ func init() {
           "format": "int32"
         },
         "reservation_clamped": {
-          "description": "Requests admitted with less than default_max_tokens reserved because a quota bucket did not hold all of it, since the process started. Counted per service - every model pool of the same VIP and port reads the same number. Never a refusal.",
+          "description": "Requests admitted with less than default_max_tokens reserved because a quota bucket did not hold all of it, since the process started. The sum of reservation_clamped_burst and reservation_clamped_budget. Counted per service - every model pool of the same VIP and port reads the same number. Never a refusal.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "reservation_clamped_budget": {
+          "description": "The part of reservation_clamped where the bucket's budget was already taken by other claims or by spend. Transient - it passes as the window refills.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "reservation_clamped_burst": {
+          "description": "The part of reservation_clamped where default_max_tokens beside the prompt is more than a quota bucket can ever hold, so the request is clamped on an idle bucket too. A configuration to fix - lower the default or raise the quota or its burst. A request this applies to is counted here whatever the budgets held.",
           "type": "integer",
           "format": "int64"
         },
         "source": {
-          "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default).",
+          "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default). default_reservation and default_max_tokens can also read listener: the value in force is the one of the rule installed first on the VIP and port, and this rule resolves to another.",
           "type": "object",
           "properties": {
             "adaptive": {
@@ -42437,7 +42489,8 @@ func init() {
               "enum": [
                 "rule",
                 "env",
-                "default"
+                "default",
+                "listener"
               ]
             },
             "default_reservation": {
@@ -42445,7 +42498,8 @@ func init() {
               "enum": [
                 "rule",
                 "env",
-                "default"
+                "default",
+                "listener"
               ]
             },
             "ep_max_inflight": {
@@ -42575,7 +42629,7 @@ func init() {
       "readOnly": true
     },
     "LoadbalanceEntryServiceArgumentsFcEffectiveSource": {
-      "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default).",
+      "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default). default_reservation and default_max_tokens can also read listener: the value in force is the one of the rule installed first on the VIP and port, and this rule resolves to another.",
       "type": "object",
       "properties": {
         "adaptive": {
@@ -42599,7 +42653,8 @@ func init() {
           "enum": [
             "rule",
             "env",
-            "default"
+            "default",
+            "listener"
           ]
         },
         "default_reservation": {
@@ -42607,7 +42662,8 @@ func init() {
           "enum": [
             "rule",
             "env",
-            "default"
+            "default",
+            "listener"
           ]
         },
         "ep_max_inflight": {

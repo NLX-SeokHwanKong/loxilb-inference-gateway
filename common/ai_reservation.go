@@ -55,6 +55,10 @@ const (
 	AIDefaultSourceRule    = "rule"
 	AIDefaultSourceEnv     = "env"
 	AIDefaultSourceDefault = "default"
+	// AIDefaultSourceListener: the value in force is not this rule's own
+	// but the listener's, set by the first rule installed on the VIP and
+	// port. The gate reserves before a rule is selected.
+	AIDefaultSourceListener = "listener"
 )
 
 // AIDefaultReservationToRule maps a rule's ai_default_reservation to what
