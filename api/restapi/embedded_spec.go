@@ -8296,6 +8296,13 @@ func init() {
           "description": "build info",
           "type": "string"
         },
+        "features": {
+          "description": "Optional capabilities this build serves, for clients that gate a feature on the gateway rather than on its version string. \"epp\" means loadbalancer rules accept the Endpoint Picker fields (eppEndpoint, eppFailureMode, eppTimeoutMs, eppPlaintext) and the data plane consults the picker. Builds predating the field omit it; clients treat an absent or empty list as \"no optional feature\".",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "product": {
           "description": "Product identifier for API flavor detection. This gateway reports \"loxilb-inference-gateway\"; upstream loxilb (and gateway builds predating the field) omit it, which clients treat as plain loxilb.",
           "type": "string"
@@ -45515,6 +45522,13 @@ func init() {
         "buildInfo": {
           "description": "build info",
           "type": "string"
+        },
+        "features": {
+          "description": "Optional capabilities this build serves, for clients that gate a feature on the gateway rather than on its version string. \"epp\" means loadbalancer rules accept the Endpoint Picker fields (eppEndpoint, eppFailureMode, eppTimeoutMs, eppPlaintext) and the data plane consults the picker. Builds predating the field omit it; clients treat an absent or empty list as \"no optional feature\".",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "product": {
           "description": "Product identifier for API flavor detection. This gateway reports \"loxilb-inference-gateway\"; upstream loxilb (and gateway builds predating the field) omit it, which clients treat as plain loxilb.",

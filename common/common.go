@@ -58,6 +58,16 @@ var BuildTags string = ""
 // upstream loxilb, so this must ship in any release the UI flavor-gates on.
 const Product = "loxilb-inference-gateway"
 
+// FeatureEpp is the GET /version feature flag for the Endpoint Picker
+// integration: loadbalancer rules accept the epp* fields and the data
+// plane consults the picker. kube-loxilb gates its EPP support on it.
+const FeatureEpp = "epp"
+
+// Features lists the optional capabilities this build advertises on GET
+// /version. Clients gate on the flag, not on the version string, so a
+// build must only list what it really serves.
+var Features = []string{FeatureEpp}
+
 // This file defines the go interface implementation needed to interact with loxinet go module
 
 const (

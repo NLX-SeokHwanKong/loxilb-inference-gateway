@@ -54,6 +54,7 @@ if [ "$code" != "200" ]; then
 else ok "FailClose rule accepted"; fi
 code=$(curl -s --max-time 8 -o /dev/null -w '%{http_code}' -X POST "$API/config/loadbalancer" -H 'Content-Type: application/json' -d "$(rule_json $PORT_FO FailOpen)")
 check "FailOpen rule accepted" "$code" "200"
+check "/version advertises the epp feature" "$(curl -s --max-time 5 "$API/version" | jq -r '(.features // []) | index("epp") != null')" "true"
 RULE=$(curl -s --max-time 5 "$API/config/loadbalancer/all" | jq -c '.lbAttr[]? | select(.serviceArguments.name=="epp-FailClose")')
 check "eppEndpoint reads back"   "$(jq -r '.serviceArguments.eppEndpoint' <<<"$RULE")" "$EPP_IP:$EPP_PORT"
 check "eppFailureMode reads back" "$(jq -r '.serviceArguments.eppFailureMode' <<<"$RULE")" "FailClose"
