@@ -461,3 +461,35 @@ func TestEncodeNetIdentityIsAddOnly(t *testing.T) {
 		}
 	}
 }
+
+// A bearer-token actor is written with the mode's own value and the same
+// fields any other actor has: a reader that does not know the value reads a
+// well-formed record with an auth string it has not seen, nothing else.
+func TestEncodeBearerAuth(t *testing.T) {
+	e := newEncoder()
+	r := goldenData()
+	r.Actor = Actor{Auth: AuthBearer, Tenant: "acme", User: "alice", Remote: "10.20.0.7"}
+	got, err := e.encode(r, goldenStamp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		SchemaVersion int `json:"schema_version"`
+		Actor         map[string]any
+	}
+	if err := json.Unmarshal(got, &doc); err != nil {
+		t.Fatalf("not readable as JSON: %v: %s", err, got)
+	}
+	if doc.SchemaVersion != SchemaVersion || SchemaVersion != 1 {
+		t.Errorf("schema_version = %d, package says %d, want 1", doc.SchemaVersion, SchemaVersion)
+	}
+	want := map[string]any{"auth": "bearer", "tenant": "acme", "user": "alice", "remote": "10.20.0.7"}
+	if len(doc.Actor) != len(want) {
+		t.Errorf("actor = %v, want exactly %v", doc.Actor, want)
+	}
+	for k, v := range want {
+		if doc.Actor[k] != v {
+			t.Errorf("actor.%s = %v, want %v", k, doc.Actor[k], v)
+		}
+	}
+}

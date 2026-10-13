@@ -25,6 +25,7 @@ import (
 // A request with no binding is recorded as it always was: the actor says
 // nothing about a network identity, whatever the source argument holds.
 func TestAINetActorWithoutABindingChangesNothing(t *testing.T) {
+	// A bearer token is not in this list: it changes the mode on its own.
 	for _, src := range []int{aiAuthSrcCredential, aiAuthSrcNetwork} {
 		keyed := aiDataActor("acme", "u-1", "k-1")
 		if got := aiNetActor(keyed, src, ""); got != keyed {
@@ -51,10 +52,88 @@ func TestAINetActorNamesTheBinding(t *testing.T) {
 		t.Errorf("credential-decided actor = %+v, want apikey with the binding named", a)
 	}
 
-	// A bearer token decided (no key id): the mode stays what it was.
-	a = aiNetActor(aiDataActor("acme", "alice", ""), aiAuthSrcCredential, "line-1")
-	if a.Auth != audit.AuthNone || a.NetIdentity != "line-1" {
-		t.Errorf("token-decided actor = %+v, want the mode untouched", a)
+	// A bearer token decided and the binding matched beside it.
+	a = aiNetActor(aiDataActor("acme", "alice", ""), aiAuthSrcBearer, "line-1")
+	if a.Auth != audit.AuthBearer || a.NetIdentity != "line-1" {
+		t.Errorf("token-decided actor = %+v, want bearer with the binding named", a)
+	}
+}
+
+// A request a validated bearer token decided reads as bearer on each of its
+// three records, with no binding anywhere; an API key and an anonymous
+// request read as they always did.
+func TestBearerTokenIsRecordedAsBearer(t *testing.T) {
+	a := aiNetActor(aiDataActor("acme", "alice", ""), aiAuthSrcBearer, "")
+	if a.Auth != audit.AuthBearer || a.NetIdentity != "" || a.Tenant != "acme" || a.User != "alice" {
+		t.Errorf("bearer actor = %+v", a)
+	}
+	if a := aiNetActor(aiDataActor("acme", "", "k-1"), aiAuthSrcCredential, ""); a.Auth != audit.AuthAPIKey {
+		t.Errorf("API-key actor = %+v", a)
+	}
+	if a := aiNetActor(aiDataActor("", "", ""), aiAuthSrcCredential, ""); a.Auth != audit.AuthNone {
+		t.Errorf("anonymous actor = %+v", a)
+	}
+
+	_, drain := startTrail(t)
+	if !emitAIComplete(aiCompleteRecord{
+		RequestID: "req-jwt", TenantID: "acme", UserID: "alice", SvcIdent: "10.0.0.1:8080",
+		ModelName: "llama-3", StatusCode: 200, WorkerID: 1, ClientIP: "10.20.0.7",
+		AuthSrc: aiAuthSrcBearer,
+	}) {
+		t.Fatal("emit refused")
+	}
+	if !emitAISettle(aiSettleRecord{
+		RequestID: "req-jwt", TenantID: "acme", UserID: "alice", SvcIdent: "10.0.0.1:8080",
+		ModelName: "llama-3", TokensIn: 7, TokensOut: 3, Allowed: true, WorkerID: 1,
+		AuthSrc: aiAuthSrcBearer,
+	}) {
+		t.Fatal("emit refused")
+	}
+	if !emitAIDeny(aiDenyRecord{
+		RequestID: "req-jwt-denied", TenantID: "acme", UserID: "alice", SvcIdent: "10.0.0.1:8080",
+		Stage: aiStageRateLimit, HTTPStatus: 429, ErrorCode: "rate_limit_exceeded",
+		WorkerID: 1, ClientIP: "10.20.0.7",
+		AuthSrc: aiAuthSrcBearer,
+	}) {
+		t.Fatal("emit refused")
+	}
+	// A token that did not validate decided nothing.
+	if !emitAIDeny(aiDenyRecord{
+		RequestID: "req-jwt-invalid", SvcIdent: "10.0.0.1:8080",
+		Stage: aiStageAuth, HTTPStatus: 401, ErrorCode: "invalid_token",
+		WorkerID: 1, ClientIP: "10.20.0.7",
+	}) {
+		t.Fatal("emit refused")
+	}
+
+	seen := map[string]string{}
+	for _, l := range drain() {
+		et := l.str("event_type")
+		if et != eventAIComplete && et != eventAISettle && et != eventAIDeny {
+			continue
+		}
+		a := l.actor()
+		seen[et+" "+l.str("request_id")] = a.str("auth")
+		if _, found := a["net_identity"]; found {
+			t.Errorf("%s: net_identity present with no binding", et)
+		}
+		if _, found := a["key_id"]; found {
+			t.Errorf("%s: key_id present on a token request", et)
+		}
+	}
+	want := map[string]string{
+		eventAIComplete + " req-jwt":     "bearer",
+		eventAISettle + " req-jwt":       "bearer",
+		eventAIDeny + " req-jwt-denied":  "bearer",
+		eventAIDeny + " req-jwt-invalid": "none",
+	}
+	for k, v := range want {
+		if seen[k] != v {
+			t.Errorf("%s: auth %q, want %q", k, seen[k], v)
+		}
+	}
+	if len(seen) != len(want) {
+		t.Errorf("records seen: %v", seen)
 	}
 }
 

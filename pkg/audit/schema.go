@@ -85,6 +85,9 @@ const (
 	// where the request came from, as far as the network can vouch for
 	// that; it is not proof of who sent it.
 	AuthNetwork AuthMode = "network"
+	// AuthBearer is a data-path request whose tenant was decided by a
+	// bearer token the gateway validated (a JWT).
+	AuthBearer AuthMode = "bearer"
 )
 
 // Reason is the closed vocabulary of outcome.reason. It is the only

@@ -326,9 +326,14 @@ func aiDataActor(tenantID, userID, keyID string) audit.Actor {
 const (
 	aiAuthSrcCredential = 0
 	aiAuthSrcNetwork    = 1
+	aiAuthSrcBearer     = 2
 )
 
-// aiNetActor records a network-identity binding on a data-path actor.
+// aiNetActor records, on a data-path actor, what the gate said decided the
+// tenant and the network-identity binding that matched the source.
+//
+// A bearer token the gateway validated reads as bearer: the token mints no
+// key id, so without this the actor would read as unauthenticated.
 //
 // netIdentity is the binding that matched the request's source and is
 // recorded whenever one did. authSrc says whether it decided the tenant:
@@ -338,6 +343,9 @@ const (
 // not written without a binding to name: a mode nothing can be traced to
 // would be a claim, not a record.
 func aiNetActor(a audit.Actor, authSrc int, netIdentity string) audit.Actor {
+	if authSrc == aiAuthSrcBearer {
+		a.Auth = audit.AuthBearer
+	}
 	if netIdentity == "" {
 		return a
 	}

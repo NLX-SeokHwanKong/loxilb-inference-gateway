@@ -1642,11 +1642,11 @@ func llb_ai_stream_end(tenantID *C.char, modelName *C.char) C.int {
 //	               peer
 //	trustedHops:   how many of our own hops the attribution walk stepped
 //	               past; read only as a pair with originIP
-//	authSrc:       what decided the tenant: 0 a credential (or nothing), 1 a
-//	               network-identity binding
+//	authSrc:       what decided the tenant: 0 an API key (or nothing), 1 a
+//	               network-identity binding, 2 a validated bearer token
 //	netIdentity:   the binding that matched the request's source, "" when
-//	               none did; set with authSrc 0 when a credential decided
-//	               and the binding only matched beside it
+//	               none did; set with authSrc 0 or 2 when a credential
+//	               decided and the binding only matched beside it
 //
 //export llb_ai_record_request
 func llb_ai_record_request(tenantID *C.char, modelName *C.char, statusCode C.int, latencyMs C.int64_t, promptTokens C.int, completTokens C.int, streamStart C.int, streamEnd C.int, errorCode *C.char, requestID *C.char, userID *C.char, keyID *C.char, svcIdent *C.char, isStream C.int, producerID C.int, clientIP *C.char, originIP *C.char, trustedHops C.int, authSrc C.int, netIdentity *C.char) {

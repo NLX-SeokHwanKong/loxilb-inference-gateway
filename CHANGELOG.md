@@ -84,6 +84,17 @@ binary behaves exactly like upstream loxilb.
 - Container image renamed to `ghcr.io/loxilb-io/loxilb-inference-gateway`.
 - README rewritten around inference-gateway use cases; `loxilb-ebpf` submodule
   repointed to the `loxilb-ebpf-inference-gateway` fork.
+- **Audit trail: a request authenticated by a bearer token (JWT) is recorded
+  with `actor.auth: "bearer"`.** It used to be recorded as `"none"`, the
+  value an unauthenticated request has, because the data-path actor only
+  knew API keys. The new value is written on `data.ai.complete`,
+  `data.ai.settle` and `sec.ai.deny` once the token has validated; a request
+  whose token did not validate is still `"none"`, and API-key requests are
+  still `"apikey"`. `schema_version` stays `1`. **SIEM impact:** a rule or
+  dashboard that matches `actor.auth == "none"` no longer matches JWT
+  traffic, and a consumer that validates `actor.auth` against a closed list
+  must accept `"bearer"` (and `"network"`, written when a network-identity
+  binding decided the tenant).
 
 ### Notes
 
