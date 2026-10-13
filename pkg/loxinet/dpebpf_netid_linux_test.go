@@ -78,9 +78,25 @@ func TestNetIdentityForwardAndInterfaceSwitchReachTheDataPlane(t *testing.T) {
 			t.Errorf("all: %q reads %#x, want %#x", svc, got, want)
 		}
 	}
-	netidBoundPublish(netidBound{all: true, allFwd: true})
-	if got := netidBoundRead(nidSvcB); got != fwd {
-		t.Errorf("all forward: reads %#x, want %#x", got, fwd)
+	// The set holds netidBoundSvcMax services: at that size a service nobody
+	// named reads as unbound, and one more makes the set answer for every
+	// service, with the forward flag when a named one carries it. That wider
+	// answer is why the bindings are refused before they get there.
+	full := netidBound{svcs: map[string]bool{}, fwd: map[string]bool{nidSvcC: true}}
+	for i := 0; len(full.svcs) < netidBoundSvcMax-1; i++ {
+		full.svcs[fmt.Sprintf("30.%d.%d.1:80", i/250, i%250)] = false
+	}
+	netidBoundPublish(full)
+	if got := netidBoundRead(nidSvcB); got != 0 {
+		t.Errorf("a full set: an unnamed service reads %#x", got)
+	}
+	if got := netidBoundRead(nidSvcC); got != fwd {
+		t.Errorf("a full set: the forwarding service reads %#x, want %#x", got, fwd)
+	}
+	full.svcs["31.0.0.1:80"] = false
+	netidBoundPublish(full)
+	if got := netidBoundRead(nidSvcB); got&netidBoundBit == 0 {
+		t.Errorf("past the size the set no longer answers for every service (%#x): netidBoundSvcMax is not the data plane's", got)
 	}
 	netidBoundPublish(netidBound{})
 	if got := netidBoundRead(nidSvcA); got != 0 {

@@ -22,11 +22,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -322,6 +326,13 @@ func TestProducerDropAccounting(t *testing.T) {
 
 	cfg := testConfig(t)
 	cfg.QueueSize = 4
+	var logMu sync.Mutex
+	var warned []string
+	cfg.Logf = func(format string, args ...any) {
+		logMu.Lock()
+		warned = append(warned, fmt.Sprintf(format, args...))
+		logMu.Unlock()
+	}
 	w := startWriter(t, cfg)
 	w.faults.arm(FaultWriterStall)
 	// Wake the writer so it is inside a stall while we flood the queue.
@@ -352,6 +363,22 @@ func TestProducerDropAccounting(t *testing.T) {
 	waitFor(t, "queue drained", func() bool { return w.Stats().QueueDepth["data"] == 0 })
 	w.heartbeatNow(t)
 	closeWriter(t, w)
+
+	// The drop is said in the operational log too, with the producer, the
+	// count and the reason.
+	logMu.Lock()
+	said := strings.Join(warned, "\n")
+	logMu.Unlock()
+	// A heartbeat of its own may have split the drops over two drains: the
+	// lines add up to every drop.
+	var loggedDrops int
+	for _, m := range regexp.MustCompile(`WARNING: producer w1 dropped (\d+) data records \(queue_full first\)`).FindAllStringSubmatch(said, -1) {
+		k, _ := strconv.Atoi(m[1])
+		loggedDrops += k
+	}
+	if loggedDrops != n-accepted {
+		t.Fatalf("the operational log names %d dropped records, want %d: %q", loggedDrops, n-accepted, said)
+	}
 
 	ls := readDir(t, cfg.Dir)
 	gaps := ofType(ls, "sys.producer.gap")
@@ -1090,4 +1117,63 @@ func TestProducerGapRingOverflow(t *testing.T) {
 	if covered+overflows != droppedTotal {
 		t.Fatalf("width %d + overflows %d != dropped_total %d", covered, overflows, droppedTotal)
 	}
+}
+
+// TestProducerDropWarningCountsEveryDropOnce floods a stalled writer twice,
+// each time with more drops than the drop ring can name, with a heartbeat
+// after each. The operational log has to name every drop exactly once: a
+// count read from the ring would stop at the ring's size, and one read
+// from the counters without remembering the last reading would name the
+// first flood's drops again.
+func TestProducerDropWarningCountsEveryDropOnce(t *testing.T) {
+	old := stallNanos.Swap(int64(100 * time.Millisecond))
+	defer stallNanos.Store(old)
+
+	cfg := testConfig(t)
+	cfg.QueueSize = 4
+	var logMu sync.Mutex
+	var warned []string
+	cfg.Logf = func(format string, args ...any) {
+		logMu.Lock()
+		warned = append(warned, fmt.Sprintf(format, args...))
+		logMu.Unlock()
+	}
+	w := startWriter(t, cfg)
+	p := w.Producer("w1", StreamData)
+	re := regexp.MustCompile(`WARNING: producer w1 dropped (\d+) data records \(queue_full first\)`)
+	logged := func() (sum int, lines []int) {
+		logMu.Lock()
+		defer logMu.Unlock()
+		for _, m := range re.FindAllStringSubmatch(strings.Join(warned, "\n"), -1) {
+			k, _ := strconv.Atoi(m[1])
+			sum += k
+			lines = append(lines, k)
+		}
+		return sum, lines
+	}
+
+	const n = dropRingSize * 3
+	var droppedSoFar int
+	for round := 1; round <= 2; round++ {
+		w.faults.arm(FaultWriterStall)
+		w.Append(mgmtIntent("/wake"))
+		time.Sleep(5 * time.Millisecond)
+		accepted := 0
+		for i := 0; i < n; i++ {
+			if p.Emit(dataRecord()) {
+				accepted++
+			}
+		}
+		w.faults.arm("")
+		if n-accepted <= dropRingSize {
+			t.Fatalf("round %d: %d drops do not overflow the ring of %d; the test proves nothing", round, n-accepted, dropRingSize)
+		}
+		droppedSoFar += n - accepted
+		waitFor(t, "queue drained", func() bool { return w.Stats().QueueDepth["data"] == 0 })
+		w.heartbeatNow(t)
+		if sum, lines := logged(); sum != droppedSoFar {
+			t.Fatalf("round %d: the log names %d dropped records in lines %v, the producer dropped %d", round, sum, lines, droppedSoFar)
+		}
+	}
+	closeWriter(t, w)
 }

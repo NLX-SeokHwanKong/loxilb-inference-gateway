@@ -4573,6 +4573,10 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 	if err := fcExposeSockMapErr(&serv, nextFcCfg, sockMapCode); err != nil {
 		return RuleArgsErr, err
 	}
+	if err := netidRuleSockMapErr(mh.NetIdentity, aiServiceIdent(sNetAddr.IP, serv.ServPort),
+		aiGwModeFor(serv.SSEMode, serv.PDDisaggMode, nextApiKeyAuth), sockMapCode); err != nil {
+		return RuleArgsErr, err
+	}
 	if err := resolveCHWBLContract(&serv, eRule, lBActs.endPoints); err != nil {
 		return RuleUnknownServiceErr, err
 	}

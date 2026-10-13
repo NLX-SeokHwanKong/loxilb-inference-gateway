@@ -773,11 +773,12 @@ func (na *NetAPIStruct) NetAINetIdentityGet() ([]cmn.NetIdentityMod, error) {
 }
 
 // NetAINetIdentityAdd - create or replace a network-identity binding. The
-// holder has its own lock. The one question that needs rule state, whether
-// a credential: network or forward_identity binding names a service the
-// gateway does not see every request of, is asked first under the
-// configuration mutex, which is released
-// before the holder's lock is taken: the two are never held together.
+// one question that needs rule state, whether a credential: network or
+// forward_identity binding names a service the gateway does not see every
+// request of, is asked under the configuration mutex, and the binding is
+// stored before the mutex is released: a rule change cannot slip between
+// the answer and the store. The holder's own lock is taken inside the
+// configuration mutex, the one order the two are ever held in.
 func (na *NetAPIStruct) NetAINetIdentityAdd(pm *cmn.NetIdentityMod) (int, error) {
 	if na.BgpPeerMode {
 		return NetIdentityArgErr, errors.New("running in bgp only mode")
@@ -785,15 +786,11 @@ func (na *NetAPIStruct) NetAINetIdentityAdd(pm *cmn.NetIdentityMod) (int, error)
 	if mh.NetIdentity == nil {
 		return NetIdentityArgErr, errors.New("network-identity bindings not initialized")
 	}
-	if mh.zr != nil && mh.zr.Rules != nil {
-		mh.mtx.RLock()
-		err := mh.zr.Rules.netidSockMapErr(pm)
-		mh.mtx.RUnlock()
-		if err != nil {
-			return NetIdentityArgErr, err
-		}
+	var rules *RuleH
+	if mh.zr != nil {
+		rules = mh.zr.Rules
 	}
-	return mh.NetIdentity.BindingAdd(pm)
+	return netidAddUnderConfig(&mh.mtx, rules, mh.NetIdentity, pm)
 }
 
 // NetAINetIdentityDel - delete a network-identity binding
@@ -814,6 +811,9 @@ func (na *NetAPIStruct) NetAINetIdentityWarning(pm *cmn.NetIdentityMod) string {
 		return ""
 	}
 	msg := mh.NetIdentity.BindingWarning(pm)
+	if mh.AIKeyService == nil {
+		msg = netidJoinWarning(msg, netidNoKeyStoreWarning)
+	}
 	if msg != "" {
 		tk.LogIt(tk.LogWarning, "[NetIdentity] binding %s: %s\n", pm.Name, msg)
 	}

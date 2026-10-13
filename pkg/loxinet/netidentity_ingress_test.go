@@ -18,6 +18,7 @@ package loxinet
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"reflect"
 	"strings"
@@ -26,6 +27,7 @@ import (
 	"time"
 
 	cmn "github.com/loxilb-io/loxilb/common"
+	"github.com/loxilb-io/loxilb/pkg/aikey"
 )
 
 // nidTunnels is the node's IPsec tunnels for a test: tunnel name -> VTI.
@@ -470,8 +472,8 @@ func TestNetIdentityPortEventNeverBlocks(t *testing.T) {
 }
 
 // The bound set says which services forward identity: those drop the
-// X-Auth-* headers a client sends. A service forwards when any binding that
-// applies to it does, named or global.
+// X-Auth-* headers a client sends. A service forwards when a binding that
+// names it does.
 func TestNetIdentityBoundSetCarriesForward(t *testing.T) {
 	fwd := func(pm *cmn.NetIdentityMod) cmn.NetIdentityMod { pm.ForwardIdentity = true; return *pm }
 	plain := func(pm *cmn.NetIdentityMod) cmn.NetIdentityMod { return *pm }
@@ -495,21 +497,22 @@ func TestNetIdentityBoundSetCarriesForward(t *testing.T) {
 		"a": fwd(nidCIDR("a", "t", []string{"10.1.0.0/16"}, nidSvcA)),
 		"g": plain(nidCIDR("g", "t", []string{"10.0.0.0/8"})),
 	})
-	if !nb.all || nb.allFwd || !nb.forwards(nidSvcA) || nb.forwards(nidSvcB) {
+	if !nb.all || !nb.forwards(nidSvcA) || nb.forwards(nidSvcB) {
 		t.Errorf("all bound, one forwards: %+v", nb)
 	}
 	if bound, _ := nb.has(nidSvcB); !bound {
 		t.Error("all bound: another service reads as unbound")
 	}
 
-	// A global binding that forwards: every service does, and naming one
-	// adds nothing.
+	// The flag follows the service list and nothing else: a binding that
+	// names no service is refused with forward_identity, and were one in the
+	// set all the same, no service it does not name would forward.
 	nb = netidBoundOf(map[string]cmn.NetIdentityMod{
 		"a": fwd(nidCIDR("a", "t", []string{"10.1.0.0/16"}, nidSvcA)),
 		"g": fwd(nidCIDR("g", "t", []string{"10.0.0.0/8"})),
 	})
-	if !nb.allFwd || !nb.forwards(nidSvcC) || len(nb.fwd) != 0 {
-		t.Errorf("all forward: %+v", nb)
+	if !nb.all || !nb.forwards(nidSvcA) || nb.forwards(nidSvcB) || nb.forwards(nidSvcC) || len(nb.fwd) != 1 {
+		t.Errorf("a binding of every service widened the forward flag: %+v", nb)
 	}
 
 	// Two sets that differ only in who forwards are not equal, so the data
@@ -596,7 +599,7 @@ func TestNetIdentityRefusedOnASockmapService(t *testing.T) {
 		{"two of several: the first in order", bind("network", false, "20.20.20.1:8091", "20.20.20.1:8090"), "credential", "20.20.20.1:8090"},
 		{"forward_identity on the sockmap service", bind("", true, "20.20.20.1:8090"), "forward_identity", "20.20.20.1:8090"},
 		{"both asked: named as the credential", bind("network", true, "20.20.20.1:8091"), "credential", "20.20.20.1:8091"},
-		{"forward_identity on every service while such a rule exists", bind("", true), "forward_identity", "20.20.20.1:8090"},
+		{"forward_identity with no service is left to validation", bind("", true), "", ""},
 		{"sockmap response only", bind("network", true, "20.20.20.1:8092"), "", ""},
 		{"sockmap off", bind("network", true, "20.20.20.1:8093"), "", ""},
 		{"an AI-gateway service", bind("network", true, "20.20.20.1:8081", "20.20.20.1:8080"), "", ""},
@@ -621,10 +624,318 @@ func TestNetIdentityRefusedOnASockmapService(t *testing.T) {
 	if err := R.netidSockMapErr(nil); err != nil {
 		t.Errorf("nil binding: %v", err)
 	}
-	// With no such rule left, forward_identity on every service is accepted.
-	delete(R.tables[RtLB].eMap, "plain-both")
-	delete(R.tables[RtLB].eMap, "plain-request")
-	if err := R.netidSockMapErr(bind("", true)); err != nil {
-		t.Errorf("forward_identity on every service with no such rule: %v", err)
+}
+
+// forward_identity is kept to the services the operator named: a binding
+// that names none is refused, whatever else it says.
+func TestNetIdentityForwardNeedsServices(t *testing.T) {
+	h, dp := newNidHolder(nidIfs{"vlan20": 5})
+	for _, pm := range []*cmn.NetIdentityMod{
+		nidCIDR("g", "t", []string{"10.0.0.0/8"}),
+		nidIf("line", "t", "vlan20"),
+	} {
+		pm.ForwardIdentity = true
+		rc, err := h.BindingAdd(pm)
+		var ve *cmn.ValidationError
+		if rc != NetIdentityArgErr || !errors.As(err, &ve) || ve.Field != "forward_identity" ||
+			!strings.Contains(err.Error(), "forward_identity needs services") {
+			t.Errorf("%s: rc %d, err %v", pm.Name, rc, err)
+		}
 	}
+	if dp.writes != 0 || len(h.bindings) != 0 {
+		t.Fatalf("a refused binding left something: %d writes, %d stored", dp.writes, len(h.bindings))
+	}
+	// The same binding without the flag, and with a service, are both fine.
+	mustAdd(t, h, nidCIDR("g", "t", []string{"10.0.0.0/8"}))
+	pm := nidCIDR("a", "t", []string{"10.1.0.0/16"}, nidSvcA)
+	pm.ForwardIdentity = true
+	mustAdd(t, h, pm)
+	if !dp.bound.forwards(nidSvcA) || dp.bound.forwards(nidSvcB) {
+		t.Fatalf("forwards: %+v", dp.bound)
+	}
+	// Turning the flag on for the stored binding of every service is the
+	// same refusal, and leaves it as it was.
+	g := nidCIDR("g", "t", []string{"10.0.0.0/8"})
+	g.ForwardIdentity = true
+	if _, err := h.BindingAdd(g); err == nil || h.bindings["g"].ForwardIdentity {
+		t.Fatalf("replace with the flag and no service: err %v, stored %+v", err, h.bindings["g"])
+	}
+}
+
+// Past what the data plane's service set holds, it answers for every
+// service at once. With a forwarding binding that would strip on services
+// nobody named, so the binding that crosses the size is refused; without
+// one nothing is.
+func TestNetIdentityForwardRefusedPastTheServiceSet(t *testing.T) {
+	many := func(name string, from, n int) *cmn.NetIdentityMod {
+		svcs := make([]string, 0, n)
+		for i := from; i < from+n; i++ {
+			svcs = append(svcs, fmt.Sprintf("30.%d.%d.1:80", i/250, i%250))
+		}
+		return nidCIDR(name, "t", []string{fmt.Sprintf("10.%d.0.0/16", from/250+1)}, svcs...)
+	}
+	fill := func(h *NetIdentityH, n int) {
+		for i := 0; i < n; i += 250 {
+			k := n - i
+			if k > 250 {
+				k = 250
+			}
+			mustAdd(t, h, many(fmt.Sprintf("p%d", i), i, k))
+		}
+	}
+	h, _ := newNidHolder(nidIfs{})
+	fill(h, netidBoundSvcMax-1)
+	fw := nidCIDR("fw", "t", []string{"10.200.0.0/16"}, "40.0.0.1:80")
+	fw.ForwardIdentity = true
+	mustAdd(t, h, fw) // exactly the size: kept to the named service
+	over := nidCIDR("over", "t", []string{"10.201.0.0/16"}, "40.0.0.2:80")
+	rc, err := h.BindingAdd(over)
+	var ve *cmn.ValidationError
+	if rc != NetIdentityArgErr || !errors.As(err, &ve) || ve.Field != "services" {
+		t.Fatalf("a plain binding past the size beside a forwarding one: rc %d, err %v", rc, err)
+	}
+	if _, stored := h.bindings["over"]; stored {
+		t.Fatal("the refused binding is stored")
+	}
+
+	// The other order: the set is past the size, then a binding asks to forward.
+	h, _ = newNidHolder(nidIfs{})
+	fill(h, netidBoundSvcMax+1)
+	rc, err = h.BindingAdd(fw)
+	if rc != NetIdentityArgErr || !errors.As(err, &ve) || ve.Field != "forward_identity" {
+		t.Fatalf("forward_identity past the size: rc %d, err %v", rc, err)
+	}
+	// Nothing forwards: nothing is refused.
+	mustAdd(t, h, over)
+}
+
+// A rule that would carry a service's request direction in the kernel is
+// refused while a binding that forwards identity, or admits by the network,
+// names the service, and the refusal names the binding.
+func TestNetIdentityRuleRefusedOnAForwardingBinding(t *testing.T) {
+	h, _ := newNidHolder(nidIfs{"vlan20": 5})
+	fw := nidCIDR("zz-fwd", "t", []string{"10.1.0.0/16"}, nidSvcA)
+	fw.ForwardIdentity = true
+	mustAdd(t, h, fw)
+	fw2 := nidCIDR("aa-fwd", "t", []string{"10.2.0.0/16"}, nidSvcA)
+	fw2.ForwardIdentity = true
+	mustAdd(t, h, fw2)
+	cred := nidIf("cred", "t", "vlan20", nidSvcB)
+	cred.Credential = cmn.NetIdentityCredentialNetwork
+	mustAdd(t, h, cred)
+	mustAdd(t, h, nidCIDR("plain", "t", []string{"10.3.0.0/16"}, nidSvcC))
+	mustAdd(t, h, nidCIDR("global", "t", []string{"10.4.0.0/16"}))
+
+	for _, c := range []struct {
+		name    string
+		svc     string
+		aiGw    bool
+		mode    uint8
+		binding string // "" = accepted
+		what    string
+	}{
+		{"both, forwarding binding: the first in name order", nidSvcA, false, 1, "aa-fwd", "forward_identity"},
+		{"request", nidSvcA, false, 2, "aa-fwd", "forward_identity"},
+		{"credential network", nidSvcB, false, 1, "cred", "credential: network"},
+		{"response only", nidSvcA, false, 3, "", ""},
+		{"off", nidSvcA, false, 0, "", ""},
+		{"an AI-gateway rule", nidSvcA, true, 1, "", ""},
+		{"a plain binding names the service", nidSvcC, false, 1, "", ""},
+		{"only a binding of every service applies", "50.0.0.1:80", false, 1, "", ""},
+		{"no service identity", "", false, 1, "", ""},
+	} {
+		err := netidRuleSockMapErr(h, c.svc, c.aiGw, c.mode)
+		if c.binding == "" {
+			if err != nil {
+				t.Errorf("%s: refused: %v", c.name, err)
+			}
+			continue
+		}
+		var ve *cmn.ValidationError
+		if !errors.As(err, &ve) || ve.Field != "sockMapMode" ||
+			!strings.Contains(err.Error(), "binding "+c.binding+" ") ||
+			!strings.Contains(err.Error(), c.what) || !strings.Contains(err.Error(), c.svc) {
+			t.Errorf("%s: got %v, want a validation error on sockMapMode naming %s and %s", c.name, err, c.binding, c.what)
+		}
+	}
+	if err := netidRuleSockMapErr(nil, nidSvcA, false, 1); err != nil {
+		t.Errorf("no holder: %v", err)
+	}
+	// The binding gone, the rule is accepted.
+	for _, n := range []string{"aa-fwd", "zz-fwd"} {
+		if _, err := h.BindingDel(n); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := netidRuleSockMapErr(h, nidSvcA, false, 1); err != nil {
+		t.Errorf("after the bindings are deleted: %v", err)
+	}
+}
+
+// A forwarding binding and a rule that carries the same service's requests
+// in the kernel never both get in, whichever asks first and however the two
+// interleave: each side checks and stores under the configuration mutex.
+func TestNetIdentityBindingAndSockmapRuleNeverBothAccepted(t *testing.T) {
+	const svc = "20.20.20.1:8090"
+	var cfg sync.RWMutex
+	for i := 0; i < 100; i++ {
+		R := newTestRuleH()
+		h, _ := newNidHolder(nidIfs{})
+		pm := nidCIDR("fw", "t", []string{"10.1.0.0/16"}, svc)
+		pm.ForwardIdentity = true
+
+		var wg sync.WaitGroup
+		var bindErr, ruleErr error
+		start := make(chan struct{})
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, bindErr = netidAddUnderConfig(&cfg, R, h, pm)
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			// What a rule add does: the check, then the store, under the
+			// configuration mutex.
+			cfg.Lock()
+			defer cfg.Unlock()
+			if ruleErr = netidRuleSockMapErr(h, svc, false, 1); ruleErr == nil {
+				R.tables[RtLB].eMap["plain"] = nidRule("20.20.20.1", 8090, "", false, 1)
+			}
+		}()
+		close(start)
+		wg.Wait()
+
+		_, bound := h.bindings["fw"]
+		_, ruled := R.tables[RtLB].eMap["plain"]
+		if (bindErr == nil) != bound || (ruleErr == nil) != ruled {
+			t.Fatalf("round %d: answers and state disagree: binding err %v stored %v, rule err %v stored %v",
+				i, bindErr, bound, ruleErr, ruled)
+		}
+		if bound == ruled {
+			t.Fatalf("round %d: binding stored %v and rule stored %v: exactly one may get in", i, bound, ruled)
+		}
+	}
+}
+
+// Either order, one after the other: the binding that comes after the
+// kernel-carried rule is refused with the rule's service named, and the rule
+// that comes after the binding is refused with the binding named.
+func TestNetIdentityBindingAndSockmapRuleEitherOrder(t *testing.T) {
+	const svc = "20.20.20.1:8090"
+	var cfg sync.RWMutex
+	pm := nidCIDR("fw", "t", []string{"10.1.0.0/16"}, svc)
+	pm.ForwardIdentity = true
+
+	R := newTestRuleH()
+	h, _ := newNidHolder(nidIfs{})
+	R.tables[RtLB].eMap["plain"] = nidRule("20.20.20.1", 8090, "", false, 1)
+	rc, err := netidAddUnderConfig(&cfg, R, h, pm)
+	if rc != NetIdentityArgErr || err == nil || !strings.Contains(err.Error(), svc) || len(h.bindings) != 0 {
+		t.Fatalf("the binding after the rule: rc %d, err %v, stored %d", rc, err, len(h.bindings))
+	}
+	// No rule table to ask (a gateway still starting): the binding is stored.
+	if _, err := netidAddUnderConfig(&cfg, nil, h, pm); err != nil || len(h.bindings) != 1 {
+		t.Fatalf("with no rule table: err %v, stored %d", err, len(h.bindings))
+	}
+
+	R = newTestRuleH()
+	h, _ = newNidHolder(nidIfs{})
+	if _, err := netidAddUnderConfig(&cfg, R, h, pm); err != nil {
+		t.Fatal(err)
+	}
+	if err := netidRuleSockMapErr(h, svc, false, 1); err == nil || !strings.Contains(err.Error(), "binding fw ") {
+		t.Fatalf("the rule after the binding: %v", err)
+	}
+}
+
+// A binding stored on a gateway with no key store says so: the requests it
+// gives a tenant would be refused.
+func TestNetIdentityWarnsWithoutAKeyStore(t *testing.T) {
+	savedH, savedK := mh.NetIdentity, mh.AIKeyService
+	t.Cleanup(func() { mh.NetIdentity, mh.AIKeyService = savedH, savedK })
+	h, _ := newNidHolder(nidIfs{})
+	mh.NetIdentity = h
+	pm := nidCIDR("a", "t", []string{"10.1.0.0/16"}, nidSvcA)
+	mustAdd(t, h, pm)
+	na := &NetAPIStruct{}
+	mh.AIKeyService = nil
+	if got := na.NetAINetIdentityWarning(pm); got != netidNoKeyStoreWarning {
+		t.Errorf("no key store: %q", got)
+	}
+	mh.AIKeyService = &aikey.Service{}
+	if got := na.NetAINetIdentityWarning(pm); got != "" {
+		t.Errorf("with a key store: %q", got)
+	}
+	if got := netidJoinWarning("", netidNoKeyStoreWarning); got != netidNoKeyStoreWarning {
+		t.Errorf("alone: %q", got)
+	}
+	got := netidJoinWarning("first", netidNoKeyStoreWarning)
+	if got != "first; warning: "+netidNoKeyStoreWarning {
+		t.Errorf("after another: %q", got)
+	}
+	for _, word := range []string{"key store", "--aikey-db", "503", "policy_store_unavailable"} {
+		if !strings.Contains(netidNoKeyStoreWarning, word) {
+			t.Errorf("the warning does not say %q", word)
+		}
+	}
+}
+
+// The rule add itself asks: a plain rule that would run sockMapMode both on
+// a service a forwarding binding names is refused before anything is
+// touched, with the binding named.
+func TestNetIdentityAddLbRuleRefusedOnAForwardingBinding(t *testing.T) {
+	savedEn, savedH := mh.sockMapEn, mh.NetIdentity
+	t.Cleanup(func() { mh.sockMapEn, mh.NetIdentity = savedEn, savedH })
+	mh.sockMapEn = true
+	h, _ := newNidHolder(nidIfs{})
+	mh.NetIdentity = h
+	pm := nidCIDR("fw", "t", []string{"10.1.0.0/16"}, "10.10.10.254:8090")
+	pm.ForwardIdentity = true
+	mustAdd(t, h, pm)
+
+	R := &RuleH{}
+	R.tables[RtLB].eMap = map[string]*ruleEnt{}
+	eps := []cmn.LbEndPointArg{{EpIP: "10.20.0.1", EpPort: 80, Weight: 1}}
+	for _, mode := range []string{"both", "request"} {
+		serv := cmn.LbServiceArg{ServIP: "10.10.10.254", ServPort: 8090, Proto: "tcp", Mode: cmn.LBModeFullProxy, SockMapMode: mode}
+		rc, err := R.AddLbRule(serv, nil, nil, nil, eps)
+		var ve *cmn.ValidationError
+		if rc != RuleArgsErr || !errors.As(err, &ve) || ve.Field != "sockMapMode" ||
+			!strings.Contains(err.Error(), "binding fw ") || !strings.Contains(err.Error(), "10.10.10.254:8090") {
+			t.Errorf("sockMapMode %s: rc %d, err %v", mode, rc, err)
+		}
+	}
+	if len(R.tables[RtLB].eMap) != 0 {
+		t.Fatalf("a refused rule left %d entries", len(R.tables[RtLB].eMap))
+	}
+}
+
+// The binding is stored while the configuration mutex is still held: a rule
+// add, which takes it exclusively, cannot run between the question about
+// the rules and the store.
+func TestNetIdentityBindingStoredWithTheConfigMutexHeld(t *testing.T) {
+	var cfg sync.RWMutex
+	h, _ := newNidHolder(nidIfs{})
+	stages := 0
+	h.step = func(string) {
+		stages++
+		if cfg.TryLock() {
+			cfg.Unlock()
+			t.Error("the configuration mutex is free while the binding is being stored")
+		}
+	}
+	pm := nidCIDR("fw", "t", []string{"10.1.0.0/16"}, nidSvcA)
+	pm.ForwardIdentity = true
+	if _, err := netidAddUnderConfig(&cfg, newTestRuleH(), h, pm); err != nil {
+		t.Fatal(err)
+	}
+	if stages == 0 {
+		t.Fatal("the store told no stage: the check above did not run")
+	}
+	if !cfg.TryLock() {
+		t.Fatal("the configuration mutex is still held after the store")
+	}
+	cfg.Unlock()
 }

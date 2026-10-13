@@ -45,9 +45,6 @@ func netidBoundPublish(nb netidBound) {
 		if nb.allClosed {
 			all |= netidFailClosedBit
 		}
-		if nb.allFwd {
-			all |= netidFwdBit
-		}
 	}
 	// The services to name: each one bound by name, and each one that
 	// forwards while the others do not.
@@ -77,7 +74,7 @@ func netidBoundPublish(nb netidBound) {
 		C.free(unsafe.Pointer(ptrs))
 		C.free(unsafe.Pointer(flags))
 		fallback := C.int(netidBoundBit)
-		if nb.allFwd || len(nb.fwd) > 0 {
+		if len(nb.fwd) > 0 {
 			fallback |= netidFwdBit
 		}
 		C.ai_gw_netid_bound_set(nil, nil, 0, fallback)

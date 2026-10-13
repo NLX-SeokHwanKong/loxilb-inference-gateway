@@ -243,6 +243,7 @@ func TestNetIdentityAnswerFields(t *testing.T) {
 	mustAdd(t, h, &cmn.NetIdentityMod{
 		Name: "line-1", Tenant: "tenant-line-1",
 		Match:         cmn.NetIdentityMatch{CIDR: []string{"10.20.0.0/24"}},
+		Services:      []string{nidSvcA},
 		AllowedModels: []string{"llama-3.1-8b", "qwen3"}, Enforce: "strict", ForwardIdentity: true,
 	})
 	mustAdd(t, h, &cmn.NetIdentityMod{

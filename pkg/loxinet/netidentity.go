@@ -57,6 +57,9 @@ const (
 	netidMaxBindings = 4096
 	netidMaxCIDRs    = 256
 	netidMaxServices = 256
+	// netidBoundSvcMax is what the data plane's service set holds
+	// (AI_GW_NETID_SVC_MAX).
+	netidBoundSvcMax = 1024
 	netidMaxModels   = 256
 )
 
@@ -269,7 +272,6 @@ func buildNetidSnapshotIf(bindings map[string]cmn.NetIdentityMod, ifIndex func(s
 type netidBound struct {
 	all       bool            // a binding names no service: every AI service is bound
 	allClosed bool            // ... and every one fails closed
-	allFwd    bool            // ... and every one forwards identity
 	svcs      map[string]bool // service -> fails closed
 	fwd       map[string]bool // the services that forward identity; each is bound
 }
@@ -281,7 +283,6 @@ func netidBoundOf(bindings map[string]cmn.NetIdentityMod) netidBound {
 		if len(pm.Services) == 0 {
 			nb.all = true
 			nb.allClosed = nb.allClosed || closed
-			nb.allFwd = nb.allFwd || pm.ForwardIdentity
 			continue
 		}
 		for _, svc := range pm.Services {
@@ -295,15 +296,10 @@ func netidBoundOf(bindings map[string]cmn.NetIdentityMod) netidBound {
 }
 
 // canon drops what says nothing: once every service is bound, a listed
-// service only matters where it fails closed and the others do not, and
-// once every service forwards, naming one that does adds nothing. Two sets
-// that answer has and forwards alike are then equal.
+// service only matters where it fails closed and the others do not, or
+// where it forwards identity. Two sets that answer has and forwards alike
+// are then equal.
 func (nb netidBound) canon() netidBound {
-	if nb.allFwd {
-		for svc := range nb.fwd {
-			delete(nb.fwd, svc)
-		}
-	}
 	if !nb.all {
 		return nb
 	}
@@ -323,11 +319,11 @@ func (nb netidBound) has(svc string) (bound, closed bool) {
 
 // forwards reports whether a service has a binding that forwards identity.
 func (nb netidBound) forwards(svc string) bool {
-	return (nb.all && nb.allFwd) || nb.fwd[svc]
+	return nb.fwd[svc]
 }
 
 func (nb netidBound) equal(o netidBound) bool {
-	if nb.all != o.all || nb.allClosed != o.allClosed || nb.allFwd != o.allFwd ||
+	if nb.all != o.all || nb.allClosed != o.allClosed ||
 		len(nb.svcs) != len(o.svcs) || len(nb.fwd) != len(o.fwd) {
 		return false
 	}
@@ -350,7 +346,6 @@ func (nb netidBound) equal(o netidBound) bool {
 func (nb netidBound) meet(next netidBound) netidBound {
 	m := netidBound{all: nb.all && next.all, svcs: make(map[string]bool), fwd: make(map[string]bool)}
 	m.allClosed = m.all && next.allClosed
-	m.allFwd = m.all && next.allFwd
 	keep := func(svc string) {
 		if _, done := m.svcs[svc]; done {
 			return
@@ -604,6 +599,9 @@ func (h *NetIdentityH) BindingAdd(pm *cmn.NetIdentityMod) (int, error) {
 		next[name] = b
 	}
 	next[nm.Name] = nm
+	if err := netidFwdRoomErr(next, &nm); err != nil {
+		return NetIdentityArgErr, err
+	}
 	h.commit(next)
 	tk.LogIt(tk.LogInfo, "[NetIdentity] binding %s stored (tenant %s, %s)\n", nm.Name, nm.Tenant, netidMatchWord(&nm))
 	if idx, onIf := h.ifSeen[nm.Name]; onIf && idx == 0 {
@@ -613,6 +611,59 @@ func (h *NetIdentityH) BindingAdd(pm *cmn.NetIdentityMod) (int, error) {
 			nm.Name, netidMatchWord(&nm))
 	}
 	return 0, nil
+}
+
+// netidFwdRoomErr refuses the binding that would take the bindings past
+// what the data plane's service set holds while one of them forwards
+// identity. Past that size the set answers for every service at once, and
+// the strip of client-sent X-Auth-* headers would reach services no binding
+// names. Without a forwarding binding the wider answer only costs a
+// resolver call, and nothing is refused.
+func netidFwdRoomErr(next map[string]cmn.NetIdentityMod, nm *cmn.NetIdentityMod) error {
+	fwd := false
+	svcs := make(map[string]struct{})
+	for _, b := range next {
+		fwd = fwd || b.ForwardIdentity
+		for _, svc := range b.Services {
+			svcs[svc] = struct{}{}
+		}
+	}
+	if !fwd || len(svcs) <= netidBoundSvcMax {
+		return nil
+	}
+	field := "services"
+	if nm.ForwardIdentity {
+		field = "forward_identity"
+	}
+	return cmn.NewValidationError(field,
+		"the bindings would name %d services, more than the %d forward_identity can be kept to", len(svcs), netidBoundSvcMax)
+}
+
+// sockMapBlocker names a binding that a rule carrying the request direction
+// in the kernel could not honour on the service: one that forwards identity,
+// or one with credential: network, that names the service. what is the
+// field that makes it so. Empty when there is none. The first in name order,
+// so the same rule is refused with the same text every time.
+func (h *NetIdentityH) sockMapBlocker(svc string) (name, what string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for n, b := range h.bindings {
+		if !b.ForwardIdentity && b.Credential != cmn.NetIdentityCredentialNetwork {
+			continue
+		}
+		named := false
+		for _, s := range b.Services {
+			named = named || s == svc
+		}
+		if !named || (name != "" && n > name) {
+			continue
+		}
+		name, what = n, "credential: network"
+		if b.ForwardIdentity {
+			what = "forward_identity"
+		}
+	}
+	return name, what
 }
 
 // BindingDel removes a binding.
@@ -673,6 +724,20 @@ func (h *NetIdentityH) BindingWarning(pm *cmn.NetIdentityMod) string {
 	}
 	// Each warning after its own marker, as a rule reply carries several.
 	return strings.Join(msgs, "; warning: ")
+}
+
+// netidNoKeyStoreWarning is said of a binding stored on a gateway that has
+// no key store: the limits of the tenant a binding decides are read from
+// the store, and the gate refuses a request it cannot read them for.
+const netidNoKeyStoreWarning = "the key store is not configured (--aikey-db-*): a request this binding gives a tenant is refused 503 policy_store_unavailable until it is"
+
+// netidJoinWarning adds one warning to the others, each after its own
+// marker.
+func netidJoinWarning(msg, more string) string {
+	if msg == "" {
+		return more
+	}
+	return msg + "; warning: " + more
 }
 
 // netidFailModeWarning is the text for a binding whose fail_mode is not the
@@ -1056,6 +1121,11 @@ func netidNormalize(pm *cmn.NetIdentityMod) (cmn.NetIdentityMod, error) {
 		}
 	}
 	sort.Strings(out.Services)
+	if out.ForwardIdentity && len(out.Services) == 0 {
+		// The strip of client-sent X-Auth-* headers follows the service
+		// list: with none it would reach services the operator never named.
+		return out, cmn.NewValidationError("forward_identity", "forward_identity needs services")
+	}
 
 	if len(pm.AllowedModels) > netidMaxModels {
 		return out, cmn.NewValidationError("allowed_models", "allowed_models: at most %d", netidMaxModels)
