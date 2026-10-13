@@ -1,4 +1,4 @@
 [submodule "loxilb-ebpf"]
 	path = loxilb-ebpf
-	url = https://github.com/loxilb-io/loxilb-ebpf-inference-gateway.git
-	branch = main
+	url = https://github.com/inhogog2/loxilb-ebpf-inference-gateway.git
+	branch = codex/epp-phase1
