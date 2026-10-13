@@ -223,7 +223,7 @@ How it behaves:
 
 **What is reserved right now.** The rule's `GET` also shows the reservations that
 admitted requests hold and have not settled, read from the quota store itself
-(`fc_effective.reservation_held_claims`, `reservation_held_buckets`, and the list
+(`fc_effective.reservation_held_claims` and the list
 `reservation_held` with each bucket's `kind`, `bucket` and `tokens`). Read it to see
 which tenants hold budget on a service at this moment, or to check that a request
 that ended — completed, refused, cancelled, timed out in the queue — gave its claim
@@ -231,9 +231,9 @@ back: its buckets must read what they read before it.
 
 - A request holds its claim on every quota bucket that applies to it (the tenant's,
   the tenant's for the model, the user's, the key's, the service's shared keyless one),
-  so `reservation_held_claims` — the sum of those claims — counts a request's
-  reservation once per bucket. It is zero exactly when nothing is held; it is not the
-  number of tokens in flight.
+  and `reservation_held_claims` counts those claims: one per request and bucket, so one
+  in-flight request on three buckets reads 3. It is zero exactly when nothing is held;
+  it is a count of claims, not of tokens (each bucket's tokens are in the list).
 - A tenant's bucket belongs to the tenant, not to a service: every service the tenant
   has used shows it, with the same number.
 - A reservation belongs to the minute it was made in (`reservation_epoch`) and is

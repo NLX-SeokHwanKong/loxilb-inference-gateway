@@ -55,7 +55,7 @@ func heldOf(store *rl.RateLimiterStore, svcIdent string) *cmn.FcEffectiveArg {
 func TestReservationsHeldOfAnIdleService(t *testing.T) {
 	store := rl.New()
 	eff := heldOf(store, "10.10.10.254:2079")
-	if eff.ReservationHeldClaims != 0 || eff.ReservationHeldBuckets != 0 || eff.ReservationHeldTruncated {
+	if eff.ReservationHeldClaims != 0 || eff.ReservationHeldTruncated {
 		t.Errorf("idle service: %+v", eff)
 	}
 	if eff.ReservationHeld == nil || len(eff.ReservationHeld) != 0 {
@@ -83,9 +83,9 @@ func TestReservationsHeldFollowsTheLedger(t *testing.T) {
 		t.Fatalf("reserve: allowed=%v epoch=%d", allowed, epoch)
 	}
 	eff := heldOf(store, ledgerSvc)
-	if eff.ReservationHeldBuckets != 6 || eff.ReservationHeldClaims != 6*300 || eff.ReservationHeldTruncated {
-		t.Fatalf("one request of 300 on six buckets: buckets=%d tokens=%d truncated=%v",
-			eff.ReservationHeldBuckets, eff.ReservationHeldClaims, eff.ReservationHeldTruncated)
+	if len(eff.ReservationHeld) != 6 || eff.ReservationHeldClaims != 6 || eff.ReservationHeldTruncated {
+		t.Fatalf("one request of 300 on six buckets: listed=%d claims=%d truncated=%v, want one claim per bucket",
+			len(eff.ReservationHeld), eff.ReservationHeldClaims, eff.ReservationHeldTruncated)
 	}
 	if eff.ReservationEpoch != epoch {
 		t.Errorf("read-back epoch %d, the claim was tagged %d", eff.ReservationEpoch, epoch)
@@ -119,18 +119,23 @@ func TestReservationsHeldFollowsTheLedger(t *testing.T) {
 	if !ok2 || granted != 150 {
 		t.Fatalf("elastic reserve: ok=%v granted=%d", ok2, granted)
 	}
-	if eff = heldOf(store, ledgerSvc); eff.ReservationHeldClaims != 6*450 || eff.ReservationHeldBuckets != 6 {
-		t.Fatalf("two requests: tokens=%d buckets=%d", eff.ReservationHeldClaims, eff.ReservationHeldBuckets)
+	if eff = heldOf(store, ledgerSvc); eff.ReservationHeldClaims != 12 || len(eff.ReservationHeld) != 6 {
+		t.Fatalf("two requests: claims=%d listed=%d, want 12 claims on six buckets", eff.ReservationHeldClaims, len(eff.ReservationHeld))
+	}
+	for _, h := range eff.ReservationHeld {
+		if h.Tokens != 450 {
+			t.Errorf("bucket %s holds %d, want 450", h.Bucket, h.Tokens)
+		}
 	}
 
 	// Settle both: nothing is held, on any bucket.
 	tokenQuotaConsumeInternal(svc, store, "t1", "m", "alice", "key-1", ledgerSvc, 10, 300, epoch)
-	if eff = heldOf(store, ledgerSvc); eff.ReservationHeldClaims != 6*150 {
-		t.Fatalf("after the first settle: tokens=%d, want %d", eff.ReservationHeldClaims, 6*150)
+	if eff = heldOf(store, ledgerSvc); eff.ReservationHeldClaims != 6 {
+		t.Fatalf("after the first settle: claims=%d, want 6", eff.ReservationHeldClaims)
 	}
 	tokenQuotaConsumeInternal(svc, store, "t1", "m", "alice", "key-1", ledgerSvc, 10, granted, epoch2)
 	eff = heldOf(store, ledgerSvc)
-	if eff.ReservationHeldClaims != 0 || eff.ReservationHeldBuckets != 0 || len(eff.ReservationHeld) != 0 {
+	if eff.ReservationHeldClaims != 0 || len(eff.ReservationHeld) != 0 {
 		t.Fatalf("after both settled: %+v", eff)
 	}
 }
@@ -144,7 +149,7 @@ func TestReservationsHeldAfterARefusal(t *testing.T) {
 	if allowed, _, _ := tokenQuotaReserveInternal(svc, store, "t-small", "", "", "", svcIdent, 5000); allowed {
 		t.Fatal("a claim larger than the bucket was admitted")
 	}
-	if eff := heldOf(store, svcIdent); eff.ReservationHeldClaims != 0 || eff.ReservationHeldBuckets != 0 {
+	if eff := heldOf(store, svcIdent); eff.ReservationHeldClaims != 0 || len(eff.ReservationHeld) != 0 {
 		t.Errorf("after a refusal: %+v", eff)
 	}
 }
@@ -166,35 +171,33 @@ func TestReservationsHeldIsPerService(t *testing.T) {
 	}
 	for _, s := range []string{a, b} {
 		eff := heldOf(store, s)
-		if eff.ReservationHeldBuckets != 1 || eff.ReservationHeldClaims != 500 {
-			t.Errorf("service %s: buckets=%d tokens=%d, want the tenant's one bucket holding 500",
-				s, eff.ReservationHeldBuckets, eff.ReservationHeldClaims)
+		if len(eff.ReservationHeld) != 1 || eff.ReservationHeld[0].Tokens != 500 || eff.ReservationHeldClaims != 2 {
+			t.Errorf("service %s: %+v claims=%d, want the tenant's one bucket holding 500 for two claims",
+				s, eff.ReservationHeld, eff.ReservationHeldClaims)
 		}
 	}
-	if eff := heldOf(store, c); eff.ReservationHeldBuckets != 0 {
-		t.Errorf("a service the tenant never used shows %d buckets", eff.ReservationHeldBuckets)
+	if eff := heldOf(store, c); len(eff.ReservationHeld) != 0 || eff.ReservationHeldClaims != 0 {
+		t.Errorf("a service the tenant never used shows %+v, %d claims", eff.ReservationHeld, eff.ReservationHeldClaims)
 	}
 }
 
 // The list is cut at FcResvHeldMax, largest first, and says so; the count
-// and the sum still cover every bucket.
+// of claims still covers every bucket.
 func TestReservationsHeldListIsBounded(t *testing.T) {
 	store := rl.New()
 	svc := ladderSvc()
 	svc.tenantTPM = 100000
 	const svcIdent = "10.10.10.254:2077"
 	n := cmn.FcResvHeldMax + 6
-	var sum uint64
 	for i := 0; i < n; i++ {
 		want := 10 + i
 		if ok, _, _ := tokenQuotaReserveInternal(svc, store, fmt.Sprintf("t-many-%03d", i), "", "", "", svcIdent, want); !ok {
 			t.Fatalf("reserve %d", i)
 		}
-		sum += uint64(want)
 	}
 	eff := heldOf(store, svcIdent)
-	if int(eff.ReservationHeldBuckets) != n || eff.ReservationHeldClaims != sum {
-		t.Errorf("buckets=%d tokens=%d, want %d and %d", eff.ReservationHeldBuckets, eff.ReservationHeldClaims, n, sum)
+	if eff.ReservationHeldClaims != uint64(n) {
+		t.Errorf("claims=%d, want %d: one request on each of %d buckets", eff.ReservationHeldClaims, n, n)
 	}
 	if len(eff.ReservationHeld) != cmn.FcResvHeldMax || !eff.ReservationHeldTruncated {
 		t.Errorf("list of %d, truncated=%v; want %d and true", len(eff.ReservationHeld), eff.ReservationHeldTruncated, cmn.FcResvHeldMax)
@@ -228,7 +231,7 @@ func TestReservationsHeldForgetsVanishedBuckets(t *testing.T) {
 		t.Fatalf("remembered %d buckets, want 2", got)
 	}
 	eff := heldOf(store, svcIdent)
-	if eff.ReservationHeldBuckets != 1 || eff.ReservationHeld[0].Bucket != "t-kept" {
+	if len(eff.ReservationHeld) != 1 || eff.ReservationHeld[0].Bucket != "t-kept" || eff.ReservationHeldClaims != 1 {
 		t.Errorf("read-back: %+v", eff.ReservationHeld)
 	}
 	if got := s.n.Load(); got != 1 {
@@ -282,12 +285,51 @@ func TestReservationsHeldSeesTheDefaultReservation(t *testing.T) {
 		t.Fatalf("elastic reserve: ok=%v granted=%d epoch=%d", ok, granted, epoch)
 	}
 	eff := heldOf(store, svcIdent)
-	if eff.ReservationHeldBuckets != 1 || eff.ReservationHeldClaims != 520 ||
+	if len(eff.ReservationHeld) != 1 || eff.ReservationHeldClaims != 1 || eff.ReservationHeld[0].Tokens != 520 ||
 		eff.ReservationHeld[0].Bucket != "t-elastic" || eff.ReservationHeld[0].Kind != cmn.FcResvBucketTenant {
 		t.Fatalf("read-back of a default reservation: %+v", eff.ReservationHeld)
 	}
 	tokenQuotaConsumeInternal(svc, store, "t-elastic", "", "", "", svcIdent, 30, granted, epoch)
-	if eff = heldOf(store, svcIdent); eff.ReservationHeldClaims != 0 {
-		t.Errorf("after settlement: %+v", eff.ReservationHeld)
+	if eff = heldOf(store, svcIdent); eff.ReservationHeldClaims != 0 || len(eff.ReservationHeld) != 0 {
+		t.Errorf("after settlement: %+v, %d claims", eff.ReservationHeld, eff.ReservationHeldClaims)
+	}
+}
+
+// A default reservation cut down to what the bucket has left is still one
+// claim, and one cut down to nothing is none: the count follows the claims
+// held, not the tokens asked for.
+func TestReservationsHeldCountsAClampedClaimOnce(t *testing.T) {
+	store := rl.New()
+	svc := ladderSvc()
+	svc.tenantTPM = 1000
+	svc.modelTPM = map[string]int{"m": 400}
+	const svcIdent = "10.10.10.254:2068"
+	// The model bucket holds less than the tenant's: the tenant's claim is
+	// trimmed to what the model bucket granted, and both stay held.
+	ok, _, epoch, granted, why := tokenQuotaReserveElasticReason(svc, store, "t-trim", "m", "", "", svcIdent, 20, 5000)
+	if !ok || epoch == 0 || granted <= 20 || why == resvClampNone {
+		t.Fatalf("clamped reserve: ok=%v epoch=%d granted=%d why=%v", ok, epoch, granted, why)
+	}
+	eff := heldOf(store, svcIdent)
+	if eff.ReservationHeldClaims != 2 || len(eff.ReservationHeld) != 2 {
+		t.Fatalf("a trimmed claim on two buckets: claims=%d listed=%+v, want 2", eff.ReservationHeldClaims, eff.ReservationHeld)
+	}
+	for _, h := range eff.ReservationHeld {
+		if h.Tokens != uint64(granted) {
+			t.Errorf("bucket %s holds %d, want the granted %d", h.Bucket, h.Tokens, granted)
+		}
+	}
+	tokenQuotaConsumeInternal(svc, store, "t-trim", "m", "", "", svcIdent, 30, granted, epoch)
+	if eff = heldOf(store, svcIdent); eff.ReservationHeldClaims != 0 || len(eff.ReservationHeld) != 0 {
+		t.Fatalf("after settlement: claims=%d listed=%+v", eff.ReservationHeldClaims, eff.ReservationHeld)
+	}
+
+	// A refusal on the second bucket gives the first bucket's claim back.
+	svc.modelTPM = map[string]int{"m2": 10}
+	if ok, _, _, _, _ := tokenQuotaReserveElasticReason(svc, store, "t-trim", "m2", "", "", svcIdent, 50, 100); ok {
+		t.Fatal("a firm part larger than the model bucket was admitted")
+	}
+	if eff = heldOf(store, svcIdent); eff.ReservationHeldClaims != 0 || len(eff.ReservationHeld) != 0 {
+		t.Fatalf("after a refusal on the second bucket: claims=%d listed=%+v", eff.ReservationHeldClaims, eff.ReservationHeld)
 	}
 }

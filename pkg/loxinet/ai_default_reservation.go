@@ -337,7 +337,12 @@ func tokenQuotaReserveElasticReason(svc rateLimitService, store *rl.RateLimiterS
 	granted = firm + left
 	for i, b := range buckets {
 		if held[i] > granted {
-			store.ReleaseReservation(b.key, held[i]-granted, resEpoch)
+			if granted == 0 {
+				// Nothing of the claim is kept: it ends here.
+				store.ReleaseReservation(b.key, held[i], resEpoch)
+			} else {
+				store.TrimReservation(b.key, held[i]-granted, resEpoch)
+			}
 		}
 	}
 	if left < elastic {

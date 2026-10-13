@@ -248,6 +248,12 @@ type tokenWindowEntry struct {
 	// an aborted request to one 60-second epoch, exactly as the fixed
 	// window's rollover reset did.
 	reserved int64
+	// claims counts the reservations `reserved` is the sum of: one per
+	// request holding a claim on this bucket. It lives and dies with
+	// `reserved` (node-local, zeroed by the same epoch advance, lowered by
+	// the same releases) and feeds nothing but the management read-back: no
+	// admission decision reads it.
+	claims int64
 	// reservedEpoch is the minute `reserved` belongs to, and it is NODE-LOCAL
 	// for the same reason `reserved` is.
 	//
@@ -297,6 +303,7 @@ func touchQuotaEpoch(e *tokenWindowEntry) {
 	if stored := atomic.LoadInt64(&e.reservedEpoch); epoch > stored &&
 		atomic.CompareAndSwapInt64(&e.reservedEpoch, stored, epoch) {
 		atomic.StoreInt64(&e.reserved, 0)
+		atomic.StoreInt64(&e.claims, 0)
 	}
 }
 
@@ -605,6 +612,7 @@ func (s *RateLimiterStore) ReserveTokens(tenantID string, want, tokensPerMin, bu
 		retry := int(min((deficit*60+limit-1)/limit, int64(epochInterval.Seconds())))
 		return false, max(retry, 1), 0
 	}
+	atomic.AddInt64(&e.claims, 1)
 	return true, 0, currentQuotaEpoch.Load()
 }
 
@@ -679,6 +687,7 @@ func (s *RateLimiterStore) ReserveTokensElastic(tenantID string, firm, elastic, 
 		// Nothing is held, so there is nothing to settle.
 		return true, 0, 0, 0
 	}
+	atomic.AddInt64(&e.claims, 1)
 	return true, 0, currentQuotaEpoch.Load(), firm + int(el)
 }
 
@@ -702,6 +711,7 @@ func (s *RateLimiterStore) SettleTokens(tenantID string, actual, reservedAmt int
 			// skipped because a peer's snapshot moved a shared stamp.
 			if atomic.LoadInt64(&e.reservedEpoch) == resEpoch {
 				reservedSubClamp(e, int64(reservedAmt))
+				claimsSubClamp(e)
 			}
 		}
 	}
@@ -711,7 +721,9 @@ func (s *RateLimiterStore) SettleTokens(tenantID string, actual, reservedAmt int
 	return s.AllowTokens(tenantID, actual, tokensPerMin, burstPct)
 }
 
-// ReleaseReservation gives back a reservation without charging anything.
+// ReleaseReservation gives back a whole reservation without charging
+// anything: the request's claim on the bucket ends here. To shrink a claim
+// that stays held, use TrimReservation.
 //
 // It is SettleTokens' release half on its own, for the two callers that must
 // hand a claim back to a bucket they are not charging: the ladder's rollback
@@ -738,6 +750,25 @@ func (s *RateLimiterStore) ReleaseReservation(key string, amt int, resEpoch int6
 		return
 	}
 	reservedSubClamp(e, int64(amt))
+	claimsSubClamp(e)
+}
+
+// TrimReservation gives back part of a reservation that stays held: the
+// tokens go back and the request still holds its claim on the bucket. The
+// guards are ReleaseReservation's.
+func (s *RateLimiterStore) TrimReservation(key string, amt int, resEpoch int64) {
+	if amt <= 0 || resEpoch == 0 {
+		return
+	}
+	v, ok := s.quotaMap.Load(key)
+	if !ok {
+		return
+	}
+	e := v.(*tokenWindowEntry)
+	if atomic.LoadInt64(&e.reservedEpoch) != resEpoch {
+		return
+	}
+	reservedSubClamp(e, int64(amt))
 }
 
 // ReservedTokens returns the tokens outstanding reservations hold on a quota
@@ -754,21 +785,22 @@ func (s *RateLimiterStore) ReservedTokens(key string) int64 {
 
 // ReservedNow is ReservedTokens for a reader that cannot know which minute
 // a claim was made in. It returns the tokens outstanding reservations hold
-// on the key in the current epoch, and whether the key has an entry at all.
-// A claim left from an earlier epoch reads as 0: the next reservation on
-// the entry zeroes it before it is counted against anything, so it holds
-// nothing. Read-only; the epoch and the count are two loads, which a
-// reservation may run between.
-func (s *RateLimiterStore) ReservedNow(key string) (tokens int64, ok bool) {
+// on the key in the current epoch, how many reservations those are (one per
+// request holding a claim on the key), and whether the key has an entry at
+// all. A claim left from an earlier epoch reads as 0: the next reservation
+// on the entry zeroes it before it is counted against anything, so it holds
+// nothing. Read-only; the epoch and the two counts are separate loads, which
+// a reservation may run between.
+func (s *RateLimiterStore) ReservedNow(key string) (tokens, claims int64, ok bool) {
 	v, found := s.quotaMap.Load(key)
 	if !found {
-		return 0, false
+		return 0, 0, false
 	}
 	e := v.(*tokenWindowEntry)
 	if atomic.LoadInt64(&e.reservedEpoch) != currentQuotaEpoch.Load() {
-		return 0, true
+		return 0, 0, true
 	}
-	return atomic.LoadInt64(&e.reserved), true
+	return atomic.LoadInt64(&e.reserved), atomic.LoadInt64(&e.claims), true
 }
 
 // QuotaEpoch returns the minute reservations are being made in now: the tag
@@ -789,6 +821,21 @@ func reservedSubClamp(e *tokenWindowEntry, amt int64) {
 			next = 0
 		}
 		if atomic.CompareAndSwapInt64(&e.reserved, cur, next) {
+			return
+		}
+	}
+}
+
+// claimsSubClamp ends one claim on the entry, never going below zero, for
+// the reason reservedSubClamp does not: an epoch advance may have zeroed the
+// count since the claim was made.
+func claimsSubClamp(e *tokenWindowEntry) {
+	for {
+		cur := atomic.LoadInt64(&e.claims)
+		if cur <= 0 {
+			return
+		}
+		if atomic.CompareAndSwapInt64(&e.claims, cur, cur-1) {
 			return
 		}
 	}

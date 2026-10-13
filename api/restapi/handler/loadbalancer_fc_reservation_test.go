@@ -29,7 +29,7 @@ func TestFcReservationHeldReadBack(t *testing.T) {
 	lb := cmn.LbRuleMod{Serv: cmn.LbServiceArg{
 		ServIP: "10.10.10.254", ServPort: 2071, Proto: "tcp",
 		FcEffective: &cmn.FcEffectiveArg{
-			Mode: "off", ReservationEpoch: 29384756, ReservationHeldClaims: 900, ReservationHeldBuckets: 2,
+			Mode: "off", ReservationEpoch: 29384756, ReservationHeldClaims: 3,
 			ReservationHeldTruncated: true,
 			ReservationHeld: []cmn.FcResvHeldArg{
 				{Kind: cmn.FcResvBucketTenant, Bucket: "t1", Tokens: 600},
@@ -38,8 +38,8 @@ func TestFcReservationHeldReadBack(t *testing.T) {
 		},
 	}}
 	eff := serializeLBRule(lb).ServiceArguments.FcEffective
-	if eff == nil || eff.ReservationEpoch != 29384756 || eff.ReservationHeldClaims != 900 ||
-		eff.ReservationHeldBuckets != 2 || !eff.ReservationHeldTruncated || len(eff.ReservationHeld) != 2 {
+	if eff == nil || eff.ReservationEpoch != 29384756 || eff.ReservationHeldClaims != 3 ||
+		!eff.ReservationHeldTruncated || len(eff.ReservationHeld) != 2 {
 		t.Fatalf("read back as %+v", eff)
 	}
 	if h := eff.ReservationHeld[0]; h.Kind != "tenant" || h.Bucket != "t1" || h.Tokens != 600 {
@@ -62,7 +62,7 @@ func TestFcReservationHeldReadBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	for key, want := range map[string]string{
-		"reservation_epoch": "0", "reservation_held_claims": "0", "reservation_held_buckets": "0",
+		"reservation_epoch": "0", "reservation_held_claims": "0",
 		"reservation_held_truncated": "false", "reservation_held": "[]",
 	} {
 		if got, ok := m[key]; !ok || string(got) != want {

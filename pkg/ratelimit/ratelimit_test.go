@@ -951,15 +951,15 @@ func TestIsTokenQuotaExceededUsesStoredBurst(t *testing.T) {
 // reservation has zeroed it.
 func TestReservedNowReadsTheCurrentEpochOnly(t *testing.T) {
 	s := New()
-	if got, ok := s.ReservedNow("t-now-none"); ok || got != 0 {
-		t.Fatalf("no entry: %d %v", got, ok)
+	if got, n, ok := s.ReservedNow("t-now-none"); ok || got != 0 || n != 0 {
+		t.Fatalf("no entry: %d %d %v", got, n, ok)
 	}
 	allowed, _, epoch := s.ReserveTokens("t-now", 400, 1000, 0)
 	if !allowed || epoch == 0 || epoch != QuotaEpoch() {
 		t.Fatalf("reserve: allowed=%v epoch=%d, store in %d", allowed, epoch, QuotaEpoch())
 	}
-	if got, ok := s.ReservedNow("t-now"); !ok || got != 400 {
-		t.Fatalf("ReservedNow = %d %v, want 400", got, ok)
+	if got, n, ok := s.ReservedNow("t-now"); !ok || got != 400 || n != 1 {
+		t.Fatalf("ReservedNow = %d tokens, %d claims, %v; want 400 and 1", got, n, ok)
 	}
 
 	// The minute turns and nothing touches the entry: the counter still
@@ -970,14 +970,69 @@ func TestReservedNowReadsTheCurrentEpochOnly(t *testing.T) {
 	if got := s.ReservedTokens("t-now"); got != 400 {
 		t.Fatalf("the raw counter reads %d, want the stale 400", got)
 	}
-	if got, ok := s.ReservedNow("t-now"); !ok || got != 0 {
-		t.Fatalf("ReservedNow of an earlier minute's claim = %d %v, want 0 and present", got, ok)
+	if got, n, ok := s.ReservedNow("t-now"); !ok || got != 0 || n != 0 {
+		t.Fatalf("ReservedNow of an earlier minute's claim = %d tokens, %d claims, %v; want 0, 0 and present", got, n, ok)
 	}
 	// The next reservation zeroes it, and only the new claim is held.
 	if allowed, _, _ := s.ReserveTokens("t-now", 50, 1000, 0); !allowed {
 		t.Fatal("reserve after the minute turned")
 	}
-	if got, _ := s.ReservedNow("t-now"); got != 50 {
-		t.Fatalf("ReservedNow = %d, want 50: the old claim must be gone", got)
+	if got, n, _ := s.ReservedNow("t-now"); got != 50 || n != 1 {
+		t.Fatalf("ReservedNow = %d tokens, %d claims; want 50 and 1: the old claim must be gone", got, n)
+	}
+}
+
+// The claim count is one per reservation held on a key: it rises with each
+// reservation that is granted, falls when one is released whole or settled,
+// stays when one is only trimmed, and never goes below zero.
+func TestReservedNowCountsClaims(t *testing.T) {
+	s := New()
+	claims := func() int64 { _, n, _ := s.ReservedNow("t-claims"); return n }
+
+	_, _, e1 := s.ReserveTokens("t-claims", 100, 1000, 0)
+	_, _, e2, granted := s.ReserveTokensElastic("t-claims", 50, 200, 1000, 0)
+	if e1 == 0 || e2 == 0 || granted != 250 || claims() != 2 {
+		t.Fatalf("two reservations: epochs %d %d, granted %d, claims %d", e1, e2, granted, claims())
+	}
+	// A refused reservation holds nothing and counts nothing.
+	if allowed, _, _ := s.ReserveTokens("t-claims", 5000, 1000, 0); allowed || claims() != 2 {
+		t.Fatalf("a refusal: allowed=%v claims=%d", allowed, claims())
+	}
+	if allowed, _, _, _ := s.ReserveTokensElastic("t-claims", 5000, 10, 1000, 0); allowed || claims() != 2 {
+		t.Fatalf("an elastic refusal: allowed=%v claims=%d", allowed, claims())
+	}
+	// Trimmed: the tokens go back, the claim stays.
+	s.TrimReservation("t-claims", 150, e2)
+	if got, n, _ := s.ReservedNow("t-claims"); got != 200 || n != 2 {
+		t.Fatalf("after a trim: %d tokens, %d claims; want 200 and 2", got, n)
+	}
+	// Released whole, then settled.
+	s.ReleaseReservation("t-claims", 100, e2)
+	if got, n, _ := s.ReservedNow("t-claims"); got != 100 || n != 1 {
+		t.Fatalf("after a release: %d tokens, %d claims; want 100 and 1", got, n)
+	}
+	s.SettleTokens("t-claims", 10, 100, e1, 1000, 0)
+	if got, n, _ := s.ReservedNow("t-claims"); got != 0 || n != 0 {
+		t.Fatalf("after the settle: %d tokens, %d claims; want 0 and 0", got, n)
+	}
+	// A release nothing is held for leaves the count at zero.
+	s.ReleaseReservation("t-claims", 100, e1)
+	if claims() != 0 {
+		t.Fatalf("a release with nothing held: claims %d", claims())
+	}
+	// A release tagged with another minute ends no claim.
+	_, _, e3 := s.ReserveTokens("t-claims", 10, 1000, 0)
+	s.ReleaseReservation("t-claims", 10, e3-1)
+	s.TrimReservation("t-claims", 5, e3-1)
+	if got, n, _ := s.ReservedNow("t-claims"); got != 10 || n != 1 {
+		t.Fatalf("a stale release: %d tokens, %d claims; want 10 and 1", got, n)
+	}
+	// An elastic reservation that is granted nothing holds no claim.
+	s2 := New()
+	if allowed, _, ep, g := s2.ReserveTokensElastic("t-none", 0, 0, 1000, 0); !allowed || ep != 0 || g != 0 {
+		t.Fatalf("nothing asked: allowed=%v epoch=%d granted=%d", allowed, ep, g)
+	}
+	if _, n, _ := s2.ReservedNow("t-none"); n != 0 {
+		t.Fatalf("nothing asked: claims %d", n)
 	}
 }

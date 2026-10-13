@@ -2954,16 +2954,13 @@ type LoadbalanceEntryServiceArgumentsFcEffective struct {
 	// The minute (Unix time divided by 60) the reservation_held_* fields below are a reading of. A token reservation belongs to the minute it was made in and does not outlive it - a request that ended without settling leaves its claim until the minute turns, and no longer. Compare two readings only when this value is the same in both.
 	ReservationEpoch int64 `json:"reservation_epoch"`
 
-	// The quota buckets holding a reservation right now, largest first, at most 64. Empty when nothing is held. A bucket not listed holds nothing unless reservation_held_truncated is true.
+	// The quota buckets holding reserved tokens right now, largest first, at most 64. Empty when nothing is held. A bucket not listed holds nothing unless reservation_held_truncated is true.
 	ReservationHeld []*LoadbalanceEntryServiceArgumentsFcEffectiveReservationHeldItems0 `json:"reservation_held"`
 
-	// How many quota buckets hold a reservation right now, among those this service's requests reserve on. reservation_held lists them.
-	ReservationHeldBuckets int32 `json:"reservation_held_buckets"`
-
-	// The token claims that admitted requests hold right now and have not settled, summed over the quota buckets this service's requests reserve on. A request holds one claim, for the tokens it reserved, on every quota bucket that applies to it (tenant, tenant and model, user, user and model, key, service), so its reservation is counted once per bucket - this is a sum of claims and not the number of tokens in flight, and it is zero exactly when nothing is held. A tenant's bucket is shared by every service the tenant uses and is counted on each of them. Read from the quota store's own counter. Management read-back only - not exported as a metric.
+	// How many token reservations are held right now on the quota buckets this service's requests reserve on, counted one per request and bucket - a request holds one claim on every quota bucket that applies to it (tenant, tenant and model, user, user and model, key, service), so one in-flight request on three buckets is three claims. Zero exactly when nothing is held. It is a count of claims and says nothing about tokens - the tokens each bucket holds are in reservation_held. A tenant's bucket is shared by every service the tenant uses, and its claims are counted on each of them. Read from the quota store's own counters. Management read-back only - not exported as a metric.
 	ReservationHeldClaims int64 `json:"reservation_held_claims"`
 
-	// true when reservation_held does not list every bucket holding a reservation - more than 64 hold one, or the service has reserved on more buckets than the gateway tracks for it (4096). reservation_held_claims and reservation_held_buckets cover the tracked buckets in either case.
+	// true when reservation_held does not list every bucket holding a reservation - more than 64 hold one, or the service has reserved on more buckets than the gateway tracks for it (4096). reservation_held_claims covers the tracked buckets in either case.
 	ReservationHeldTruncated bool `json:"reservation_held_truncated"`
 
 	// source

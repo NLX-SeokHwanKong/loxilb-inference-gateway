@@ -1,8 +1,8 @@
 {
  "schema_version": 1,
  "provenance": {
-  "generated_at": "2026-10-13T05:35:41+00:00",
-  "source_revision": "6a3e8120dd7af134032739d71981cb14cb36c540"
+  "generated_at": "2026-10-13T06:44:26+00:00",
+  "source_revision": "c108fee517c0b87de575701e3e6a226860377c02"
  },
  "contract": {
   "total": 329,
@@ -3517,8 +3517,8 @@
      "symbol": "noteReservationClamped",
      "kind": "func",
      "file": "pkg/loxinet/ai_default_reservation.go",
-     "def_line": 361,
-     "call_line": 370,
+     "def_line": 366,
+     "call_line": 375,
      "calls": "RecordReservationClamped",
      "note": "also moves the per-service, per-reason count the rule read-back (fc_effective.reservation_clamped_burst / _budget) reports, so the two cannot part"
     },

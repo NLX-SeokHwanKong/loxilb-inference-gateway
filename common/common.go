@@ -1778,18 +1778,17 @@ type FcEffectiveArg struct {
 	// The token reservations outstanding right now on the quota buckets
 	// the service's requests reserve on: what admitted requests hold and
 	// have not settled. ReservationEpoch is the minute the read is of; a
-	// claim does not outlive its minute. ReservationHeld lists the buckets
-	// holding a claim, largest first, at most FcResvHeldMax of them
-	// (ReservationHeldTruncated says more exist); ReservationHeldBuckets
-	// counts them all and ReservationHeldClaims sums their claims. A
-	// request holds one claim on every bucket of its ladder, so the sum
-	// counts a request's reservation once per bucket: it is not the tokens
-	// in flight, and it is zero exactly when nothing is held. A
-	// tenant's bucket is shared by every service the tenant uses and reads
-	// the same on each. Management read-back only; not exported as metrics.
+	// claim does not outlive its minute. ReservationHeldClaims counts the
+	// claims: one for each bucket each request holds a reservation on, so
+	// a request whose ladder has three buckets is three claims. It is zero
+	// exactly when nothing is held and says nothing about tokens.
+	// ReservationHeld lists the buckets holding tokens, largest first, at
+	// most FcResvHeldMax of them (ReservationHeldTruncated says more
+	// exist). A tenant's bucket is shared by every service the tenant uses
+	// and reads the same on each. Management read-back only; not exported
+	// as metrics.
 	ReservationEpoch         int64           `json:"reservation_epoch"`
 	ReservationHeldClaims    uint64          `json:"reservation_held_claims"`
-	ReservationHeldBuckets   uint32          `json:"reservation_held_buckets"`
 	ReservationHeldTruncated bool            `json:"reservation_held_truncated"`
 	ReservationHeld          []FcResvHeldArg `json:"reservation_held"`
 	// ListenerDefaultTokens is the default reservation the data plane holds

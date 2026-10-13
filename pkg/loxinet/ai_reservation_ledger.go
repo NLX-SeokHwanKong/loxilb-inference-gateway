@@ -82,7 +82,6 @@ func noteReservedBucket(svcIdent string, b quotaBucket) {
 func fillReservationsHeld(eff *cmn.FcEffectiveArg, store *rl.RateLimiterStore, svcIdent string) {
 	eff.ReservationEpoch = rl.QuotaEpoch()
 	eff.ReservationHeldClaims = 0
-	eff.ReservationHeldBuckets = 0
 	eff.ReservationHeldTruncated = false
 	eff.ReservationHeld = []cmn.FcResvHeldArg{}
 	if store == nil || svcIdent == "" {
@@ -95,14 +94,18 @@ func fillReservationsHeld(eff *cmn.FcEffectiveArg, store *rl.RateLimiterStore, s
 	s := v.(*aiResvService)
 
 	var held []cmn.FcResvHeldArg
+	var nclaims uint64
 	s.buckets.Range(func(k, kind any) bool {
 		key := k.(string)
-		tokens, exists := store.ReservedNow(key)
+		tokens, claims, exists := store.ReservedNow(key)
 		if !exists {
 			if _, was := s.buckets.LoadAndDelete(key); was {
 				s.n.Add(-1)
 			}
 			return true
+		}
+		if claims > 0 {
+			nclaims += uint64(claims)
 		}
 		if tokens > 0 {
 			held = append(held, cmn.FcResvHeldArg{Kind: kind.(string), Bucket: key, Tokens: uint64(tokens)})
@@ -122,10 +125,7 @@ func fillReservationsHeld(eff *cmn.FcEffectiveArg, store *rl.RateLimiterStore, s
 		}
 		return held[i].Bucket < held[j].Bucket
 	})
-	for _, h := range held {
-		eff.ReservationHeldClaims += h.Tokens
-	}
-	eff.ReservationHeldBuckets = uint32(len(held))
+	eff.ReservationHeldClaims = nclaims
 	eff.ReservationHeldTruncated = missed
 	if len(held) > cmn.FcResvHeldMax {
 		held = held[:cmn.FcResvHeldMax]
