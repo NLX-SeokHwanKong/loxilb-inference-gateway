@@ -773,14 +773,25 @@ func (na *NetAPIStruct) NetAINetIdentityGet() ([]cmn.NetIdentityMod, error) {
 }
 
 // NetAINetIdentityAdd - create or replace a network-identity binding. The
-// holder has its own lock and reads no rule state, so the global
-// configuration mutex is not taken.
+// holder has its own lock. The one question that needs rule state, whether
+// a credential: network or forward_identity binding names a service the
+// gateway does not see every request of, is asked first under the
+// configuration mutex, which is released
+// before the holder's lock is taken: the two are never held together.
 func (na *NetAPIStruct) NetAINetIdentityAdd(pm *cmn.NetIdentityMod) (int, error) {
 	if na.BgpPeerMode {
 		return NetIdentityArgErr, errors.New("running in bgp only mode")
 	}
 	if mh.NetIdentity == nil {
 		return NetIdentityArgErr, errors.New("network-identity bindings not initialized")
+	}
+	if mh.zr != nil && mh.zr.Rules != nil {
+		mh.mtx.RLock()
+		err := mh.zr.Rules.netidSockMapErr(pm)
+		mh.mtx.RUnlock()
+		if err != nil {
+			return NetIdentityArgErr, err
+		}
 	}
 	return mh.NetIdentity.BindingAdd(pm)
 }

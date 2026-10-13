@@ -26,6 +26,8 @@ package loxinet
 void ai_gw_netid_bound_set(const char *const *svc_idents, const uint8_t *flags,
                            int n, int all);
 int  ai_gw_netid_bound(const char *svc_ident);
+void ai_gw_netid_ifmatch_set(int on);
+int  ai_gw_netid_ifmatch(void);
 */
 import "C"
 
@@ -43,15 +45,25 @@ func netidBoundPublish(nb netidBound) {
 		if nb.allClosed {
 			all |= netidFailClosedBit
 		}
+		if nb.allFwd {
+			all |= netidFwdBit
+		}
 	}
-	n := len(nb.svcs)
+	// The services to name: each one bound by name, and each one that
+	// forwards while the others do not.
+	names := make([]string, 0, len(nb.svcs)+len(nb.fwd))
+	for svc := range nb.svcs {
+		names = append(names, svc)
+	}
+	for svc := range nb.fwd {
+		if _, listed := nb.svcs[svc]; !listed {
+			names = append(names, svc)
+		}
+	}
+	n := len(names)
 	if n == 0 {
 		C.ai_gw_netid_bound_set(nil, nil, 0, all)
 		return
-	}
-	names := make([]string, 0, n)
-	for svc := range nb.svcs {
-		names = append(names, svc)
 	}
 	sort.Strings(names)
 
@@ -60,10 +72,15 @@ func netidBoundPublish(nb netidBound) {
 	if ptrs == nil || flags == nil {
 		// Nothing to build the set from. Bind every service instead: the
 		// resolver is asked more often and no binding is skipped. A service
-		// that fails closed keeps doing so only if all do.
+		// that fails closed keeps doing so only if all do; one that forwards
+		// identity must keep dropping what a client sends, so all do.
 		C.free(unsafe.Pointer(ptrs))
 		C.free(unsafe.Pointer(flags))
-		C.ai_gw_netid_bound_set(nil, nil, 0, netidBoundBit)
+		fallback := C.int(netidBoundBit)
+		if nb.allFwd || len(nb.fwd) > 0 {
+			fallback |= netidFwdBit
+		}
+		C.ai_gw_netid_bound_set(nil, nil, 0, fallback)
 		return
 	}
 	pv := unsafe.Slice(ptrs, n)
@@ -72,6 +89,9 @@ func netidBoundPublish(nb netidBound) {
 		pv[i] = C.CString(svc)
 		if nb.svcs[svc] {
 			fv[i] = netidFailClosedBit
+		}
+		if nb.fwd[svc] {
+			fv[i] |= netidFwdBit
 		}
 	}
 	C.ai_gw_netid_bound_set(ptrs, flags, C.int(n), all)
@@ -88,4 +108,19 @@ func netidBoundRead(svc string) int {
 	cs := C.CString(svc)
 	defer C.free(unsafe.Pointer(cs))
 	return int(C.ai_gw_netid_bound(cs))
+}
+
+// netidIfMatchPublish tells the data plane whether any binding matches on an
+// interface.
+func netidIfMatchPublish(on bool) {
+	v := C.int(0)
+	if on {
+		v = 1
+	}
+	C.ai_gw_netid_ifmatch_set(v)
+}
+
+// netidIfMatchRead is the switch as the accept path reads it.
+func netidIfMatchRead() bool {
+	return C.ai_gw_netid_ifmatch() != 0
 }

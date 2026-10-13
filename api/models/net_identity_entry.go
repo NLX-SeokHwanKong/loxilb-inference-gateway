@@ -23,7 +23,7 @@ type NetIdentityEntry struct {
 	// The models a request admitted or held by this binding may name, compared exactly. Empty or omitted allows any. At most 256.
 	AllowedModels []string `json:"allowed_models,omitempty"`
 
-	// none (default): the binding never stands in for a credential. network: on a service that requires a credential, a request that presents none is admitted as the binding's tenant. Accepted with an ingress_if match only; refused with a cidr match.
+	// none (default): the binding never stands in for a credential. network: on a service that requires a credential, a request that presents none is admitted as the binding's tenant. Accepted with an interface match only (ingress_if, vlan, vni or ipsec_tunnel); refused with a cidr match. Also refused when a named service has a rule that is not an AI-gateway service and runs sockMapMode request or both: the gateway does not see every request on it.
 	// Enum: [none network]
 	Credential string `json:"credential,omitempty"`
 
@@ -35,7 +35,7 @@ type NetIdentityEntry struct {
 	// Enum: [neutral closed]
 	FailMode string `json:"fail_mode,omitempty"`
 
-	// Forward the tenant upstream as X-Auth-Tenant. Stored and reported; it does not change the upstream request yet. Default false.
+	// Forward the request's tenant upstream as X-Auth-Tenant, and its user as X-Auth-User when it has one, on a request whose source matched this binding. The services the binding names (every HTTP full-proxy service of the node when it names none) then also drop every header whose name starts with X-Auth- that a client sends, on every request and whatever the rule's api_key_auth, whether or not the request's source matched a binding. A service no such binding applies to is unchanged. The identity is injected only on an AI-gateway service, where the admission gate decides it, and not into a chunked HTTP/1.1 request. Refused when a service the binding applies to has a rule that is not an AI-gateway service and runs sockMapMode request or both: the gateway does not see every request on it. Default false.
 	ForwardIdentity bool `json:"forward_identity,omitempty"`
 
 	// match
@@ -353,7 +353,7 @@ func (m *NetIdentityEntry) UnmarshalBinary(b []byte) error {
 	return nil
 }
 
-// NetIdentityEntryMatch The source the binding applies to. Exactly one of cidr and ingress_if.
+// NetIdentityEntryMatch The source the binding applies to. Exactly one of cidr, ingress_if, vlan, vni and ipsec_tunnel. All but cidr match on the interface the connection arrived on.
 //
 // swagger:model NetIdentityEntryMatch
 type NetIdentityEntryMatch struct {
@@ -361,12 +361,70 @@ type NetIdentityEntryMatch struct {
 	// IPv4 networks in a.b.c.d/len form, without host bits, that the socket peer of the request is in. At most 256.
 	Cidr []string `json:"cidr,omitempty"`
 
-	// Name of the interface the connection arrived on. The name is stored, never an index. A name that does not exist on the node is accepted with a warning in the reply. Interface matching is not active yet: such a binding is stored and matches nothing.
+	// Name of the interface the connection arrived on, at most 15 characters: the logical device, which for a tagged VLAN is its bridge (vlan<id>), for a VXLAN its device (vxlan<vni>) and for an IPsec tunnel its VTI. The name is stored, never an index, so an interface that is removed and created again keeps its binding. A name that does not exist on the node is accepted with a warning in the reply and matches nothing until it exists; an interface that is removed later is logged and matches nothing until it is back. The interface is that of the connection's first packet and holds for the life of the connection.
 	IngressIf string `json:"ingress_if,omitempty"`
+
+	// Name of an IPsec tunnel configured on this node (/config/ipsec/tunnel). Another spelling of ingress_if: the tunnel's VTI interface, vti<mark>. A tunnel that is not configured, or has no mark, is accepted with a warning and matches nothing until it has one.
+	IpsecTunnel string `json:"ipsec_tunnel,omitempty"`
+
+	// A VLAN ID. Another spelling of ingress_if: the VLAN's bridge interface on this node, vlan<id>.
+	// Maximum: 4094
+	// Minimum: 1
+	Vlan int64 `json:"vlan,omitempty"`
+
+	// A VXLAN network identifier. Another spelling of ingress_if: the interface vxlan<vni> on this node.
+	// Maximum: 1.6777215e+07
+	// Minimum: 1
+	Vni int64 `json:"vni,omitempty"`
 }
 
 // Validate validates this net identity entry match
 func (m *NetIdentityEntryMatch) Validate(formats strfmt.Registry) error {
+	var res []error
+
+	if err := m.validateVlan(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := m.validateVni(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if len(res) > 0 {
+		return errors.CompositeValidationError(res...)
+	}
+	return nil
+}
+
+func (m *NetIdentityEntryMatch) validateVlan(formats strfmt.Registry) error {
+	if swag.IsZero(m.Vlan) { // not required
+		return nil
+	}
+
+	if err := validate.MinimumInt("match"+"."+"vlan", "body", m.Vlan, 1, false); err != nil {
+		return err
+	}
+
+	if err := validate.MaximumInt("match"+"."+"vlan", "body", m.Vlan, 4094, false); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (m *NetIdentityEntryMatch) validateVni(formats strfmt.Registry) error {
+	if swag.IsZero(m.Vni) { // not required
+		return nil
+	}
+
+	if err := validate.MinimumInt("match"+"."+"vni", "body", m.Vni, 1, false); err != nil {
+		return err
+	}
+
+	if err := validate.MaximumInt("match"+"."+"vni", "body", m.Vni, 1.6777215e+07, false); err != nil {
+		return err
+	}
+
 	return nil
 }
 

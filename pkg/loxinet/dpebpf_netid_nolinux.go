@@ -23,3 +23,7 @@ package loxinet
 func netidBoundPublish(nb netidBound) {}
 
 func netidBoundRead(svc string) int { return 0 }
+
+func netidIfMatchPublish(on bool) {}
+
+func netidIfMatchRead() bool { return false }

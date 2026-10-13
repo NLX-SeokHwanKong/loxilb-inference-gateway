@@ -165,13 +165,46 @@ func (s *netidSnapshot) resolve(ip uint32, ipOK bool, ifindex int, svc string) *
 	return gb
 }
 
+// netidIfName is the interface a binding's match names: the name itself, or
+// the one its alias stands for. A VLAN is its bridge and a VXLAN its device,
+// as this node names them; an IPsec tunnel is its VTI, which tunnelIf knows.
+// ok is false for an address match, and for a tunnel that is not configured
+// or has no VTI.
+func netidIfName(m *cmn.NetIdentityMatch, tunnelIf func(string) (string, bool)) (name string, ok bool) {
+	switch {
+	case m.IngressIf != "":
+		return m.IngressIf, true
+	case m.Vlan != 0:
+		return "vlan" + strconv.Itoa(m.Vlan), true
+	case m.Vni != 0:
+		return "vxlan" + strconv.Itoa(m.Vni), true
+	case m.IPsecTunnel != "":
+		if tunnelIf == nil {
+			return "", false
+		}
+		return tunnelIf(m.IPsecTunnel)
+	}
+	return "", false
+}
+
 // buildNetidSnapshot compiles the bindings. They are taken in name order and
 // the first to claim a key keeps it, so two bindings that match as
 // specifically on one service (which the configuration allows only for one
 // tenant) resolve to the same one every time. An interface that does not
 // exist now contributes nothing.
 func buildNetidSnapshot(bindings map[string]cmn.NetIdentityMod, ifIndex func(string) (int, bool)) *netidSnapshot {
+	s, _ := buildNetidSnapshotIf(bindings, ifIndex, nil)
+	return s
+}
+
+// buildNetidSnapshotIf is buildNetidSnapshot with the IPsec tunnels known,
+// and also returns what it resolved: for each interface match, the binding's
+// name mapped to the index it was compiled with (0 where the interface, or
+// the tunnel behind an alias, does not exist now).
+func buildNetidSnapshotIf(bindings map[string]cmn.NetIdentityMod, ifIndex func(string) (int, bool),
+	tunnelIf func(string) (string, bool)) (*netidSnapshot, map[string]int) {
 	s := &netidSnapshot{global: &netidTable{}, bySvc: make(map[string]*netidTable)}
+	seen := make(map[string]int)
 	names := make([]string, 0, len(bindings))
 	for name := range bindings {
 		names = append(names, name)
@@ -204,10 +237,14 @@ func buildNetidSnapshot(bindings map[string]cmn.NetIdentityMod, ifIndex func(str
 				tables = append(tables, t)
 			}
 		}
-		if pm.Match.IngressIf != "" {
-			if idx, ok := ifIndex(pm.Match.IngressIf); ok && idx > 0 {
-				for _, t := range tables {
-					t.addIf(idx, b)
+		if pm.Match.OnInterface() {
+			seen[name] = 0
+			if ifName, ok := netidIfName(&pm.Match, tunnelIf); ok {
+				if idx, ok := ifIndex(ifName); ok && idx > 0 {
+					seen[name] = idx
+					for _, t := range tables {
+						t.addIf(idx, b)
+					}
 				}
 			}
 			continue
@@ -222,37 +259,51 @@ func buildNetidSnapshot(bindings map[string]cmn.NetIdentityMod, ifIndex func(str
 			}
 		}
 	}
-	return s
+	return s, seen
 }
 
-// netidBound is the bound set: the services that have a binding, and which
-// of them refuse a request the resolver could not answer for.
+// netidBound is the bound set: the services that have a binding, which of
+// them refuse a request the resolver could not answer for, and which have a
+// binding that forwards identity upstream (those drop the X-Auth-* headers a
+// client sends).
 type netidBound struct {
 	all       bool            // a binding names no service: every AI service is bound
 	allClosed bool            // ... and every one fails closed
+	allFwd    bool            // ... and every one forwards identity
 	svcs      map[string]bool // service -> fails closed
+	fwd       map[string]bool // the services that forward identity; each is bound
 }
 
 func netidBoundOf(bindings map[string]cmn.NetIdentityMod) netidBound {
-	nb := netidBound{svcs: make(map[string]bool)}
+	nb := netidBound{svcs: make(map[string]bool), fwd: make(map[string]bool)}
 	for _, pm := range bindings {
 		closed := pm.FailMode == cmn.NetIdentityFailClosed
 		if len(pm.Services) == 0 {
 			nb.all = true
 			nb.allClosed = nb.allClosed || closed
+			nb.allFwd = nb.allFwd || pm.ForwardIdentity
 			continue
 		}
 		for _, svc := range pm.Services {
 			nb.svcs[svc] = nb.svcs[svc] || closed
+			if pm.ForwardIdentity {
+				nb.fwd[svc] = true
+			}
 		}
 	}
 	return nb.canon()
 }
 
 // canon drops what says nothing: once every service is bound, a listed
-// service only matters where it fails closed and the others do not. Two
-// sets that answer has alike are then equal.
+// service only matters where it fails closed and the others do not, and
+// once every service forwards, naming one that does adds nothing. Two sets
+// that answer has and forwards alike are then equal.
 func (nb netidBound) canon() netidBound {
+	if nb.allFwd {
+		for svc := range nb.fwd {
+			delete(nb.fwd, svc)
+		}
+	}
 	if !nb.all {
 		return nb
 	}
@@ -267,15 +318,26 @@ func (nb netidBound) canon() netidBound {
 // has reports whether a service is bound, and whether it fails closed.
 func (nb netidBound) has(svc string) (bound, closed bool) {
 	c, listed := nb.svcs[svc]
-	return nb.all || listed, (nb.all && nb.allClosed) || c
+	return nb.all || listed || nb.fwd[svc], (nb.all && nb.allClosed) || c
+}
+
+// forwards reports whether a service has a binding that forwards identity.
+func (nb netidBound) forwards(svc string) bool {
+	return (nb.all && nb.allFwd) || nb.fwd[svc]
 }
 
 func (nb netidBound) equal(o netidBound) bool {
-	if nb.all != o.all || nb.allClosed != o.allClosed || len(nb.svcs) != len(o.svcs) {
+	if nb.all != o.all || nb.allClosed != o.allClosed || nb.allFwd != o.allFwd ||
+		len(nb.svcs) != len(o.svcs) || len(nb.fwd) != len(o.fwd) {
 		return false
 	}
 	for svc, c := range nb.svcs {
 		if oc, ok := o.svcs[svc]; !ok || oc != c {
+			return false
+		}
+	}
+	for svc := range nb.fwd {
+		if !o.fwd[svc] {
 			return false
 		}
 	}
@@ -286,8 +348,9 @@ func (nb netidBound) equal(o netidBound) bool {
 // to publish while the snapshot goes from the one nb describes to the one
 // next describes.
 func (nb netidBound) meet(next netidBound) netidBound {
-	m := netidBound{all: nb.all && next.all, svcs: make(map[string]bool)}
+	m := netidBound{all: nb.all && next.all, svcs: make(map[string]bool), fwd: make(map[string]bool)}
 	m.allClosed = m.all && next.allClosed
+	m.allFwd = m.all && next.allFwd
 	keep := func(svc string) {
 		if _, done := m.svcs[svc]; done {
 			return
@@ -296,13 +359,15 @@ func (nb netidBound) meet(next netidBound) netidBound {
 		is, closed := next.has(svc)
 		if was && is {
 			m.svcs[svc] = closed
+			if next.forwards(svc) {
+				m.fwd[svc] = true
+			}
 		}
 	}
-	for svc := range nb.svcs {
-		keep(svc)
-	}
-	for svc := range next.svcs {
-		keep(svc)
+	for _, set := range []map[string]bool{nb.svcs, next.svcs, nb.fwd, next.fwd} {
+		for svc := range set {
+			keep(svc)
+		}
 	}
 	return m.canon()
 }
@@ -319,10 +384,30 @@ type NetIdentityH struct {
 	publish func(netidBound)
 	// ifIndex resolves an interface name on this node.
 	ifIndex func(name string) (int, bool)
+	// tunnelIf names the VTI interface of an IPsec tunnel configured on this
+	// node; nil where there is none to ask (the alias then matches nothing).
+	tunnelIf func(tunnel string) (string, bool)
+	// publishIfMatch tells the data plane whether any binding matches on an
+	// interface: only then does it read a connection's ingress interface.
+	publishIfMatch func(on bool)
+	// ifSeen is what the snapshot in place was compiled with: for each
+	// binding that matches on an interface, its index then (0 = none).
+	ifSeen map[string]int
+	// ifMatch is the last value handed to publishIfMatch.
+	ifMatch bool
+	// hasIf mirrors ifMatch for the refresher, which reads it without mu.
+	hasIf atomic.Bool
+	// kick wakes the refresher after a port event.
+	kick chan struct{}
 	// step, when set, is told each stage of a configuration change as it
 	// completes ("bound", "snapshot"). Tests only.
 	step func(stage string)
 }
+
+// netidRefreshEvery is how often the interfaces behind the bindings are
+// looked at again without a port event: an interface the port layer does
+// not track (a VTI made by the IPsec daemon) still reaches the resolver.
+const netidRefreshEvery = 2 * time.Second
 
 // netidActive is the holder the gate's resolver reads. Set once at start-up.
 var netidActive atomic.Pointer[NetIdentityH]
@@ -331,16 +416,110 @@ var netidActive atomic.Pointer[NetIdentityH]
 // data plane starts with no service bound, which is what no binding means.
 func NetIdentityInit() *NetIdentityH {
 	h := newNetIdentityH(netidBoundPublish, netidIfIndex)
+	h.tunnelIf = netidTunnelIf
+	h.publishIfMatch = netidIfMatchPublish
 	netidActive.Store(h)
+	go h.refresher(netidRefreshEvery, nil)
 	return h
+}
+
+// netidTunnelIf names the VTI of an IPsec tunnel as the IPsec layer creates
+// it: vti<mark>. A tunnel that is not configured, or has no mark, has none.
+func netidTunnelIf(tunnel string) (string, bool) {
+	if mh.ipsec == nil {
+		return "", false
+	}
+	mark, ok := mh.ipsec.tunnelMark(tunnel)
+	if !ok || mark == 0 {
+		return "", false
+	}
+	return "vti" + strconv.FormatUint(uint64(mark), 10), true
+}
+
+// NetIdentityPortEvent tells the resolver that an interface was added or
+// removed. It only wakes the refresher: the caller may hold any lock.
+func NetIdentityPortEvent() {
+	if h := netidActive.Load(); h != nil {
+		select {
+		case h.kick <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// refresher re-reads the interfaces behind the bindings after a port event
+// and every period, until stop is closed (nil: for the life of the process).
+// It does nothing while no binding matches on an interface.
+func (h *NetIdentityH) refresher(period time.Duration, stop <-chan struct{}) {
+	t := time.NewTicker(period)
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-h.kick:
+		case <-t.C:
+		}
+		if h.hasIf.Load() {
+			h.refresh()
+		}
+	}
+}
+
+// refresh recompiles the snapshot when an interface behind a binding has
+// appeared, gone or come back under another index, and says which. It
+// reports whether anything changed. A failure inside is recovered: the
+// snapshot in place stays, and the next round tries again.
+func (h *NetIdentityH) refresh() (changed bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			changed = false
+			tk.LogIt(tk.LogError, "[NetIdentity] interface refresh failed: %v\n", r)
+		}
+	}()
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	_, now := buildNetidSnapshotIf(h.bindings, h.ifIndex, h.tunnelIf)
+	type move struct {
+		name     string
+		was, now int
+	}
+	var moved []move
+	for name, idx := range now {
+		if was := h.ifSeen[name]; was != idx {
+			moved = append(moved, move{name, was, idx})
+		}
+	}
+	if len(moved) == 0 {
+		return false
+	}
+	sort.Slice(moved, func(i, j int) bool { return moved[i].name < moved[j].name })
+	h.commit(h.bindings)
+	for _, m := range moved {
+		b := h.bindings[m.name]
+		switch {
+		case m.now == 0:
+			tk.LogIt(tk.LogWarning, "[NetIdentity] binding %s: %s is gone from this node; the binding matches nothing until it exists again\n",
+				m.name, netidMatchWord(&b))
+		case m.was == 0:
+			tk.LogIt(tk.LogInfo, "[NetIdentity] binding %s: %s is present (index %d); the binding matches again\n",
+				m.name, netidMatchWord(&b), m.now)
+		default:
+			tk.LogIt(tk.LogInfo, "[NetIdentity] binding %s: %s was re-created (index %d, was %d)\n",
+				m.name, netidMatchWord(&b), m.now, m.was)
+		}
+	}
+	return true
 }
 
 func newNetIdentityH(publish func(netidBound), ifIndex func(string) (int, bool)) *NetIdentityH {
 	h := &NetIdentityH{
 		bindings: make(map[string]cmn.NetIdentityMod),
-		bound:    netidBound{svcs: make(map[string]bool)},
+		bound:    netidBound{svcs: make(map[string]bool), fwd: make(map[string]bool)},
 		publish:  publish,
 		ifIndex:  ifIndex,
+		ifSeen:   make(map[string]int),
+		kick:     make(chan struct{}, 1),
 	}
 	h.snap.Store(buildNetidSnapshot(nil, ifIndex))
 	return h
@@ -356,8 +535,17 @@ func netidIfIndex(name string) (int, bool) {
 
 // commit makes next the configuration. Called with mu held.
 func (h *NetIdentityH) commit(next map[string]cmn.NetIdentityMod) {
-	snap := buildNetidSnapshot(next, h.ifIndex)
+	snap, seen := buildNetidSnapshotIf(next, h.ifIndex, h.tunnelIf)
 	nb := netidBoundOf(next)
+	ifMatch := len(seen) > 0
+
+	// The data plane starts reading ingress interfaces before a snapshot
+	// that matches on one is in place, and stops after the last such
+	// snapshot is gone. A connection it has not read is read at its next
+	// request, so the order only decides who pays the read.
+	if ifMatch && !h.ifMatch {
+		h.setIfMatch(true)
+	}
 
 	// Leave first: a service that is losing its bindings stops asking
 	// before the snapshot forgets them.
@@ -375,7 +563,20 @@ func (h *NetIdentityH) commit(next map[string]cmn.NetIdentityMod) {
 		h.bound = nb
 		h.told("bound")
 	}
+	if !ifMatch && h.ifMatch {
+		h.setIfMatch(false)
+	}
+	h.ifSeen = seen
 	h.bindings = next
+}
+
+func (h *NetIdentityH) setIfMatch(on bool) {
+	h.ifMatch = on
+	h.hasIf.Store(on)
+	if h.publishIfMatch != nil {
+		h.publishIfMatch(on)
+	}
+	h.told("ifmatch")
 }
 
 func (h *NetIdentityH) told(stage string) {
@@ -405,6 +606,12 @@ func (h *NetIdentityH) BindingAdd(pm *cmn.NetIdentityMod) (int, error) {
 	next[nm.Name] = nm
 	h.commit(next)
 	tk.LogIt(tk.LogInfo, "[NetIdentity] binding %s stored (tenant %s, %s)\n", nm.Name, nm.Tenant, netidMatchWord(&nm))
+	if idx, onIf := h.ifSeen[nm.Name]; onIf && idx == 0 {
+		// Said here as well as in the API reply: a binding restored at
+		// start-up has no reply to carry it.
+		tk.LogIt(tk.LogWarning, "[NetIdentity] binding %s: the interface of %s is not on this node; the binding matches nothing until it exists\n",
+			nm.Name, netidMatchWord(&nm))
+	}
 	return 0, nil
 }
 
@@ -446,12 +653,17 @@ func (h *NetIdentityH) BindingWarning(pm *cmn.NetIdentityMod) string {
 		return ""
 	}
 	var msgs []string
-	if ifName := strings.TrimSpace(pm.Match.IngressIf); ifName != "" {
-		if _, ok := h.ifIndex(ifName); !ok {
-			msgs = append(msgs, fmt.Sprintf("match.ingress_if: no interface %q on this node; the binding matches nothing until it exists", ifName))
+	nm, err := netidNormalize(pm)
+	if err == nil && nm.Match.OnInterface() {
+		field := netidMatchField(&nm.Match)
+		if ifName, ok := netidIfName(&nm.Match, h.tunnelIf); !ok {
+			msgs = append(msgs, fmt.Sprintf("match.%s: IPsec tunnel %q is not configured on this node, or has no mark and so no VTI interface; the binding matches nothing until it has one",
+				field, nm.Match.IPsecTunnel))
+		} else if _, ok := h.ifIndex(ifName); !ok {
+			msgs = append(msgs, fmt.Sprintf("match.%s: no interface %q on this node; the binding matches nothing until it exists", field, ifName))
 		}
 	}
-	if nm, err := netidNormalize(pm); err == nil {
+	if err == nil {
 		h.mu.Lock()
 		msg := netidFailModeWarning(h.bindings, &nm)
 		h.mu.Unlock()
@@ -606,10 +818,11 @@ func netidAnswerFor(h *NetIdentityH, clientIP string, ifindex int, svc, model st
 }
 
 // The bits of the bound set, as sockproxy_ai_admit.h defines them
-// (AI_GW_NETID_BOUND, AI_GW_NETID_FAIL_CLOSED).
+// (AI_GW_NETID_BOUND, AI_GW_NETID_FAIL_CLOSED, AI_GW_NETID_FWD).
 const (
 	netidBoundBit      = 0x1
 	netidFailClosedBit = 0x2
+	netidFwdBit        = 0x4
 )
 
 // netidFaultLogEvery bounds the fault line: a fault is per request, and a
@@ -644,10 +857,32 @@ func netidCopy(b cmn.NetIdentityMod) cmn.NetIdentityMod {
 }
 
 func netidMatchWord(pm *cmn.NetIdentityMod) string {
-	if pm.Match.IngressIf != "" {
+	switch {
+	case pm.Match.IngressIf != "":
 		return "ingress_if " + pm.Match.IngressIf
+	case pm.Match.Vlan != 0:
+		return "vlan " + strconv.Itoa(pm.Match.Vlan)
+	case pm.Match.Vni != 0:
+		return "vni " + strconv.Itoa(pm.Match.Vni)
+	case pm.Match.IPsecTunnel != "":
+		return "ipsec_tunnel " + pm.Match.IPsecTunnel
 	}
 	return "cidr " + strings.Join(pm.Match.CIDR, ",")
+}
+
+// netidMatchField is the name of the match field a binding uses.
+func netidMatchField(m *cmn.NetIdentityMatch) string {
+	switch {
+	case m.IngressIf != "":
+		return "ingress_if"
+	case m.Vlan != 0:
+		return "vlan"
+	case m.Vni != 0:
+		return "vni"
+	case m.IPsecTunnel != "":
+		return "ipsec_tunnel"
+	}
+	return "cidr"
 }
 
 func netidHasControl(s string) bool {
@@ -721,16 +956,40 @@ func netidNormalize(pm *cmn.NetIdentityMod) (cmn.NetIdentityMod, error) {
 	out.Name = pm.Name
 
 	ifName := strings.TrimSpace(pm.Match.IngressIf)
+	tunnel := strings.TrimSpace(pm.Match.IPsecTunnel)
+	given := 0
+	for _, set := range []bool{len(pm.Match.CIDR) != 0, ifName != "", pm.Match.Vlan != 0, pm.Match.Vni != 0, tunnel != ""} {
+		if set {
+			given++
+		}
+	}
 	switch {
-	case len(pm.Match.CIDR) == 0 && ifName == "":
-		return out, cmn.NewValidationError("match", "match needs one of cidr or ingress_if")
-	case len(pm.Match.CIDR) != 0 && ifName != "":
-		return out, cmn.NewValidationError("match", "match takes one of cidr or ingress_if, not both")
+	case given == 0:
+		return out, cmn.NewValidationError("match", "match needs one of cidr, ingress_if, vlan, vni or ipsec_tunnel")
+	case given > 1:
+		return out, cmn.NewValidationError("match", "match takes one of cidr, ingress_if, vlan, vni or ipsec_tunnel, not several")
 	case ifName != "":
 		if len(ifName) > netidIfNameMax || strings.ContainsAny(ifName, "/ \t") || netidHasControl(ifName) {
 			return out, cmn.NewValidationError("match.ingress_if", "match.ingress_if: %q is not an interface name", pm.Match.IngressIf)
 		}
 		out.Match.IngressIf = ifName
+	case pm.Match.Vlan != 0:
+		if pm.Match.Vlan < 1 || pm.Match.Vlan > cmn.NetIdentityVlanMax {
+			return out, cmn.NewValidationError("match.vlan", "match.vlan must be within 1..%d", cmn.NetIdentityVlanMax)
+		}
+		out.Match.Vlan = pm.Match.Vlan
+	case pm.Match.Vni != 0:
+		if pm.Match.Vni < 1 || pm.Match.Vni > cmn.NetIdentityVniMax {
+			return out, cmn.NewValidationError("match.vni", "match.vni must be within 1..%d", cmn.NetIdentityVniMax)
+		}
+		out.Match.Vni = pm.Match.Vni
+	case tunnel != "":
+		if !netidNameOK(tunnel) {
+			return out, cmn.NewValidationError("match.ipsec_tunnel",
+				"match.ipsec_tunnel: %q is not a tunnel name (1 to %d characters of letters, digits, '-', '_' and '.')",
+				pm.Match.IPsecTunnel, netidNameMax)
+		}
+		out.Match.IPsecTunnel = tunnel
 	default:
 		if len(pm.Match.CIDR) > netidMaxCIDRs {
 			return out, cmn.NewValidationError("match.cidr", "match.cidr: at most %d networks", netidMaxCIDRs)
@@ -768,9 +1027,9 @@ func netidNormalize(pm *cmn.NetIdentityMod) (cmn.NetIdentityMod, error) {
 		cmn.NetIdentityCredentialNone, cmn.NetIdentityCredentialNetwork); err != nil {
 		return out, err
 	}
-	if out.Credential == cmn.NetIdentityCredentialNetwork && out.Match.IngressIf == "" {
+	if out.Credential == cmn.NetIdentityCredentialNetwork && !out.Match.OnInterface() {
 		return out, cmn.NewValidationError("credential",
-			"credential: network needs an ingress_if match; an address range does not stand in for a credential")
+			"credential: network needs an interface match (ingress_if, vlan, vni or ipsec_tunnel); an address range does not stand in for a credential")
 	}
 	if out.PriorityClass, err = netidEnum("priority_class", pm.PriorityClass,
 		cmn.NetIdentityClassStandard, cmn.NetIdentityClassCritical, cmn.NetIdentityClassSheddable); err != nil {
@@ -825,8 +1084,13 @@ func netidKeys(pm *cmn.NetIdentityMod) []string {
 	}
 	matches := pm.Match.CIDR
 	kind := "cidr "
-	if pm.Match.IngressIf != "" {
-		matches, kind = []string{pm.Match.IngressIf}, "ingress_if "
+	// An alias whose interface name is fixed claims that interface, so
+	// "vlan 20" and "ingress_if vlan20" are one claim. A tunnel's interface
+	// is known only on a node that has the tunnel: it claims its own name.
+	if ifName, fixed := netidIfName(&pm.Match, nil); fixed {
+		matches, kind = []string{ifName}, "ingress_if "
+	} else if pm.Match.IPsecTunnel != "" {
+		matches, kind = []string{pm.Match.IPsecTunnel}, "ipsec_tunnel "
 	}
 	keys := make([]string, 0, len(scopes)*len(matches))
 	for _, sc := range scopes {

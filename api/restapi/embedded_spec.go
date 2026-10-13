@@ -6370,7 +6370,7 @@ func init() {
           "x-omitempty": true
         },
         "credential": {
-          "description": "none (default): the binding never stands in for a credential. network: on a service that requires a credential, a request that presents none is admitted as the binding's tenant. Accepted with an ingress_if match only; refused with a cidr match.",
+          "description": "none (default): the binding never stands in for a credential. network: on a service that requires a credential, a request that presents none is admitted as the binding's tenant. Accepted with an interface match only (ingress_if, vlan, vni or ipsec_tunnel); refused with a cidr match. Also refused when a named service has a rule that is not an AI-gateway service and runs sockMapMode request or both: the gateway does not see every request on it.",
           "enum": [
             "none",
             "network"
@@ -6394,11 +6394,11 @@ func init() {
           "type": "string"
         },
         "forward_identity": {
-          "description": "Forward the tenant upstream as X-Auth-Tenant. Stored and reported; it does not change the upstream request yet. Default false.",
+          "description": "Forward the request's tenant upstream as X-Auth-Tenant, and its user as X-Auth-User when it has one, on a request whose source matched this binding. The services the binding names (every HTTP full-proxy service of the node when it names none) then also drop every header whose name starts with X-Auth- that a client sends, on every request and whatever the rule's api_key_auth, whether or not the request's source matched a binding. A service no such binding applies to is unchanged. The identity is injected only on an AI-gateway service, where the admission gate decides it, and not into a chunked HTTP/1.1 request. Refused when a service the binding applies to has a rule that is not an AI-gateway service and runs sockMapMode request or both: the gateway does not see every request on it. Default false.",
           "type": "boolean"
         },
         "match": {
-          "description": "The source the binding applies to. Exactly one of cidr and ingress_if.",
+          "description": "The source the binding applies to. Exactly one of cidr, ingress_if, vlan, vni and ipsec_tunnel. All but cidr match on the interface the connection arrived on.",
           "properties": {
             "cidr": {
               "description": "IPv4 networks in a.b.c.d/len form, without host bits, that the socket peer of the request is in. At most 256.",
@@ -6409,8 +6409,26 @@ func init() {
               "x-omitempty": true
             },
             "ingress_if": {
-              "description": "Name of the interface the connection arrived on. The name is stored, never an index. A name that does not exist on the node is accepted with a warning in the reply. Interface matching is not active yet: such a binding is stored and matches nothing.",
+              "description": "Name of the interface the connection arrived on, at most 15 characters: the logical device, which for a tagged VLAN is its bridge (vlan\u003cid\u003e), for a VXLAN its device (vxlan\u003cvni\u003e) and for an IPsec tunnel its VTI. The name is stored, never an index, so an interface that is removed and created again keeps its binding. A name that does not exist on the node is accepted with a warning in the reply and matches nothing until it exists; an interface that is removed later is logged and matches nothing until it is back. The interface is that of the connection's first packet and holds for the life of the connection.",
               "type": "string"
+            },
+            "ipsec_tunnel": {
+              "description": "Name of an IPsec tunnel configured on this node (/config/ipsec/tunnel). Another spelling of ingress_if: the tunnel's VTI interface, vti\u003cmark\u003e. A tunnel that is not configured, or has no mark, is accepted with a warning and matches nothing until it has one.",
+              "type": "string"
+            },
+            "vlan": {
+              "description": "A VLAN ID. Another spelling of ingress_if: the VLAN's bridge interface on this node, vlan\u003cid\u003e.",
+              "maximum": 4094,
+              "minimum": 1,
+              "type": "integer",
+              "x-omitempty": true
+            },
+            "vni": {
+              "description": "A VXLAN network identifier. Another spelling of ingress_if: the interface vxlan\u003cvni\u003e on this node.",
+              "maximum": 16777215,
+              "minimum": 1,
+              "type": "integer",
+              "x-omitempty": true
             }
           },
           "type": "object"
@@ -33371,7 +33389,7 @@ func init() {
     },
     "/config/vlan": {
       "post": {
-        "description": "Create Linux bridge vlan<ID> with MTU 9000. The REST helper does not consistently enforce the VLAN range documented elsewhere, and successful creation does not prove completion of subsequent link setup.",
+        "description": "Create Linux bridge vlan\u003cID\u003e with MTU 9000. The REST helper does not consistently enforce the VLAN range documented elsewhere, and successful creation does not prove completion of subsequent link setup.",
         "summary": "Create vlan interface in the device",
         "parameters": [
           {
@@ -33484,7 +33502,7 @@ func init() {
     },
     "/config/vlan/{vlan_id}": {
       "delete": {
-        "description": "Delete Linux bridge vlan<ID>. The REST helper does not enforce a no-members precondition; do not assume a populated bridge will be rejected. Downstream failures are not guaranteed to use the documented conflict or not-found status.",
+        "description": "Delete Linux bridge vlan\u003cID\u003e. The REST helper does not enforce a no-members precondition; do not assume a populated bridge will be rejected. Downstream failures are not guaranteed to use the documented conflict or not-found status.",
         "summary": "Delete vlan in the device",
         "parameters": [
           {
@@ -33549,7 +33567,7 @@ func init() {
     },
     "/config/vlan/{vlan_id}/member": {
       "post": {
-        "description": "Attach a member to bridge vlan<ID>. Omitted tagged means false and attaches the named interface; tagged true creates and attaches <interface>.<ID>. The helper does not enforce existing-master ownership or the documented VLAN range, and failures can leave partial state. Verify existing membership before submission; automatic reparenting must not be treated as a safe update contract.",
+        "description": "Attach a member to bridge vlan\u003cID\u003e. Omitted tagged means false and attaches the named interface; tagged true creates and attaches \u003cinterface\u003e.\u003cID\u003e. The helper does not enforce existing-master ownership or the documented VLAN range, and failures can leave partial state. Verify existing membership before submission; automatic reparenting must not be treated as a safe update contract.",
         "summary": "Add a physical port to a vlan interface",
         "parameters": [
           {
@@ -33624,7 +33642,7 @@ func init() {
     },
     "/config/vlan/{vlan_id}/member/{if_name}/tagged/{tagged}": {
       "delete": {
-        "description": "Request removal of a member from bridge vlan<ID>; tagged deletion also deletes <interface>.<ID>. Safety limitation: the helper checks that the requested bridge exists but does not verify that it owns the member before unmastering it. Verify membership before submission; wrong-bridge deletion is an implementation gap.",
+        "description": "Request removal of a member from bridge vlan\u003cID\u003e; tagged deletion also deletes \u003cinterface\u003e.\u003cID\u003e. Safety limitation: the helper checks that the requested bridge exists but does not verify that it owns the member before unmastering it. Verify membership before submission; wrong-bridge deletion is an implementation gap.",
         "summary": "Remove a vlan member from a vlan interface",
         "parameters": [
           {
@@ -43952,7 +43970,7 @@ func init() {
           "x-omitempty": true
         },
         "credential": {
-          "description": "none (default): the binding never stands in for a credential. network: on a service that requires a credential, a request that presents none is admitted as the binding's tenant. Accepted with an ingress_if match only; refused with a cidr match.",
+          "description": "none (default): the binding never stands in for a credential. network: on a service that requires a credential, a request that presents none is admitted as the binding's tenant. Accepted with an interface match only (ingress_if, vlan, vni or ipsec_tunnel); refused with a cidr match. Also refused when a named service has a rule that is not an AI-gateway service and runs sockMapMode request or both: the gateway does not see every request on it.",
           "type": "string",
           "enum": [
             "none",
@@ -43976,11 +43994,11 @@ func init() {
           ]
         },
         "forward_identity": {
-          "description": "Forward the tenant upstream as X-Auth-Tenant. Stored and reported; it does not change the upstream request yet. Default false.",
+          "description": "Forward the request's tenant upstream as X-Auth-Tenant, and its user as X-Auth-User when it has one, on a request whose source matched this binding. The services the binding names (every HTTP full-proxy service of the node when it names none) then also drop every header whose name starts with X-Auth- that a client sends, on every request and whatever the rule's api_key_auth, whether or not the request's source matched a binding. A service no such binding applies to is unchanged. The identity is injected only on an AI-gateway service, where the admission gate decides it, and not into a chunked HTTP/1.1 request. Refused when a service the binding applies to has a rule that is not an AI-gateway service and runs sockMapMode request or both: the gateway does not see every request on it. Default false.",
           "type": "boolean"
         },
         "match": {
-          "description": "The source the binding applies to. Exactly one of cidr and ingress_if.",
+          "description": "The source the binding applies to. Exactly one of cidr, ingress_if, vlan, vni and ipsec_tunnel. All but cidr match on the interface the connection arrived on.",
           "type": "object",
           "properties": {
             "cidr": {
@@ -43992,8 +44010,26 @@ func init() {
               "x-omitempty": true
             },
             "ingress_if": {
-              "description": "Name of the interface the connection arrived on. The name is stored, never an index. A name that does not exist on the node is accepted with a warning in the reply. Interface matching is not active yet: such a binding is stored and matches nothing.",
+              "description": "Name of the interface the connection arrived on, at most 15 characters: the logical device, which for a tagged VLAN is its bridge (vlan\u003cid\u003e), for a VXLAN its device (vxlan\u003cvni\u003e) and for an IPsec tunnel its VTI. The name is stored, never an index, so an interface that is removed and created again keeps its binding. A name that does not exist on the node is accepted with a warning in the reply and matches nothing until it exists; an interface that is removed later is logged and matches nothing until it is back. The interface is that of the connection's first packet and holds for the life of the connection.",
               "type": "string"
+            },
+            "ipsec_tunnel": {
+              "description": "Name of an IPsec tunnel configured on this node (/config/ipsec/tunnel). Another spelling of ingress_if: the tunnel's VTI interface, vti\u003cmark\u003e. A tunnel that is not configured, or has no mark, is accepted with a warning and matches nothing until it has one.",
+              "type": "string"
+            },
+            "vlan": {
+              "description": "A VLAN ID. Another spelling of ingress_if: the VLAN's bridge interface on this node, vlan\u003cid\u003e.",
+              "type": "integer",
+              "maximum": 4094,
+              "minimum": 1,
+              "x-omitempty": true
+            },
+            "vni": {
+              "description": "A VXLAN network identifier. Another spelling of ingress_if: the interface vxlan\u003cvni\u003e on this node.",
+              "type": "integer",
+              "maximum": 16777215,
+              "minimum": 1,
+              "x-omitempty": true
             }
           }
         },
@@ -44025,7 +44061,7 @@ func init() {
       }
     },
     "NetIdentityEntryMatch": {
-      "description": "The source the binding applies to. Exactly one of cidr and ingress_if.",
+      "description": "The source the binding applies to. Exactly one of cidr, ingress_if, vlan, vni and ipsec_tunnel. All but cidr match on the interface the connection arrived on.",
       "type": "object",
       "properties": {
         "cidr": {
@@ -44037,8 +44073,26 @@ func init() {
           "x-omitempty": true
         },
         "ingress_if": {
-          "description": "Name of the interface the connection arrived on. The name is stored, never an index. A name that does not exist on the node is accepted with a warning in the reply. Interface matching is not active yet: such a binding is stored and matches nothing.",
+          "description": "Name of the interface the connection arrived on, at most 15 characters: the logical device, which for a tagged VLAN is its bridge (vlan\u003cid\u003e), for a VXLAN its device (vxlan\u003cvni\u003e) and for an IPsec tunnel its VTI. The name is stored, never an index, so an interface that is removed and created again keeps its binding. A name that does not exist on the node is accepted with a warning in the reply and matches nothing until it exists; an interface that is removed later is logged and matches nothing until it is back. The interface is that of the connection's first packet and holds for the life of the connection.",
           "type": "string"
+        },
+        "ipsec_tunnel": {
+          "description": "Name of an IPsec tunnel configured on this node (/config/ipsec/tunnel). Another spelling of ingress_if: the tunnel's VTI interface, vti\u003cmark\u003e. A tunnel that is not configured, or has no mark, is accepted with a warning and matches nothing until it has one.",
+          "type": "string"
+        },
+        "vlan": {
+          "description": "A VLAN ID. Another spelling of ingress_if: the VLAN's bridge interface on this node, vlan\u003cid\u003e.",
+          "type": "integer",
+          "maximum": 4094,
+          "minimum": 1,
+          "x-omitempty": true
+        },
+        "vni": {
+          "description": "A VXLAN network identifier. Another spelling of ingress_if: the interface vxlan\u003cvni\u003e on this node.",
+          "type": "integer",
+          "maximum": 16777215,
+          "minimum": 1,
+          "x-omitempty": true
         }
       }
     },
@@ -46336,7 +46390,7 @@ func init() {
       }
     },
     "VlanBridgeEntry": {
-      "description": "Linux bridge identifier used to form vlan<ID>. The REST creation helper does not enforce all documented VLAN bounds; successful bridge creation does not establish completion of link setup.",
+      "description": "Linux bridge identifier used to form vlan\u003cID\u003e. The REST creation helper does not enforce all documented VLAN bounds; successful bridge creation does not establish completion of link setup.",
       "type": "object",
       "required": [
         "vid"

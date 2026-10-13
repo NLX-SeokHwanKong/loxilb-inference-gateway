@@ -1,8 +1,8 @@
 {
  "schema_version": 1,
  "provenance": {
-  "generated_at": "2026-10-13T06:44:26+00:00",
-  "source_revision": "c108fee517c0b87de575701e3e6a226860377c02"
+  "generated_at": "2026-10-13T09:22:26+00:00",
+  "source_revision": "9352de60981cf9afe00e78981e4fa3af47ddd8e5"
  },
  "contract": {
   "total": 329,
@@ -2934,8 +2934,8 @@
      "symbol": "netidFault",
      "kind": "func",
      "file": "pkg/loxinet/netidentity.go",
-     "def_line": 626,
-     "call_line": 627,
+     "def_line": 839,
+     "call_line": 840,
      "calls": "RecordNetIDResolverFault",
      "note": "counts every fault; the WARN line beside it is written at most once per ten seconds"
     },
@@ -2943,10 +2943,10 @@
      "symbol": "netidAnswerFor",
      "kind": "func",
      "file": "pkg/loxinet/netidentity.go",
-     "def_line": 578,
-     "call_line": 582,
+     "def_line": 790,
+     "call_line": 794,
      "calls": "netidFault",
-     "note": "THREE CALL SITES, one per way the lookup cannot answer: a recovered panic (this one), no holder (:498) and no snapshot (:503). Each returns -1 with an empty answer, never a match"
+     "note": "THREE CALL SITES, one per way the lookup cannot answer: a recovered panic (this one), no holder (:798) and no snapshot (:803). Each returns -1 with an empty answer, never a match"
     },
     {
      "symbol": "llb_ai_netid_resolve",

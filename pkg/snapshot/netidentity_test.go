@@ -42,6 +42,51 @@ func netIdentityFixture() []cmn.NetIdentityMod {
 	}
 }
 
+// The three other spellings of an interface match, one binding each.
+func netIdentityAliasFixture() []cmn.NetIdentityMod {
+	return []cmn.NetIdentityMod{
+		{Name: "by-tunnel", Match: cmn.NetIdentityMatch{IPsecTunnel: "branch-1"}, Tenant: "branch",
+			Credential: cmn.NetIdentityCredentialNetwork},
+		{Name: "by-vlan", Match: cmn.NetIdentityMatch{Vlan: 20}, Tenant: "line-1"},
+		{Name: "by-vni", Match: cmn.NetIdentityMatch{Vni: 1001}, Tenant: "grade-c"},
+	}
+}
+
+// TestNetIdentityAliasesRoundTrip: a binding written with vlan, vni or
+// ipsec_tunnel is captured and restored as written, never as the interface
+// name the alias stood for on the node that captured it.
+func TestNetIdentityAliasesRoundTrip(t *testing.T) {
+	src := newMockHooks()
+	src.netIDs = netIdentityAliasFixture()
+	doc, err := Capture(src, "0.9.8.6-beta", "src-host", TriggerManual, []string{DomainNetIdentity})
+	if err != nil {
+		t.Fatalf("Capture: %v", err)
+	}
+	raw := encodeDoc(t, doc)
+	flat := strings.ReplaceAll(strings.ReplaceAll(string(raw), " ", ""), "\n", "")
+	for _, field := range []string{`"match":{"ipsec_tunnel":"branch-1"}`, `"match":{"vlan":20}`, `"match":{"vni":1001}`} {
+		if !strings.Contains(flat, field) {
+			t.Errorf("the encoded document lacks %s", field)
+		}
+	}
+	if strings.Contains(flat, "ingress_if") {
+		t.Errorf("an alias was captured as an interface name: %s", flat)
+	}
+
+	hooks := newMockHooks()
+	e := newTestEngine(hooks, t.TempDir())
+	res, err := e.Restore(raw, RestoreOptions{Mode: ModeCommit})
+	if err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	if res.Result != ResultOK {
+		t.Fatalf("expected ok, got %+v", res)
+	}
+	if !reflect.DeepEqual(hooks.netIDs, netIdentityAliasFixture()) {
+		t.Fatalf("live bindings after the restore: %+v", hooks.netIDs)
+	}
+}
+
 // TestNetIdentityRoundTrip: the bindings a capture reads are the bindings a
 // restore leaves, every field, through the encoded document.
 func TestNetIdentityRoundTrip(t *testing.T) {

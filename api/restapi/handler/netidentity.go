@@ -46,6 +46,9 @@ func netIdentityModFromEntry(attr *models.NetIdentityEntry) cmn.NetIdentityMod {
 	if attr.Match != nil {
 		pm.Match.CIDR = attr.Match.Cidr
 		pm.Match.IngressIf = attr.Match.IngressIf
+		pm.Match.Vlan = int(attr.Match.Vlan)
+		pm.Match.Vni = int(attr.Match.Vni)
+		pm.Match.IPsecTunnel = attr.Match.IpsecTunnel
 	}
 	return pm
 }
@@ -56,8 +59,11 @@ func netIdentityEntryFromMod(pm *cmn.NetIdentityMod) *models.NetIdentityEntry {
 	return &models.NetIdentityEntry{
 		Name: &name,
 		Match: &models.NetIdentityEntryMatch{
-			Cidr:      pm.Match.CIDR,
-			IngressIf: pm.Match.IngressIf,
+			Cidr:        pm.Match.CIDR,
+			IngressIf:   pm.Match.IngressIf,
+			Vlan:        int64(pm.Match.Vlan),
+			Vni:         int64(pm.Match.Vni),
+			IpsecTunnel: pm.Match.IPsecTunnel,
 		},
 		Services:        pm.Services,
 		Tenant:          &tenant,

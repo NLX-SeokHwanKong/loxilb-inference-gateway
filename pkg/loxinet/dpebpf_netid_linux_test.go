@@ -55,6 +55,60 @@ func TestNetIdentityBoundSetReachesTheDataPlane(t *testing.T) {
 	}
 }
 
+// The forward flag and the interface switch as the data plane holds them:
+// the bridge and the gate's own readers, with no stand-in.
+func TestNetIdentityForwardAndInterfaceSwitchReachTheDataPlane(t *testing.T) {
+	const fwd = netidBoundBit | netidFwdBit
+	defer netidBoundPublish(netidBound{})
+	defer netidIfMatchPublish(false)
+
+	netidBoundPublish(netidBound{
+		svcs: map[string]bool{nidSvcA: false, nidSvcB: true},
+		fwd:  map[string]bool{nidSvcA: true},
+	})
+	for svc, want := range map[string]int{nidSvcA: fwd, nidSvcB: netidBoundBit | netidFailClosedBit, nidSvcC: 0} {
+		if got := netidBoundRead(svc); got != want {
+			t.Errorf("listed: %q reads %#x, want %#x", svc, got, want)
+		}
+	}
+	// Every service bound; one named only because it forwards.
+	netidBoundPublish(netidBound{all: true, svcs: map[string]bool{}, fwd: map[string]bool{nidSvcC: true}})
+	for svc, want := range map[string]int{nidSvcA: netidBoundBit, nidSvcC: fwd} {
+		if got := netidBoundRead(svc); got != want {
+			t.Errorf("all: %q reads %#x, want %#x", svc, got, want)
+		}
+	}
+	netidBoundPublish(netidBound{all: true, allFwd: true})
+	if got := netidBoundRead(nidSvcB); got != fwd {
+		t.Errorf("all forward: reads %#x, want %#x", got, fwd)
+	}
+	netidBoundPublish(netidBound{})
+	if got := netidBoundRead(nidSvcA); got != 0 {
+		t.Errorf("empty: reads %#x", got)
+	}
+
+	if netidIfMatchRead() {
+		t.Fatal("the interface switch is on before anything set it")
+	}
+	h := newNetIdentityH(netidBoundPublish, nidIfs{"vlan20": 5}.index)
+	h.publishIfMatch = netidIfMatchPublish
+	pm := nidIf("line", "t-line", "vlan20", nidSvcA)
+	pm.ForwardIdentity = true
+	mustAdd(t, h, pm)
+	if !netidIfMatchRead() {
+		t.Fatal("an interface binding did not switch the data plane's read on")
+	}
+	if got := netidBoundRead(nidSvcA); got != fwd {
+		t.Fatalf("the holder's forwarding service reads %#x, want %#x", got, fwd)
+	}
+	if _, err := h.BindingDel("line"); err != nil {
+		t.Fatal(err)
+	}
+	if netidIfMatchRead() || netidBoundRead(nidSvcA) != 0 {
+		t.Fatal("deleting the last binding left the switch or the flag behind")
+	}
+}
+
 // A holder wired to the real data plane: a binding binds its services there
 // and its removal unbinds them.
 func TestNetIdentityHolderDrivesTheDataPlane(t *testing.T) {

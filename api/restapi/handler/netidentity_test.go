@@ -21,6 +21,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -110,6 +111,61 @@ func TestNetIdentityPostAndGetCarryEveryField(t *testing.T) {
 	wantList, _ := json.Marshal(stub.stored)
 	if string(gotList) != string(wantList) {
 		t.Fatalf("GET listed %s, want %s", gotList, wantList)
+	}
+}
+
+// The three aliases of an interface match reach the net layer as written and
+// come back as stored; a number outside a VLAN's or a VNI's range is
+// refused by the model before anything is handed down.
+func TestNetIdentityMatchAliasesRoundTrip(t *testing.T) {
+	prev := ApiHooks
+	defer func() { ApiHooks = prev }()
+	stub := &stubNetIdentityHook{}
+	ApiHooks = stub
+
+	for body, want := range map[string]cmn.NetIdentityMatch{
+		`{"name":"b","match":{"vlan":20},"tenant":"t"}`:                 {Vlan: 20},
+		`{"name":"b","match":{"vni":1001},"tenant":"t"}`:                {Vni: 1001},
+		`{"name":"b","match":{"ipsec_tunnel":"branch-1"},"tenant":"t"}`: {IPsecTunnel: "branch-1"},
+		`{"name":"b","match":{"ingress_if":"vlan20"},"tenant":"t"}`:     {IngressIf: "vlan20"},
+	} {
+		stub.added = nil
+		if code, reply := netIdentityPost(t, body); code != http.StatusOK {
+			t.Fatalf("%s answered %d %s", body, code, reply)
+		}
+		if stub.added == nil || !reflect.DeepEqual(stub.added.Match, want) {
+			t.Fatalf("%s: the net layer was handed %+v, want %+v", body, stub.added, want)
+		}
+	}
+
+	stub.stored = []cmn.NetIdentityMod{
+		{Name: "a", Match: cmn.NetIdentityMatch{Vlan: 20}, Tenant: "t"},
+		{Name: "b", Match: cmn.NetIdentityMatch{Vni: 1001}, Tenant: "t"},
+		{Name: "c", Match: cmn.NetIdentityMatch{IPsecTunnel: "branch-1"}, Tenant: "t"},
+	}
+	req := httptest.NewRequest(http.MethodGet, "/netlox/v1/config/ai/netidentity", nil)
+	code, body := renderResponder(t, ConfigGetNetIdentityAll(ai.GetConfigAiNetidentityAllParams{HTTPRequest: req}, nil))
+	if code != http.StatusOK {
+		t.Fatalf("GET answered %d %s", code, body)
+	}
+	for _, want := range []string{`"match":{"vlan":20}`, `"match":{"vni":1001}`, `"match":{"ipsec_tunnel":"branch-1"}`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("GET %s does not carry %s", body, want)
+		}
+	}
+
+	for _, body := range []string{
+		`{"name":"b","match":{"vlan":4095},"tenant":"t"}`,
+		`{"name":"b","match":{"vlan":-1},"tenant":"t"}`,
+		`{"name":"b","match":{"vni":16777216},"tenant":"t"}`,
+	} {
+		var attr models.NetIdentityEntry
+		if err := json.Unmarshal([]byte(body), &attr); err != nil {
+			t.Fatalf("decode %s: %v", body, err)
+		}
+		if err := attr.Validate(nil); err == nil {
+			t.Errorf("%s passed the model's validation", body)
+		}
 	}
 }
 
