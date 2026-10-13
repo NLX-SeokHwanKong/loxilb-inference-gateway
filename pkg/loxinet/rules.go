@@ -4049,7 +4049,20 @@ func (R *RuleH) JwtProfileRuleRefs(name string) []string {
 	return refs
 }
 
+// canonicalLBPortMax makes an explicitly bounded singleton identical to an
+// omitted upper bound. Otherwise AddLbRule installs a range firewall mark,
+// while LB2DP installs the singleton key: packets follow the wrong NAT lookup
+// (and fullproxy has no NAT entry at all). Preserve real and invalid ranges so
+// their existing installation and validation paths remain authoritative.
+func canonicalLBPortMax(port, max uint16) uint16 {
+	if max == port {
+		return 0
+	}
+	return max
+}
+
 func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, servSecVIPs []cmn.LbSecVIPArg, allowedSources []cmn.LbAllowedSrcIPArg, servEndPoints []cmn.LbEndPointArg) (int, error) {
+	serv.ServPortMax = canonicalLBPortMax(serv.ServPort, serv.ServPortMax)
 	var lBActs ruleLBActs
 	var nSecIP []ruleLBSIP
 	var ipProto uint8
@@ -5635,6 +5648,7 @@ func (R *RuleH) deleteVIPSys(r *ruleEnt) {
 // On success, it will return 0 and nil error, else appropriate return code and
 // error string will be set
 func (R *RuleH) DeleteLbRule(serv cmn.LbServiceArg) (int, error) {
+	serv.ServPortMax = canonicalLBPortMax(serv.ServPort, serv.ServPortMax)
 	var ipProto uint8
 
 	service := ""
