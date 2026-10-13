@@ -1,17 +1,17 @@
 {
  "schema_version": 1,
  "provenance": {
-  "generated_at": "2026-10-13T13:28:12+00:00",
-  "source_revision": "804d4ce684110c0d7cb4852a0e4e75eb673d6350",
+  "generated_at": "2026-10-13T14:39:16+00:00",
+  "source_revision": "99fea8f567e8dba3abafc448e19c910e9dc93cdd",
   "upstream_repository": "https://github.com/loxilb-io/loxilb",
   "upstream_revision": "98487453eaf1853690de5928eab95a51817ba5d7"
  },
  "contract": {
-  "gateway_families": 329,
+  "gateway_families": 330,
   "upstream_families": 60,
   "present_identical": 35,
   "present_divergent": 0,
-  "absent": 294,
+  "absent": 295,
   "upstream_only": 25
  },
  "upstream_only": [
@@ -2426,6 +2426,19 @@
    "gateway": {
     "type": "counter",
     "labels": []
+   }
+  },
+  {
+   "name": "loxilb_log_lines_dropped_total",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "counter",
+    "labels": [
+     "level"
+    ]
    }
   },
   {

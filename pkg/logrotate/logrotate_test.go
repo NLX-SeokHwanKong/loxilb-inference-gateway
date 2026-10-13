@@ -296,3 +296,75 @@ func TestGzipFileKeepsRequestedMode(t *testing.T) {
 		t.Fatal("BackupName shape changed")
 	}
 }
+
+// A writer of its own (the data-plane log's writer thread) renames its
+// file and opens a new one; SweepBackups compresses and prunes what it
+// left, and waits until a fresh backup has been left alone.
+func TestSweepBackupsFinishesAnotherWritersRotation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "loxilbdp.log")
+	if err := os.WriteFile(path, []byte("live\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	// A live file nobody has written for a day is still the live file.
+	if err := os.Chtimes(path, now.Add(-24*time.Hour), now.Add(-24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	old := []string{
+		BackupName(path, now.Add(-4*time.Hour)),
+		BackupName(path, now.Add(-3*time.Hour)),
+		BackupName(path, now.Add(-2*time.Hour)),
+	}
+	for i, p := range old {
+		if err := os.WriteFile(p, bytes.Repeat([]byte("x"), 4096), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		mt := now.Add(time.Duration(i-4) * time.Hour)
+		if err := os.Chtimes(p, mt, mt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fresh := BackupName(path, now)
+	if err := os.WriteFile(fresh, []byte("just renamed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := Config{MaxSizeMB: 1, MaxBackups: 3, Compress: true}
+	if err := SweepBackups(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	// The oldest of the four is pruned; the two older ones left are
+	// compressed; the one renamed a moment ago is as its writer left it.
+	if _, err := os.Stat(old[0]); !os.IsNotExist(err) {
+		t.Fatalf("oldest backup still there: %v", err)
+	}
+	if _, err := os.Stat(old[0] + ".gz"); !os.IsNotExist(err) {
+		t.Fatalf("oldest backup kept compressed: %v", err)
+	}
+	for _, p := range old[1:] {
+		if _, err := os.Stat(p + ".gz"); err != nil {
+			t.Fatalf("%s not compressed: %v", filepath.Base(p), err)
+		}
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Fatalf("%s left beside its archive: %v", filepath.Base(p), err)
+		}
+	}
+	if raw, err := os.ReadFile(fresh); err != nil || string(raw) != "just renamed\n" {
+		t.Fatalf("fresh backup touched: %q %v", raw, err)
+	}
+	if raw, err := os.ReadFile(path); err != nil || string(raw) != "live\n" {
+		t.Fatalf("live file touched: %q %v", raw, err)
+	}
+	// Once it has been left alone it is compressed too.
+	if err := sweepBackups(path, cfg, now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(fresh + ".gz"); err != nil {
+		t.Fatalf("settled backup not compressed: %v", err)
+	}
+	// Rotation off: nothing is touched.
+	if err := SweepBackups(path, Config{}); err != nil {
+		t.Fatal(err)
+	}
+}

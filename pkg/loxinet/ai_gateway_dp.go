@@ -215,7 +215,7 @@ func rateLimitCheckInternal(svc rateLimitService, store *rl.RateLimiterStore, ke
 		}
 		if d.vipRPS > 0 {
 			if allowed, retrySec := store.CheckVipShared(svcIdent, d.vipRPS); !allowed {
-				tk.LogIt(tk.LogWarning, "[AIGateway] rateLimitCheckInternal: service %s keyless bucket rate-limited (retry %ds)\n", svcIdent, retrySec)
+				tk.LogIt(tk.LogDebug, "[AIGateway] rateLimitCheckInternal: service %s keyless bucket rate-limited (retry %ds)\n", svcIdent, retrySec)
 				return 3, retrySec, "rate_limit_exceeded"
 			}
 		}
@@ -231,7 +231,7 @@ func rateLimitCheckInternal(svc rateLimitService, store *rl.RateLimiterStore, ke
 				return 3, 1, "token_quota_warming"
 			}
 			if store.IsTokenQuotaExceeded(rl.VipSharedQuotaKey(svcIdent)) {
-				tk.LogIt(tk.LogWarning, "[AIGateway] rateLimitCheckInternal: service %s keyless bucket token quota exceeded\n", svcIdent)
+				tk.LogIt(tk.LogDebug, "[AIGateway] rateLimitCheckInternal: service %s keyless bucket token quota exceeded\n", svcIdent)
 				return 3, 60, "token_quota_exceeded"
 			}
 		}
@@ -269,7 +269,7 @@ func rateLimitCheckInternal(svc rateLimitService, store *rl.RateLimiterStore, ke
 		}
 		allowed, retrySec := store.CheckKey(keyIDStr, keyRPS, keyBurst)
 		if !allowed {
-			tk.LogIt(tk.LogWarning, "[AIGateway] rateLimitCheckInternal: key %s rate-limited (retry %ds)\n", keyIDStr, retrySec)
+			tk.LogIt(tk.LogDebug, "[AIGateway] rateLimitCheckInternal: key %s rate-limited (retry %ds)\n", keyIDStr, retrySec)
 			return 3, retrySec, "rate_limit_exceeded"
 		}
 	}
@@ -298,7 +298,7 @@ func rateLimitCheckInternal(svc rateLimitService, store *rl.RateLimiterStore, ke
 		}
 		allowed, retrySec := store.CheckUser(tenantIDStr, userIDStr, userRPS, userBurst)
 		if !allowed {
-			tk.LogIt(tk.LogWarning, "[AIGateway] rateLimitCheckInternal: user %s/%s rate-limited (retry %ds)\n", tenantIDStr, userIDStr, retrySec)
+			tk.LogIt(tk.LogDebug, "[AIGateway] rateLimitCheckInternal: user %s/%s rate-limited (retry %ds)\n", tenantIDStr, userIDStr, retrySec)
 			return 3, retrySec, "user_rate_limit_exceeded"
 		}
 	}
@@ -331,7 +331,7 @@ func rateLimitCheckInternal(svc rateLimitService, store *rl.RateLimiterStore, ke
 		}
 		allowed, retrySec := store.CheckTenant(tenantIDStr, tenantRPS)
 		if !allowed {
-			tk.LogIt(tk.LogWarning, "[AIGateway] rateLimitCheckInternal: tenant %s rate-limited (retry %ds)\n", tenantIDStr, retrySec)
+			tk.LogIt(tk.LogDebug, "[AIGateway] rateLimitCheckInternal: tenant %s rate-limited (retry %ds)\n", tenantIDStr, retrySec)
 			return 3, retrySec, "tenant_quota_exceeded"
 		}
 
@@ -368,19 +368,19 @@ func rateLimitCheckInternal(svc rateLimitService, store *rl.RateLimiterStore, ke
 		// silently admitting against a zeroed quota.
 		anyTPM := tenantTPM > 0 || modelTPM > 0 || userTPM > 0 || userModelTPM > 0 || keyTPM > 0
 		if anyTPM && store.QuotaWarming() {
-			tk.LogIt(tk.LogWarning, "[AIGateway] rateLimitCheckInternal: tenant %s denied during token-quota warmup\n", tenantIDStr)
+			tk.LogIt(tk.LogDebug, "[AIGateway] rateLimitCheckInternal: tenant %s denied during token-quota warmup\n", tenantIDStr)
 			return 3, 1, "token_quota_warming"
 		}
 		if keyTPM > 0 && store.IsTokenQuotaExceeded(rl.KeyQuotaKey(keyIDStr)) {
-			tk.LogIt(tk.LogWarning, "[AIGateway] rateLimitCheckInternal: key %s token quota exceeded\n", keyIDStr)
+			tk.LogIt(tk.LogDebug, "[AIGateway] rateLimitCheckInternal: key %s token quota exceeded\n", keyIDStr)
 			return 3, 60, "token_quota_exceeded"
 		}
 		if userTPM > 0 && store.IsTokenQuotaExceeded(rl.UserQuotaKey(tenantIDStr, userIDStr)) {
-			tk.LogIt(tk.LogWarning, "[AIGateway] rateLimitCheckInternal: user %s/%s token quota exceeded\n", tenantIDStr, userIDStr)
+			tk.LogIt(tk.LogDebug, "[AIGateway] rateLimitCheckInternal: user %s/%s token quota exceeded\n", tenantIDStr, userIDStr)
 			return 3, 60, "token_quota_exceeded"
 		}
 		if userModelTPM > 0 && store.IsTokenQuotaExceeded(rl.UserModelQuotaKey(tenantIDStr, userIDStr, modelName)) {
-			tk.LogIt(tk.LogWarning, "[AIGateway] rateLimitCheckInternal: user %s/%s model %s token quota exceeded\n", tenantIDStr, userIDStr, modelName)
+			tk.LogIt(tk.LogDebug, "[AIGateway] rateLimitCheckInternal: user %s/%s model %s token quota exceeded\n", tenantIDStr, userIDStr, modelName)
 			return 3, 60, "token_quota_exceeded"
 		}
 		// Guarded like its four siblings, and for the same reason the
@@ -397,11 +397,11 @@ func rateLimitCheckInternal(svc rateLimitService, store *rl.RateLimiterStore, ke
 		// token quota — the tenant rate-limit surface has no DELETE — so
 		// unguarded, the lift does not take effect at all.
 		if tenantTPM > 0 && store.IsTokenQuotaExceeded(tenantIDStr) {
-			tk.LogIt(tk.LogWarning, "[AIGateway] rateLimitCheckInternal: tenant %s token quota exceeded\n", tenantIDStr)
+			tk.LogIt(tk.LogDebug, "[AIGateway] rateLimitCheckInternal: tenant %s token quota exceeded\n", tenantIDStr)
 			return 3, 60, "token_quota_exceeded"
 		}
 		if modelTPM > 0 && store.IsTokenQuotaExceeded(modelQuotaKey(tenantIDStr, modelName)) {
-			tk.LogIt(tk.LogWarning, "[AIGateway] rateLimitCheckInternal: tenant %s model %s token quota exceeded\n", tenantIDStr, modelName)
+			tk.LogIt(tk.LogDebug, "[AIGateway] rateLimitCheckInternal: tenant %s model %s token quota exceeded\n", tenantIDStr, modelName)
 			return 3, 60, "token_quota_exceeded"
 		}
 	}
@@ -421,8 +421,11 @@ func rateLimitCheckInternal(svc rateLimitService, store *rl.RateLimiterStore, ke
 //	modelOut   – model name echoed back on allow
 //	errorCode  – "invalid_api_key" or "model_not_allowed" on deny
 func validateAPIKeyInternal(svc apiKeyValidator, rawKey, modelName string) (decision int, tenantID, keyID, modelOut, errorCode string) {
+	// A refused or admitted request is in the audit record and the metrics;
+	// its log lines here are debug lines, so that the worker that runs this
+	// callback writes none at the default level.
 	if rawKey == "" {
-		tk.LogIt(tk.LogWarning, "[AIGateway] llb_ai_validate_key: empty raw key\n")
+		tk.LogIt(tk.LogDebug, "[AIGateway] llb_ai_validate_key: empty raw key\n")
 		return 1, "", "", "", "invalid_api_key"
 	}
 
@@ -438,7 +441,7 @@ func validateAPIKeyInternal(svc apiKeyValidator, rawKey, modelName string) (deci
 		// false and permanent-sounding. The management plane had this same
 		// defect and had it fixed; this is its data-plane twin.
 		if errors.Is(err, aikey.ErrInvalidKey) {
-			tk.LogIt(tk.LogWarning, "[AIGateway] llb_ai_validate_key: key validation failed: %v\n", err)
+			tk.LogIt(tk.LogDebug, "[AIGateway] llb_ai_validate_key: key validation failed: %v\n", err)
 			return 1, "", "", "", "invalid_api_key"
 		}
 		tk.LogIt(tk.LogError, "[AIGateway] llb_ai_validate_key: key store could not answer: %v\n", err)
@@ -448,7 +451,7 @@ func validateAPIKeyInternal(svc apiKeyValidator, rawKey, modelName string) (deci
 
 	// Check expiry (ValidateAPIKey only filters on enabled=1, not expires_at).
 	if entry.ExpiresAt != nil && time.Now().After(*entry.ExpiresAt) {
-		tk.LogIt(tk.LogWarning, "[AIGateway] llb_ai_validate_key: key %s has expired\n", entry.KeyID)
+		tk.LogIt(tk.LogDebug, "[AIGateway] llb_ai_validate_key: key %s has expired\n", entry.KeyID)
 		return 1, "", "", "", "invalid_api_key"
 	}
 
@@ -462,7 +465,7 @@ func validateAPIKeyInternal(svc apiKeyValidator, rawKey, modelName string) (deci
 			}
 		}
 		if !allowed {
-			tk.LogIt(tk.LogWarning, "[AIGateway] llb_ai_validate_key: model %q not allowed for key %s\n", modelName, entry.KeyID)
+			tk.LogIt(tk.LogDebug, "[AIGateway] llb_ai_validate_key: model %q not allowed for key %s\n", modelName, entry.KeyID)
 			// Only the model was refused: the key itself validated, so both
 			// halves of its identity are known here. They are returned so
 			// the refusal can be counted against the right tenant and
@@ -471,7 +474,7 @@ func validateAPIKeyInternal(svc apiKeyValidator, rawKey, modelName string) (deci
 		}
 	}
 
-	tk.LogIt(tk.LogInfo, "[AIGateway] llb_ai_validate_key: key %s validated for tenant %s\n", entry.KeyID, entry.TenantID)
+	tk.LogIt(tk.LogDebug, "[AIGateway] llb_ai_validate_key: key %s validated for tenant %s\n", entry.KeyID, entry.TenantID)
 	return 0, entry.TenantID, entry.KeyID, modelName, ""
 }
 
@@ -990,7 +993,7 @@ func llb_ai_ratelimit_check(keyID *C.char, tenantID *C.char, userID *C.char, svc
 				prom.RecordTokenQuotaDenied(tenantIDStr)
 			}
 		}
-		tk.LogIt(tk.LogWarning, "[AIGateway] llb_ai_ratelimit_check: denied key=%s tenant=%s error=%s\n", keyIDStr, tenantIDStr, errorCode)
+		tk.LogIt(tk.LogDebug, "[AIGateway] llb_ai_ratelimit_check: denied key=%s tenant=%s error=%s\n", keyIDStr, tenantIDStr, errorCode)
 		return -1
 	}
 
@@ -1351,7 +1354,7 @@ func llb_ai_token_quota_reserve(tenantID *C.char, modelName *C.char, userID *C.c
 		}
 		prom.RecordRateLimitHit(tenant, "token_quota_would_exceed")
 		prom.RecordTokenQuotaDenied(tenant)
-		tk.LogIt(tk.LogWarning, "[AIGateway] llb_ai_token_quota_reserve: tenant %s denied pre-admission (want %d, model %s)\n",
+		tk.LogIt(tk.LogDebug, "[AIGateway] llb_ai_token_quota_reserve: tenant %s denied pre-admission (want %d, model %s)\n",
 			tenant, want, C.GoString(modelName))
 		return -1
 	}
@@ -1473,7 +1476,7 @@ func llb_ai_token_quota_consume(tenantID *C.char, modelName *C.char, userID *C.c
 			result.retry_after = C.int(retrySecs)
 			cCopyStr((*C.char)(unsafe.Pointer(&result.error_code[0])), "token_quota_exceeded", 64)
 		}
-		tk.LogIt(tk.LogWarning, "[AIGateway] llb_ai_token_quota_consume: tenant %s over token quota (charged %d, model %s)\n",
+		tk.LogIt(tk.LogDebug, "[AIGateway] llb_ai_token_quota_consume: tenant %s over token quota (charged %d, model %s)\n",
 			tenant, count, C.GoString(modelName))
 		return -1
 	}
@@ -1563,7 +1566,7 @@ func llb_ai_stream_start(tenantID *C.char, modelName *C.char) C.int {
 
 	prom.AdjustActiveStreams(modelStr, 1.0)
 
-	tk.LogIt(tk.LogInfo, "[AIGateway] llb_ai_stream_start: tenant=%s model=%s\n", tenantStr, modelStr)
+	tk.LogIt(tk.LogDebug, "[AIGateway] llb_ai_stream_start: tenant=%s model=%s\n", tenantStr, modelStr)
 	return 0
 }
 
@@ -1600,7 +1603,7 @@ func llb_ai_stream_end(tenantID *C.char, modelName *C.char) C.int {
 
 	prom.AdjustActiveStreams(modelStr, -1.0)
 
-	tk.LogIt(tk.LogInfo, "[AIGateway] llb_ai_stream_end: tenant=%s model=%s\n", tenantStr, modelStr)
+	tk.LogIt(tk.LogDebug, "[AIGateway] llb_ai_stream_end: tenant=%s model=%s\n", tenantStr, modelStr)
 	return 0
 }
 

@@ -96,6 +96,25 @@ binary behaves exactly like upstream loxilb.
   must accept `"bearer"` (and `"network"`, written when a network-identity
   binding decided the tenant).
 
+- **Log calls no longer wait for the log's device.** The gateway's log and
+  the data-plane log are written by one writer each, from an in-memory queue;
+  a worker thread that logs copies its line and returns. When the device is
+  slow or stalled, lines are dropped and counted in the new
+  `loxilb_log_lines_dropped_total{level}` and the writer reports the drop in
+  the log; requests are not held. Before, one stalled log write stopped every
+  connection of the worker that made it. The data-plane log is now rotated by
+  its own writer (rename and reopen; no line lost at a rotation). The stdout
+  copy of the gateway's log is unchanged except that a message with no
+  trailing newline now gets one. See `docs/LOG-ROTATION.md`.
+- **Per-request log lines of the AI gateway moved from `info` / `warn` to
+  `debug`**: key validated, empty or invalid key, expired key, model not
+  allowed, rate-limited, token quota exceeded, pre-admission denied, capacity
+  refused, request refused 413, stream start / end. Each of these is in the
+  audit trail (`data.ai.complete`, `sec.ai.deny`) and the metrics. **Impact:**
+  a log-based alert or a script that matches these lines sees them only at
+  `--loglevel debug`; use the audit trail or `loxilb_ai_*` counters instead.
+  Store-outage and fault lines are unchanged.
+
 ### Notes
 
 - This release preserves full upstream loxilb functionality; classic L4/L7
