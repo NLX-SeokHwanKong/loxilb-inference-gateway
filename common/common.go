@@ -1688,6 +1688,9 @@ type JWTAuthProfileMod struct {
 	ForwardIdentity bool `json:"forward_identity,omitempty"`
 	// AuthorizationPassthrough - keep the Authorization header upstream
 	AuthorizationPassthrough bool `json:"authorization_passthrough,omitempty"`
+	// PriorityClass caps the class of the requests this profile's tokens
+	// authenticate: standard, critical or sheddable. Empty is no cap.
+	PriorityClass string `json:"priority_class,omitempty"`
 }
 
 // LbSecIPArg - Secondary IP

@@ -72,6 +72,7 @@ type netidBinding struct {
 	credNetwork bool
 	forward     bool
 	models      map[string]struct{} // nil: any model
+	class       string              // priority_class: the cap on the binding's requests
 }
 
 func (b *netidBinding) modelOK(model string) bool {
@@ -138,6 +139,11 @@ func netidV4(a netip.Addr) uint32 {
 type netidSnapshot struct {
 	global *netidTable
 	bySvc  map[string]*netidTable
+	// classOf is each binding's priority_class by name, and lowers says
+	// whether any of them is sheddable: the only class of a binding that
+	// changes a request when nothing else configures classes.
+	classOf map[string]string
+	lowers  bool
 }
 
 // resolve finds the binding of a source on a service. An interface match
@@ -206,7 +212,8 @@ func buildNetidSnapshot(bindings map[string]cmn.NetIdentityMod, ifIndex func(str
 // the tunnel behind an alias, does not exist now).
 func buildNetidSnapshotIf(bindings map[string]cmn.NetIdentityMod, ifIndex func(string) (int, bool),
 	tunnelIf func(string) (string, bool)) (*netidSnapshot, map[string]int) {
-	s := &netidSnapshot{global: &netidTable{}, bySvc: make(map[string]*netidTable)}
+	s := &netidSnapshot{global: &netidTable{}, bySvc: make(map[string]*netidTable),
+		classOf: make(map[string]string, len(bindings))}
 	seen := make(map[string]int)
 	names := make([]string, 0, len(bindings))
 	for name := range bindings {
@@ -221,6 +228,11 @@ func buildNetidSnapshotIf(bindings map[string]cmn.NetIdentityMod, ifIndex func(s
 			strict:      pm.Enforce == cmn.NetIdentityEnforceStrict,
 			credNetwork: pm.Credential == cmn.NetIdentityCredentialNetwork,
 			forward:     pm.ForwardIdentity,
+			class:       pm.PriorityClass,
+		}
+		s.classOf[b.name] = b.class
+		if b.class == cmn.NetIdentityClassSheddable {
+			s.lowers = true
 		}
 		if len(pm.AllowedModels) > 0 {
 			b.models = make(map[string]struct{}, len(pm.AllowedModels))
@@ -551,6 +563,7 @@ func (h *NetIdentityH) commit(next map[string]cmn.NetIdentityMod) {
 	}
 	h.snap.Store(snap)
 	h.told("snapshot")
+	aiClassRecompute()
 	// Enter last: a service that is gaining bindings starts asking once the
 	// snapshot knows them.
 	if !nb.equal(h.bound) {
@@ -1212,3 +1225,28 @@ const (
 	NetIdentityNoExistErr
 	NetIdentityConflictErr
 )
+
+// netidClassOf returns the priority_class of the binding of that name ("" when
+// there is none). Lock-free: it reads the snapshot requests are resolved
+// against.
+func netidClassOf(name string) string {
+	h := netidActive.Load()
+	if h == nil || name == "" {
+		return ""
+	}
+	s := h.snap.Load()
+	if s == nil {
+		return ""
+	}
+	return s.classOf[name]
+}
+
+// netidLowersClass reports whether a binding makes its requests sheddable.
+func netidLowersClass() bool {
+	h := netidActive.Load()
+	if h == nil {
+		return false
+	}
+	s := h.snap.Load()
+	return s != nil && s.lowers
+}

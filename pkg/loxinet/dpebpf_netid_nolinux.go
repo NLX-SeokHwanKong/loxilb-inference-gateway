@@ -27,3 +27,7 @@ func netidBoundRead(svc string) int { return 0 }
 func netidIfMatchPublish(on bool) {}
 
 func netidIfMatchRead() bool { return false }
+
+func aiClassOnPublish(on bool) {}
+
+func aiClassOnRead() bool { return false }

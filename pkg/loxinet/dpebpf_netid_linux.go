@@ -28,6 +28,8 @@ void ai_gw_netid_bound_set(const char *const *svc_idents, const uint8_t *flags,
 int  ai_gw_netid_bound(const char *svc_ident);
 void ai_gw_netid_ifmatch_set(int on);
 int  ai_gw_netid_ifmatch(void);
+void ai_gw_class_on_set(int on);
+int  ai_gw_class_on(void);
 */
 import "C"
 
@@ -121,3 +123,15 @@ func netidIfMatchPublish(on bool) {
 func netidIfMatchRead() bool {
 	return C.ai_gw_netid_ifmatch() != 0
 }
+
+// aiClassOnPublish tells the data plane whether any class is configured.
+func aiClassOnPublish(on bool) {
+	v := C.int(0)
+	if on {
+		v = 1
+	}
+	C.ai_gw_class_on_set(v)
+}
+
+// aiClassOnRead reads the switch back from the data plane.
+func aiClassOnRead() bool { return C.ai_gw_class_on() != 0 }

@@ -840,6 +840,12 @@ func loxiNetInit() {
 		// configured nothing while it is busy dialling what they configured.
 		svc := aikey.New()
 		mh.AIKeyService = svc
+		// Objectives and classes: one snapshot of the store's rows, kept
+		// current on its own goroutine, with the last one the store
+		// answered with kept in a file beside snapshot.json for a start
+		// during an outage.
+		svc.SetClassChangeHook(func(*aikey.ClassSnapshot) { aiClassRecompute() })
+		svc.StartClassRefresher(opts.Opts.ConfigPath)
 		// The dial runs in the background for the same reason the service is
 		// published before it: Connect retries with a doubling backoff and
 		// takes tens of seconds against a store that is down, and blocking
