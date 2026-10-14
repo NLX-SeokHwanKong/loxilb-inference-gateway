@@ -1718,10 +1718,13 @@ func netIDCompleteOutcome(authSrc int) string {
 // refused request's source matched one. The attribution triple carries the meanings llb_ai_record_request
 // documents; note the gate runs BEFORE the header splice, so on a refused
 // request originIP is normally "" -- nothing derived -- while clientIP is
-// always known.
+// always known. priority, classInfo and objective are the request's class
+// with the meanings llb_ai_record_request documents, so that the records of
+// one request agree; classInfo is 0 for a refusal made before the class
+// stage ran.
 //
 //export llb_ai_record_deny
-func llb_ai_record_deny(requestID *C.char, producerID C.int, svcIdent *C.char, modelName *C.char, tenantID *C.char, keyID *C.char, userID *C.char, stage C.int, httpStatus C.int, errorCode *C.char, clientIP *C.char, originIP *C.char, trustedHops C.int, authSrc C.int, netIdentity *C.char) {
+func llb_ai_record_deny(requestID *C.char, producerID C.int, svcIdent *C.char, modelName *C.char, tenantID *C.char, keyID *C.char, userID *C.char, stage C.int, httpStatus C.int, errorCode *C.char, clientIP *C.char, originIP *C.char, trustedHops C.int, authSrc C.int, netIdentity *C.char, priority C.int, classInfo C.int, objective *C.char) {
 	defer cgoRecover("llb_ai_record_deny")
 	tenantIDStr := C.GoString(tenantID)
 	netIdentityStr := C.GoString(netIdentity)
@@ -1748,6 +1751,10 @@ func llb_ai_record_deny(requestID *C.char, producerID C.int, svcIdent *C.char, m
 
 		AuthSrc:     int(authSrc),
 		NetIdentity: netIdentityStr,
+
+		Priority:  int(priority),
+		ClassInfo: int(classInfo),
+		Objective: C.GoString(objective),
 	})
 }
 

@@ -1800,13 +1800,18 @@ type FcEffectiveArg struct {
 	ReservationHeldClaims    uint64          `json:"reservation_held_claims"`
 	ReservationHeldTruncated bool            `json:"reservation_held_truncated"`
 	ReservationHeld          []FcResvHeldArg `json:"reservation_held"`
-	// Source names where each value in force came from: "rule", "env" or
-	// "default".
 	// ConfigSource is where the objectives and the tenant and key classes
 	// this gateway is applying came from: AIClassSourceStore, AIClassSourceLKG
 	// or AIClassSourceNone. The gateway's, the same on every rule.
-	ConfigSource string            `json:"config_source,omitempty"`
-	Source       FcEffectiveSource `json:"source"`
+	ConfigSource string `json:"config_source,omitempty"`
+	// StoreReachable says whether the AI key store answered the latest
+	// read, and StoreLastRead when a read last answered, whatever
+	// ConfigSource says: nil and zero without a key store.
+	StoreReachable *bool      `json:"store_reachable,omitempty"`
+	StoreLastRead  *time.Time `json:"store_last_read,omitempty"`
+	// Source names where each value in force came from: "rule", "env" or
+	// "default".
+	Source FcEffectiveSource `json:"source"`
 }
 
 // FcResvHeldMax - the most buckets one read-back lists.
@@ -2818,7 +2823,7 @@ type NetHookInterface interface {
 
 	// AI Gateway - objectives (named priorities) and the class fields of
 	// tenants and keys. All of it lives in the key store.
-	NetAIObjectiveGet() ([]AIObjectiveEntry, error)
+	NetAIObjectiveGet() (AIObjectiveList, error)
 	NetAIObjectiveAdd(*AIObjectiveEntry) (int, error)
 	NetAIObjectiveDel(name string) (int, error)
 	NetTenantClassPatch(tenantID string, patch AIClassPatch) error

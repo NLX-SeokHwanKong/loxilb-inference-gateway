@@ -790,6 +790,8 @@ func serializeLBRule(lb cmn.LbRuleMod) *models.LoadbalanceEntry {
 			ReservationClampedBudget: int64(eff.ReservationClampedBudget),
 			ReservationEpoch:         eff.ReservationEpoch,
 			ConfigSource:             eff.ConfigSource,
+			StoreReachable:           eff.StoreReachable,
+			StoreLastRead:            fcStoreLastRead(eff.StoreLastRead),
 			ReservationHeldClaims:    int64(eff.ReservationHeldClaims),
 			ReservationHeldTruncated: eff.ReservationHeldTruncated,
 			ReservationHeld:          fcReservationHeldModel(eff.ReservationHeld),

@@ -9324,10 +9324,13 @@ paths:
     get:
       summary: List objectives
       description: >-
-        Returns every objective in name order, read from the AI key store.
-        503 while the store does not answer - the objectives a gateway is
-        applying meanwhile are the last it read, and fc_effective.config_source
-        on a rule says where they came from.
+        Returns every objective in name order, read from the AI key store
+        (source store). While the store does not answer, returns the
+        objectives this gateway applies instead: the last it read from the
+        store in this process (source store, with the time of that read), or
+        the last-known-good file it started from (source lkg, with the time
+        the store had answered with them). 503 only when the store does not
+        answer and the gateway has applied nothing yet.
       operationId: getConfigAiObjectiveAll
       responses:
         '200':
@@ -9339,6 +9342,37 @@ paths:
                 type: array
                 items:
                   $ref: '#/definitions/AIObjectiveEntry'
+              source:
+                type: string
+                enum: [store, lkg]
+                description: >-
+                  Where the list came from: store (the key store answered) or
+                  lkg (the last-known-good file this gateway started from,
+                  while the store has not answered since)
+              source_timestamp:
+                type: string
+                format: date-time
+                description: >-
+                  When the key store answered with this list: now for a list
+                  read now, earlier for an applied list served during an
+                  outage
+              store_reachable:
+                type: boolean
+                x-omitempty: false
+                description: >-
+                  Whether the key store answered this request's read of it:
+                  false during an outage, whatever source says
+              store_last_read:
+                type: string
+                format: date-time
+                x-nullable: true
+                description: >-
+                  When a read of the key store last answered: now when it
+                  answered this one; during an outage, the last read in this
+                  process. A gateway started from the last-known-good file
+                  shows the read that last CHANGED that file (the store may
+                  have answered later with nothing changed). Absent when
+                  neither happened
         '401':
           description: Invalid authentication credentials
           schema:
@@ -9350,7 +9384,7 @@ paths:
           schema:
             $ref: '#/definitions/Error'
         '503':
-          description: Maintenance mode, no AI key store configured, or the store does not answer
+          description: Maintenance mode, no AI key store configured, or the store does not answer and nothing was applied yet
           schema:
             $ref: '#/definitions/Error'
       tags:
@@ -11444,6 +11478,26 @@ definitions:
                   not answered and no file); every request is standard. The
                   same value on every rule - it is the gateway's, not the
                   rule's.
+              store_reachable:
+                type: boolean
+                x-nullable: true
+                description: >-
+                  Whether the AI key store answered the gateway's latest read
+                  of it, whatever config_source says (a configuration read
+                  earlier stays in force through an outage). Absent when no
+                  key store is configured. The gateway's, the same on every
+                  rule.
+              store_last_read:
+                type: string
+                format: date-time
+                x-nullable: true
+                description: >-
+                  When a read of the AI key store last answered in this
+                  process. A gateway started from the last-known-good file
+                  shows, until the store answers, the read that last CHANGED
+                  that file: the store may have answered later with nothing
+                  changed (the file is written only on a change). Absent when
+                  neither happened or no key store is configured.
               source:
                 type: object
                 description: >-
@@ -16428,8 +16482,9 @@ definitions:
           - sheddable
         description: >-
           The highest priority class a request admitted by this profile's
-          tokens may have. It can only lower what the tenant allows. Omitted
-          means no cap from the profile.
+          tokens may have. It can only lower what the tenant allows (a tenant
+          that sets no class allows standard). Omitted means no cap from the
+          profile.
 
   AIObjectiveEntry:
     type: object
@@ -16613,8 +16668,9 @@ definitions:
           - sheddable
         description: >-
           The highest priority class a request the binding names the tenant
-          of may have. It can only lower what the tenant allows. Default
-          standard - a binding that should not cap its requests says critical.
+          of may have. It can only lower what the tenant allows (a tenant
+          that sets no class allows standard). Default standard - a binding
+          that should not cap its requests says critical.
       fail_mode:
         type: string
         enum:
@@ -16701,8 +16757,8 @@ definitions:
           - sheddable
         description: >-
           The highest priority class a request with this key may have. It can
-          only lower what the key's tenant allows. Omitted means no cap from
-          the key.
+          only lower what the key's tenant allows (a tenant that sets no class
+          allows standard). Omitted means no cap from the key.
       default_objective:
         type: string
         description: >-
@@ -16715,9 +16771,10 @@ definitions:
         items:
           type: string
         description: >-
-          The objectives a request with this key may ask for by header, out
-          of the ones its tenant allows; at most 64. Empty means the key
-          narrows nothing.
+          The objectives a request with this key may ask for by header, and
+          the body tiers (tier:priority, tier:fast, tier:flex) it may ask for
+          by service_tier, out of the ones its tenant allows; at most 64.
+          Empty means the key narrows nothing.
 
   ApiKeyCreateResponse:
     type: object
@@ -16805,8 +16862,8 @@ definitions:
           - sheddable
         description: >-
           The highest priority class a request with this key may have. It can
-          only lower what the key's tenant allows. Omitted means no cap from
-          the key.
+          only lower what the key's tenant allows (a tenant that sets no class
+          allows standard). Omitted means no cap from the key.
       default_objective:
         type: string
         description: >-
@@ -16819,9 +16876,10 @@ definitions:
         items:
           type: string
         description: >-
-          The objectives a request with this key may ask for by header, out
-          of the ones its tenant allows; at most 64. Empty means the key
-          narrows nothing.
+          The objectives a request with this key may ask for by header, and
+          the body tiers (tier:priority, tier:fast, tier:flex) it may ask for
+          by service_tier, out of the ones its tenant allows; at most 64.
+          Empty means the key narrows nothing.
 
   TenantRateLimitMod:
     type: object
@@ -16867,7 +16925,8 @@ definitions:
         description: >-
           The highest priority class a request of this tenant may have:
           standard, critical or sheddable. Omitted leaves the stored value;
-          an empty string clears it (no cap).
+          an empty string clears it, and a tenant that sets no class is held
+          at standard.
       default_objective:
         type: string
         x-nullable: true
@@ -16882,9 +16941,10 @@ definitions:
           type: string
         description: >-
           The objectives a request of this tenant may ask for with the
-          x-llm-d-inference-objective header; at most 64. Omitted leaves the
-          stored list; an empty array clears it, and then no objective can
-          be asked for.
+          x-llm-d-inference-objective header, and the body tiers it may ask
+          for by service_tier, named tier:priority, tier:fast and tier:flex;
+          at most 64. Omitted leaves the stored list; an empty array clears
+          it, and then nothing can be asked for.
 
   TenantModelRateLimit:
     type: object
@@ -16936,7 +16996,7 @@ definitions:
           $ref: '#/definitions/TenantModelRateLimit'
       priority_class:
         type: string
-        description: The highest priority class a request of this tenant may have; absent when no cap is set
+        description: The highest priority class a request of this tenant may have; absent when none is set, which holds the tenant at standard
       default_objective:
         type: string
         description: The objective a request of this tenant gets when it names none, or one it may not use
@@ -16945,7 +17005,7 @@ definitions:
         x-omitempty: true
         items:
           type: string
-        description: The objectives a request of this tenant may ask for by header
+        description: The objectives a request of this tenant may ask for by header, and the body tiers (tier:priority, tier:fast, tier:flex)
       updated_at:
         type: string
         format: date-time

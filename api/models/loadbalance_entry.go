@@ -2973,6 +2973,13 @@ type LoadbalanceEntryServiceArgumentsFcEffective struct {
 	// source
 	Source *LoadbalanceEntryServiceArgumentsFcEffectiveSource `json:"source,omitempty"`
 
+	// When a read of the AI key store last answered in this process. A gateway started from the last-known-good file shows, until the store answers, the read that last CHANGED that file: the store may have answered later with nothing changed (the file is written only on a change). Absent when neither happened or no key store is configured.
+	// Format: date-time
+	StoreLastRead *strfmt.DateTime `json:"store_last_read,omitempty"`
+
+	// Whether the AI key store answered the gateway's latest read of it, whatever config_source says (a configuration read earlier stays in force through an outage). Absent when no key store is configured. The gateway's, the same on every rule.
+	StoreReachable *bool `json:"store_reachable,omitempty"`
+
 	// The P/D scorers' trust window for scraped queue depth, in milliseconds.
 	TelemetryStaleMs int32 `json:"telemetry_stale_ms"`
 
@@ -3028,6 +3035,10 @@ func (m *LoadbalanceEntryServiceArgumentsFcEffective) Validate(formats strfmt.Re
 	}
 
 	if err := m.validateSource(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := m.validateStoreLastRead(formats); err != nil {
 		res = append(res, err)
 	}
 
@@ -3347,6 +3358,18 @@ func (m *LoadbalanceEntryServiceArgumentsFcEffective) validateSource(formats str
 			}
 			return err
 		}
+	}
+
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArgumentsFcEffective) validateStoreLastRead(formats strfmt.Registry) error {
+	if swag.IsZero(m.StoreLastRead) { // not required
+		return nil
+	}
+
+	if err := validate.FormatOf("serviceArguments"+"."+"fc_effective"+"."+"store_last_read", "body", "date-time", m.StoreLastRead.String(), formats); err != nil {
+		return err
 	}
 
 	return nil

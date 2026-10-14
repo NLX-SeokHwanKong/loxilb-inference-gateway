@@ -59,7 +59,7 @@ type JWTAuthProfileEntry struct {
 	// Required: true
 	Name *string `json:"name"`
 
-	// The highest priority class a request admitted by this profile's tokens may have. It can only lower what the tenant allows. Omitted means no cap from the profile.
+	// The highest priority class a request admitted by this profile's tokens may have. It can only lower what the tenant allows (a tenant that sets no class allows standard). Omitted means no cap from the profile.
 	// Enum: [standard critical sheddable]
 	PriorityClass string `json:"priority_class,omitempty"`
 

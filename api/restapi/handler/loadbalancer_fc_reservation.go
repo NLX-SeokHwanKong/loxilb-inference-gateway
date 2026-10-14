@@ -17,6 +17,9 @@
 package handler
 
 import (
+	"time"
+
+	"github.com/go-openapi/strfmt"
 	"github.com/loxilb-io/loxilb/api/models"
 	cmn "github.com/loxilb-io/loxilb/common"
 )
@@ -34,4 +37,14 @@ func fcReservationHeldModel(held []cmn.FcResvHeldArg) []*models.LoadbalanceEntry
 		})
 	}
 	return out
+}
+
+// fcStoreLastRead is the read-back's store_last_read: absent when no read of
+// the key store ever answered.
+func fcStoreLastRead(at *time.Time) *strfmt.DateTime {
+	if at == nil || at.IsZero() {
+		return nil
+	}
+	v := strfmt.DateTime(at.UTC())
+	return &v
 }

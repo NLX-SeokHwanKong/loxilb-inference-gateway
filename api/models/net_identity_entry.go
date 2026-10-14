@@ -46,7 +46,7 @@ type NetIdentityEntry struct {
 	// Required: true
 	Name *string `json:"name"`
 
-	// The highest priority class a request the binding names the tenant of may have. It can only lower what the tenant allows. Default standard - a binding that should not cap its requests says critical.
+	// The highest priority class a request the binding names the tenant of may have. It can only lower what the tenant allows (a tenant that sets no class allows standard). Default standard - a binding that should not cap its requests says critical.
 	// Enum: [standard critical sheddable]
 	PriorityClass string `json:"priority_class,omitempty"`
 

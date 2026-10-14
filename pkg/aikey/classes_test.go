@@ -77,6 +77,19 @@ func TestClassPolicyValidation(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(got.AllowedObjectives, []string{"a", "b"}) {
 		t.Errorf("allowed = %v, %v; want sorted, without the duplicate", got.AllowedObjectives, err)
 	}
+	// The body's tier hints are allowed by name; no other tier: name is.
+	if got, err := ValidateClassPolicy(cmn.AIClassPolicy{AllowedObjectives: []string{"tier:flex", "batch", "tier:priority", "tier:fast"}}); err != nil ||
+		!reflect.DeepEqual(got.AllowedObjectives, []string{"batch", "tier:fast", "tier:flex", "tier:priority"}) {
+		t.Errorf("tier names = %v, %v; want accepted and sorted", got.AllowedObjectives, err)
+	}
+	for _, name := range []string{"tier:auto", "tier:", "TIER:flex", "tier:flex "} {
+		if _, err := ValidateClassPolicy(cmn.AIClassPolicy{AllowedObjectives: []string{name}}); err == nil {
+			t.Errorf("allowed objective %q accepted", name)
+		}
+	}
+	if _, err := ValidateClassPolicy(cmn.AIClassPolicy{DefaultObjective: "tier:flex"}); err == nil {
+		t.Errorf("a tier name accepted as a default objective: a default is an objective row")
+	}
 	if got, _ := ValidateClassPolicy(cmn.AIClassPolicy{AllowedObjectives: []string{}}); got.AllowedObjectives != nil || !got.IsZero() {
 		t.Errorf("an empty list is not the zero policy: %+v", got)
 	}
@@ -122,8 +135,8 @@ func TestClassLKGRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(data, &f); err != nil {
 		t.Fatalf("the file is not JSON: %v", err)
 	}
-	if string(f["version"]) != "1" {
-		t.Errorf("version = %s, want 1", f["version"])
+	if string(f["version"]) != "2" {
+		t.Errorf("version = %s, want 2", f["version"])
 	}
 	if !strings.Contains(string(f["source_timestamp"]), "2023-11-14T22:15:00Z") {
 		t.Errorf("source_timestamp = %s, want the time the store answered", f["source_timestamp"])
@@ -188,7 +201,7 @@ func TestClassLKGNotRewrittenWhenUnchanged(t *testing.T) {
 
 func TestClassLKGRefusals(t *testing.T) {
 	for name, content := range map[string]string{
-		"another version": `{"version":2,"source_timestamp":"2023-11-14T22:15:00Z","objectives":[{"name":"x","priority":1}],"tenants":{},"keys":{}}`,
+		"another version": `{"version":3,"source_timestamp":"2023-11-14T22:15:00Z","objectives":[{"name":"x","priority":1}],"tenants":{},"keys":{}}`,
 		"not JSON":        `{"version":1,`,
 		"empty":           ``,
 	} {

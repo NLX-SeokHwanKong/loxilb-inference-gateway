@@ -30,12 +30,14 @@ import (
 // what its identity is allowed:
 //
 //	asked    the objective named by the request's header, when the identity
-//	         may use it; else the body's tier hint; else the identity's
-//	         default objective; else 0.
-//	cap      the lowest class among the tenant's, the key's, the binding's
-//	         and the JWT profile's priority_class. Unset is no cap.
+//	         may use it; else the body's tier hint, when the identity may
+//	         use it (its name is "tier:<value>" in allowed_objectives);
+//	         else the identity's default objective; else 0.
+//	cap      the tenant's priority_class, standard when it sets none, then
+//	         lowered by the key's, the JWT profile's and the binding's when
+//	         they set one: those three can only lower what the tenant grants.
 //	result   min(asked, cap). A hint can lower a request, never raise it
-//	         above what its identity allows.
+//	         above what its identity allows, by the header or by the body.
 //
 // The class is the sign of the result (cmn.AIClassOfPriority).
 
@@ -84,6 +86,7 @@ type classAnswer struct {
 }
 
 // capOfClass turns a priority_class into the highest priority it admits.
+// Unset admits anything here; identityCap decides what a tenant's unset is.
 func capOfClass(class string) int32 {
 	switch class {
 	case cmn.AIClassStandard:
@@ -91,7 +94,24 @@ func capOfClass(class string) int32 {
 	case cmn.AIClassSheddable:
 		return -1
 	}
-	return math.MaxInt32 // critical, or unset: no cap
+	return math.MaxInt32 // critical, or unset
+}
+
+// identityCap is the cap of a request: the tenant's class, standard when the
+// tenant sets none, lowered by every other class that is set. Only a tenant
+// the operator granted critical can have critical requests; a key, a JWT
+// profile or a binding narrows its tenant and never raises it.
+func identityCap(tenantClass string, lowering ...string) int32 {
+	limit := int32(0)
+	if tenantClass != "" {
+		limit = capOfClass(tenantClass)
+	}
+	for _, c := range lowering {
+		if v := capOfClass(c); v < limit {
+			limit = v
+		}
+	}
+	return limit
 }
 
 func classNumOf(priority int32) int {
@@ -113,6 +133,14 @@ func aiClassName(class int) string {
 		return cmn.AIClassSheddable
 	}
 	return cmn.AIClassStandard
+}
+
+// aiTierPriorityOf is the priority a tier hint stands for.
+func aiTierPriorityOf(tier int) int32 {
+	if tier == aiTierFlex {
+		return aiTierPrioritySheddable
+	}
+	return aiTierPriorityCritical
 }
 
 func tierName(tier int) string {
@@ -168,13 +196,8 @@ func classResolve(snap *aikey.ClassSnapshot, in classInput) classAnswer {
 		}
 	}
 
-	// The cap: the lowest of the four.
-	limit := capOfClass(tenantPol.PriorityClass)
-	for _, c := range []string{keyPol.PriorityClass, in.bindingClass, in.profileClass} {
-		if v := capOfClass(c); v < limit {
-			limit = v
-		}
-	}
+	// The cap: the lowest of the four that are set.
+	limit := identityCap(tenantPol.PriorityClass, keyPol.PriorityClass, in.bindingClass, in.profileClass)
 
 	// What the identity may ask for, and what it gets when it asks for
 	// nothing. A key narrows its tenant: its list is used only for the
@@ -204,12 +227,14 @@ func classResolve(snap *aikey.ClassSnapshot, in classInput) classAnswer {
 			ans.denied = true
 		}
 	}
-	if !decided && !ans.denied {
-		switch in.tier {
-		case aiTierFlex:
-			asked, ans.objective, decided = aiTierPrioritySheddable, "tier:"+tierName(in.tier), true
-		case aiTierPriority, aiTierFast:
-			asked, ans.objective, decided = aiTierPriorityCritical, "tier:"+tierName(in.tier), true
+	if !decided && !ans.denied && tierName(in.tier) != "" {
+		// The body's tier is a hint like the header's, under the same list:
+		// a client does not get by the body what it may not ask for by name.
+		name := cmn.AITierObjectivePrefix + tierName(in.tier)
+		if allowed(name) {
+			asked, ans.objective, decided = aiTierPriorityOf(in.tier), name, true
+		} else {
+			ans.denied = true
 		}
 	}
 	if !decided {
