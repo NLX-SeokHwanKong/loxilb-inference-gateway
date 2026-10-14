@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -138,5 +139,99 @@ func TestEppPinHoldsChwblLoadUnit(t *testing.T) {
 				t.Errorf("after teardown: EP1 holds %d units, want 0 (a unit was stolen)", got)
 			}
 		})
+	}
+}
+
+// TestEppBackendCloseReleasesChwblUnitOnce: a backend that closes its side
+// first (a `Connection: close` request, an engine that drops the keep-alive)
+// ends its leg before the client's teardown. Both teardowns reach the
+// client's load-unit release; the unit must go back exactly once, or the
+// second pass takes the unit of another connection in flight on the same
+// endpoint and CHWBL's bounded load undercounts it (the cluster report of
+// 2026-10-13, item 3, "underflow protection" on the FailOpen fallback).
+func TestEppBackendCloseReleasesChwblUnitOnce(t *testing.T) {
+	if mh.zr == nil || mh.dpEbpf == nil {
+		t.Skip("loxinet harness not initialized (run the whole package as root)")
+	}
+	var mu sync.Mutex
+	nreq := 0
+	hit := make(chan struct{}, 2)
+	release := make(chan struct{})
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The first request is held until `release`; every later one is
+	// answered at once, and its connection then closes (the client asked
+	// for that), so its backend leg ends before its client leg does.
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.ReadAll(r.Body)
+		mu.Lock()
+		nreq++
+		n := nreq
+		mu.Unlock()
+		if n == 1 {
+			hit <- struct{}{}
+			<-release
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"served":"a","n":%d}`, n)
+	}))
+	srv.Listener.Close()
+	srv.Listener = l
+	srv.Start()
+	t.Cleanup(srv.Close)
+	host, port, _ := net.SplitHostPort(l.Addr().String())
+	var p int
+	fmt.Sscanf(port, "%d", &p)
+	epA := cmn.LbEndPointArg{EpIP: host, EpPort: uint16(p), Weight: 1}
+	_, epB, _ := eppTestBackendSeen(t, "b")
+	f := epptest.New("echo")
+	f.Dest = eppAddr(epA)
+	addr, stop := epptest.Start(t, f, false)
+	defer stop()
+	serv := eppTestRuleSel(t, 28172, addr, cmn.EppFailureModeFailClose, 3000, cmn.LbSelCHWBL, epA, epB)
+	ruleNum := mh.zr.Rules.GetLBRuleMarkByKey(fmt.Sprintf("%s:%d:%s", serv.ServIP, serv.ServPort, serv.Proto))
+	if ruleNum == 0 {
+		t.Fatal("rule number not found")
+	}
+
+	// Request 1: held in flight on EP0.
+	done := make(chan error, 1)
+	go func() {
+		code, _, err := eppTestRequest(28172, `{"model":"alias","prompt":"held"}`, 10*time.Second)
+		if err == nil && code != 200 {
+			err = fmt.Errorf("status %d", code)
+		}
+		done <- err
+	}()
+	select {
+	case <-hit:
+	case err := <-done:
+		t.Fatalf("request 1 ended before the backend held it: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the backend never saw request 1")
+	}
+	if got := DpChwblEpLoad(uint32(ruleNum), 0); got != 1 {
+		t.Fatalf("request 1 in flight: EP0 holds %d units, want 1", got)
+	}
+	// Request 2: answered, and its backend leg closed first.
+	if code, _, err := eppTestRequest(28172, `{"model":"alias","prompt":"quick"}`, 10*time.Second); err != nil || code != 200 {
+		t.Fatalf("request 2: code=%d err=%v", code, err)
+	}
+	time.Sleep(300 * time.Millisecond) // request 2's two teardowns are done by now
+	if got := DpChwblEpLoad(uint32(ruleNum), 0); got != 1 {
+		t.Errorf("request 1 still in flight after request 2's backend closed first: EP0 holds %d units, want 1 (request 2's unit was released twice)", got)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("request 1: %v", err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for DpChwblEpLoad(uint32(ruleNum), 0) != 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("after both requests: EP0 still holds %d units, want 0", DpChwblEpLoad(uint32(ruleNum), 0))
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
