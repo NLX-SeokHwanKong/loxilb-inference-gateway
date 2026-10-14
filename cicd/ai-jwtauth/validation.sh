@@ -774,6 +774,97 @@ k_not_served "K5 credential-free request not served" "$r"
 chk_receipt  "K5 backend received nothing" 0 "$K5_NONCE"
 
 echo ""
+echo "== W: a request's bytes are the client's; only its header block is =="
+echo "   edited, once (port 2071: jwt, forward_identity, sse_mode). The"
+echo "   backend is a witness: it returns the body it received byte for"
+echo "   byte and keeps its own record of what reached it while it was"
+echo "   streaming an answer. A blank line in a body is not the end of a"
+echo "   header block, and bytes a client sends while its answer is still"
+echo "   running belong to no admitted request."
+
+W_DIR=$(mktemp -d /tmp/ai-jwtauth-w.XXXXXX)
+W_LOG=/tmp/ai-jwtauth-body-witness.jsonl
+W_PORT=2071
+# w_head <body file> <extra header lines> -> header block on stdout
+w_head() {
+  printf 'POST /v1/chat/completions HTTP/1.1\r\nHost: %s:%s\r\nContent-Type: application/json\r\nAuthorization: Bearer %s\r\nX-Auth-Tenant: spoof\r\n%sContent-Length: %d\r\n\r\n' \
+    "$VIP" "$W_PORT" "$TOK_ALICE" "$2" "$(stat -c %s "$1")"
+}
+w_chk() { # w_chk <name> <want (glob)> <got>
+  note_case "$1"
+  # shellcheck disable=SC2053
+  if [[ "$3" == $2 ]]; then
+    echo "  [PASS] $1 ($3)"; PASS=$((PASS + 1))
+  else
+    echo "  [FAIL] $1 — want '$2', got '$3'"; FAIL=$((FAIL + 1))
+  fi
+}
+# w_split <tag> <pause-ms> <pieces...> -> "<status> | <what the backend received, against the body sent>"
+w_split() {
+  local tag=$1 pause=$2 code; shift 2
+  code=$($hexec l3h1 python3 ./split_send.py "$VIP" "$W_PORT" "$W_DIR/$tag.json" "$pause" "$@" 2>/dev/null)
+  echo "$code | $(python3 ./body_verdict.py "$W_DIR/$tag.json.1" "$W_DIR/body.bin" 2>/dev/null)"
+}
+# w_stream <tag> <file sent while the answer streams> -> "<status> <1 = the stream reached its end at the client> | <the backend's own record>"
+w_stream() {
+  local tag=$1 r i
+  sed "s/WITNESS-ID/$tag/" "$W_DIR/streq.tmpl" > "$W_DIR/streq-$tag.bin"
+  r=$($hexec l3h1 python3 ./stream_send.py "$VIP" "$W_PORT" "$W_DIR/$tag.client.json" "$W_DIR/streq-$tag.bin" "$2" 2>/dev/null)
+  for i in $(seq 1 20); do
+    grep -q "\"id\": \"$tag\"" "$W_LOG" 2>/dev/null && break
+    sleep 0.5
+  done
+  grep "\"id\": \"$tag\"" "$W_LOG" 2>/dev/null | tail -1 > "$W_DIR/$tag.json"
+  echo "$r | $(python3 ./body_verdict.py "$W_DIR/$tag.json" "$W_DIR/stream-body.bin" "$2" 2>/dev/null)"
+}
+printf '{"model":"llama-70b",\r\n\r\n"messages":[{"role":"user","content":"hi"}],\r\n"max_tokens":8}' > "$W_DIR/body.bin"
+printf '{"model":"llama-70b","stream":true,"stream_options":{"include_usage":true},"messages":[{"role":"user","content":"hi"}],"max_tokens":8}' > "$W_DIR/stream-body.bin"
+w_head "$W_DIR/body.bin" $'Connection: close\r\n' > "$W_DIR/head.bin"
+{ w_head "$W_DIR/stream-body.bin" $'X-Witness-Stream: 3\r\nX-Witness-Id: WITNESS-ID\r\n'; cat "$W_DIR/stream-body.bin"; } > "$W_DIR/streq.tmpl"
+printf 'not a request\r\nX-Auth-Canary: 1\r\n\r\ntail\r\n' > "$W_DIR/mid-bytes.bin"
+# The request sent while the answer runs carries NO token: served, it is a
+# request no credential was checked for.
+{ printf 'POST /v1/chat/completions HTTP/1.1\r\nHost: %s:%s\r\nContent-Type: application/json\r\nX-Auth-Tenant: spoof\r\nContent-Length: %d\r\n\r\n' "$VIP" "$W_PORT" "$(stat -c %s "$W_DIR/body.bin")"; cat "$W_DIR/body.bin"; } > "$W_DIR/mid-request.bin"
+: > "$W_DIR/mid-none.bin"
+
+echo ""
+echo "W1: a body with a blank CRLF line, sent in a write of its own after the"
+echo "    header block → the verified tenant once in the header block, the"
+echo "    client's own X-Auth-Tenant gone, the body byte for byte"
+w_chk "W1 identity once, body as sent" "200 | hdr=1:tenant-a body=same extra=0 short=0 inbody=0" \
+  "$(w_split w1 300 "$W_DIR/head.bin" "$W_DIR/body.bin" READ)"
+
+echo ""
+echo "W2: control — a streamed answer with nothing sent while it runs → it"
+echo "    reaches its end, and the backend received nothing after the request"
+w_chk "W2 the stream runs to its end" "200 1 | hdr=1:tenant-a body=same after=none short=0 inbody=0 cut=0" \
+  "$(w_stream w2 "$W_DIR/mid-none.bin")"
+
+echo ""
+echo "W3: bytes with a blank CRLF line sent while the answer runs → none of"
+echo "    them reaches the backend and no identity is written into them; the"
+echo "    connection is closed"
+echo "    (BORN RED while the relay path took any read holding a blank line"
+echo "     for a header block: the backend received these bytes with"
+echo "     X-Auth-Tenant and X-Auth-User spliced in)"
+w_chk "W3 nothing relayed, connection closed" "200 0 | hdr=1:tenant-a body=same after=none short=0 inbody=0 cut=1" \
+  "$(w_stream w3 "$W_DIR/mid-bytes.bin")"
+
+echo ""
+echo "W4: a second request with NO token sent while the answer runs → it"
+echo "    does not reach the backend"
+echo "    (BORN RED: it reached the backend with the first request's verified"
+echo "     identity written into its header block — no credential checked)"
+w_chk "W4 the unadmitted request is not forwarded" "200 0 | hdr=1:tenant-a body=same after=none short=0 inbody=0 cut=1" \
+  "$(w_stream w4 "$W_DIR/mid-request.bin")"
+
+echo ""
+echo "W5: after them, a streamed request on a new connection runs to its end"
+w_chk "W5 the service still streams" "200 1 | hdr=1:tenant-a body=same after=none short=0 inbody=0 cut=0" \
+  "$(w_stream w5 "$W_DIR/mid-none.bin")"
+rm -rf "$W_DIR"
+
+echo ""
 echo "== X: repeated Authorization headers — deterministic, never a leak =="
 echo "   RFC 9110 defines no merge for a repeated singleton field. Pinned"
 echo "   contract: the LAST Authorization value decides admission, exactly"
@@ -3879,7 +3970,7 @@ echo "   A deleted, renamed, or skipped block stops being tested silently:"
 echo "   the pass count simply gets smaller and the run still says OK. This"
 echo "   compares the case IDs that actually asserted against the declared"
 echo "   set, so coverage cannot shrink without turning the run RED."
-EXPECTED_CASES="A1 A2 A3 A4 A5 A6 A7 A8 B1 B2 B3 C1 C2 C3 C4 C5 C6 D1 D2 D3 D4 D5 D6 E1 E2 F1 F2 F3 F4 L1 L2 L3 L4 K1 K2 K3 K4 K5 X1 X2 M1 M2 M3 M4 N1 N2 N3 N4 G1 G2 H0 H1 H2 H3 H4 P1 P2 I0 I1 I2 I3 J1 T0 T1 T2 T3 T4 U1 U2 \
+EXPECTED_CASES="A1 A2 A3 A4 A5 A6 A7 A8 B1 B2 B3 C1 C2 C3 C4 C5 C6 D1 D2 D3 D4 D5 D6 E1 E2 F1 F2 F3 F4 L1 L2 L3 L4 K1 K2 K3 K4 K5 W1 W2 W3 W4 W5 X1 X2 M1 M2 M3 M4 N1 N2 N3 N4 G1 G2 H0 H1 H2 H3 H4 P1 P2 I0 I1 I2 I3 J1 T0 T1 T2 T3 T4 U1 U2 \
 QOS-RPS-001 QOS-RPS-002 QOS-RPS-003 QOS-RPS-004 QOS-RPS-005 \
 QOS-DEF-001 QOS-DEF-002 QOS-DEF-003 \
 QOS-VIP-001 QOS-VIP-004 \

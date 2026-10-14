@@ -126,6 +126,34 @@ binary behaves exactly like upstream loxilb.
   `--loglevel debug`; use the audit trail or `loxilb_ai_*` counters instead.
   Store-outage and fault lines are unchanged.
 
+### Fixed
+
+- **Bytes a client sends while a streamed answer is running are no longer
+  relayed to the backend.** On a rule with `sse_mode`, anything a client sent
+  on an HTTP/1.1 connection while its streamed answer was still in progress
+  went to the backend behind the request being answered, without passing the
+  admission gate: a second request sent early was served with no credential
+  checked, no model allowlist, no rate limit and no charge. On a JWT service
+  whose profile has `forward_identity` the gateway also wrote the first
+  request's verified `X-Auth-Tenant` / `X-Auth-User` into those bytes, so the
+  backend read them as an authenticated request. The gateway now closes the
+  connection when a client sends anything before its streamed answer has
+  ended; the unfinished stream is counted as one its client left. **Impact:**
+  a client that pipelines a request behind a streamed answer on HTTP/1.1 has
+  the connection closed and must send that request on a new one (or wait for
+  the answer to end, or use HTTP/2). Clients that wait for their answer are
+  not affected.
+- **A request or response body is no longer edited as if it were a header
+  block.** On the path that relays a connection's later reads, any read that
+  held a blank line was taken for a header block: on a service that declares
+  `api_key_auth`, lines beginning `X-Api-Key:` (and on a service with a
+  forwarding network-identity binding, lines beginning `X-Auth-`) were
+  removed from it, in a request body, in a backend's response headers and in
+  a response body alike, leaving the message shorter than its
+  `Content-Length`. Header lines are now removed only from the header block
+  of a request, once, and a backend's bytes are never touched. A backend's
+  own `X-Api-Key` or `X-Auth-*` response header now reaches the client.
+
 ### Notes
 
 - This release preserves full upstream loxilb functionality; classic L4/L7

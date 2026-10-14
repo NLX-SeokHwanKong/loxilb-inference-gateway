@@ -136,6 +136,13 @@
 #                                              has somewhere else to land and
 #                                              the push is visible by label
 #
+#     2071 jwt+sse        profile kc-fwd       request bytes are the client's:
+#                                              the backend is a witness that
+#                                              returns the body it received
+#                                              byte for byte and records what
+#                                              arrives while it streams an
+#                                              answer (l3ep1 :8097)
+#
 #   :2053 and :2069 are NOT in this map on purpose — the P2 case creates a
 #   rule at :2053 at RUNTIME to prove a 63-byte profile name is usable, and
 #   the HTTP/2 rule-deletion case creates and then DELETES one at :2069. A
@@ -409,6 +416,12 @@ fi
 # 4xx/5xx there is nothing to prove the status test with, and a filter nothing
 # exercises is indistinguishable from no filter at all.
 $hexec l3ep1 sh -c "nohup python3 $SDIR/hdr_echo.py server-err 8094 error-500 >/tmp/ai-jwtauth-err.log 2>&1 &"
+
+# The body witness: answers with the request body it received, byte for
+# byte, and keeps its own record of every streamed answer (what arrived on
+# the connection while the stream ran, and whether the stream was cut).
+BODY_WITNESS_LOG=/tmp/ai-jwtauth-body-witness.jsonl
+$hexec l3ep1 sh -c "rm -f $BODY_WITNESS_LOG; nohup python3 $SDIR/body_witness.py 31.31.31.1 8097 server-witness $BODY_WITNESS_LOG >/tmp/ai-jwtauth-witness.log 2>&1 &"
 for i in $(seq 1 20); do
   if $hexec l3ep1 curl -s --max-time 1 -o /dev/null -w '%{http_code}' \
        http://127.0.0.1:8094/ | grep -q "500"; then
@@ -695,6 +708,29 @@ add_lb_rule 2067 "llama-70b"  "31.31.31.1" jwt           kc 8090
 add_lb_rule 2068 "llama-70b"  "31.31.31.1" jwt           kc 8099
 # HTTP/2 bounded load: one CHWBL service over both h2c echoes.
 add_chwbl_h2_rule 2070 "llama-70b" jwt kc 8090 31.31.31.1 32.32.32.1
+
+# :2071 forwards identity and streams: sse_mode is what keeps a streamed
+# answer's connection on the relay path while the answer runs.
+resp=$($hexec l3h1 curl -s -X POST \
+  http://10.10.10.254:11111/netlox/v1/config/loadbalancer \
+  -H "Content-Type: application/json" \
+  -d '{
+    "serviceArguments": {
+      "externalIP": "10.10.10.254", "port": 2071, "protocol": "tcp",
+      "sel": 0, "mode": 4, "host": "10.10.10.254",
+      "path_prefix": "/", "path_match_mode": "prefix",
+      "model_name": "llama-70b", "api_key_auth": "jwt",
+      "jwt_auth_profile": "kc-fwd", "sse_mode": true, "inactiveTimeOut": 30
+    },
+    "endpoints": [
+      {"endpointIP": "31.31.31.1", "targetPort": 8097, "weight": 1}
+    ]
+  }')
+echo "  rule 2071/llama-70b (jwt/kc-fwd, sse_mode) -> body witness: $resp"
+case "$resp" in
+  *Success*) ;;
+  *) echo "FATAL: LB rule 2071 rejected"; exit 1 ;;
+esac
 
 # TLS + ALPN. Every H2 port above is h2c, so nothing here has ever run the
 # bearer gate on a connection whose HTTP/2 was negotiated through the TLS
