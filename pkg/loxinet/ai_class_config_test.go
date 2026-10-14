@@ -20,6 +20,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -120,6 +122,47 @@ func classOnFor(t *testing.T) {
 	}
 	reset()
 	t.Cleanup(reset)
+}
+
+// Callers on different goroutines (the store's refresher, a REST write, a
+// binding commit, a profile change) work out the switch at the same time.
+// Whatever the order, the data plane ends holding the value of the state
+// that is there when they are done, and Go and the data plane agree.
+func TestAIClassRecomputeConcurrent(t *testing.T) {
+	classOnFor(t)
+	prevProfiles := mh.JWTAuthProfiles
+	prevNetid := netidActive.Load()
+	prevSrc := aiClassSnapshotSrc
+	var cur atomic.Pointer[aikey.ClassSnapshot]
+	mh.JWTAuthProfiles = nil
+	netidActive.Store(nil)
+	aiClassSnapshotSrc = func() *aikey.ClassSnapshot { return cur.Load() }
+	t.Cleanup(func() {
+		mh.JWTAuthProfiles = prevProfiles
+		netidActive.Store(prevNetid)
+		aiClassSnapshotSrc = prevSrc
+	})
+	some := &aikey.ClassSnapshot{Objectives: map[string]cmn.AIObjectiveEntry{"batch": {Name: "batch", Priority: -5}}}
+	for round := 0; round < 2000; round++ {
+		var wg sync.WaitGroup
+		for g := 0; g < 8; g++ {
+			wg.Add(1)
+			go func(g int) {
+				defer wg.Done()
+				if (g+round)%2 == 0 {
+					cur.Store(some)
+				} else {
+					cur.Store(nil)
+				}
+				aiClassRecompute()
+			}(g)
+		}
+		wg.Wait()
+		want := cur.Load() != nil
+		if aiClassOnNow.Load() != want || aiClassOnRead() != want {
+			t.Fatalf("round %d: switch is %v here and %v in the data plane, want %v", round, aiClassOnNow.Load(), aiClassOnRead(), want)
+		}
+	}
 }
 
 // The switch the data plane reads is on exactly while something could give

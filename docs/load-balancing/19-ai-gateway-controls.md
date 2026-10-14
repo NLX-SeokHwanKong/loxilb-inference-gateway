@@ -124,6 +124,32 @@ quota errors: `502 backend_unreachable` / `503 no_healthy_backend` come from the
 connect-failover path, not from key enforcement — see the
 [troubleshooting guide](06-troubleshooting.md) §5.
 
+### 2.5 A backend's `X-Api-Key` and `X-Auth-*` response headers
+
+On a service that declares `api_key_auth`, `X-Api-Key` is the gateway's credential header.
+The caller's is consumed or removed on the way in; a backend's is removed on the way out, so
+a backend cannot hand a key to a client under the gateway's header name.
+
+| Service | A backend's `X-Api-Key` response header | A backend's `X-Auth-*` response headers |
+|---|---|---|
+| HTTP/1.1, `api_key_auth` declared (`required`, `disabled`, `jwt`, `apikey-or-jwt`), response relayed by the gateway | **removed** | passed through |
+| HTTP/1.1, no `api_key_auth` declaration | passed through | passed through |
+| HTTP/2, `api_key_auth` declared | **removed** (from the response head, interim or final; not from trailers) | passed through |
+| HTTP/2, no `api_key_auth` declaration | passed through | passed through |
+| Any service whose response direction is carried in the kernel (`sockMapMode` `response` or `both`) | passed through | passed through |
+
+Limits:
+
+- On HTTP/1.1 the header is removed from the response head only, and only when the head
+  arrives whole in one read from the backend. A head split across two reads is passed as it
+  is; so is the final head when an interim response (`100`, `103`) and the final one arrive
+  in the same read.
+- A rule accelerated with `sockMapMode` `response` or `both` does not see its responses, so
+  nothing is removed there.
+- A response body is never edited, and neither are HTTP/2 trailers.
+- The gateway does not remove `X-Auth-*` from responses on any service: a backend that must
+  not expose identity headers should not send them.
+
 ## 3. Per-tenant rate limiting
 
 Tenant-level ceilings apply across **all** keys of a tenant, on top of per-key limits:
@@ -273,7 +299,7 @@ curl -sk -X POST https://<LB>:11111/netlox/v1/config/ai/objective -H "Authorizat
   -d '{"name":"realtime-chat","priority":10}'
 curl -sk -X POST https://<LB>:11111/netlox/v1/config/ai/objective -H "Authorization: Bearer $TOKEN" \
   -d '{"name":"batch","priority":-5,"services":["20.20.20.1:8080"]}'
-curl -sk https://<LB>:11111/netlox/v1/config/ai/objective/all -H "Authorization: Bearer $TOKEN"
+curl -sk https://<LB>:11111/netlox/v1/config/ai/objective -H "Authorization: Bearer $TOKEN"
 curl -sk -X DELETE https://<LB>:11111/netlox/v1/config/ai/objective/batch -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -318,6 +344,19 @@ the last-known-good file `aigw-lkg.json` under `--config-path` (written, mode 06
 every read whose content changed) until the store answers. `fc_effective.config_source` on
 any AI-gateway rule says which: `store`, `lkg` or `none`; while it is `lkg`,
 `loxilb_ai_class_config_lkg_intervals_total` counts one per refresh interval.
+
+**A restart while the key store is away.** API keys are never cached on disk, so the file
+does not carry them:
+
+- A request that presents an API key is refused with 503 `policy_store_unavailable`. It is
+  not admitted on a guess and it is not treated as keyless.
+- Requests that need no key are served: a tenant named by a network-identity binding, and
+  keyless services. Their objectives and classes come from the file.
+- The gateway keeps running. When the store answers again the gateway reads it within 20 s,
+  `config_source` returns to `store`, and keys validate again.
+
+So "no admission failure caused by the database" holds for requests that need no key; a
+keyed request fails closed until the store is back.
 
 ---
 
@@ -377,6 +416,24 @@ Three rule fields govern streaming behavior:
 
 This is a **stream-duration** quota; token-count budgets are enforced per key/tenant via
 `tokens_per_min` (§2–§3).
+
+### A request sent while a streamed answer is running (HTTP/1.1)
+
+On HTTP/1.1 a connection carries one exchange at a time. While the gateway relays a
+streamed answer the client must not send anything on that connection. If it does, the
+gateway closes the connection: the bytes are not relayed, and the stream in progress ends
+as one its client left. The request being answered was checked and charged as a whole;
+bytes behind it belong to no checked request and would otherwise reach the backend without
+a credential check, a model allowlist, a rate limit or a charge.
+
+A streamed answer has ended when its framing ends (the last chunk, or `Content-Length`
+bytes), with or without a `data: [DONE]` event; the next request on the connection is then
+admitted as any request. A client should wait for the answer to end, open a second
+connection, or use HTTP/2, where each request is its own stream.
+
+`loxilb_ai_stream_early_bytes_closed_total{service}` counts one per closed connection
+(absent until the first); at `--loglevel debug` the data-plane log has one
+`[STREAM_INTRUSION]` line for each.
 
 ---
 

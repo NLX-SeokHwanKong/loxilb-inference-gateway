@@ -34,6 +34,7 @@ _Static_assert(sizeof(ai_gw_class_t) == 72, "ai_gw_class_t size");
 import "C"
 
 import (
+	"sync"
 	"sync/atomic"
 	"unsafe"
 
@@ -136,6 +137,12 @@ func aiClassResolveC(in classInput, binding, profile string) (rc int, ans classA
 // aiClassOnNow is the switch as last published.
 var aiClassOnNow atomic.Bool
 
+// aiClassOnMu orders the publications: the value is worked out and handed to
+// the data plane as one step, so two callers that work out different values
+// cannot publish them in the other order and leave the data plane holding
+// the older one.
+var aiClassOnMu sync.Mutex
+
 // aiClassRecompute works out whether any class is configured and tells the
 // data plane. A request is looked at for a class only while this is on:
 // with no objective, no tenant or key that sets a class field, and no
@@ -147,6 +154,8 @@ var aiClassOnNow atomic.Bool
 // Called after every published class snapshot and every change of the
 // bindings or the profiles.
 func aiClassRecompute() {
+	aiClassOnMu.Lock()
+	defer aiClassOnMu.Unlock()
 	on := aiClassSnapshot().Configured() || netidLowersClass() || mh.JWTAuthProfiles.lowersClass()
 	if aiClassOnNow.Swap(on) != on {
 		aiClassOnPublish(on)

@@ -79,6 +79,32 @@ binary behaves exactly like upstream loxilb.
   and a byte-shaper row. `GET /metrics` is exempt from management-plane bearer
   auth so a scraper needs no credential.
 
+- **Request priority: objectives and classes.** A request on an AI-gateway
+  rule has a priority and a class (`critical`, `standard`, `sheddable`). It
+  asks for an objective by name with the header `x-llm-d-inference-objective`
+  (the older `x-gateway-inference-objective` is accepted), or, without one,
+  with the body's `service_tier` (`flex`, `priority`, `fast`); what it gets is
+  held under the `priority_class` of its tenant, its API key or JWT auth
+  profile, and the network-identity binding that named its tenant, so a hint
+  can lower a request and never raise it above its cap. New:
+  `POST` / `GET` / `DELETE /config/ai/objective`; `priority_class`,
+  `default_objective` and `allowed_objectives` on tenants and API keys;
+  `priority_class` on JWT auth profiles and network-identity bindings; the
+  rule knob `ai_objective_strict` (403 `objective_not_allowed` for an
+  objective the caller may not use, instead of its default);
+  `X-Loxilb-Admission-Class` / `X-Loxilb-Admission-Objective` on admitted
+  responses of a rule with `fc_expose_headers`; `priority_class`, `priority`,
+  `objective`, `objective_denied` and `hint_not_applied` on the
+  `data.ai.complete` audit record. A `service_tier` the gateway read as a
+  hint is replaced by `null` in the forwarded body (same length). With no
+  objective and no class field configured anywhere nothing is read and
+  every request is handled as before. Objectives and classes live in the AI
+  key store and are served from the last-known-good file `aigw-lkg.json`
+  (under `--config-path`) by a gateway that starts while the store is away;
+  `fc_effective.config_source` and
+  `loxilb_ai_class_config_lkg_intervals_total` say when. See
+  `docs/load-balancing/19-ai-gateway-controls.md`.
+
 ### Changed
 
 - Container image renamed to `ghcr.io/loxilb-io/loxilb-inference-gateway`.
@@ -140,7 +166,9 @@ binary behaves exactly like upstream loxilb.
   connection when a client sends anything before its streamed answer has
   ended; the unfinished stream is counted as one its client left, and each
   such close is counted in `loxilb_ai_stream_early_bytes_closed_total{service}`
-  and logged once at debug. **Impact:**
+  and logged once at debug. A streamed answer has ended when its framing
+  ends, whether or not it carried the `[DONE]` event, so the next request on
+  a kept connection is admitted as any request. **Impact:**
   a client that pipelines a request behind a streamed answer on HTTP/1.1 has
   the connection closed and must send that request on a new one (or wait for
   the answer to end, or use HTTP/2). Clients that wait for their answer are
@@ -161,11 +189,14 @@ binary behaves exactly like upstream loxilb.
   above. It still does, now as a rule: `X-Api-Key` is the gateway's
   credential header on such a service and a backend does not get to hand a
   key to a client under that name. The header is removed from the response
-  head only, when the head arrives whole in one read. Unchanged from earlier
-  releases: a backend's `X-Auth-*` response headers pass through on every
-  service; on a service that makes no `api_key_auth` declaration, on HTTP/2,
-  and on a rule whose response direction is carried by `sockMapMode`, a
-  backend's `X-Api-Key` passes through as well.
+  head only, when the head arrives whole in one read. **Behaviour change:**
+  the rule now holds on HTTP/2 as well: on an HTTP/2 service that declares
+  `api_key_auth` a backend's `x-api-key` response field, which earlier
+  releases passed through, is dropped from the response head (not from
+  trailers). Unchanged from earlier releases: a backend's `X-Auth-*` response
+  headers pass through on every service; on a service that makes no
+  `api_key_auth` declaration, and on a rule whose response direction is
+  carried by `sockMapMode`, a backend's `X-Api-Key` passes through as well.
 
 ### Notes
 

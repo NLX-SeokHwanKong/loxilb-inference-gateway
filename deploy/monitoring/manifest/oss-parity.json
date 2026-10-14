@@ -1,17 +1,17 @@
 {
  "schema_version": 1,
  "provenance": {
-  "generated_at": "2026-10-13T16:52:50+00:00",
-  "source_revision": "645bc87a0f5b053c899b0e5eebcfac964078ab3f",
+  "generated_at": "2026-10-14T03:31:35+00:00",
+  "source_revision": "fed475f9f0576a3b09fc0966faa5b993eb9bd4f9",
   "upstream_repository": "https://github.com/loxilb-io/loxilb",
   "upstream_revision": "98487453eaf1853690de5928eab95a51817ba5d7"
  },
  "contract": {
-  "gateway_families": 330,
+  "gateway_families": 332,
   "upstream_families": 60,
   "present_identical": 35,
   "present_divergent": 0,
-  "absent": 295,
+  "absent": 297,
   "upstream_only": 25
  },
  "upstream_only": [
@@ -788,6 +788,17 @@
    }
   },
   {
+   "name": "loxilb_ai_class_config_lkg_intervals_total",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "counter",
+    "labels": []
+   }
+  },
+  {
    "name": "loxilb_ai_engine_info",
    "owner": "loxilb",
    "class": "default",
@@ -1224,6 +1235,19 @@
     "type": "counter",
     "labels": [
      "reason",
+     "service"
+    ]
+   }
+  },
+  {
+   "name": "loxilb_ai_stream_early_bytes_closed_total",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "counter",
+    "labels": [
      "service"
     ]
    }
