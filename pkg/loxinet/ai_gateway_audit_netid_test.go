@@ -336,3 +336,94 @@ func TestEmitAISettleCarriesTheNetworkIdentity(t *testing.T) {
 		t.Errorf("auth = %q on a plain keyed charge", a.str("auth"))
 	}
 }
+
+// A completion names the class its request was given, and only when the
+// class stage ran for it: a request handled while no class is configured
+// leaves a record with none of the class fields.
+func TestEmitAICompleteCarriesTheClass(t *testing.T) {
+	_, drain := startTrail(t)
+	base := aiCompleteRecord{TenantID: "acme", SvcIdent: "10.0.0.1:8080", ModelName: "llama-3", StatusCode: 200, WorkerID: 1}
+
+	plain := base
+	plain.RequestID = "req-plain"
+	shed := base
+	shed.RequestID, shed.Priority, shed.ClassInfo, shed.Objective = "req-shed", -5, aiClassInfoSet|aiClassNumSheddable, "batch"
+	std := base
+	std.RequestID, std.ClassInfo = "req-std", aiClassInfoSet|aiClassNumStandard|aiClassInfoDenied
+	crit := base
+	crit.RequestID, crit.Priority, crit.ClassInfo, crit.Objective = "req-crit", 1, aiClassInfoSet|aiClassNumCritical, "tier:priority"
+	unread := base
+	unread.RequestID, unread.ClassInfo = "req-unread", aiClassInfoSet|aiClassNumStandard|aiClassInfoHintUnread
+	// The class bits without the "ran" bit say nothing.
+	stale := base
+	stale.RequestID, stale.Priority, stale.ClassInfo, stale.Objective = "req-stale", 9, aiClassNumCritical|aiClassInfoDenied, "left-over"
+	for _, c := range []aiCompleteRecord{plain, shed, std, crit, unread, stale} {
+		if !emitAIComplete(c) {
+			t.Fatal("emit refused")
+		}
+	}
+
+	classKeys := []string{"priority_class", "priority", "objective", "objective_denied", "hint_not_applied"}
+	seen := 0
+	for _, l := range drain() {
+		if l.str("event_type") != eventAIComplete {
+			continue
+		}
+		seen++
+		d := l.detail()
+		switch id := l.str("request_id"); id {
+		case "req-plain", "req-stale":
+			for _, k := range classKeys {
+				if _, found := d[k]; found {
+					t.Errorf("%s: %q present on a request the class stage did not run for", id, k)
+				}
+			}
+		case "req-shed":
+			if d.str("priority_class") != "sheddable" || d.num("priority") != -5 || d.str("objective") != "batch" {
+				t.Errorf("%s: detail %v", id, d)
+			}
+			if _, found := d["objective_denied"]; found {
+				t.Errorf("%s: objective_denied on a hint that was applied", id)
+			}
+		case "req-std":
+			if d.str("priority_class") != "standard" || d["objective_denied"] != true {
+				t.Errorf("%s: detail %v", id, d)
+			}
+			if v, found := d["priority"]; !found || v != float64(0) {
+				t.Errorf("%s: priority %v, want 0 written", id, v)
+			}
+			if _, found := d["objective"]; found {
+				t.Errorf("%s: an objective named although none was applied", id)
+			}
+		case "req-crit":
+			if d.str("priority_class") != "critical" || d.num("priority") != 1 || d.str("objective") != "tier:priority" {
+				t.Errorf("%s: detail %v", id, d)
+			}
+		case "req-unread":
+			if d.str("priority_class") != "standard" || d["hint_not_applied"] != true {
+				t.Errorf("%s: detail %v", id, d)
+			}
+		default:
+			t.Errorf("unexpected record %q", id)
+		}
+	}
+	if seen != 6 {
+		t.Errorf("%d completions read, want 6", seen)
+	}
+}
+
+// A refusal for an objective the request may not use is filed as an
+// authorization refusal at its own stage.
+func TestAIDenyObjectiveStage(t *testing.T) {
+	if got := aiDenyStage(aiStageObjective); got != "objective" {
+		t.Errorf("stage %q", got)
+	}
+	if got := aiDenyReason(aiStageObjective, "objective_not_allowed"); got != audit.ReasonAuthz {
+		t.Errorf("reason %q", got)
+	}
+	// The stage's number is the data plane's: AI_GW_STAGE_OBJECTIVE follows
+	// AI_GW_STAGE_CAPACITY.
+	if got := int(aiStageObjective); got != 6 {
+		t.Errorf("aiStageObjective = %d, want 6", got)
+	}
+}

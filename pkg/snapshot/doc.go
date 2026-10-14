@@ -125,6 +125,11 @@ import (
 // restoring them leaves the live bindings untouched. Builds that predate it
 // refuse 1.11 documents via the minor-version gate - a document whose
 // bindings admit or hold requests cannot be restored without them quietly.
+// Within 1.11, before any build that writes it was released: a JWT auth
+// profile gained priority_class and a load-balancer rule ai_objective_strict.
+// Both are absent in a document that does not set them, and absent reads as
+// what it was before (no cap from the profile, a request that names an
+// objective it may not use falls to its default).
 const SchemaVersion = "1.11"
 
 // DocKind identifies the document type, matching §4's "kind" field.

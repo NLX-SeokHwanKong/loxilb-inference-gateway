@@ -270,6 +270,20 @@ type DataDetail struct {
 	// two reservations, without joining on time.
 	Reserved int64
 	ResEpoch int64
+	// PriorityClass, Priority, Objective, ObjectiveDenied and
+	// HintNotApplied are the class the admission gate gave the request.
+	// PriorityClass is empty, and the other four absent with it, on a
+	// request the class stage did not run for: no class is configured, or
+	// the request has no tenant. Objective is the hint that was applied (an
+	// objective name, or "tier:<value>" for the body's service_tier).
+	// ObjectiveDenied: the request named an objective it may not use and
+	// was given its default. HintNotApplied: the body was streamed, so a
+	// service_tier in it could not be read.
+	PriorityClass   string
+	Priority        int64
+	Objective       string
+	ObjectiveDenied bool
+	HintNotApplied  bool
 }
 
 // SysDetail is the detail object of an audit_system record. Fields are

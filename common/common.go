@@ -1090,6 +1090,12 @@ type LbServiceArg struct {
 	AIDefaultMaxTokens uint32 `json:"ai_default_max_tokens,omitempty"`
 	// AIDefaultMaxTokensPresent is the presence bit for replace semantics.
 	AIDefaultMaxTokensPresent bool `json:"-"`
+	// AIObjectiveStrict - true refuses, with 403 objective_not_allowed, a
+	// request that names an objective it may not use; false lets it fall
+	// to its default objective. Read where the admission gate runs.
+	AIObjectiveStrict bool `json:"ai_objective_strict,omitempty"`
+	// AIObjectiveStrictPresent is the presence bit for replace semantics.
+	AIObjectiveStrictPresent bool `json:"-"`
 	// Egress - Egress Rule
 	Egress bool `json:"egress"`
 	// Id - Stable opaque identifier for the LB rule (Octavia).
@@ -1796,7 +1802,11 @@ type FcEffectiveArg struct {
 	ReservationHeld          []FcResvHeldArg `json:"reservation_held"`
 	// Source names where each value in force came from: "rule", "env" or
 	// "default".
-	Source FcEffectiveSource `json:"source"`
+	// ConfigSource is where the objectives and the tenant and key classes
+	// this gateway is applying came from: AIClassSourceStore, AIClassSourceLKG
+	// or AIClassSourceNone. The gateway's, the same on every rule.
+	ConfigSource string            `json:"config_source,omitempty"`
+	Source       FcEffectiveSource `json:"source"`
 }
 
 // FcResvHeldMax - the most buckets one read-back lists.
@@ -2806,6 +2816,14 @@ type NetHookInterface interface {
 	NetTenantRateLimitSet(tenantID string, rps, tokensPerMin, burstPct int, modelLimits []TenantModelRateLimit) error
 	NetTenantRateLimitGet(tenantID string) (*TenantRateLimitEntry, error)
 
+	// AI Gateway - objectives (named priorities) and the class fields of
+	// tenants and keys. All of it lives in the key store.
+	NetAIObjectiveGet() ([]AIObjectiveEntry, error)
+	NetAIObjectiveAdd(*AIObjectiveEntry) (int, error)
+	NetAIObjectiveDel(name string) (int, error)
+	NetTenantClassPatch(tenantID string, patch AIClassPatch) error
+	NetAPIKeyClassPatch(keyID string, patch AIClassPatch) error
+
 	// AI Gateway - QoS ladder: per-user limits and configurable defaults.
 	NetUserRateLimitSet(entry UserRateLimitEntry) error
 	NetUserRateLimitGet(tenantID, userID string) (*UserRateLimitEntry, error)
@@ -3041,6 +3059,8 @@ type ApiKeyEntry struct {
 	CreatedAt     time.Time  `json:"created_at"`
 	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
 	Enabled       bool       `json:"enabled"`
+	// The key's class fields; they can only narrow its tenant's.
+	AIClassPolicy
 }
 
 // ApiKeySummary - API key summary without the secret hash
@@ -3055,6 +3075,8 @@ type ApiKeySummary struct {
 	CreatedAt     time.Time  `json:"created_at"`
 	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
 	Enabled       bool       `json:"enabled"`
+	// The key's class fields; they can only narrow its tenant's.
+	AIClassPolicy
 }
 
 // TenantModelRateLimit - one model's token quota inside a tenant's rate
@@ -3077,6 +3099,8 @@ type TenantRateLimitEntry struct {
 	BurstPct    int                    `json:"burst_pct"`
 	ModelLimits []TenantModelRateLimit `json:"model_limits,omitempty"`
 	UpdatedAt   time.Time              `json:"updated_at"`
+	// The tenant's class fields.
+	AIClassPolicy
 }
 
 // UserModelRateLimit - one model's token quota inside a user's rate limit

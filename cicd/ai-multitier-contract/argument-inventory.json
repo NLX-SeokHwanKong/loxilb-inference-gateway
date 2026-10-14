@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "scope": "LoadbalanceEntry fields and AI KV inventory query parameters; not a test-coverage claim",
   "sourceSha256": {
-    "swagger-extras.yml": "5e36fc44f7bcae7588611893ef158e68e0f26c2a0e67d0a9fc719ab3c026c3bc",
-    "swagger.yml": "d16924e943538859db8246122677d20a033dae65eaddd7e79a1b4cf1c11d0402"
+    "swagger-extras.yml": "7cf1fa625f075edbdae5e7b92155e90c1cd792f0d897a050fd89295827183b3f",
+    "swagger.yml": "fea607d2c6f71f182cd501b53a16da3463ce13c6dc26695581e9dcf0a8006439"
   },
   "fields": [
     {
@@ -337,6 +337,16 @@
           "inherit"
         ],
         "type": "string",
+        "x-nullable": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/ai_objective_strict",
+      "required": false,
+      "contract": {
+        "default": false,
+        "description": "What happens to a request that names, with the x-llm-d-inference-objective header, an objective it may not use (unknown, not in its tenant's allowed_objectives, or not for this service). false (the default) - the request falls to its default objective and is admitted; the record says the objective was denied. true - the request is refused with 403 objective_not_allowed. Stored on any rule; it has an effect only where the admission gate runs (an AI-gateway service) and while a class is configured. The admission gate reads it per listener, as api_key_auth: declare the same value on each rule of a VIP and port. Changeable at runtime by a replace POST (the stored value is kept when omitted). Explicit JSON null is rejected.",
+        "type": "boolean",
         "x-nullable": false
       }
     },
@@ -685,6 +695,19 @@
         "enum": [
           "on",
           "off"
+        ],
+        "type": "string"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/config_source",
+      "required": false,
+      "contract": {
+        "description": "Where the objectives and the tenant and key classes this gateway is applying came from. store - the AI key store answered the last read. lkg - the store has not answered since the gateway started and the last-known-good file (aigw-lkg.json under the configuration path) is being served; writes are refused with 503 meanwhile and loxilb_ai_class_config_lkg_intervals_total counts. none - nothing was read (no store configured, or a store that has not answered and no file); every request is standard. The same value on every rule - it is the gateway's, not the rule's.",
+        "enum": [
+          "store",
+          "lkg",
+          "none"
         ],
         "type": "string"
       }

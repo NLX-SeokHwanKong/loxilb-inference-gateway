@@ -97,10 +97,40 @@ func llb_ai_class_resolve(tenant *C.char, keyID *C.char, binding *C.char, profil
 // aiClassSnapshot is the store's class snapshot, nil with no store or
 // before anything was read.
 func aiClassSnapshot() *aikey.ClassSnapshot {
+	return aiClassSnapshotSrc()
+}
+
+// aiClassSnapshotSrc is where the snapshot is read from. A variable so the
+// package's tests can stand a snapshot in without a store.
+var aiClassSnapshotSrc = func() *aikey.ClassSnapshot {
 	if svc := mh.AIKeyService; svc != nil {
 		return svc.Classes()
 	}
 	return nil
+}
+
+// aiClassResolveC calls llb_ai_class_resolve with C arguments, the way the
+// admission gate does, and reads the answer back out of the C struct. The
+// package's tests reach the export through it: a test file cannot hold C
+// types.
+func aiClassResolveC(in classInput, binding, profile string) (rc int, ans classAnswer) {
+	args := []*C.char{C.CString(in.tenant), C.CString(in.keyID), C.CString(binding),
+		C.CString(profile), C.CString(in.svc), C.CString(in.hint)}
+	defer func() {
+		for _, a := range args {
+			C.free(unsafe.Pointer(a))
+		}
+	}()
+	var out C.ai_gw_class_t
+	// Not zero on entry: the export owes the caller a struct it has cleared.
+	C.memset(unsafe.Pointer(&out), 0xff, C.size_t(unsafe.Sizeof(out)))
+	rc = int(llb_ai_class_resolve(args[0], args[1], args[2], args[3], args[4], args[5],
+		C.int(in.tier), &out))
+	ans.priority = int32(out.priority)
+	ans.class = int(out.priority_class)
+	ans.denied = out.objective_denied != 0
+	ans.objective = C.GoString((*C.char)(unsafe.Pointer(&out.objective[0])))
+	return rc, ans
 }
 
 // aiClassOnNow is the switch as last published.

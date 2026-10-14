@@ -666,6 +666,9 @@ type LoadbalanceEntryServiceArguments struct {
 	// Enum: [on off inherit]
 	AiDefaultReservation string `json:"ai_default_reservation,omitempty"`
 
+	// What happens to a request that names, with the x-llm-d-inference-objective header, an objective it may not use (unknown, not in its tenant's allowed_objectives, or not for this service). false (the default) - the request falls to its default objective and is admitted; the record says the objective was denied. true - the request is refused with 403 objective_not_allowed. Stored on any rule; it has an effect only where the admission gate runs (an AI-gateway service) and while a class is configured. The admission gate reads it per listener, as api_key_auth: declare the same value on each rule of a VIP and port. Changeable at runtime by a replace POST (the stored value is kept when omitted). Explicit JSON null is rejected.
+	AiObjectiveStrict bool `json:"ai_objective_strict,omitempty"`
+
 	// HTTP ALPN capability list, typically [h2, http/1.1], [h2] or [http/1.1]. Recognized values override backend_protocol through a shared capability used by listener and backend TLS setup; list order is not preserved as preference order. Empty leaves backend_protocol in use. Implementation limitations: unknown tokens are ignored, an entirely unrecognized list falls back to backend_protocol, and the H1/both listener callback can select H1 without a common advertised protocol. This is not strict ALPN allow-list enforcement. See shared readback/update warnings.
 	AlpnProtocols []string `json:"alpn_protocols"`
 
@@ -2901,6 +2904,10 @@ type LoadbalanceEntryServiceArgumentsFcEffective struct {
 	// Enum: [on off]
 	Adaptive string `json:"adaptive,omitempty"`
 
+	// Where the objectives and the tenant and key classes this gateway is applying came from. store - the AI key store answered the last read. lkg - the store has not answered since the gateway started and the last-known-good file (aigw-lkg.json under the configuration path) is being served; writes are refused with 503 meanwhile and loxilb_ai_class_config_lkg_intervals_total counts. none - nothing was read (no store configured, or a store that has not answered and no file); every request is standard. The same value on every rule - it is the gateway's, not the rule's.
+	// Enum: [store lkg none]
+	ConfigSource string `json:"config_source,omitempty"`
+
 	// Per-endpoint ceiling for decode legs; 0 is unlimited.
 	DecodeMaxInflight int32 `json:"decode_max_inflight"`
 
@@ -3001,6 +3008,10 @@ func (m *LoadbalanceEntryServiceArgumentsFcEffective) Validate(formats strfmt.Re
 	}
 
 	if err := m.validateAdaptive(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := m.validateConfigSource(formats); err != nil {
 		res = append(res, err)
 	}
 
@@ -3161,6 +3172,51 @@ func (m *LoadbalanceEntryServiceArgumentsFcEffective) validateAdaptive(formats s
 
 	// value enum
 	if err := m.validateAdaptiveEnum("serviceArguments"+"."+"fc_effective"+"."+"adaptive", "body", m.Adaptive); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+var loadbalanceEntryServiceArgumentsFcEffectiveTypeConfigSourcePropEnum []interface{}
+
+func init() {
+	var res []string
+	if err := json.Unmarshal([]byte(`["store","lkg","none"]`), &res); err != nil {
+		panic(err)
+	}
+	for _, v := range res {
+		loadbalanceEntryServiceArgumentsFcEffectiveTypeConfigSourcePropEnum = append(loadbalanceEntryServiceArgumentsFcEffectiveTypeConfigSourcePropEnum, v)
+	}
+}
+
+const (
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveConfigSourceStore captures enum value "store"
+	LoadbalanceEntryServiceArgumentsFcEffectiveConfigSourceStore string = "store"
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveConfigSourceLkg captures enum value "lkg"
+	LoadbalanceEntryServiceArgumentsFcEffectiveConfigSourceLkg string = "lkg"
+
+	// LoadbalanceEntryServiceArgumentsFcEffectiveConfigSourceNone captures enum value "none"
+	LoadbalanceEntryServiceArgumentsFcEffectiveConfigSourceNone string = "none"
+)
+
+// prop value enum
+func (m *LoadbalanceEntryServiceArgumentsFcEffective) validateConfigSourceEnum(path, location string, value string) error {
+	if err := validate.EnumCase(path, location, value, loadbalanceEntryServiceArgumentsFcEffectiveTypeConfigSourcePropEnum, true); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *LoadbalanceEntryServiceArgumentsFcEffective) validateConfigSource(formats strfmt.Registry) error {
+	if swag.IsZero(m.ConfigSource) { // not required
+		return nil
+	}
+
+	// value enum
+	if err := m.validateConfigSourceEnum("serviceArguments"+"."+"fc_effective"+"."+"config_source", "body", m.ConfigSource); err != nil {
 		return err
 	}
 

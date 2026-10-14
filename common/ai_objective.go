@@ -69,6 +69,34 @@ func (p AIClassPolicy) IsZero() bool {
 	return p.PriorityClass == "" && p.DefaultObjective == "" && len(p.AllowedObjectives) == 0
 }
 
+// AIClassPatch is a change to a class policy: a nil field is left as it is,
+// a field that is present replaces the stored one (an empty value clears
+// it).
+type AIClassPatch struct {
+	PriorityClass     *string
+	DefaultObjective  *string
+	AllowedObjectives *[]string
+}
+
+// IsZero reports whether the patch changes nothing.
+func (c AIClassPatch) IsZero() bool {
+	return c.PriorityClass == nil && c.DefaultObjective == nil && c.AllowedObjectives == nil
+}
+
+// Apply returns base with the patch's fields laid over it.
+func (c AIClassPatch) Apply(base AIClassPolicy) AIClassPolicy {
+	if c.PriorityClass != nil {
+		base.PriorityClass = *c.PriorityClass
+	}
+	if c.DefaultObjective != nil {
+		base.DefaultObjective = *c.DefaultObjective
+	}
+	if c.AllowedObjectives != nil {
+		base.AllowedObjectives = append([]string(nil), (*c.AllowedObjectives)...)
+	}
+	return base
+}
+
 // AIClassOfPriority maps a priority to its class.
 func AIClassOfPriority(priority int32) string {
 	switch {

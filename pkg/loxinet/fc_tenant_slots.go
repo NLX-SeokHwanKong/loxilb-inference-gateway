@@ -48,7 +48,12 @@ func fcTenantSlotsFromEnv() int {
 func fcTenantShareWanted(serv *cmn.LbServiceArg) uint32 {
 	pct := serv.FcTenantMaxSharePct
 	if pct == 0 {
+		// Bounded before it is narrowed: a value past 32 bits must read as
+		// "no share" like any other value over 100, not as its low bits.
 		if n, err := strconv.Atoi(os.Getenv("LLB_FC_TENANT_MAX_SHARE_PCT")); err == nil && n > 0 {
+			if n > cmn.FcTenantMaxSharePctMax {
+				n = cmn.FcTenantMaxSharePctMax
+			}
 			pct = uint32(n)
 		}
 	}

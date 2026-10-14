@@ -153,6 +153,7 @@ func ConfigPostLoadbalancer(params operations.PostConfigLoadbalancerParams, prin
 	}
 	pres.applyHalfCloseMode(&lbRules.Serv, params.Attr.ServiceArguments)
 	pres.applyAIDefaultReservation(&lbRules.Serv, params.Attr.ServiceArguments)
+	pres.applyAIObjectiveStrict(&lbRules.Serv, params.Attr.ServiceArguments)
 	lbRules.Serv.Egress = params.Attr.ServiceArguments.Egress
 	lbRules.Serv.TraceType = params.Attr.ServiceArguments.TraceType // Tracing catalog (independent from GPU routing)
 
@@ -758,6 +759,7 @@ func serializeLBRule(lb cmn.LbRuleMod) *models.LoadbalanceEntry {
 	tmpSvc.FcExposeHeaders = lb.Serv.FcExposeHeaders
 	tmpSvc.AiDefaultReservation = lb.Serv.AIDefaultReservation
 	tmpSvc.AiDefaultMaxTokens = int32(lb.Serv.AIDefaultMaxTokens)
+	tmpSvc.AiObjectiveStrict = lb.Serv.AIObjectiveStrict
 	if eff := lb.Serv.FcEffective; eff != nil {
 		tmpSvc.FcEffective = &models.LoadbalanceEntryServiceArgumentsFcEffective{
 			Mode:                     eff.Mode,
@@ -787,6 +789,7 @@ func serializeLBRule(lb cmn.LbRuleMod) *models.LoadbalanceEntry {
 			ReservationClampedBurst:  int64(eff.ReservationClampedBurst),
 			ReservationClampedBudget: int64(eff.ReservationClampedBudget),
 			ReservationEpoch:         eff.ReservationEpoch,
+			ConfigSource:             eff.ConfigSource,
 			ReservationHeldClaims:    int64(eff.ReservationHeldClaims),
 			ReservationHeldTruncated: eff.ReservationHeldTruncated,
 			ReservationHeld:          fcReservationHeldModel(eff.ReservationHeld),

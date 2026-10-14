@@ -477,6 +477,10 @@ func (s *Service) CreateAPIKey(entry cmn.ApiKeyEntry) (string, string, error) {
 	if err := ValidateQoSIdentity("tenant_id", entry.TenantID); err != nil {
 		return "", "", err
 	}
+	class, err := ValidateClassPolicy(entry.AIClassPolicy)
+	if err != nil {
+		return "", "", err
+	}
 	db, err := s.store()
 	if err != nil {
 		return "", "", err
@@ -524,6 +528,21 @@ func (s *Service) CreateAPIKey(entry cmn.ApiKeyEntry) (string, string, error) {
 		}
 		tk.LogIt(tk.LogError, "[AIKey] Failed to create API key for tenant %s: %v\n", entry.TenantID, err)
 		return "", "", err
+	}
+
+	// The class fields have their own statement. A key that was asked for
+	// with a class and would exist without it is not left behind: its
+	// requests would run above the class its operator set.
+	if !class.IsZero() {
+		if _, err := db.Exec(sqlUpdateKeyClass, keyID, class.PriorityClass, class.DefaultObjective,
+			joinList(class.AllowedObjectives)); err != nil {
+			tk.LogIt(tk.LogError, "[AIKey] Failed to set class of new key %s, removing it: %v\n", keyID, err)
+			if _, dErr := db.Exec(sqlDeleteAPIKeyByID, keyID); dErr != nil {
+				tk.LogIt(tk.LogError, "[AIKey] New key %s could not be removed either: it exists without its class\n", keyID)
+			}
+			return "", "", errStoreUnavailable
+		}
+		s.refreshClassesAfterWrite()
 	}
 
 	tk.LogIt(tk.LogInfo, "[AIKey] Created API key %s for tenant %s (supplied=%t)\n",

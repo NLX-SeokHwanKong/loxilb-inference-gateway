@@ -42,6 +42,7 @@ func TestAbsentKeyStoreDistinguishesUnconfiguredFromUnreachable(t *testing.T) {
 
 	var na NetAPIStruct
 	enabled := false
+	classStd := cmn.AIClassStandard
 
 	// Every hook that can be reached before the store exists. Naming them
 	// individually rather than testing one is the point: a hook added later
@@ -70,6 +71,18 @@ func TestAbsentKeyStoreDistinguishesUnconfiguredFromUnreachable(t *testing.T) {
 		},
 		"NetRateLimitDefaultsGet":    func() error { _, err := na.NetRateLimitDefaultsGet(cmn.RateLimitScopeGlobal, ""); return err },
 		"NetRateLimitDefaultsDelete": func() error { return na.NetRateLimitDefaultsDelete(cmn.RateLimitScopeGlobal, "") },
+		"NetAIObjectiveGet":          func() error { _, err := na.NetAIObjectiveGet(); return err },
+		"NetAIObjectiveAdd": func() error {
+			_, err := na.NetAIObjectiveAdd(&cmn.AIObjectiveEntry{Name: "o", Priority: 1})
+			return err
+		},
+		"NetAIObjectiveDel": func() error { _, err := na.NetAIObjectiveDel("o"); return err },
+		"NetTenantClassPatch": func() error {
+			return na.NetTenantClassPatch("t", cmn.AIClassPatch{PriorityClass: &classStd})
+		},
+		"NetAPIKeyClassPatch": func() error {
+			return na.NetAPIKeyClassPatch("k", cmn.AIClassPatch{PriorityClass: &classStd})
+		},
 	}
 
 	opts.Opts.AIKeyDBHost = ""

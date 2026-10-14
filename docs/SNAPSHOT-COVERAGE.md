@@ -174,7 +174,7 @@ forward on read.
 | 1.8 | `auditsink` domain |
 | 1.9 | `halfclose` gains `defaultMode` |
 | 1.10 | a `loadbalancer` rule gains `ai_default_reservation` and `ai_default_max_tokens` |
-| 1.11 | `netidentity` domain |
+| 1.11 | `netidentity` domain; a `jwtauthprofile` gains `priority_class` and a `loadbalancer` rule `ai_objective_strict` (both absent when unset) |
 
 The resulting compatibility matrix, enforced by the version-gate and
 golden-document test suites (a golden document of every prior schema must

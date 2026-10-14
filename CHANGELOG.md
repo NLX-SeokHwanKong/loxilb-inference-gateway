@@ -138,7 +138,9 @@ binary behaves exactly like upstream loxilb.
   request's verified `X-Auth-Tenant` / `X-Auth-User` into those bytes, so the
   backend read them as an authenticated request. The gateway now closes the
   connection when a client sends anything before its streamed answer has
-  ended; the unfinished stream is counted as one its client left. **Impact:**
+  ended; the unfinished stream is counted as one its client left, and each
+  such close is counted in `loxilb_ai_stream_early_bytes_closed_total{service}`
+  and logged once at debug. **Impact:**
   a client that pipelines a request behind a streamed answer on HTTP/1.1 has
   the connection closed and must send that request on a new one (or wait for
   the answer to end, or use HTTP/2). Clients that wait for their answer are
@@ -151,8 +153,19 @@ binary behaves exactly like upstream loxilb.
   removed from it, in a request body, in a backend's response headers and in
   a response body alike, leaving the message shorter than its
   `Content-Length`. Header lines are now removed only from the header block
-  of a request, once, and a backend's bytes are never touched. A backend's
-  own `X-Api-Key` or `X-Auth-*` response header now reaches the client.
+  of a request, once, and a response body is never touched.
+- **A backend's `X-Api-Key` response header is removed on purpose, where it
+  was removed by accident.** On an HTTP/1.1 service that declares
+  `api_key_auth` (any declared value) the gateway already removed a
+  backend's `X-Api-Key` response header, as a side effect of the defect
+  above. It still does, now as a rule: `X-Api-Key` is the gateway's
+  credential header on such a service and a backend does not get to hand a
+  key to a client under that name. The header is removed from the response
+  head only, when the head arrives whole in one read. Unchanged from earlier
+  releases: a backend's `X-Auth-*` response headers pass through on every
+  service; on a service that makes no `api_key_auth` declaration, on HTTP/2,
+  and on a rule whose response direction is carried by `sockMapMode`, a
+  backend's `X-Api-Key` passes through as well.
 
 ### Notes
 

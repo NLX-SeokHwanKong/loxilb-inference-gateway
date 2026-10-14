@@ -85,3 +85,26 @@ func TestFcTenantSlotsWarningNeedsAStore(t *testing.T) {
 		t.Errorf("nil rule: got %q, want no warning", msg)
 	}
 }
+
+// An environment share past 32 bits reads as no share, like any value over
+// 100; it must not be narrowed to its low bits and come back as a share.
+func TestFcTenantShareWantedBoundsTheEnvironment(t *testing.T) {
+	serv := &cmn.LbServiceArg{}
+	for _, tc := range []struct {
+		env  string
+		want uint32
+	}{
+		{"10", 10},
+		{"99", 99},
+		{"100", 0},
+		{"101", 0},
+		{"4294967306", 0}, // 2^32 + 10
+		{"-5", 0},
+		{"x", 0},
+	} {
+		t.Setenv("LLB_FC_TENANT_MAX_SHARE_PCT", tc.env)
+		if got := fcTenantShareWanted(serv); got != tc.want {
+			t.Errorf("LLB_FC_TENANT_MAX_SHARE_PCT=%s: share %d, want %d", tc.env, got, tc.want)
+		}
+	}
+}

@@ -160,6 +160,7 @@ func ConfigPatchLoadbalancer(params operations.PatchConfigLoadbalancerExternalip
 		pres.applyFcGate(&merged.Serv, sa)
 		pres.applyHalfCloseMode(&merged.Serv, sa)
 		pres.applyAIDefaultReservation(&merged.Serv, sa)
+		pres.applyAIObjectiveStrict(&merged.Serv, sa)
 		if err := cmn.FcQueuePairError(merged.Serv.FcMaxQueueDepth, merged.Serv.FcMaxQueueWaitMs); err != nil {
 			return patchErr(err.Error())
 		}

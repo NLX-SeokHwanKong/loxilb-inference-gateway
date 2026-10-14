@@ -329,7 +329,7 @@ func (p *loadbalancerRequestPresence) applyHalfCloseMode(
 func (p *loadbalancerRequestPresence) validateAIDefaultReservation(
 	src *models.LoadbalanceEntryServiceArguments,
 ) error {
-	for _, key := range []string{"ai_default_reservation", "ai_default_max_tokens"} {
+	for _, key := range []string{"ai_default_reservation", "ai_default_max_tokens", "ai_objective_strict"} {
 		if p.svcIsNull(key) {
 			return fmt.Errorf("%s must not be null", key)
 		}
@@ -359,6 +359,18 @@ func (p *loadbalancerRequestPresence) applyAIDefaultReservation(
 	if p.svcPresent("ai_default_max_tokens") || src.AiDefaultMaxTokens != 0 {
 		dst.AIDefaultMaxTokens = uint32(src.AiDefaultMaxTokens)
 		dst.AIDefaultMaxTokensPresent = p.svcPresent("ai_default_max_tokens")
+	}
+}
+
+// applyAIObjectiveStrict copies ai_objective_strict with its presence bit,
+// as applyAIDefaultReservation does.
+func (p *loadbalancerRequestPresence) applyAIObjectiveStrict(
+	dst *cmn.LbServiceArg,
+	src *models.LoadbalanceEntryServiceArguments,
+) {
+	if p.svcPresent("ai_objective_strict") || src.AiObjectiveStrict {
+		dst.AIObjectiveStrict = src.AiObjectiveStrict
+		dst.AIObjectiveStrictPresent = p.svcPresent("ai_objective_strict")
 	}
 }
 

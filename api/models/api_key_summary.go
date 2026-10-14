@@ -7,6 +7,7 @@ package models
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/go-openapi/errors"
 	"github.com/go-openapi/strfmt"
@@ -22,12 +23,18 @@ type APIKeySummary struct {
 	// List of model identifiers this key may access
 	AllowedModels []string `json:"allowed_models"`
 
+	// The objectives a request with this key may ask for by header, out of the ones its tenant allows; at most 64. Empty means the key narrows nothing.
+	AllowedObjectives []string `json:"allowed_objectives,omitempty"`
+
 	// Total request-bucket capacity, not additional capacity above RPS. Nonpositive burst uses per-key RPS; nonpositive RPS skips that limiter.
 	BurstSize int64 `json:"burst_size,omitempty"`
 
 	// Timestamp when the key was created
 	// Format: date-time
 	CreatedAt strfmt.DateTime `json:"created_at,omitempty"`
+
+	// The objective a request with this key gets when it names none, or one it may not use. Counts only when the tenant's allowed_objectives hold it.
+	DefaultObjective string `json:"default_objective,omitempty"`
 
 	// Whether this key is currently active
 	// Required: true
@@ -42,6 +49,10 @@ type APIKeySummary struct {
 
 	// Human-readable label for the API key
 	Name string `json:"name,omitempty"`
+
+	// The highest priority class a request with this key may have. It can only lower what the key's tenant allows. Omitted means no cap from the key.
+	// Enum: [standard critical sheddable]
+	PriorityClass string `json:"priority_class,omitempty"`
 
 	// Maximum requests per second allowed for this key
 	RateLimitRps int64 `json:"rate_limit_rps,omitempty"`
@@ -66,6 +77,10 @@ func (m *APIKeySummary) Validate(formats strfmt.Registry) error {
 	}
 
 	if err := m.validateExpiresAt(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := m.validatePriorityClass(formats); err != nil {
 		res = append(res, err)
 	}
 
@@ -102,6 +117,51 @@ func (m *APIKeySummary) validateExpiresAt(formats strfmt.Registry) error {
 	}
 
 	if err := validate.FormatOf("expires_at", "body", "date-time", m.ExpiresAt.String(), formats); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+var apiKeySummaryTypePriorityClassPropEnum []interface{}
+
+func init() {
+	var res []string
+	if err := json.Unmarshal([]byte(`["standard","critical","sheddable"]`), &res); err != nil {
+		panic(err)
+	}
+	for _, v := range res {
+		apiKeySummaryTypePriorityClassPropEnum = append(apiKeySummaryTypePriorityClassPropEnum, v)
+	}
+}
+
+const (
+
+	// APIKeySummaryPriorityClassStandard captures enum value "standard"
+	APIKeySummaryPriorityClassStandard string = "standard"
+
+	// APIKeySummaryPriorityClassCritical captures enum value "critical"
+	APIKeySummaryPriorityClassCritical string = "critical"
+
+	// APIKeySummaryPriorityClassSheddable captures enum value "sheddable"
+	APIKeySummaryPriorityClassSheddable string = "sheddable"
+)
+
+// prop value enum
+func (m *APIKeySummary) validatePriorityClassEnum(path, location string, value string) error {
+	if err := validate.EnumCase(path, location, value, apiKeySummaryTypePriorityClassPropEnum, true); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *APIKeySummary) validatePriorityClass(formats strfmt.Registry) error {
+	if swag.IsZero(m.PriorityClass) { // not required
+		return nil
+	}
+
+	// value enum
+	if err := m.validatePriorityClassEnum("priority_class", "body", m.PriorityClass); err != nil {
 		return err
 	}
 

@@ -258,6 +258,67 @@ process default, `null` is refused, and a replace that changes nothing else appl
 place, to requests admitted from then on. A streamed request body whose `max_tokens` the
 gateway has not read by the time it admits the request is treated as declaring none.
 
+### Request priority: objectives and classes
+
+A request has a priority, an integer, and a class that is its sign: `critical` (positive),
+`standard` (zero, and every request while nothing below is configured) or `sheddable`
+(negative). Three things decide it, all stored in the AI key store, so every gateway that
+shares the store applies a change within one refresh interval
+(`LLB_AI_OBJECTIVE_REFRESH_SEC`, default 10 s) and the one that took the write at once.
+
+**Objectives** are named priorities:
+
+```bash
+curl -sk -X POST https://<LB>:11111/netlox/v1/config/ai/objective -H "Authorization: Bearer $TOKEN" \
+  -d '{"name":"realtime-chat","priority":10}'
+curl -sk -X POST https://<LB>:11111/netlox/v1/config/ai/objective -H "Authorization: Bearer $TOKEN" \
+  -d '{"name":"batch","priority":-5,"services":["20.20.20.1:8080"]}'
+curl -sk https://<LB>:11111/netlox/v1/config/ai/objective/all -H "Authorization: Bearer $TOKEN"
+curl -sk -X DELETE https://<LB>:11111/netlox/v1/config/ai/objective/batch -H "Authorization: Bearer $TOKEN"
+```
+
+| Field | Values | Meaning |
+|---|---|---|
+| `name` | 1–63 of letters, digits, `-`, `_`, `.` | what a request's header names; compared exactly, case included |
+| `priority` | int32 | positive `critical`, negative `sheddable`, zero `standard` |
+| `services` | `["VIP:port", …]`, at most 256 | the services the objective applies to; empty or omitted = all |
+
+**Class fields** on a tenant (`POST /config/ai/tenant/ratelimit`) and on an API key (create,
+and `PATCH /config/ai/apikey/{key_id}`):
+
+| Field | Meaning |
+|---|---|
+| `priority_class` | the highest class a request may have (`standard`, `critical`, `sheddable`); unset = no cap |
+| `default_objective` | the objective a request gets when it names none, or one it may not use |
+| `allowed_objectives` | the objectives a request may ask for by header, at most 64; empty = none can be asked for |
+
+A key can only narrow its tenant: its cap only lowers, its list counts only for names the
+tenant's list holds. A JWT auth profile and a network-identity binding carry
+`priority_class` alone, as one more cap (a binding's default is `standard`: say `critical`
+on a binding that should not cap). The result is the lowest of what the request asks for
+and every cap that applies: a hint can lower a request, never raise it.
+
+The class fields and the limits of a tenant are separate writes. A POST of limits leaves the
+class as it is. A class field that is omitted is left as stored, an empty value (`""`, `[]`)
+clears it. A body that names a class field and no limit writes the class alone:
+
+```bash
+curl -sk -X POST https://<LB>:11111/netlox/v1/config/ai/tenant/ratelimit -H "Authorization: Bearer $TOKEN" \
+  -d '{"tenant_id":"acme","priority_class":"standard","default_objective":"batch","allowed_objectives":["batch","realtime-chat"]}'
+```
+
+On a rule, `ai_objective_strict: true` refuses a request that names an objective it may not
+use with 403 `objective_not_allowed`; by default such a request falls to its default
+objective.
+
+**When the key store is away.** Every write above answers 503 (`ai_key_store_unavailable`,
+or `ai_key_store_unconfigured` with no store) and changes nothing. A running gateway keeps
+applying what it last read. A gateway that starts while the store does not answer serves
+the last-known-good file `aigw-lkg.json` under `--config-path` (written, mode 0600, after
+every read whose content changed) until the store answers. `fc_effective.config_source` on
+any AI-gateway rule says which: `store`, `lkg` or `none`; while it is `lkg`,
+`loxilb_ai_class_config_lkg_intervals_total` counts one per refresh interval.
+
 ---
 
 ## 4. Model-name routing

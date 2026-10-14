@@ -165,6 +165,7 @@ func TestSnapshotDomainSetMatchesRegistry(t *testing.T) {
 func TestExcludedDomainsDerivation(t *testing.T) {
 	want := []string{
 		AreaAIKeys,
+		AreaAIObjective,
 		AreaAIRateLimit,
 		AreaAuthUsers,
 		AreaSNI,

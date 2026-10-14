@@ -169,6 +169,17 @@ func appendDataDetail(b []byte, d *DataDetail) []byte {
 	b = appendOptField(b, "decision", d.Decision)
 	b = appendOptInt(b, "reserved", d.Reserved)
 	b = appendOptInt(b, "res_epoch", d.ResEpoch)
+	if d.PriorityClass != "" {
+		b = appendOptField(b, "priority_class", d.PriorityClass)
+		b = appendInt(b, "priority", d.Priority)
+		b = appendOptField(b, "objective", d.Objective)
+		if d.ObjectiveDenied {
+			b = appendBool(b, "objective_denied", true)
+		}
+		if d.HintNotApplied {
+			b = appendBool(b, "hint_not_applied", true)
+		}
+	}
 	return append(b, '}')
 }
 

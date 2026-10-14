@@ -630,6 +630,9 @@ func NewLoxilbRestAPIAPI(spec *loads.Document) *LoxilbRestAPIAPI {
 		AiDeleteConfigAiNetidentityNameHandler: ai.DeleteConfigAiNetidentityNameHandlerFunc(func(params ai.DeleteConfigAiNetidentityNameParams, principal interface{}) middleware.Responder {
 			return middleware.NotImplemented("operation ai.DeleteConfigAiNetidentityName has not yet been implemented")
 		}),
+		AiDeleteConfigAiObjectiveNameHandler: ai.DeleteConfigAiObjectiveNameHandlerFunc(func(params ai.DeleteConfigAiObjectiveNameParams, principal interface{}) middleware.Responder {
+			return middleware.NotImplemented("operation ai.DeleteConfigAiObjectiveName has not yet been implemented")
+		}),
 		AiDeleteConfigAiRatelimitDefaultsScopeHandler: ai.DeleteConfigAiRatelimitDefaultsScopeHandlerFunc(func(params ai.DeleteConfigAiRatelimitDefaultsScopeParams, principal interface{}) middleware.Responder {
 			return middleware.NotImplemented("operation ai.DeleteConfigAiRatelimitDefaultsScope has not yet been implemented")
 		}),
@@ -668,6 +671,9 @@ func NewLoxilbRestAPIAPI(spec *loads.Document) *LoxilbRestAPIAPI {
 		}),
 		AiGetConfigAiNetidentityAllHandler: ai.GetConfigAiNetidentityAllHandlerFunc(func(params ai.GetConfigAiNetidentityAllParams, principal interface{}) middleware.Responder {
 			return middleware.NotImplemented("operation ai.GetConfigAiNetidentityAll has not yet been implemented")
+		}),
+		AiGetConfigAiObjectiveAllHandler: ai.GetConfigAiObjectiveAllHandlerFunc(func(params ai.GetConfigAiObjectiveAllParams, principal interface{}) middleware.Responder {
+			return middleware.NotImplemented("operation ai.GetConfigAiObjectiveAll has not yet been implemented")
 		}),
 		AiGetConfigAiRatelimitDefaultsScopeHandler: ai.GetConfigAiRatelimitDefaultsScopeHandlerFunc(func(params ai.GetConfigAiRatelimitDefaultsScopeParams, principal interface{}) middleware.Responder {
 			return middleware.NotImplemented("operation ai.GetConfigAiRatelimitDefaultsScope has not yet been implemented")
@@ -740,6 +746,9 @@ func NewLoxilbRestAPIAPI(spec *loads.Document) *LoxilbRestAPIAPI {
 		}),
 		AiPostConfigAiNetidentityHandler: ai.PostConfigAiNetidentityHandlerFunc(func(params ai.PostConfigAiNetidentityParams, principal interface{}) middleware.Responder {
 			return middleware.NotImplemented("operation ai.PostConfigAiNetidentity has not yet been implemented")
+		}),
+		AiPostConfigAiObjectiveHandler: ai.PostConfigAiObjectiveHandlerFunc(func(params ai.PostConfigAiObjectiveParams, principal interface{}) middleware.Responder {
+			return middleware.NotImplemented("operation ai.PostConfigAiObjective has not yet been implemented")
 		}),
 		AiPostConfigAiRatelimitDefaultsHandler: ai.PostConfigAiRatelimitDefaultsHandlerFunc(func(params ai.PostConfigAiRatelimitDefaultsParams, principal interface{}) middleware.Responder {
 			return middleware.NotImplemented("operation ai.PostConfigAiRatelimitDefaults has not yet been implemented")
@@ -1218,6 +1227,8 @@ type LoxilbRestAPIAPI struct {
 	AiDeleteConfigAiJwtauthprofileNameHandler ai.DeleteConfigAiJwtauthprofileNameHandler
 	// AiDeleteConfigAiNetidentityNameHandler sets the operation handler for the delete config ai netidentity name operation
 	AiDeleteConfigAiNetidentityNameHandler ai.DeleteConfigAiNetidentityNameHandler
+	// AiDeleteConfigAiObjectiveNameHandler sets the operation handler for the delete config ai objective name operation
+	AiDeleteConfigAiObjectiveNameHandler ai.DeleteConfigAiObjectiveNameHandler
 	// AiDeleteConfigAiRatelimitDefaultsScopeHandler sets the operation handler for the delete config ai ratelimit defaults scope operation
 	AiDeleteConfigAiRatelimitDefaultsScopeHandler ai.DeleteConfigAiRatelimitDefaultsScopeHandler
 	// AiDeleteConfigAiUserRatelimitTenantIDUserIDHandler sets the operation handler for the delete config ai user ratelimit tenant ID user ID operation
@@ -1244,6 +1255,8 @@ type LoxilbRestAPIAPI struct {
 	AiGetConfigAiModelProfilesProfileIDHandler ai.GetConfigAiModelProfilesProfileIDHandler
 	// AiGetConfigAiNetidentityAllHandler sets the operation handler for the get config ai netidentity all operation
 	AiGetConfigAiNetidentityAllHandler ai.GetConfigAiNetidentityAllHandler
+	// AiGetConfigAiObjectiveAllHandler sets the operation handler for the get config ai objective all operation
+	AiGetConfigAiObjectiveAllHandler ai.GetConfigAiObjectiveAllHandler
 	// AiGetConfigAiRatelimitDefaultsScopeHandler sets the operation handler for the get config ai ratelimit defaults scope operation
 	AiGetConfigAiRatelimitDefaultsScopeHandler ai.GetConfigAiRatelimitDefaultsScopeHandler
 	// AiGetConfigAiTenantRatelimitTenantIDHandler sets the operation handler for the get config ai tenant ratelimit tenant ID operation
@@ -1292,6 +1305,8 @@ type LoxilbRestAPIAPI struct {
 	AiPostConfigAiJwtauthprofileHandler ai.PostConfigAiJwtauthprofileHandler
 	// AiPostConfigAiNetidentityHandler sets the operation handler for the post config ai netidentity operation
 	AiPostConfigAiNetidentityHandler ai.PostConfigAiNetidentityHandler
+	// AiPostConfigAiObjectiveHandler sets the operation handler for the post config ai objective operation
+	AiPostConfigAiObjectiveHandler ai.PostConfigAiObjectiveHandler
 	// AiPostConfigAiRatelimitDefaultsHandler sets the operation handler for the post config ai ratelimit defaults operation
 	AiPostConfigAiRatelimitDefaultsHandler ai.PostConfigAiRatelimitDefaultsHandler
 	// AiPostConfigAiTenantRatelimitHandler sets the operation handler for the post config ai tenant ratelimit operation
@@ -1979,6 +1994,9 @@ func (o *LoxilbRestAPIAPI) Validate() error {
 	if o.AiDeleteConfigAiNetidentityNameHandler == nil {
 		unregistered = append(unregistered, "ai.DeleteConfigAiNetidentityNameHandler")
 	}
+	if o.AiDeleteConfigAiObjectiveNameHandler == nil {
+		unregistered = append(unregistered, "ai.DeleteConfigAiObjectiveNameHandler")
+	}
 	if o.AiDeleteConfigAiRatelimitDefaultsScopeHandler == nil {
 		unregistered = append(unregistered, "ai.DeleteConfigAiRatelimitDefaultsScopeHandler")
 	}
@@ -2017,6 +2035,9 @@ func (o *LoxilbRestAPIAPI) Validate() error {
 	}
 	if o.AiGetConfigAiNetidentityAllHandler == nil {
 		unregistered = append(unregistered, "ai.GetConfigAiNetidentityAllHandler")
+	}
+	if o.AiGetConfigAiObjectiveAllHandler == nil {
+		unregistered = append(unregistered, "ai.GetConfigAiObjectiveAllHandler")
 	}
 	if o.AiGetConfigAiRatelimitDefaultsScopeHandler == nil {
 		unregistered = append(unregistered, "ai.GetConfigAiRatelimitDefaultsScopeHandler")
@@ -2089,6 +2110,9 @@ func (o *LoxilbRestAPIAPI) Validate() error {
 	}
 	if o.AiPostConfigAiNetidentityHandler == nil {
 		unregistered = append(unregistered, "ai.PostConfigAiNetidentityHandler")
+	}
+	if o.AiPostConfigAiObjectiveHandler == nil {
+		unregistered = append(unregistered, "ai.PostConfigAiObjectiveHandler")
 	}
 	if o.AiPostConfigAiRatelimitDefaultsHandler == nil {
 		unregistered = append(unregistered, "ai.PostConfigAiRatelimitDefaultsHandler")
@@ -3000,6 +3024,10 @@ func (o *LoxilbRestAPIAPI) initHandlerCache() {
 	if o.handlers["DELETE"] == nil {
 		o.handlers["DELETE"] = make(map[string]http.Handler)
 	}
+	o.handlers["DELETE"]["/config/ai/objective/{name}"] = ai.NewDeleteConfigAiObjectiveName(o.context, o.AiDeleteConfigAiObjectiveNameHandler)
+	if o.handlers["DELETE"] == nil {
+		o.handlers["DELETE"] = make(map[string]http.Handler)
+	}
 	o.handlers["DELETE"]["/config/ai/ratelimit/defaults/{scope}"] = ai.NewDeleteConfigAiRatelimitDefaultsScope(o.context, o.AiDeleteConfigAiRatelimitDefaultsScopeHandler)
 	if o.handlers["DELETE"] == nil {
 		o.handlers["DELETE"] = make(map[string]http.Handler)
@@ -3049,6 +3077,10 @@ func (o *LoxilbRestAPIAPI) initHandlerCache() {
 		o.handlers["GET"] = make(map[string]http.Handler)
 	}
 	o.handlers["GET"]["/config/ai/netidentity"] = ai.NewGetConfigAiNetidentityAll(o.context, o.AiGetConfigAiNetidentityAllHandler)
+	if o.handlers["GET"] == nil {
+		o.handlers["GET"] = make(map[string]http.Handler)
+	}
+	o.handlers["GET"]["/config/ai/objective"] = ai.NewGetConfigAiObjectiveAll(o.context, o.AiGetConfigAiObjectiveAllHandler)
 	if o.handlers["GET"] == nil {
 		o.handlers["GET"] = make(map[string]http.Handler)
 	}
@@ -3145,6 +3177,10 @@ func (o *LoxilbRestAPIAPI) initHandlerCache() {
 		o.handlers["POST"] = make(map[string]http.Handler)
 	}
 	o.handlers["POST"]["/config/ai/netidentity"] = ai.NewPostConfigAiNetidentity(o.context, o.AiPostConfigAiNetidentityHandler)
+	if o.handlers["POST"] == nil {
+		o.handlers["POST"] = make(map[string]http.Handler)
+	}
+	o.handlers["POST"]["/config/ai/objective"] = ai.NewPostConfigAiObjective(o.context, o.AiPostConfigAiObjectiveHandler)
 	if o.handlers["POST"] == nil {
 		o.handlers["POST"] = make(map[string]http.Handler)
 	}

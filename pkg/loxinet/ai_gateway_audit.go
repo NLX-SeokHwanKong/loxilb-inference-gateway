@@ -172,6 +172,35 @@ type aiCompleteRecord struct {
 	// documents.
 	AuthSrc     int
 	NetIdentity string
+	// Priority, ClassInfo and Objective are the class the admission gate
+	// gave the request: ClassInfo is the data plane's AI_GW_CLASSF_* bits
+	// and is 0 when the class stage did not run.
+	Priority  int
+	ClassInfo int
+	Objective string
+}
+
+// The class bits a completion carries, mirroring AI_GW_CLASSF_* in
+// sockproxy_ai_gw.h; the low two are the class (AI_GW_CLASS_*).
+const (
+	aiClassInfoMask       = 0x03
+	aiClassInfoSet        = 0x04
+	aiClassInfoDenied     = 0x08
+	aiClassInfoHintUnread = 0x10
+)
+
+// aiClassDetail writes the request's class into a data record. It writes
+// nothing for a request the class stage did not run for, so such a record
+// reads as it did before classes existed.
+func aiClassDetail(d *audit.DataDetail, priority, classInfo int, objective string) {
+	if classInfo&aiClassInfoSet == 0 {
+		return
+	}
+	d.PriorityClass = aiClassName(classInfo & aiClassInfoMask)
+	d.Priority = int64(priority)
+	d.Objective = objective
+	d.ObjectiveDenied = classInfo&aiClassInfoDenied != 0
+	d.HintNotApplied = classInfo&aiClassInfoHintUnread != 0
 }
 
 // emitAIComplete writes the data.ai.complete record for a request whose
@@ -201,6 +230,7 @@ func emitAIComplete(c aiCompleteRecord) bool {
 		LatencyMs: c.LatencyMs,
 		Stream:    c.IsStream,
 	}
+	aiClassDetail(r.Data, c.Priority, c.ClassInfo, c.Objective)
 	return p.Emit(r)
 }
 
@@ -387,6 +417,9 @@ const (
 	// aiStageCapacity is the service/endpoint capacity gate, which refuses
 	// after policy admitted the request and reports through its own frame.
 	aiStageCapacity
+	// aiStageObjective is the class stage on a rule that is strict about
+	// objectives: the request named one it may not use.
+	aiStageObjective
 )
 
 // aiDenyStage names the gate stage that refused the request.
@@ -402,6 +435,8 @@ func aiDenyStage(stage int) string {
 		return "reserve"
 	case aiStageCapacity:
 		return "capacity"
+	case aiStageObjective:
+		return "objective"
 	}
 	return "keyless"
 }
@@ -451,6 +486,9 @@ func aiDenyReason(stage int, errorCode string) audit.Reason {
 		// an admission decision, and the decision field names which
 		// ceiling refused (admission_capacity, admission_no_capacity).
 		return audit.ReasonAdmission
+	case aiStageObjective:
+		// A caller asking for something it is not entitled to.
+		return audit.ReasonAuthz
 	}
 	return audit.ReasonAdmission
 }

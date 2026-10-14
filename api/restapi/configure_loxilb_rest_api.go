@@ -449,6 +449,10 @@ func configureAPI(api *operations.LoxilbRestAPIAPI) http.Handler {
 	api.AiPostConfigAiNetidentityHandler = ai.PostConfigAiNetidentityHandlerFunc(handler.ConfigPostNetIdentity)
 	api.AiGetConfigAiNetidentityAllHandler = ai.GetConfigAiNetidentityAllHandlerFunc(handler.ConfigGetNetIdentityAll)
 	api.AiDeleteConfigAiNetidentityNameHandler = ai.DeleteConfigAiNetidentityNameHandlerFunc(handler.ConfigDeleteNetIdentity)
+	// AI Gateway objectives (named request priorities, in the key store)
+	api.AiPostConfigAiObjectiveHandler = ai.PostConfigAiObjectiveHandlerFunc(handler.ConfigPostAIObjective)
+	api.AiGetConfigAiObjectiveAllHandler = ai.GetConfigAiObjectiveAllHandlerFunc(handler.ConfigGetAIObjectiveAll)
+	api.AiDeleteConfigAiObjectiveNameHandler = ai.DeleteConfigAiObjectiveNameHandlerFunc(handler.ConfigDeleteAIObjective)
 
 	api.AiGetConfigAiModelProfilesHandler = ai.GetConfigAiModelProfilesHandlerFunc(handler.ConfigGetAIModelProfiles)
 	api.AiGetConfigAiModelProfilesProfileIDHandler = ai.GetConfigAiModelProfilesProfileIDHandlerFunc(handler.ConfigGetAIModelProfileByID)

@@ -7,6 +7,7 @@ package models
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/go-openapi/errors"
 	"github.com/go-openapi/strfmt"
@@ -22,11 +23,17 @@ type APIKeyCreateRequest struct {
 	// List of model identifiers this key may access
 	AllowedModels []string `json:"allowed_models"`
 
+	// The objectives a request with this key may ask for by header, out of the ones its tenant allows; at most 64. Empty means the key narrows nothing.
+	AllowedObjectives []string `json:"allowed_objectives,omitempty"`
+
 	// Optional imported credential; absent or empty generates a new key. Imports require 16-512 printable non-space ASCII bytes. GET/list never returns the credential. Create currently emits an empty raw_key string for imports, not omission. Length and invalid-character rejections both map to 400 with api_key validation fields.
 	APIKey string `json:"api_key,omitempty"`
 
 	// Total request-bucket capacity, not additional capacity above RPS. Zero uses per-key RPS. Nonpositive RPS skips this limiter; negative-value validation remains incomplete.
 	BurstSize int64 `json:"burst_size,omitempty"`
+
+	// The objective a request with this key gets when it names none, or one it may not use. Counts only when the tenant's allowed_objectives hold it.
+	DefaultObjective string `json:"default_objective,omitempty"`
 
 	// Whether the API key is active. Absent = enabled (optional, nullable to distinguish unset).
 	Enabled *bool `json:"enabled,omitempty"`
@@ -37,6 +44,10 @@ type APIKeyCreateRequest struct {
 
 	// Human-readable label for the API key
 	Name string `json:"name,omitempty"`
+
+	// The highest priority class a request with this key may have. It can only lower what the key's tenant allows. Omitted means no cap from the key.
+	// Enum: [standard critical sheddable]
+	PriorityClass string `json:"priority_class,omitempty"`
 
 	// Maximum requests per second allowed for this key
 	RateLimitRps int64 `json:"rate_limit_rps,omitempty"`
@@ -57,6 +68,10 @@ func (m *APIKeyCreateRequest) Validate(formats strfmt.Registry) error {
 		res = append(res, err)
 	}
 
+	if err := m.validatePriorityClass(formats); err != nil {
+		res = append(res, err)
+	}
+
 	if err := m.validateTenantID(formats); err != nil {
 		res = append(res, err)
 	}
@@ -73,6 +88,51 @@ func (m *APIKeyCreateRequest) validateExpiresAt(formats strfmt.Registry) error {
 	}
 
 	if err := validate.FormatOf("expires_at", "body", "date-time", m.ExpiresAt.String(), formats); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+var apiKeyCreateRequestTypePriorityClassPropEnum []interface{}
+
+func init() {
+	var res []string
+	if err := json.Unmarshal([]byte(`["standard","critical","sheddable"]`), &res); err != nil {
+		panic(err)
+	}
+	for _, v := range res {
+		apiKeyCreateRequestTypePriorityClassPropEnum = append(apiKeyCreateRequestTypePriorityClassPropEnum, v)
+	}
+}
+
+const (
+
+	// APIKeyCreateRequestPriorityClassStandard captures enum value "standard"
+	APIKeyCreateRequestPriorityClassStandard string = "standard"
+
+	// APIKeyCreateRequestPriorityClassCritical captures enum value "critical"
+	APIKeyCreateRequestPriorityClassCritical string = "critical"
+
+	// APIKeyCreateRequestPriorityClassSheddable captures enum value "sheddable"
+	APIKeyCreateRequestPriorityClassSheddable string = "sheddable"
+)
+
+// prop value enum
+func (m *APIKeyCreateRequest) validatePriorityClassEnum(path, location string, value string) error {
+	if err := validate.EnumCase(path, location, value, apiKeyCreateRequestTypePriorityClassPropEnum, true); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *APIKeyCreateRequest) validatePriorityClass(formats strfmt.Registry) error {
+	if swag.IsZero(m.PriorityClass) { // not required
+		return nil
+	}
+
+	// value enum
+	if err := m.validatePriorityClassEnum("priority_class", "body", m.PriorityClass); err != nil {
 		return err
 	}
 

@@ -44,6 +44,7 @@ func jwtAuthProfileModFromEntry(attr *models.JWTAuthProfileEntry) cmn.JWTAuthPro
 		DefaultTenant:            attr.DefaultTenant,
 		ForwardIdentity:          attr.ForwardIdentity,
 		AuthorizationPassthrough: attr.AuthorizationPassthrough,
+		PriorityClass:            attr.PriorityClass,
 	}
 	if attr.Name != nil {
 		pm.Name = *attr.Name
@@ -75,6 +76,7 @@ func jwtAuthProfileEntryFromMod(pm *cmn.JWTAuthProfileMod) *models.JWTAuthProfil
 		DefaultTenant:            pm.DefaultTenant,
 		ForwardIdentity:          pm.ForwardIdentity,
 		AuthorizationPassthrough: pm.AuthorizationPassthrough,
+		PriorityClass:            pm.PriorityClass,
 	}
 }
 

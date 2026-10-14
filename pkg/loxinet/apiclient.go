@@ -2039,19 +2039,41 @@ func (na *NetAPIStruct) NetAPIKeyCreate(entry cmn.ApiKeyEntry) (string, string, 
 }
 
 // NetAPIKeyList - List API keys. If tenantID is empty, returns all keys.
+// Each key carries its class fields as the store holds them.
 func (na *NetAPIStruct) NetAPIKeyList(tenantID string) ([]cmn.ApiKeySummary, error) {
 	if mh.AIKeyService == nil {
 		return nil, keyStoreAbsentErr()
 	}
-	return mh.AIKeyService.ListAPIKeys(tenantID)
+	keys, err := mh.AIKeyService.ListAPIKeys(tenantID)
+	if err != nil {
+		return nil, err
+	}
+	classes, err := mh.AIKeyService.ListAPIKeyClasses()
+	if err != nil {
+		return nil, err
+	}
+	for i := range keys {
+		keys[i].AIClassPolicy = classes[keys[i].KeyID]
+	}
+	return keys, nil
 }
 
-// NetAPIKeyGet - Retrieve a single API key by its key_id.
+// NetAPIKeyGet - Retrieve a single API key by its key_id, with its class
+// fields as the store holds them. The summary the store hands out may be
+// its cached one, so the class is laid over a copy.
 func (na *NetAPIStruct) NetAPIKeyGet(keyID string) (*cmn.ApiKeySummary, error) {
 	if mh.AIKeyService == nil {
 		return nil, keyStoreAbsentErr()
 	}
-	return mh.AIKeyService.GetAPIKeyByID(keyID)
+	key, err := mh.AIKeyService.GetAPIKeyByID(keyID)
+	if err != nil {
+		return nil, err
+	}
+	out := *key
+	if out.AIClassPolicy, err = mh.AIKeyService.GetAPIKeyClass(keyID); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // NetAPIKeyRevoke - Disable an API key and evict it from cache.
@@ -2131,12 +2153,73 @@ func (na *NetAPIStruct) NetTenantRateLimitSet(tenantID string, rps, tokensPerMin
 	return nil
 }
 
-// NetTenantRateLimitGet - Retrieve the full rate limit entry for a tenant.
+// NetTenantRateLimitGet - Retrieve the full rate limit entry for a tenant,
+// with its class fields.
 func (na *NetAPIStruct) NetTenantRateLimitGet(tenantID string) (*cmn.TenantRateLimitEntry, error) {
 	if mh.AIKeyService == nil {
 		return nil, keyStoreAbsentErr()
 	}
-	return mh.AIKeyService.GetTenantRateLimitEntry(tenantID)
+	entry, err := mh.AIKeyService.GetTenantRateLimitEntry(tenantID)
+	if err != nil {
+		return nil, err
+	}
+	if entry.AIClassPolicy, err = mh.AIKeyService.GetTenantClass(tenantID); err != nil {
+		return nil, err
+	}
+	return entry, nil
+}
+
+// NetTenantClassPatch - change the class fields of a tenant that the patch
+// names. The tenant's limits are not touched.
+func (na *NetAPIStruct) NetTenantClassPatch(tenantID string, patch cmn.AIClassPatch) error {
+	if mh.AIKeyService == nil {
+		return keyStoreAbsentErr()
+	}
+	return mh.AIKeyService.PatchTenantClass(tenantID, patch)
+}
+
+// NetAPIKeyClassPatch - change the class fields of a key that the patch
+// names.
+func (na *NetAPIStruct) NetAPIKeyClassPatch(keyID string, patch cmn.AIClassPatch) error {
+	if mh.AIKeyService == nil {
+		return keyStoreAbsentErr()
+	}
+	return mh.AIKeyService.PatchAPIKeyClass(keyID, patch)
+}
+
+// NetAIObjectiveGet - list the objectives, as the store holds them.
+func (na *NetAPIStruct) NetAIObjectiveGet() ([]cmn.AIObjectiveEntry, error) {
+	if mh.AIKeyService == nil {
+		return nil, keyStoreAbsentErr()
+	}
+	return mh.AIKeyService.ListObjectives()
+}
+
+// NetAIObjectiveAdd - create or replace an objective. The class snapshot
+// is refreshed by the store before it returns, so the next request on this
+// node is decided with it.
+func (na *NetAPIStruct) NetAIObjectiveAdd(e *cmn.AIObjectiveEntry) (int, error) {
+	if mh.AIKeyService == nil {
+		return -1, keyStoreAbsentErr()
+	}
+	if e == nil {
+		return -1, cmn.NewValidationError("name", "an objective is required")
+	}
+	if err := mh.AIKeyService.SetObjective(*e); err != nil {
+		return -1, err
+	}
+	return 0, nil
+}
+
+// NetAIObjectiveDel - delete an objective.
+func (na *NetAPIStruct) NetAIObjectiveDel(name string) (int, error) {
+	if mh.AIKeyService == nil {
+		return -1, keyStoreAbsentErr()
+	}
+	if err := mh.AIKeyService.DeleteObjective(name); err != nil {
+		return -1, err
+	}
+	return 0, nil
 }
 
 // NetUserRateLimitSet - Upsert one user's explicit rate limits (QoS ladder

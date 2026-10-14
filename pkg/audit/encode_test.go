@@ -350,6 +350,66 @@ func TestEncodeReservationFieldsAreAddOnly(t *testing.T) {
 	}
 }
 
+// The class fields ride priority_class: a record whose request was given no
+// class carries none of them and is byte for byte what it was, and one that
+// was carries the priority at zero too, since zero is a class's own value.
+func TestEncodeClassFieldsAreAddOnly(t *testing.T) {
+	e := newEncoder()
+	keys := []string{"priority_class", "priority", "objective", "objective_denied", "hint_not_applied"}
+
+	plain, err := e.encode(goldenData(), goldenStamp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The other four mean nothing without the class.
+	r := goldenData()
+	r.Data.Priority, r.Data.Objective, r.Data.ObjectiveDenied, r.Data.HintNotApplied = 7, "x", true, true
+	got, err := e.encode(r, goldenStamp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(plain) {
+		t.Errorf("class fields written without a class:\n%s\n%s", got, plain)
+	}
+	for _, key := range keys {
+		if strings.Contains(string(plain), `"`+key+`"`) {
+			t.Errorf("record with no class carries %q", key)
+		}
+	}
+
+	r = goldenData()
+	r.Data.PriorityClass = "standard"
+	got, err = e.encode(r, goldenStamp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), `"priority_class":"standard","priority":0`) {
+		t.Errorf("standard class not encoded with its priority: %s", got)
+	}
+	for _, key := range keys[2:] {
+		if strings.Contains(string(got), `"`+key+`"`) {
+			t.Errorf("standard request with no hint carries %q: %s", key, got)
+		}
+	}
+
+	r = goldenData()
+	r.Data.PriorityClass, r.Data.Priority, r.Data.Objective = "sheddable", -5, "batch"
+	r.Data.ObjectiveDenied, r.Data.HintNotApplied = true, true
+	got, err = e.encode(r, goldenStamp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"priority_class":"sheddable"`, `"priority":-5`, `"objective":"batch"`,
+		`"objective_denied":true`, `"hint_not_applied":true`} {
+		if !strings.Contains(string(got), want) {
+			t.Errorf("%s missing: %s", want, got)
+		}
+	}
+	if !json.Valid(got) {
+		t.Errorf("not valid JSON: %s", got)
+	}
+}
+
 // TestEncodeOriginFieldsAreAddOnly states the three-field attribution
 // contract on the wire. The hop count rides the origin: it is written
 // whenever an origin was derived, INCLUDING at zero, because zero is the

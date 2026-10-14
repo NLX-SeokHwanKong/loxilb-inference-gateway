@@ -23,6 +23,39 @@ func init() {
     "application/json"
   ],
   "definitions": {
+    "AIObjectiveEntry": {
+      "description": "A named request priority. name is 1 to 63 characters of letters, digits, '-', '_' and '.', compared exactly (case-sensitive), and must not begin with tier:. services limits the objective to the listed services (\"VIP:port\"); empty or omitted means every service. priority is a signed integer - positive is the critical class, negative sheddable, zero standard; the order between two objectives of the same class is not kept.",
+      "properties": {
+        "name": {
+          "description": "Name of the objective, as a request's header names it",
+          "type": "string"
+        },
+        "priority": {
+          "description": "The priority a request with this objective has",
+          "format": "int32",
+          "type": "integer",
+          "x-omitempty": false
+        },
+        "services": {
+          "description": "Services the objective applies to, as \"VIP:port\"; at most 256. Empty means all",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-omitempty": true
+        },
+        "updated_at": {
+          "description": "When the objective was last written. Ignored on input",
+          "format": "date-time",
+          "readOnly": true,
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
     "AiModelProfileEntry": {
       "description": "One published model-prompt profile (list and detail representations are identical). Presence conveys validity by construction - publication is all-or-nothing, so every entry has already passed artifact digest verification and tokenizer load; there is no partial or invalid state. tokenizerSha256 is always present (publication requires it); templateSha256/templateContentFormat are present iff a chat template is bound. The sha256 digests are the immutable audit/drift identities of the profile's artifacts. Artifact locator paths, the registry root, and any host filesystem information are deliberately EXCLUDED from this representation.",
       "properties": {
@@ -157,6 +190,14 @@ func init() {
           },
           "type": "array"
         },
+        "allowed_objectives": {
+          "description": "The objectives a request with this key may ask for by header, out of the ones its tenant allows; at most 64. Empty means the key narrows nothing.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-omitempty": true
+        },
         "api_key": {
           "description": "Optional imported credential; absent or empty generates a new key. Imports require 16-512 printable non-space ASCII bytes. GET/list never returns the credential. Create currently emits an empty raw_key string for imports, not omission. Length and invalid-character rejections both map to 400 with api_key validation fields.",
           "type": "string"
@@ -165,6 +206,10 @@ func init() {
           "description": "Total request-bucket capacity, not additional capacity above RPS. Zero uses per-key RPS. Nonpositive RPS skips this limiter; negative-value validation remains incomplete.",
           "format": "int64",
           "type": "integer"
+        },
+        "default_objective": {
+          "description": "The objective a request with this key gets when it names none, or one it may not use. Counts only when the tenant's allowed_objectives hold it.",
+          "type": "string"
         },
         "enabled": {
           "description": "Whether the API key is active. Absent = enabled (optional, nullable to distinguish unset).",
@@ -178,6 +223,15 @@ func init() {
         },
         "name": {
           "description": "Human-readable label for the API key",
+          "type": "string"
+        },
+        "priority_class": {
+          "description": "The highest priority class a request with this key may have. It can only lower what the key's tenant allows. Omitted means no cap from the key.",
+          "enum": [
+            "standard",
+            "critical",
+            "sheddable"
+          ],
           "type": "string"
         },
         "rate_limit_rps": {
@@ -228,6 +282,14 @@ func init() {
           },
           "type": "array"
         },
+        "allowed_objectives": {
+          "description": "The objectives a request with this key may ask for by header, out of the ones its tenant allows; at most 64. Empty means the key narrows nothing.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-omitempty": true
+        },
         "burst_size": {
           "description": "Total request-bucket capacity, not additional capacity above RPS. Nonpositive burst uses per-key RPS; nonpositive RPS skips that limiter.",
           "format": "int64",
@@ -236,6 +298,10 @@ func init() {
         "created_at": {
           "description": "Timestamp when the key was created",
           "format": "date-time",
+          "type": "string"
+        },
+        "default_objective": {
+          "description": "The objective a request with this key gets when it names none, or one it may not use. Counts only when the tenant's allowed_objectives hold it.",
           "type": "string"
         },
         "enabled": {
@@ -253,6 +319,15 @@ func init() {
         },
         "name": {
           "description": "Human-readable label for the API key",
+          "type": "string"
+        },
+        "priority_class": {
+          "description": "The highest priority class a request with this key may have. It can only lower what the key's tenant allows. Omitted means no cap from the key.",
+          "enum": [
+            "standard",
+            "critical",
+            "sheddable"
+          ],
           "type": "string"
         },
         "rate_limit_rps": {
@@ -3517,6 +3592,15 @@ func init() {
           "description": "Profile name (the identity LB rules reference)",
           "type": "string"
         },
+        "priority_class": {
+          "description": "The highest priority class a request admitted by this profile's tokens may have. It can only lower what the tenant allows. Omitted means no cap from the profile.",
+          "enum": [
+            "standard",
+            "critical",
+            "sheddable"
+          ],
+          "type": "string"
+        },
         "refresh_sec": {
           "description": "Periodic JWKS refresh interval in seconds (default 3600)",
           "format": "int64",
@@ -4772,6 +4856,12 @@ func init() {
               "type": "string",
               "x-nullable": false
             },
+            "ai_objective_strict": {
+              "default": false,
+              "description": "What happens to a request that names, with the x-llm-d-inference-objective header, an objective it may not use (unknown, not in its tenant's allowed_objectives, or not for this service). false (the default) - the request falls to its default objective and is admitted; the record says the objective was denied. true - the request is refused with 403 objective_not_allowed. Stored on any rule; it has an effect only where the admission gate runs (an AI-gateway service) and while a class is configured. The admission gate reads it per listener, as api_key_auth: declare the same value on each rule of a VIP and port. Changeable at runtime by a replace POST (the stored value is kept when omitted). Explicit JSON null is rejected.",
+              "type": "boolean",
+              "x-nullable": false
+            },
             "alpn_protocols": {
               "description": "HTTP ALPN capability list, typically [h2, http/1.1], [h2] or [http/1.1]. Recognized values override backend_protocol through a shared capability used by listener and backend TLS setup; list order is not preserved as preference order. Empty leaves backend_protocol in use. Implementation limitations: unknown tokens are ignored, an entirely unrecognized list falls back to backend_protocol, and the H1/both listener callback can select H1 without a common advertised protocol. This is not strict ALPN allow-list enforcement. See shared readback/update warnings.",
               "items": {
@@ -4982,6 +5072,15 @@ func init() {
                   "enum": [
                     "on",
                     "off"
+                  ],
+                  "type": "string"
+                },
+                "config_source": {
+                  "description": "Where the objectives and the tenant and key classes this gateway is applying came from. store - the AI key store answered the last read. lkg - the store has not answered since the gateway started and the last-known-good file (aigw-lkg.json under the configuration path) is being served; writes are refused with 503 meanwhile and loxilb_ai_class_config_lkg_intervals_total counts. none - nothing was read (no store configured, or a store that has not answered and no file); every request is standard. The same value on every rule - it is the gateway's, not the rule's.",
+                  "enum": [
+                    "store",
+                    "lkg",
+                    "none"
                   ],
                   "type": "string"
                 },
@@ -6436,7 +6535,7 @@ func init() {
           "type": "string"
         },
         "priority_class": {
-          "description": "The priority class of the binding's requests. Stored and reported; it does not change scheduling yet. Default standard.",
+          "description": "The highest priority class a request the binding names the tenant of may have. It can only lower what the tenant allows. Default standard - a binding that should not cap its requests says critical.",
           "enum": [
             "standard",
             "critical",
@@ -8113,10 +8212,22 @@ func init() {
     "TenantRateLimitEntry": {
       "description": "Stored quotas, not enforcement status. Missing aggregate and model records produce 404; model-only state may lack an aggregate update timestamp. Zero aggregate rates disable their limiter while model quotas remain separate. burst_pct controls token capacity, not request-rate burst; zero uses the server default and positive values are clamped to 1-1000.",
       "properties": {
+        "allowed_objectives": {
+          "description": "The objectives a request of this tenant may ask for by header",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-omitempty": true
+        },
         "burst_pct": {
           "description": "Token bucket capacity as a percent of tokens_per_min; 0 uses the server default",
           "format": "int64",
           "type": "integer"
+        },
+        "default_objective": {
+          "description": "The objective a request of this tenant gets when it names none, or one it may not use",
+          "type": "string"
         },
         "model_limits": {
           "description": "Per-model token quotas for the tenant",
@@ -8124,6 +8235,10 @@ func init() {
             "$ref": "#/definitions/TenantModelRateLimit"
           },
           "type": "array"
+        },
+        "priority_class": {
+          "description": "The highest priority class a request of this tenant may have; absent when no cap is set",
+          "type": "string"
         },
         "rps": {
           "description": "Maximum requests per second for the tenant",
@@ -8151,12 +8266,25 @@ func init() {
       "type": "object"
     },
     "TenantRateLimitMod": {
-      "description": "POST replaces aggregate rps, tokens_per_min, and burst_pct; omission becomes zero, not preservation. Supplied model_limits are individual upserts or removals; omitted/empty model_limits preserves existing model rows. Aggregate and model writes are sequential, not one transaction, so failure can leave partial changes. Blank identifiers and malformed model entries are not consistently rejected as 400. Configuration alone does not enable enforcement on a service.",
+      "description": "POST replaces aggregate rps, tokens_per_min, and burst_pct; omission becomes zero, not preservation. Supplied model_limits are individual upserts or removals; omitted/empty model_limits preserves existing model rows. Aggregate and model writes are sequential, not one transaction, so failure can leave partial changes. Blank identifiers and malformed model entries are not consistently rejected as 400. Configuration alone does not enable enforcement on a service. The class fields (priority_class, default_objective, allowed_objectives) are written by their own statement and only when the body names one of them, so a POST of limits leaves the tenant's class as it is. A body that names a class field and carries no limit (rps, tokens_per_min and burst_pct absent or zero, no model_limits) writes the class only and leaves the limits as they are.",
       "properties": {
+        "allowed_objectives": {
+          "description": "The objectives a request of this tenant may ask for with the x-llm-d-inference-objective header; at most 64. Omitted leaves the stored list; an empty array clears it, and then no objective can be asked for.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-omitempty": true
+        },
         "burst_pct": {
           "description": "Token bucket capacity as a percent of tokens_per_min; 0 uses the server default",
           "format": "int64",
           "type": "integer"
+        },
+        "default_objective": {
+          "description": "The objective a request of this tenant gets when it names none, or one it may not use. Omitted leaves the stored value; an empty string clears it.",
+          "type": "string",
+          "x-nullable": true
         },
         "model_limits": {
           "description": "Per-model token quotas for the tenant",
@@ -8164,6 +8292,11 @@ func init() {
             "$ref": "#/definitions/TenantModelRateLimit"
           },
           "type": "array"
+        },
+        "priority_class": {
+          "description": "The highest priority class a request of this tenant may have: standard, critical or sheddable. Omitted leaves the stored value; an empty string clears it (no cap).",
+          "type": "string",
+          "x-nullable": true
         },
         "rps": {
           "description": "Maximum requests per second for the tenant",
@@ -10145,6 +10278,161 @@ func init() {
           }
         },
         "summary": "Delete a network-identity binding",
+        "tags": [
+          "ai"
+        ]
+      }
+    },
+    "/config/ai/objective": {
+      "get": {
+        "description": "Returns every objective in name order, read from the AI key store. 503 while the store does not answer - the objectives a gateway is applying meanwhile are the last it read, and fc_effective.config_source on a rule says where they came from.",
+        "operationId": "getConfigAiObjectiveAll",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "properties": {
+                "objectiveAttr": {
+                  "items": {
+                    "$ref": "#/definitions/AIObjectiveEntry"
+                  },
+                  "type": "array"
+                }
+              },
+              "type": "object"
+            }
+          },
+          "401": {
+            "description": "Invalid authentication credentials",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "$ref": "#/responses/ManagementForbidden"
+          },
+          "500": {
+            "description": "Internal service error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Maintenance mode, no AI key store configured, or the store does not answer",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        },
+        "summary": "List objectives",
+        "tags": [
+          "ai"
+        ]
+      },
+      "post": {
+        "description": "An objective is a named priority a request can ask for with the x-llm-d-inference-objective header, or get as its tenant's or key's default. A positive priority is the critical class, a negative one sheddable, zero standard. Posting an existing name replaces the objective. Objectives live in the AI key store, so every gateway that shares the store applies a change within one refresh interval (LLB_AI_OBJECTIVE_REFRESH_SEC, default 10 s), this one at once. Without a key store, or while it does not answer, the call is refused with 503 and nothing changes.",
+        "operationId": "postConfigAiObjective",
+        "parameters": [
+          {
+            "description": "Attributes of the objective",
+            "in": "body",
+            "name": "attr",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/AIObjectiveEntry"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/OperationResult"
+            }
+          },
+          "400": {
+            "description": "Malformed arguments for API call",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "401": {
+            "description": "Invalid authentication credentials",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "$ref": "#/responses/ManagementForbidden"
+          },
+          "500": {
+            "description": "Internal service error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Maintenance mode, no AI key store configured (ai_key_store_unconfigured), or the store does not answer (ai_key_store_unavailable)",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        },
+        "summary": "Create or replace an objective",
+        "tags": [
+          "ai"
+        ]
+      }
+    },
+    "/config/ai/objective/{name}": {
+      "delete": {
+        "description": "Removes the named objective. A tenant or key that still names it keeps the name; a request that asks for it is then treated as one that asked for an unknown objective.",
+        "operationId": "deleteConfigAiObjectiveName",
+        "parameters": [
+          {
+            "description": "Name of the objective",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/OperationResult"
+            }
+          },
+          "401": {
+            "description": "Invalid authentication credentials",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "$ref": "#/responses/ManagementForbidden"
+          },
+          "404": {
+            "description": "Resource not found",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "500": {
+            "description": "Internal service error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Maintenance mode, no AI key store configured, or the store does not answer",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        },
+        "summary": "Delete an objective",
         "tags": [
           "ai"
         ]
@@ -23350,6 +23638,170 @@ func init() {
         }
       }
     },
+    "/config/ai/objective": {
+      "get": {
+        "description": "Returns every objective in name order, read from the AI key store. 503 while the store does not answer - the objectives a gateway is applying meanwhile are the last it read, and fc_effective.config_source on a rule says where they came from.",
+        "tags": [
+          "ai"
+        ],
+        "summary": "List objectives",
+        "operationId": "getConfigAiObjectiveAll",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "objectiveAttr": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/definitions/AIObjectiveEntry"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid authentication credentials",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "description": "Authenticated principal is not authorized for this operation",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "500": {
+            "description": "Internal service error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Maintenance mode, no AI key store configured, or the store does not answer",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        }
+      },
+      "post": {
+        "description": "An objective is a named priority a request can ask for with the x-llm-d-inference-objective header, or get as its tenant's or key's default. A positive priority is the critical class, a negative one sheddable, zero standard. Posting an existing name replaces the objective. Objectives live in the AI key store, so every gateway that shares the store applies a change within one refresh interval (LLB_AI_OBJECTIVE_REFRESH_SEC, default 10 s), this one at once. Without a key store, or while it does not answer, the call is refused with 503 and nothing changes.",
+        "tags": [
+          "ai"
+        ],
+        "summary": "Create or replace an objective",
+        "operationId": "postConfigAiObjective",
+        "parameters": [
+          {
+            "description": "Attributes of the objective",
+            "name": "attr",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/AIObjectiveEntry"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/OperationResult"
+            }
+          },
+          "400": {
+            "description": "Malformed arguments for API call",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "401": {
+            "description": "Invalid authentication credentials",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "description": "Authenticated principal is not authorized for this operation",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "500": {
+            "description": "Internal service error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Maintenance mode, no AI key store configured (ai_key_store_unconfigured), or the store does not answer (ai_key_store_unavailable)",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        }
+      }
+    },
+    "/config/ai/objective/{name}": {
+      "delete": {
+        "description": "Removes the named objective. A tenant or key that still names it keeps the name; a request that asks for it is then treated as one that asked for an unknown objective.",
+        "tags": [
+          "ai"
+        ],
+        "summary": "Delete an objective",
+        "operationId": "deleteConfigAiObjectiveName",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "Name of the objective",
+            "name": "name",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/OperationResult"
+            }
+          },
+          "401": {
+            "description": "Invalid authentication credentials",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "description": "Authenticated principal is not authorized for this operation",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "500": {
+            "description": "Internal service error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Maintenance mode, no AI key store configured, or the store does not answer",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        }
+      }
+    },
     "/config/ai/ratelimit/defaults": {
       "post": {
         "description": "Creates or replaces one defaults row (QoS ladder level 3). Scope 'global' takes no rule_ident and applies everywhere; scope 'rule' names one service and overrides the global row field-wise on it. A zero field falls through; an entry whose limit fields are all zero is rejected.",
@@ -35225,6 +35677,39 @@ func init() {
     }
   },
   "definitions": {
+    "AIObjectiveEntry": {
+      "description": "A named request priority. name is 1 to 63 characters of letters, digits, '-', '_' and '.', compared exactly (case-sensitive), and must not begin with tier:. services limits the objective to the listed services (\"VIP:port\"); empty or omitted means every service. priority is a signed integer - positive is the critical class, negative sheddable, zero standard; the order between two objectives of the same class is not kept.",
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "description": "Name of the objective, as a request's header names it",
+          "type": "string"
+        },
+        "priority": {
+          "description": "The priority a request with this objective has",
+          "type": "integer",
+          "format": "int32",
+          "x-omitempty": false
+        },
+        "services": {
+          "description": "Services the objective applies to, as \"VIP:port\"; at most 256. Empty means all",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-omitempty": true
+        },
+        "updated_at": {
+          "description": "When the objective was last written. Ignored on input",
+          "type": "string",
+          "format": "date-time",
+          "readOnly": true
+        }
+      }
+    },
     "AiModelProfileEntry": {
       "description": "One published model-prompt profile (list and detail representations are identical). Presence conveys validity by construction - publication is all-or-nothing, so every entry has already passed artifact digest verification and tokenizer load; there is no partial or invalid state. tokenizerSha256 is always present (publication requires it); templateSha256/templateContentFormat are present iff a chat template is bound. The sha256 digests are the immutable audit/drift identities of the profile's artifacts. Artifact locator paths, the registry root, and any host filesystem information are deliberately EXCLUDED from this representation.",
       "type": "object",
@@ -35363,6 +35848,14 @@ func init() {
             "type": "string"
           }
         },
+        "allowed_objectives": {
+          "description": "The objectives a request with this key may ask for by header, out of the ones its tenant allows; at most 64. Empty means the key narrows nothing.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-omitempty": true
+        },
         "api_key": {
           "description": "Optional imported credential; absent or empty generates a new key. Imports require 16-512 printable non-space ASCII bytes. GET/list never returns the credential. Create currently emits an empty raw_key string for imports, not omission. Length and invalid-character rejections both map to 400 with api_key validation fields.",
           "type": "string"
@@ -35371,6 +35864,10 @@ func init() {
           "description": "Total request-bucket capacity, not additional capacity above RPS. Zero uses per-key RPS. Nonpositive RPS skips this limiter; negative-value validation remains incomplete.",
           "type": "integer",
           "format": "int64"
+        },
+        "default_objective": {
+          "description": "The objective a request with this key gets when it names none, or one it may not use. Counts only when the tenant's allowed_objectives hold it.",
+          "type": "string"
         },
         "enabled": {
           "description": "Whether the API key is active. Absent = enabled (optional, nullable to distinguish unset).",
@@ -35385,6 +35882,15 @@ func init() {
         "name": {
           "description": "Human-readable label for the API key",
           "type": "string"
+        },
+        "priority_class": {
+          "description": "The highest priority class a request with this key may have. It can only lower what the key's tenant allows. Omitted means no cap from the key.",
+          "type": "string",
+          "enum": [
+            "standard",
+            "critical",
+            "sheddable"
+          ]
         },
         "rate_limit_rps": {
           "description": "Maximum requests per second allowed for this key",
@@ -35434,6 +35940,14 @@ func init() {
             "type": "string"
           }
         },
+        "allowed_objectives": {
+          "description": "The objectives a request with this key may ask for by header, out of the ones its tenant allows; at most 64. Empty means the key narrows nothing.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-omitempty": true
+        },
         "burst_size": {
           "description": "Total request-bucket capacity, not additional capacity above RPS. Nonpositive burst uses per-key RPS; nonpositive RPS skips that limiter.",
           "type": "integer",
@@ -35443,6 +35957,10 @@ func init() {
           "description": "Timestamp when the key was created",
           "type": "string",
           "format": "date-time"
+        },
+        "default_objective": {
+          "description": "The objective a request with this key gets when it names none, or one it may not use. Counts only when the tenant's allowed_objectives hold it.",
+          "type": "string"
         },
         "enabled": {
           "description": "Whether this key is currently active",
@@ -35460,6 +35978,15 @@ func init() {
         "name": {
           "description": "Human-readable label for the API key",
           "type": "string"
+        },
+        "priority_class": {
+          "description": "The highest priority class a request with this key may have. It can only lower what the key's tenant allows. Omitted means no cap from the key.",
+          "type": "string",
+          "enum": [
+            "standard",
+            "critical",
+            "sheddable"
+          ]
         },
         "rate_limit_rps": {
           "description": "Maximum requests per second allowed for this key",
@@ -39234,6 +39761,15 @@ func init() {
           "description": "Profile name (the identity LB rules reference)",
           "type": "string"
         },
+        "priority_class": {
+          "description": "The highest priority class a request admitted by this profile's tokens may have. It can only lower what the tenant allows. Omitted means no cap from the profile.",
+          "type": "string",
+          "enum": [
+            "standard",
+            "critical",
+            "sheddable"
+          ]
+        },
         "refresh_sec": {
           "description": "Periodic JWKS refresh interval in seconds (default 3600)",
           "type": "integer",
@@ -40458,6 +40994,12 @@ func init() {
               ],
               "x-nullable": false
             },
+            "ai_objective_strict": {
+              "description": "What happens to a request that names, with the x-llm-d-inference-objective header, an objective it may not use (unknown, not in its tenant's allowed_objectives, or not for this service). false (the default) - the request falls to its default objective and is admitted; the record says the objective was denied. true - the request is refused with 403 objective_not_allowed. Stored on any rule; it has an effect only where the admission gate runs (an AI-gateway service) and while a class is configured. The admission gate reads it per listener, as api_key_auth: declare the same value on each rule of a VIP and port. Changeable at runtime by a replace POST (the stored value is kept when omitted). Explicit JSON null is rejected.",
+              "type": "boolean",
+              "default": false,
+              "x-nullable": false
+            },
             "alpn_protocols": {
               "description": "HTTP ALPN capability list, typically [h2, http/1.1], [h2] or [http/1.1]. Recognized values override backend_protocol through a shared capability used by listener and backend TLS setup; list order is not preserved as preference order. Empty leaves backend_protocol in use. Implementation limitations: unknown tokens are ignored, an entirely unrecognized list falls back to backend_protocol, and the H1/both listener callback can select H1 without a common advertised protocol. This is not strict ALPN allow-list enforcement. See shared readback/update warnings.",
               "type": "array",
@@ -40670,6 +41212,15 @@ func init() {
                   "enum": [
                     "on",
                     "off"
+                  ]
+                },
+                "config_source": {
+                  "description": "Where the objectives and the tenant and key classes this gateway is applying came from. store - the AI key store answered the last read. lkg - the store has not answered since the gateway started and the last-known-good file (aigw-lkg.json under the configuration path) is being served; writes are refused with 503 meanwhile and loxilb_ai_class_config_lkg_intervals_total counts. none - nothing was read (no store configured, or a store that has not answered and no file); every request is standard. The same value on every rule - it is the gateway's, not the rule's.",
+                  "type": "string",
+                  "enum": [
+                    "store",
+                    "lkg",
+                    "none"
                   ]
                 },
                 "decode_max_inflight": {
@@ -41707,6 +42258,12 @@ func init() {
           ],
           "x-nullable": false
         },
+        "ai_objective_strict": {
+          "description": "What happens to a request that names, with the x-llm-d-inference-objective header, an objective it may not use (unknown, not in its tenant's allowed_objectives, or not for this service). false (the default) - the request falls to its default objective and is admitted; the record says the objective was denied. true - the request is refused with 403 objective_not_allowed. Stored on any rule; it has an effect only where the admission gate runs (an AI-gateway service) and while a class is configured. The admission gate reads it per listener, as api_key_auth: declare the same value on each rule of a VIP and port. Changeable at runtime by a replace POST (the stored value is kept when omitted). Explicit JSON null is rejected.",
+          "type": "boolean",
+          "default": false,
+          "x-nullable": false
+        },
         "alpn_protocols": {
           "description": "HTTP ALPN capability list, typically [h2, http/1.1], [h2] or [http/1.1]. Recognized values override backend_protocol through a shared capability used by listener and backend TLS setup; list order is not preserved as preference order. Empty leaves backend_protocol in use. Implementation limitations: unknown tokens are ignored, an entirely unrecognized list falls back to backend_protocol, and the H1/both listener callback can select H1 without a common advertised protocol. This is not strict ALPN allow-list enforcement. See shared readback/update warnings.",
           "type": "array",
@@ -41919,6 +42476,15 @@ func init() {
               "enum": [
                 "on",
                 "off"
+              ]
+            },
+            "config_source": {
+              "description": "Where the objectives and the tenant and key classes this gateway is applying came from. store - the AI key store answered the last read. lkg - the store has not answered since the gateway started and the last-known-good file (aigw-lkg.json under the configuration path) is being served; writes are refused with 503 meanwhile and loxilb_ai_class_config_lkg_intervals_total counts. none - nothing was read (no store configured, or a store that has not answered and no file); every request is standard. The same value on every rule - it is the gateway's, not the rule's.",
+              "type": "string",
+              "enum": [
+                "store",
+                "lkg",
+                "none"
               ]
             },
             "decode_max_inflight": {
@@ -42883,6 +43449,15 @@ func init() {
           "enum": [
             "on",
             "off"
+          ]
+        },
+        "config_source": {
+          "description": "Where the objectives and the tenant and key classes this gateway is applying came from. store - the AI key store answered the last read. lkg - the store has not answered since the gateway started and the last-known-good file (aigw-lkg.json under the configuration path) is being served; writes are refused with 503 meanwhile and loxilb_ai_class_config_lkg_intervals_total counts. none - nothing was read (no store configured, or a store that has not answered and no file); every request is standard. The same value on every rule - it is the gateway's, not the rule's.",
+          "type": "string",
+          "enum": [
+            "store",
+            "lkg",
+            "none"
           ]
         },
         "decode_max_inflight": {
@@ -44028,7 +44603,7 @@ func init() {
           "type": "string"
         },
         "priority_class": {
-          "description": "The priority class of the binding's requests. Stored and reported; it does not change scheduling yet. Default standard.",
+          "description": "The highest priority class a request the binding names the tenant of may have. It can only lower what the tenant allows. Default standard - a binding that should not cap its requests says critical.",
           "type": "string",
           "enum": [
             "standard",
@@ -45997,10 +46572,22 @@ func init() {
         "tenant_id"
       ],
       "properties": {
+        "allowed_objectives": {
+          "description": "The objectives a request of this tenant may ask for by header",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-omitempty": true
+        },
         "burst_pct": {
           "description": "Token bucket capacity as a percent of tokens_per_min; 0 uses the server default",
           "type": "integer",
           "format": "int64"
+        },
+        "default_objective": {
+          "description": "The objective a request of this tenant gets when it names none, or one it may not use",
+          "type": "string"
         },
         "model_limits": {
           "description": "Per-model token quotas for the tenant",
@@ -46008,6 +46595,10 @@ func init() {
           "items": {
             "$ref": "#/definitions/TenantModelRateLimit"
           }
+        },
+        "priority_class": {
+          "description": "The highest priority class a request of this tenant may have; absent when no cap is set",
+          "type": "string"
         },
         "rps": {
           "description": "Maximum requests per second for the tenant",
@@ -46031,16 +46622,29 @@ func init() {
       }
     },
     "TenantRateLimitMod": {
-      "description": "POST replaces aggregate rps, tokens_per_min, and burst_pct; omission becomes zero, not preservation. Supplied model_limits are individual upserts or removals; omitted/empty model_limits preserves existing model rows. Aggregate and model writes are sequential, not one transaction, so failure can leave partial changes. Blank identifiers and malformed model entries are not consistently rejected as 400. Configuration alone does not enable enforcement on a service.",
+      "description": "POST replaces aggregate rps, tokens_per_min, and burst_pct; omission becomes zero, not preservation. Supplied model_limits are individual upserts or removals; omitted/empty model_limits preserves existing model rows. Aggregate and model writes are sequential, not one transaction, so failure can leave partial changes. Blank identifiers and malformed model entries are not consistently rejected as 400. Configuration alone does not enable enforcement on a service. The class fields (priority_class, default_objective, allowed_objectives) are written by their own statement and only when the body names one of them, so a POST of limits leaves the tenant's class as it is. A body that names a class field and carries no limit (rps, tokens_per_min and burst_pct absent or zero, no model_limits) writes the class only and leaves the limits as they are.",
       "type": "object",
       "required": [
         "tenant_id"
       ],
       "properties": {
+        "allowed_objectives": {
+          "description": "The objectives a request of this tenant may ask for with the x-llm-d-inference-objective header; at most 64. Omitted leaves the stored list; an empty array clears it, and then no objective can be asked for.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-omitempty": true
+        },
         "burst_pct": {
           "description": "Token bucket capacity as a percent of tokens_per_min; 0 uses the server default",
           "type": "integer",
           "format": "int64"
+        },
+        "default_objective": {
+          "description": "The objective a request of this tenant gets when it names none, or one it may not use. Omitted leaves the stored value; an empty string clears it.",
+          "type": "string",
+          "x-nullable": true
         },
         "model_limits": {
           "description": "Per-model token quotas for the tenant",
@@ -46048,6 +46652,11 @@ func init() {
           "items": {
             "$ref": "#/definitions/TenantModelRateLimit"
           }
+        },
+        "priority_class": {
+          "description": "The highest priority class a request of this tenant may have: standard, critical or sheddable. Omitted leaves the stored value; an empty string clears it (no cap).",
+          "type": "string",
+          "x-nullable": true
         },
         "rps": {
           "description": "Maximum requests per second for the tenant",

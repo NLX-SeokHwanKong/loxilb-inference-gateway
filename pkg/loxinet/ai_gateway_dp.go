@@ -1650,9 +1650,13 @@ func llb_ai_stream_end(tenantID *C.char, modelName *C.char) C.int {
 //	netIdentity:   the binding that matched the request's source, "" when
 //	               none did; set with authSrc 0 or 2 when a credential
 //	               decided and the binding only matched beside it
+//	priority:      the request's priority after the cap
+//	classInfo:     the class and how it was reached (AI_GW_CLASSF_*); 0
+//	               when the class stage did not run for the request
+//	objective:     the hint that was applied, "" when none was
 //
 //export llb_ai_record_request
-func llb_ai_record_request(tenantID *C.char, modelName *C.char, statusCode C.int, latencyMs C.int64_t, promptTokens C.int, completTokens C.int, streamStart C.int, streamEnd C.int, errorCode *C.char, requestID *C.char, userID *C.char, keyID *C.char, svcIdent *C.char, isStream C.int, producerID C.int, clientIP *C.char, originIP *C.char, trustedHops C.int, authSrc C.int, netIdentity *C.char) {
+func llb_ai_record_request(tenantID *C.char, modelName *C.char, statusCode C.int, latencyMs C.int64_t, promptTokens C.int, completTokens C.int, streamStart C.int, streamEnd C.int, errorCode *C.char, requestID *C.char, userID *C.char, keyID *C.char, svcIdent *C.char, isStream C.int, producerID C.int, clientIP *C.char, originIP *C.char, trustedHops C.int, authSrc C.int, netIdentity *C.char, priority C.int, classInfo C.int, objective *C.char) {
 	defer cgoRecover("llb_ai_record_request")
 	tenantIDStr := C.GoString(tenantID)
 	modelNameStr := C.GoString(modelName)
@@ -1687,6 +1691,10 @@ func llb_ai_record_request(tenantID *C.char, modelName *C.char, statusCode C.int
 
 		AuthSrc:     int(authSrc),
 		NetIdentity: netIdentityStr,
+
+		Priority:  int(priority),
+		ClassInfo: int(classInfo),
+		Objective: C.GoString(objective),
 	})
 }
 
