@@ -20,7 +20,7 @@ import (
 // swagger:model TenantRateLimitEntry
 type TenantRateLimitEntry struct {
 
-	// The objectives a request of this tenant may ask for by header
+	// The objectives a request of this tenant may ask for by header, and the body tiers (tier:priority, tier:fast, tier:flex)
 	AllowedObjectives []string `json:"allowed_objectives,omitempty"`
 
 	// Token bucket capacity as a percent of tokens_per_min; 0 uses the server default
@@ -32,7 +32,7 @@ type TenantRateLimitEntry struct {
 	// Per-model token quotas for the tenant
 	ModelLimits []*TenantModelRateLimit `json:"model_limits"`
 
-	// The highest priority class a request of this tenant may have; absent when no cap is set
+	// The highest priority class a request of this tenant may have; absent when none is set, which holds the tenant at standard
 	PriorityClass string `json:"priority_class,omitempty"`
 
 	// Maximum requests per second for the tenant

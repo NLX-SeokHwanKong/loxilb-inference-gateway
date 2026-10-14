@@ -19,6 +19,7 @@ package aikey
 import (
 	"errors"
 	"reflect"
+	"sync"
 	"testing"
 
 	cmn "github.com/loxilb-io/loxilb/common"
@@ -186,5 +187,51 @@ func TestClassPatchOutage(t *testing.T) {
 	}
 	if got := svc.Classes().Tenants["t1"].PriorityClass; got != "standard" {
 		t.Errorf("the snapshot in force during an outage holds %q, want the last read", got)
+	}
+}
+
+// Two patches of different fields that race both land: a patch is one
+// statement, not a read and a write. Run under -race -count=20.
+func TestClassPatchConcurrentFieldsBothLand(t *testing.T) {
+	svc := storeFixture(t)
+	_, keyID, err := svc.CreateAPIKey(cmn.ApiKeyEntry{TenantID: "t1", Name: "race", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for round := 0; round < 20; round++ {
+		class := []string{"standard", "sheddable"}[round%2]
+		def := []string{"batch", "realtime"}[round%2]
+		allowed := []string{"tier:flex", def}
+		var wg sync.WaitGroup
+		errs := make(chan error, 6)
+		for _, p := range []cmn.AIClassPatch{
+			{PriorityClass: strp(class)}, {DefaultObjective: strp(def)}, {AllowedObjectives: &allowed},
+		} {
+			wg.Add(2)
+			go func(p cmn.AIClassPatch) { defer wg.Done(); errs <- svc.PatchTenantClass("t1", p) }(p)
+			go func(p cmn.AIClassPatch) { defer wg.Done(); errs <- svc.PatchAPIKeyClass(keyID, p) }(p)
+		}
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			if err != nil {
+				t.Fatalf("round %d: %v", round, err)
+			}
+		}
+		want := cmn.AIClassPolicy{PriorityClass: class, DefaultObjective: def}
+		want.AllowedObjectives, _ = func() ([]string, error) {
+			p, err := ValidateClassPolicy(cmn.AIClassPolicy{AllowedObjectives: allowed})
+			return p.AllowedObjectives, err
+		}()
+		if got, err := svc.GetTenantClass("t1"); err != nil || !reflect.DeepEqual(got, want) {
+			t.Fatalf("round %d: tenant class %+v, %v; want %+v", round, got, err, want)
+		}
+		if got, err := svc.GetAPIKeyClass(keyID); err != nil || !reflect.DeepEqual(got, want) {
+			t.Fatalf("round %d: key class %+v, %v; want %+v", round, got, err, want)
+		}
+	}
+	// The snapshot in force is the last read, and holds what the store holds.
+	if got := svc.Classes().Tenants["t1"].PriorityClass; got != "sheddable" {
+		t.Errorf("snapshot after the races holds %q, want the store's", got)
 	}
 }

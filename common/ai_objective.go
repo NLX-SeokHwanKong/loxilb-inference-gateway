@@ -41,6 +41,26 @@ const (
 	AIObjectiveListMax = 64
 )
 
+// AITierObjectivePrefix names the body's service_tier hints in a tenant's or
+// key's allowed_objectives: "tier:priority", "tier:fast" and "tier:flex"
+// let a request ask by body for what the hint stands for. They are not
+// objective rows, and no objective may be named with this prefix.
+const AITierObjectivePrefix = "tier:"
+
+// AITierObjectives are the three names allowed_objectives accepts for the
+// body's tier hints.
+var AITierObjectives = []string{AITierObjectivePrefix + "priority", AITierObjectivePrefix + "fast", AITierObjectivePrefix + "flex"}
+
+// IsAITierObjective reports whether name is one of AITierObjectives.
+func IsAITierObjective(name string) bool {
+	for _, n := range AITierObjectives {
+		if n == name {
+			return true
+		}
+	}
+	return false
+}
+
 // AIObjectiveEntry is one row of the objective table: a named priority,
 // for every service or for the ones it lists ("VIP:port").
 type AIObjectiveEntry struct {
@@ -50,14 +70,28 @@ type AIObjectiveEntry struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// AIObjectiveList is the objective list the API answers with: what the store
+// holds when it answers, else the objectives the gateway applies, with where
+// they came from (AIClassSource*) and when the store answered with them.
+type AIObjectiveList struct {
+	Objectives      []AIObjectiveEntry
+	Source          string
+	SourceTimestamp time.Time
+	// StoreReachable: the store answered its latest read. StoreLastRead:
+	// when a read last answered (zero: never).
+	StoreReachable bool
+	StoreLastRead  time.Time
+}
+
 // AIClassPolicy is what a tenant row, an API key, a JWT profile or a
 // network-identity binding says about the class of its requests.
 //
 // PriorityClass is a cap: the highest class a request of this identity may
-// have. Empty means no cap. DefaultObjective is the objective a request
-// gets when it names none (or one it may not use); AllowedObjectives are
-// the objective names a request may ask for by header. An empty list
-// allows none.
+// have. Empty sets no cap of its own; an identity none of whose parts sets
+// one is held at standard. DefaultObjective is the objective a request gets
+// when it names none (or one it may not use); AllowedObjectives are the
+// objective names a request may ask for by header, and the AITierObjectives
+// it may ask for by the body's service_tier. An empty list allows none.
 type AIClassPolicy struct {
 	PriorityClass     string   `json:"priority_class,omitempty"`
 	DefaultObjective  string   `json:"default_objective,omitempty"`

@@ -22,7 +22,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -43,6 +45,14 @@ type ClassSnapshot struct {
 	ReadAt time.Time
 	// Source is cmn.AIClassSourceStore or cmn.AIClassSourceLKG.
 	Source string
+	// Gen orders the snapshots of the store: the ticket its read took
+	// before it asked anything. A snapshot is published only over one of a
+	// lower Gen, so a read that started before a write never replaces the
+	// read the write made. The file's snapshot is 0.
+	Gen uint64
+
+	// limits are the limit rows read with it, for the file only.
+	limits *limitRows
 }
 
 // Configured reports whether the snapshot holds anything a request's class
@@ -58,9 +68,11 @@ func (c *ClassSnapshot) Configured() bool {
 const (
 	// ClassLKGFileName is the file's name under the configuration directory.
 	ClassLKGFileName = "aigw-lkg.json"
-	// classLKGVersion is the file's format version. A file of another
-	// version is not read.
-	classLKGVersion = 1
+	// classLKGVersion is the file's format version: 2 added the limit rows.
+	// A file of version 1 is read for its classes; one of any other version
+	// is not read.
+	classLKGVersion  = 2
+	classLKGVersion1 = 1
 
 	classRefreshEnv        = "LLB_AI_OBJECTIVE_REFRESH_SEC"
 	classRefreshDefaultSec = 10
@@ -73,6 +85,10 @@ type classLKGFile struct {
 	Objectives      []cmn.AIObjectiveEntry       `json:"objectives"`
 	Tenants         map[string]cmn.AIClassPolicy `json:"tenants"`
 	Keys            map[string]cmn.AIClassPolicy `json:"keys"`
+	// The limit rows (class_lkg_limits.go); version 2 on.
+	TenantLimits      []lkgTenantLimit      `json:"tenant_limits"`
+	TenantModelLimits []lkgTenantModelLimit `json:"tenant_model_limits"`
+	RateLimitDefaults []lkgDefaults         `json:"rate_limit_defaults"`
 }
 
 // classState is the class side of a Service. Its own struct so the zero
@@ -89,6 +105,62 @@ type classState struct {
 	// onChange is told after every published snapshot.
 	onChange atomic.Pointer[func(*ClassSnapshot)]
 	started  atomic.Bool
+	// readGen hands each store read its ticket (ClassSnapshot.Gen).
+	readGen atomic.Uint64
+	// pubMu makes "newer than what is published" and the publication one
+	// step, and keeps the change hook's calls in publication order.
+	pubMu sync.Mutex
+	// fileMu orders the writes of the file. It is not pubMu: a write waits
+	// on the disk, and publishing must not.
+	fileMu sync.Mutex
+	// lkgLimits are the file's limit rows while the file is served: from
+	// the start of a process the store has not answered for, until it
+	// answers once.
+	lkgLimits atomic.Pointer[lkgLimitSet]
+	// health is what the latest read of the store said: whether it
+	// answered, and when one last did.
+	health storeHealth
+}
+
+// storeHealth is the outcome of the latest read of the store, by ticket: a
+// slow read that fails after a later one answered does not mark the store
+// away again.
+type storeHealth struct {
+	mu        sync.Mutex
+	gen       uint64
+	reachable bool
+	lastOK    time.Time
+}
+
+// noteStoreRead records the outcome of the read with ticket gen, unless a
+// later read's outcome is already recorded.
+func (s *Service) noteStoreRead(gen uint64, err error) {
+	h := &s.class.health
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if gen < h.gen {
+		return
+	}
+	h.gen = gen
+	h.reachable = err == nil
+	if err == nil {
+		h.lastOK = time.Now().UTC()
+	}
+}
+
+// StoreHealth reports whether the latest read of the store answered, and
+// when a read last did in this process. A process started from the
+// last-known-good file reports, until the store answers, the read that last
+// changed the file: the file is written only on a change, so the store may
+// have answered later. Zero when neither ever happened.
+func (s *Service) StoreHealth() (reachable bool, lastOK time.Time) {
+	if s == nil {
+		return false, time.Time{}
+	}
+	h := &s.class.health
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.reachable, h.lastOK
 }
 
 // Classes returns the snapshot in force, nil when nothing was ever read.
@@ -120,16 +192,36 @@ func (s *Service) SetClassChangeHook(fn func(*ClassSnapshot)) {
 	s.class.onChange.Store(&fn)
 }
 
-func (s *Service) publishClasses(snap *ClassSnapshot) {
+// publishClasses publishes a snapshot of the store unless one of a newer
+// read is already published, and reports whether it did. Once one is, the
+// file's limit rows are no longer served.
+func (s *Service) publishClasses(snap *ClassSnapshot) bool {
+	s.class.pubMu.Lock()
+	defer s.class.pubMu.Unlock()
+	if cur := s.class.snap.Load(); cur != nil && cur.Source == cmn.AIClassSourceStore && cur.Gen >= snap.Gen {
+		return false
+	}
 	s.class.snap.Store(snap)
+	s.class.lkgLimits.Store(nil)
 	if fn := s.class.onChange.Load(); fn != nil {
 		(*fn)(snap)
 	}
+	return true
 }
 
 // RefreshClasses reads objectives and class rows from the store and
 // publishes them. On any failure the snapshot in force stays.
 func (s *Service) RefreshClasses() error {
+	// The ticket is taken before anything is asked: a read that starts
+	// after a write committed has a higher one than any read that started
+	// before it.
+	gen := s.class.readGen.Add(1)
+	err := s.refreshClasses(gen)
+	s.noteStoreRead(gen, err)
+	return err
+}
+
+func (s *Service) refreshClasses(gen uint64) error {
 	db, err := s.store()
 	if err != nil {
 		return err
@@ -146,15 +238,23 @@ func (s *Service) RefreshClasses() error {
 	if err != nil {
 		return fmt.Errorf("aikey: read key classes: %w", err)
 	}
+	limits, err := readLimitRows(db)
+	if err != nil {
+		return fmt.Errorf("aikey: read limit rows: %w", err)
+	}
 	snap := &ClassSnapshot{Objectives: objs, Tenants: tenants, Keys: keys,
-		ReadAt: time.Now().UTC(), Source: cmn.AIClassSourceStore}
+		ReadAt: time.Now().UTC(), Source: cmn.AIClassSourceStore, Gen: gen, limits: limits}
 	prev := s.class.snap.Load()
-	s.publishClasses(snap)
+	if !s.publishClasses(snap) {
+		// A newer read is in force: this one is older than it, and is
+		// neither published nor written.
+		return nil
+	}
 	if prev != nil && prev.Source == cmn.AIClassSourceLKG {
 		tk.LogIt(tk.LogInfo, "[AIKey] Objectives and classes read from the store again (%d objectives, %d tenants, %d keys); the last-known-good file is no longer served\n",
 			len(objs), len(tenants), len(keys))
 	}
-	s.writeClassLKG(snap)
+	s.writeClassLKGIfCurrent(snap)
 	return nil
 }
 
@@ -181,6 +281,13 @@ func lkgContent(snap *ClassSnapshot) classLKGFile {
 	if f.Keys == nil {
 		f.Keys = map[string]cmn.AIClassPolicy{}
 	}
+	f.TenantLimits, f.TenantModelLimits, f.RateLimitDefaults =
+		[]lkgTenantLimit{}, []lkgTenantModelLimit{}, []lkgDefaults{}
+	if l := snap.limits; l != nil {
+		f.TenantLimits = append(f.TenantLimits, l.Tenants...)
+		f.TenantModelLimits = append(f.TenantModelLimits, l.TenantModels...)
+		f.RateLimitDefaults = append(f.RateLimitDefaults, l.Defaults...)
+	}
 	return f
 }
 
@@ -190,6 +297,18 @@ func sortObjectives(l []cmn.AIObjectiveEntry) {
 			l[j], l[j-1] = l[j-1], l[j]
 		}
 	}
+}
+
+// writeClassLKGIfCurrent writes the file for snap when snap is still the
+// snapshot in force: two refreshes publish in order but may reach the disk
+// in the other order, and the older must not land last.
+func (s *Service) writeClassLKGIfCurrent(snap *ClassSnapshot) {
+	s.class.fileMu.Lock()
+	defer s.class.fileMu.Unlock()
+	if s.class.snap.Load() != snap {
+		return
+	}
+	s.writeClassLKG(snap)
 }
 
 // writeClassLKG writes the file when the content differs from what it
@@ -221,9 +340,11 @@ func (s *Service) writeClassLKG(snap *ClassSnapshot) {
 	s.class.written.Store(&body)
 }
 
-// loadClassLKG publishes the file's content when nothing has been read yet.
-// Reports whether it did.
+// loadClassLKG publishes the file's content when nothing has been read yet,
+// with its limit rows for the outage fallbacks. Reports whether it did.
 func (s *Service) loadClassLKG() bool {
+	s.class.pubMu.Lock()
+	defer s.class.pubMu.Unlock()
 	if s.class.snap.Load() != nil {
 		return false
 	}
@@ -244,13 +365,18 @@ func (s *Service) loadClassLKG() bool {
 		tk.LogIt(tk.LogError, "[AIKey] Last-known-good file %s is not readable: %v\n", path, err)
 		return false
 	}
-	if f.Version != classLKGVersion {
-		tk.LogIt(tk.LogError, "[AIKey] Last-known-good file %s has version %d, this gateway reads %d: not used\n",
-			path, f.Version, classLKGVersion)
+	if f.Version != classLKGVersion && f.Version != classLKGVersion1 {
+		tk.LogIt(tk.LogError, "[AIKey] Last-known-good file %s has version %d, this gateway reads %d and %d: not used\n",
+			path, f.Version, classLKGVersion1, classLKGVersion)
 		return false
 	}
 	snap := &ClassSnapshot{Objectives: make(map[string]cmn.AIObjectiveEntry, len(f.Objectives)),
 		Tenants: f.Tenants, Keys: f.Keys, ReadAt: f.SourceTimestamp, Source: cmn.AIClassSourceLKG}
+	if f.Version >= classLKGVersion {
+		snap.limits = &limitRows{Tenants: f.TenantLimits, TenantModels: f.TenantModelLimits,
+			Defaults: f.RateLimitDefaults}
+		snap.limits.sort()
+	}
 	for _, o := range f.Objectives {
 		snap.Objectives[o.Name] = o
 	}
@@ -260,18 +386,48 @@ func (s *Service) loadClassLKG() bool {
 	if snap.Keys == nil {
 		snap.Keys = map[string]cmn.AIClassPolicy{}
 	}
-	if !s.class.snap.CompareAndSwap(nil, snap) {
-		return false
+	if snap.limits != nil {
+		s.class.lkgLimits.Store(newLKGLimitSet(snap.limits))
 	}
+	s.class.health.mu.Lock()
+	if s.class.health.lastOK.IsZero() {
+		s.class.health.lastOK = f.SourceTimestamp
+	}
+	s.class.health.mu.Unlock()
+	s.class.snap.Store(snap)
 	if fn := s.class.onChange.Load(); fn != nil {
 		(*fn)(snap)
 	}
-	if body, err := json.Marshal(lkgContent(snap)); err == nil {
-		s.class.written.Store(&body)
+	// Only a file of the version this gateway writes is "already written":
+	// an older one is rewritten at the first read, even of equal content.
+	if f.Version == classLKGVersion {
+		if body, err := json.Marshal(lkgContent(snap)); err == nil {
+			s.class.written.Store(&body)
+		}
 	}
-	tk.LogIt(tk.LogWarning, "[AIKey] The key store has not answered: serving objectives and classes from %s, as the store had them at %s (%d objectives, %d tenants, %d keys)\n",
-		path, f.SourceTimestamp.Format(time.RFC3339), len(snap.Objectives), len(snap.Tenants), len(snap.Keys))
+	nLimits := 0
+	if snap.limits != nil {
+		nLimits = len(snap.limits.Tenants) + len(snap.limits.TenantModels) + len(snap.limits.Defaults)
+	}
+	tk.LogIt(tk.LogWarning, "[AIKey] The key store has not answered: serving objectives, classes and limits from %s, as the store had them at %s (%d objectives, %d tenants, %d keys, %d limit rows); keyed requests are refused until it answers\n",
+		path, f.SourceTimestamp.Format(time.RFC3339), len(snap.Objectives), len(snap.Tenants), len(snap.Keys), nLimits)
 	return true
+}
+
+// AppliedObjectives lists the objectives of the snapshot in force, by name,
+// with where it came from and when the store answered with it. ok is false
+// when nothing was ever read.
+func (s *Service) AppliedObjectives() (objs []cmn.AIObjectiveEntry, source string, at time.Time, ok bool) {
+	snap := s.Classes()
+	if snap == nil {
+		return nil, cmn.AIClassSourceNone, time.Time{}, false
+	}
+	objs = make([]cmn.AIObjectiveEntry, 0, len(snap.Objectives))
+	for _, o := range snap.Objectives {
+		objs = append(objs, o)
+	}
+	sort.Slice(objs, func(i, j int) bool { return objs[i].Name < objs[j].Name })
+	return objs, snap.Source, snap.ReadAt, true
 }
 
 // classTick is one refresh interval.

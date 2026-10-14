@@ -83,10 +83,13 @@ binary behaves exactly like upstream loxilb.
   rule has a priority and a class (`critical`, `standard`, `sheddable`). It
   asks for an objective by name with the header `x-llm-d-inference-objective`
   (the older `x-gateway-inference-objective` is accepted), or, without one,
-  with the body's `service_tier` (`flex`, `priority`, `fast`); what it gets is
-  held under the `priority_class` of its tenant, its API key or JWT auth
-  profile, and the network-identity binding that named its tenant, so a hint
-  can lower a request and never raise it above its cap. New:
+  with the body's `service_tier` (`flex`, `priority`, `fast`); both channels
+  are held to the identity's `allowed_objectives` (a tier as `tier:flex`,
+  `tier:priority`, `tier:fast`). What it gets is held under the
+  `priority_class` of its tenant (a tenant that sets none is held at
+  `standard`), lowered by its API key or JWT auth profile and the
+  network-identity binding that named its tenant, so a client can lower its
+  request and never raise it above what its tenant was granted. New:
   `POST` / `GET` / `DELETE /config/ai/objective`; `priority_class`,
   `default_objective` and `allowed_objectives` on tenants and API keys;
   `priority_class` on JWT auth profiles and network-identity bindings; the
@@ -95,14 +98,25 @@ binary behaves exactly like upstream loxilb.
   `X-Loxilb-Admission-Class` / `X-Loxilb-Admission-Objective` on admitted
   responses of a rule with `fc_expose_headers`; `priority_class`, `priority`,
   `objective`, `objective_denied` and `hint_not_applied` on the
-  `data.ai.complete` audit record. A `service_tier` the gateway read as a
-  hint is replaced by `null` in the forwarded body (same length). With no
+  `data.ai.complete` record and on the `sec.ai.deny` record of a request
+  refused after its class was decided. A `service_tier` the gateway read as
+  a hint is replaced by `null` in the forwarded body (same length), every
+  top-level occurrence of it; with the key more than once the last is the
+  one read. With no
   objective and no class field configured anywhere nothing is read and
   every request is handled as before. Objectives and classes live in the AI
   key store and are served from the last-known-good file `aigw-lkg.json`
-  (under `--config-path`) by a gateway that starts while the store is away;
-  `fc_effective.config_source` and
-  `loxilb_ai_class_config_lkg_intervals_total` say when. See
+  (under `--config-path`), which also carries the tenant, tenant-and-model
+  and default limit rows, by a gateway that starts while the store is away:
+  a tenant named by a network-identity binding is then served with its
+  limits, a request with an API key is refused 503 `policy_store_unavailable`
+  (keys are never written to disk). `fc_effective.config_source`,
+  `loxilb_ai_class_config_lkg_intervals_total` and the `source` /
+  `source_timestamp` of `GET /config/ai/objective` (which answers with the
+  applied list while the store is away) say where the configuration in
+  force came from; `store_reachable` and `store_last_read` on both say,
+  whatever the source, whether the store answered its latest read and
+  when a read last answered. See
   `docs/load-balancing/19-ai-gateway-controls.md`.
 
 ### Changed

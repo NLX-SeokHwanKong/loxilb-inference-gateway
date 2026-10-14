@@ -63,7 +63,8 @@ plib_dump_domain() { # plib_dump_domain <llb> <domain> <outdir>
         # boundary differ with nothing changed, and the held and clamped
         # figures are counts of requests, gone with the process. So is
         # config_source: where the class configuration was read from says
-        # "none" until the first read after a restart.
+        # "none" until the first read after a restart; and so are
+        # store_reachable / store_last_read, the key store's latest answer.
         url="$PLIB_API/config/loadbalancer/all"
         filter='[.lbAttr[]? | del(.serviceArguments.fc_effective.reservation_epoch,
                                   .serviceArguments.fc_effective.reservation_held,
@@ -71,7 +72,9 @@ plib_dump_domain() { # plib_dump_domain <llb> <domain> <outdir>
                                   .serviceArguments.fc_effective.reservation_held_truncated,
                                   .serviceArguments.fc_effective.reservation_clamped_budget,
                                   .serviceArguments.fc_effective.reservation_clamped_burst,
-                                  .serviceArguments.fc_effective.config_source)
+                                  .serviceArguments.fc_effective.config_source,
+                                  .serviceArguments.fc_effective.store_reachable,
+                                  .serviceArguments.fc_effective.store_last_read)
                             | .endpoints = ([.endpoints[]? | del(.state,.counters,.counter)] | sort)
                             | .secondaryIPs = (.secondaryIPs | if . == null then [] else sort end)
                             | .allowedSources = (.allowedSources | if . == null then [] else sort end)] | sort' ;;

@@ -520,6 +520,9 @@ func (s *Service) SetRateLimitDefaults(entry cmn.RateLimitDefaultsEntry) error {
 	tk.LogIt(tk.LogInfo, "[AIKey] Set rate limit defaults (%s/%s): user rps=%d tpm=%d, tenant rps=%d tpm=%d, vip rps=%d tpm=%d\n",
 		entry.Scope, entry.RuleIdent, entry.DefaultUserRPS, entry.DefaultUserTPM,
 		entry.DefaultTenantRPS, entry.DefaultTenantTPM, entry.VipSharedRPS, entry.VipSharedTPM)
+	// The last-known-good file carries the limit rows: it follows the write
+	// at once, not one refresh interval later.
+	s.refreshClassesAfterWrite()
 	return nil
 }
 
@@ -534,7 +537,7 @@ func (s *Service) lastKnownDefaults(cacheKey string) (*defaultsCacheEntry, bool)
 			return e, true
 		}
 	}
-	return nil, false
+	return s.lkgDefaultsEntry(cacheKey)
 }
 
 // GetRateLimitDefaults is the hot-path defaults read for one scope row.
@@ -618,6 +621,9 @@ func (s *Service) DeleteRateLimitDefaults(scope, ruleIdent string) error {
 	s.rememberDefaults(cacheKeyForDefaults(scope, ruleIdent), &defaultsCacheEntry{})
 	s.Cache.Delete(cacheKeyForDefaults(scope, ruleIdent))
 	tk.LogIt(tk.LogInfo, "[AIKey] Deleted rate limit defaults (%s/%s)\n", scope, ruleIdent)
+	// The last-known-good file carries the limit rows: it follows the write
+	// at once, not one refresh interval later.
+	s.refreshClassesAfterWrite()
 	return nil
 }
 

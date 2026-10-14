@@ -314,15 +314,49 @@ and `PATCH /config/ai/apikey/{key_id}`):
 
 | Field | Meaning |
 |---|---|
-| `priority_class` | the highest class a request may have (`standard`, `critical`, `sheddable`); unset = no cap |
+| `priority_class` | the highest class a request may have (`standard`, `critical`, `sheddable`); on a tenant, unset = `standard`; on a key, unset = the tenant's |
 | `default_objective` | the objective a request gets when it names none, or one it may not use |
-| `allowed_objectives` | the objectives a request may ask for by header, at most 64; empty = none can be asked for |
+| `allowed_objectives` | the objectives a request may ask for by header, and the body tiers it may ask for (`tier:priority`, `tier:fast`, `tier:flex`); at most 64; empty = nothing can be asked for |
 
 A key can only narrow its tenant: its cap only lowers, its list counts only for names the
 tenant's list holds. A JWT auth profile and a network-identity binding carry
 `priority_class` alone, as one more cap (a binding's default is `standard`: say `critical`
 on a binding that should not cap). The result is the lowest of what the request asks for
-and every cap that applies: a hint can lower a request, never raise it.
+and every cap that applies: a hint can lower a request, never raise it. **A tenant that sets no
+`priority_class` is held at `standard`**: a request is `critical` only when its tenant was
+granted `critical`, and then only if no key, profile or binding lowers it. The order is the
+tenant's cap, then the key's or the JWT profile's, then the binding's, then the hint; each
+can only lower what the one before it allows.
+
+**How a request asks.** Two channels, under the same list:
+
+- The header `x-llm-d-inference-objective: <name>` (the older `x-gateway-inference-objective`
+  is read too; when both are present the new name wins). The name must be an objective that
+  applies to the service and is in `allowed_objectives`.
+- The body's top-level `service_tier`: `priority` and `fast` ask for `critical`, `flex` for
+  `sheddable`, and each only when `allowed_objectives` holds `tier:priority`, `tier:fast` or
+  `tier:flex`. Other values (`auto`, `default`, …) are no hint. The header, when it is there,
+  decides; a refused header is not rescued by the body.
+
+A request that asks for what it may not use is admitted on its default objective, with
+`objective_denied` on its records, or refused 403 `objective_not_allowed` on a rule with
+`ai_objective_strict: true`, whichever channel it asked by. An objective name of 64 bytes or
+more is such a request, never a 400 or a 5xx.
+
+A `service_tier` the gateway read is the gateway's: it is overwritten with `null`, in place and
+at the same length, before the body is forwarded, whether or not it was allowed and whichever
+hint decided. With the key more than once at the top level, the last one is the one read (as
+the engines' JSON parsers read it) and every one is nulled. **Known limit:** a key spelled
+with a JSON escape (`"service\u005ftier"`) is not read and not nulled; the gateway's class is
+not affected by it, but an engine that decodes the escape may still apply the tier.
+
+The records: a completion, and a refusal made after the class stage ran (an objective
+refusal, a rate limit, a quota, a capacity refusal), carry `priority_class`, `priority`,
+`objective` (the hint that was applied: a name, `tier:<value>`, or none), `objective_denied`
+and `hint_not_applied`. `hint_not_applied` means "no body hint was read": the body was not whole
+in the buffer, or there was none (a bodyless request reads the same way). A refusal made
+before the stage ran (a bad credential) has none of these fields. An objective refusal is
+stage `objective`, reason `authz`.
 
 The class fields and the limits of a tenant are separate writes. A POST of limits leaves the
 class as it is. A class field that is omitted is left as stored, an empty value (`""`, `[]`)
@@ -344,14 +378,31 @@ the last-known-good file `aigw-lkg.json` under `--config-path` (written, mode 06
 every read whose content changed) until the store answers. `fc_effective.config_source` on
 any AI-gateway rule says which: `store`, `lkg` or `none`; while it is `lkg`,
 `loxilb_ai_class_config_lkg_intervals_total` counts one per refresh interval.
+`GET /config/ai/objective` answers 200 meanwhile with the objectives the gateway applies,
+`source` (`store` for the last read of this process, `lkg` for the file) and
+`source_timestamp` (when the store answered with them); it answers 503 only when the store
+does not answer and nothing was applied yet.
 
-**A restart while the key store is away.** API keys are never cached on disk, so the file
-does not carry them:
+Both the objective list and `fc_effective` also carry `store_reachable` and
+`store_last_read`, whatever `source` / `config_source` say: `store_reachable: false` while
+the store does not answer (a configuration read earlier still reads `source: store`), and
+`store_last_read`, the time a read of the store last answered. After a restart from the
+file it is the read that last changed the file, which is written only on a change: the
+store may have answered later with nothing new, so read it as "at least this recent". An outage is visible in the API without
+reading the gateway's logs. Without a key store, `fc_effective` carries neither.
+
+**A restart while the key store is away.** The file carries the objectives, the class fields
+of tenants and keys, and every tenant, tenant-and-model and default limit row, as the store
+last had them. API keys are never cached on disk, so it does not carry them:
 
 - A request that presents an API key is refused with 503 `policy_store_unavailable`. It is
   not admitted on a guess and it is not treated as keyless.
 - Requests that need no key are served: a tenant named by a network-identity binding, and
-  keyless services. Their objectives and classes come from the file.
+  keyless services. Their objectives, classes and limits come from the file; a tenant the
+  file holds no limit row for had none in the store, and is served without one.
+- What this gateway confirmed from the store itself, before an outage that starts later,
+  wins over the file. Once the store has answered, the file's limit rows are not used again
+  by that process.
 - The gateway keeps running. When the store answers again the gateway reads it within 20 s,
   `config_source` returns to `store`, and keys validate again.
 
