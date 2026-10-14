@@ -20,7 +20,7 @@ import (
 // swagger:model TenantRateLimitEntry
 type TenantRateLimitEntry struct {
 
-	// The objectives a request of this tenant may ask for by header, and the body tiers (tier:priority, tier:fast, tier:flex)
+	// The objectives a request of this tenant may raise itself to by header, and the body tiers (tier:priority, tier:fast, tier:flex); a hint at or below what the request gets without one needs no entry
 	AllowedObjectives []string `json:"allowed_objectives,omitempty"`
 
 	// Token bucket capacity as a percent of tokens_per_min; 0 uses the server default

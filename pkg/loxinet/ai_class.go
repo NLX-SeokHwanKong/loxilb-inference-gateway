@@ -83,7 +83,7 @@ type classInput struct {
 type classAnswer struct {
 	priority  int32
 	class     int
-	denied    bool   // the header named an objective the request may not use
+	denied    bool   // a hint (header or tier) the request may not use: unknown, out of scope, or an ungranted raise
 	objective string // the hint that was applied: a name, "tier:<value>", or ""
 }
 

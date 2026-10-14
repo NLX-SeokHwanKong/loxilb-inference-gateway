@@ -23,7 +23,7 @@ type APIKeySummary struct {
 	// List of model identifiers this key may access
 	AllowedModels []string `json:"allowed_models"`
 
-	// The objectives a request with this key may ask for by header, and the body tiers (tier:priority, tier:fast, tier:flex) it may ask for by service_tier, out of the ones its tenant allows; at most 64. Empty means the key narrows nothing.
+	// The objectives a request with this key may ask for by header, and the body tiers (tier:priority, tier:fast, tier:flex) it may ask for by service_tier, out of the ones its tenant allows; at most 64. Empty means the key narrows nothing. The list governs raises only: a hint at or below what the request gets without one needs no entry.
 	AllowedObjectives []string `json:"allowed_objectives,omitempty"`
 
 	// Total request-bucket capacity, not additional capacity above RPS. Nonpositive burst uses per-key RPS; nonpositive RPS skips that limiter.

@@ -174,9 +174,9 @@ func TestClassResolve(t *testing.T) {
 			classInput{tenant: "nobody", tier: aiTierFlex}, classAnswer{priority: -1, class: aiClassNumSheddable, objective: "tier:flex"}},
 		{"a header below the default, not granted, is the request's",
 			classInput{tenant: "vip", hint: "scoped"}, classAnswer{priority: 7, class: aiClassNumCritical, objective: "scoped"}},
-		{"a header equal to the default, not granted, is the request's",
+		{"a header equal to the default as held by the cap, not granted, is the request's",
 			classInput{tenant: "capped", hint: "default"}, classAnswer{priority: 0, class: aiClassNumStandard, objective: "default"}},
-		{"a header equal to the default as held by the cap is the request's",
+		{"a header equal to the default, not granted, is the request's",
 			classInput{tenant: "free", hint: "batch"}, classAnswer{priority: -5, class: aiClassNumSheddable, objective: "batch"}},
 		{"the default is compared as the cap holds it: a tier above that is a raise",
 			classInput{tenant: "capped", tier: aiTierPriority}, classAnswer{priority: 0, class: aiClassNumStandard, denied: true, objective: "realtime"}},
@@ -220,8 +220,9 @@ func TestClassResolveWithoutSnapshot(t *testing.T) {
 // lists govern raises only.
 func TestClassLoweringHintIsNeverDenied(t *testing.T) {
 	snap := classSnap()
+	snap.Tenants["nobody"] = cmn.AIClassPolicy{}
 	hints := []string{"", "realtime", "default", "batch", "urgent", "scoped"}
-	n := 0
+	n, unlisted := 0, 0
 	for tenant := range snap.Tenants {
 		for _, keyID := range []string{"", "k-shed", "k-narrow", "k-default", "k-raise", "k-flex"} {
 			for _, bind := range []string{"", cmn.AIClassStandard, cmn.AIClassCritical, cmn.AIClassSheddable} {
@@ -241,6 +242,14 @@ func TestClassLoweringHintIsNeverDenied(t *testing.T) {
 							continue
 						}
 						n++
+						name := hint
+						if name == "" {
+							name = cmn.AITierObjectivePrefix + tierName(tier)
+						}
+						tp, kp := snap.Tenants[tenant], snap.Keys[keyID]
+						if !inList(tp.AllowedObjectives, name) || (len(kp.AllowedObjectives) > 0 && !inList(kp.AllowedObjectives, name)) {
+							unlisted++
+						}
 						got := classResolve(snap, classInput{tenant: tenant, keyID: keyID, svc: classSvc, hint: hint, tier: tier, bindingClass: bind})
 						if got.denied || got.priority != asks {
 							t.Errorf("tenant %s key %q binding %q hint %q tier %d asks %d at or below %d: got %+v, want applied, not denied",
@@ -251,8 +260,8 @@ func TestClassLoweringHintIsNeverDenied(t *testing.T) {
 			}
 		}
 	}
-	if n == 0 {
-		t.Fatal("no lowering hint was tried")
+	if n == 0 || unlisted == 0 {
+		t.Fatalf("lowering hints tried %d, of them not in the lists %d: both must be above 0", n, unlisted)
 	}
 }
 
@@ -264,7 +273,7 @@ func TestClassHintNeverRaises(t *testing.T) {
 	snap.Tenants["nobody"] = cmn.AIClassPolicy{}
 	hints := []string{"", "realtime", "batch", "urgent", "scoped", "elsewhere", "ghost", "no-such"}
 	for tenant := range snap.Tenants {
-		for _, keyID := range []string{"", "k-shed", "k-narrow", "k-default", "k-raise"} {
+		for _, keyID := range []string{"", "k-shed", "k-narrow", "k-default", "k-raise", "k-flex"} {
 			for _, bind := range []string{"", cmn.AIClassStandard, cmn.AIClassCritical, cmn.AIClassSheddable} {
 				// The tenant grants, the others only lower: a tenant
 				// that sets no class grants standard.

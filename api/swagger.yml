@@ -16774,7 +16774,8 @@ definitions:
           The objectives a request with this key may ask for by header, and
           the body tiers (tier:priority, tier:fast, tier:flex) it may ask for
           by service_tier, out of the ones its tenant allows; at most 64.
-          Empty means the key narrows nothing.
+          Empty means the key narrows nothing. The list governs raises only:
+          a hint at or below what the request gets without one needs no entry.
 
   ApiKeyCreateResponse:
     type: object
@@ -16879,7 +16880,8 @@ definitions:
           The objectives a request with this key may ask for by header, and
           the body tiers (tier:priority, tier:fast, tier:flex) it may ask for
           by service_tier, out of the ones its tenant allows; at most 64.
-          Empty means the key narrows nothing.
+          Empty means the key narrows nothing. The list governs raises only:
+          a hint at or below what the request gets without one needs no entry.
 
   TenantRateLimitMod:
     type: object
@@ -16940,9 +16942,9 @@ definitions:
         items:
           type: string
         description: >-
-          The objectives a request of this tenant may ask for with the
-          x-llm-d-inference-objective header, and the body tiers it may ask
-          for by service_tier, named tier:priority, tier:fast and tier:flex;
+          The objectives a request of this tenant may raise itself to with
+          the x-llm-d-inference-objective header, and the body tiers it may
+          raise itself to by service_tier, named tier:priority, tier:fast and tier:flex;
           at most 64. Omitted leaves the stored list; an empty array clears
           it, and then only a hint at or below what the request gets without
           one is honoured (the list governs raises only).
@@ -17006,7 +17008,7 @@ definitions:
         x-omitempty: true
         items:
           type: string
-        description: The objectives a request of this tenant may ask for by header, and the body tiers (tier:priority, tier:fast, tier:flex)
+        description: The objectives a request of this tenant may raise itself to by header, and the body tiers (tier:priority, tier:fast, tier:flex); a hint at or below what the request gets without one needs no entry
       updated_at:
         type: string
         format: date-time

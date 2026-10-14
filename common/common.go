@@ -1091,7 +1091,8 @@ type LbServiceArg struct {
 	// AIDefaultMaxTokensPresent is the presence bit for replace semantics.
 	AIDefaultMaxTokensPresent bool `json:"-"`
 	// AIObjectiveStrict - true refuses, with 403 objective_not_allowed, a
-	// request that names an objective it may not use; false lets it fall
+	// request that names an objective or a tier it may not use (unknown, not
+	// for this service, or a raise it was not granted); false lets it fall
 	// to its default objective. Read where the admission gate runs.
 	AIObjectiveStrict bool `json:"ai_objective_strict,omitempty"`
 	// AIObjectiveStrictPresent is the presence bit for replace semantics.
