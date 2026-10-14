@@ -83,9 +83,11 @@ binary behaves exactly like upstream loxilb.
   rule has a priority and a class (`critical`, `standard`, `sheddable`). It
   asks for an objective by name with the header `x-llm-d-inference-objective`
   (the older `x-gateway-inference-objective` is accepted), or, without one,
-  with the body's `service_tier` (`flex`, `priority`, `fast`); both channels
-  are held to the identity's `allowed_objectives` (a tier as `tier:flex`,
-  `tier:priority`, `tier:fast`). What it gets is held under the
+  with the body's `service_tier` (`flex`, `priority`, `fast`); on both
+  channels a hint that raises the request above what it gets without one
+  must be in the identity's `allowed_objectives` (a tier as `tier:flex`,
+  `tier:priority`, `tier:fast`), and a hint at or below that is always
+  applied and never `objective_denied`, strict rule or not. What it gets is held under the
   `priority_class` of its tenant (a tenant that sets none is held at
   `standard`), lowered by its API key or JWT auth profile and the
   network-identity binding that named its tenant, so a client can lower its
@@ -94,7 +96,7 @@ binary behaves exactly like upstream loxilb.
   `default_objective` and `allowed_objectives` on tenants and API keys;
   `priority_class` on JWT auth profiles and network-identity bindings; the
   rule knob `ai_objective_strict` (403 `objective_not_allowed` for an
-  objective the caller may not use, instead of its default);
+  objective or a raise the caller may not use, instead of its default);
   `X-Loxilb-Admission-Class` / `X-Loxilb-Admission-Objective` on admitted
   responses of a rule with `fc_expose_headers`; `priority_class`, `priority`,
   `objective`, `objective_denied` and `hint_not_applied` on the

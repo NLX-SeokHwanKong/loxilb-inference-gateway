@@ -3,7 +3,7 @@
   "scope": "LoadbalanceEntry fields and AI KV inventory query parameters; not a test-coverage claim",
   "sourceSha256": {
     "swagger-extras.yml": "7cf1fa625f075edbdae5e7b92155e90c1cd792f0d897a050fd89295827183b3f",
-    "swagger.yml": "21c8be59b83ee663ff554e5fdf9f95610d5cc6c92cb754d7be4855143fbc89f9"
+    "swagger.yml": "0b33449d883f173694f8ec55d61a9d4f21e5da852d441735e67b0071ee627abc"
   },
   "fields": [
     {
@@ -345,7 +345,7 @@
       "required": false,
       "contract": {
         "default": false,
-        "description": "What happens to a request that names, with the x-llm-d-inference-objective header, an objective it may not use (unknown, not in its tenant's allowed_objectives, or not for this service). false (the default) - the request falls to its default objective and is admitted; the record says the objective was denied. true - the request is refused with 403 objective_not_allowed. Stored on any rule; it has an effect only where the admission gate runs (an AI-gateway service) and while a class is configured. The admission gate reads it per listener, as api_key_auth: declare the same value on each rule of a VIP and port. Changeable at runtime by a replace POST (the stored value is kept when omitted). Explicit JSON null is rejected.",
+        "description": "What happens to a request that names, with the x-llm-d-inference-objective header, an objective it may not use (unknown, not for this service, or above what the request gets without a hint and not in its tenant's allowed_objectives). false (the default) - the request falls to its default objective and is admitted; the record says the objective was denied. true - the request is refused with 403 objective_not_allowed. Stored on any rule; it has an effect only where the admission gate runs (an AI-gateway service) and while a class is configured. The admission gate reads it per listener, as api_key_auth: declare the same value on each rule of a VIP and port. Changeable at runtime by a replace POST (the stored value is kept when omitted). Explicit JSON null is rejected.",
         "type": "boolean",
         "x-nullable": false
       }

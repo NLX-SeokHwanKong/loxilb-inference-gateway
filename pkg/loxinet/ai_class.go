@@ -32,7 +32,9 @@ import (
 //	asked    the objective named by the request's header, when the identity
 //	         may use it; else the body's tier hint, when the identity may
 //	         use it (its name is "tier:<value>" in allowed_objectives);
-//	         else the identity's default objective; else 0.
+//	         else the identity's default objective; else 0. A hint that
+//	         asks for no more than the request gets without one is always
+//	         the request's: allowed_objectives governs raises only.
 //	cap      the tenant's priority_class, standard when it sets none, then
 //	         lowered by the key's, the JWT profile's and the binding's when
 //	         they set one: those three can only lower what the tenant grants.
@@ -214,33 +216,42 @@ func classResolve(snap *aikey.ClassSnapshot, in classInput) classAnswer {
 		deflt = keyPol.DefaultObjective
 	}
 
+	// What the request gets when it asks for nothing. A hint at or below it
+	// asks for less, which is no forgery: it needs no grant.
+	base, baseName := int32(0), ""
+	if o, ok := objectiveFor(snap, deflt, in.svc); ok {
+		base, baseName = o.Priority, o.Name
+	}
+	baseHeld := min(base, limit)
+	may := func(name string, priority int32) bool {
+		return priority <= baseHeld || allowed(name)
+	}
+
 	var ans classAnswer
 	asked := int32(0)
 	decided := false
 	if in.hint != "" {
-		if o, ok := objectiveFor(snap, in.hint, in.svc); ok && allowed(in.hint) {
+		if o, ok := objectiveFor(snap, in.hint, in.svc); ok && may(in.hint, o.Priority) {
 			asked, ans.objective, decided = o.Priority, o.Name, true
 		} else {
-			// Unknown, out of scope for this service, or not this
-			// identity's to use: the request falls to its default, and
-			// the record says it asked.
+			// Unknown, out of scope for this service, or a raise this
+			// identity may not ask for: the request falls to its default,
+			// and the record says it asked.
 			ans.denied = true
 		}
 	}
 	if !decided && !ans.denied && tierName(in.tier) != "" {
-		// The body's tier is a hint like the header's, under the same list:
+		// The body's tier is a hint like the header's, under the same rule:
 		// a client does not get by the body what it may not ask for by name.
 		name := cmn.AITierObjectivePrefix + tierName(in.tier)
-		if allowed(name) {
+		if may(name, aiTierPriorityOf(in.tier)) {
 			asked, ans.objective, decided = aiTierPriorityOf(in.tier), name, true
 		} else {
 			ans.denied = true
 		}
 	}
 	if !decided {
-		if o, ok := objectiveFor(snap, deflt, in.svc); ok {
-			asked, ans.objective = o.Priority, o.Name
-		}
+		asked, ans.objective = base, baseName
 	}
 
 	ans.priority = asked

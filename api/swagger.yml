@@ -11278,8 +11278,8 @@ definitions:
             description: >-
               What happens to a request that names, with the
               x-llm-d-inference-objective header, an objective it may not use
-              (unknown, not in its tenant's allowed_objectives, or not for this
-              service). false (the default) - the request falls to its default
+              (unknown, not for this service, or above what the request gets
+              without a hint and not in its tenant's allowed_objectives). false (the default) - the request falls to its default
               objective and is admitted; the record says the objective was
               denied. true - the request is refused with 403
               objective_not_allowed. Stored on any rule; it has an effect only
@@ -16944,7 +16944,8 @@ definitions:
           x-llm-d-inference-objective header, and the body tiers it may ask
           for by service_tier, named tier:priority, tier:fast and tier:flex;
           at most 64. Omitted leaves the stored list; an empty array clears
-          it, and then nothing can be asked for.
+          it, and then only a hint at or below what the request gets without
+          one is honoured (the list governs raises only).
 
   TenantModelRateLimit:
     type: object

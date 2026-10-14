@@ -4858,7 +4858,7 @@ func init() {
             },
             "ai_objective_strict": {
               "default": false,
-              "description": "What happens to a request that names, with the x-llm-d-inference-objective header, an objective it may not use (unknown, not in its tenant's allowed_objectives, or not for this service). false (the default) - the request falls to its default objective and is admitted; the record says the objective was denied. true - the request is refused with 403 objective_not_allowed. Stored on any rule; it has an effect only where the admission gate runs (an AI-gateway service) and while a class is configured. The admission gate reads it per listener, as api_key_auth: declare the same value on each rule of a VIP and port. Changeable at runtime by a replace POST (the stored value is kept when omitted). Explicit JSON null is rejected.",
+              "description": "What happens to a request that names, with the x-llm-d-inference-objective header, an objective it may not use (unknown, not for this service, or above what the request gets without a hint and not in its tenant's allowed_objectives). false (the default) - the request falls to its default objective and is admitted; the record says the objective was denied. true - the request is refused with 403 objective_not_allowed. Stored on any rule; it has an effect only where the admission gate runs (an AI-gateway service) and while a class is configured. The admission gate reads it per listener, as api_key_auth: declare the same value on each rule of a VIP and port. Changeable at runtime by a replace POST (the stored value is kept when omitted). Explicit JSON null is rejected.",
               "type": "boolean",
               "x-nullable": false
             },
@@ -8280,7 +8280,7 @@ func init() {
       "description": "POST replaces aggregate rps, tokens_per_min, and burst_pct; omission becomes zero, not preservation. Supplied model_limits are individual upserts or removals; omitted/empty model_limits preserves existing model rows. Aggregate and model writes are sequential, not one transaction, so failure can leave partial changes. Blank identifiers and malformed model entries are not consistently rejected as 400. Configuration alone does not enable enforcement on a service. The class fields (priority_class, default_objective, allowed_objectives) are written by their own statement and only when the body names one of them, so a POST of limits leaves the tenant's class as it is. A body that names a class field and carries no limit (rps, tokens_per_min and burst_pct absent or zero, no model_limits) writes the class only and leaves the limits as they are.",
       "properties": {
         "allowed_objectives": {
-          "description": "The objectives a request of this tenant may ask for with the x-llm-d-inference-objective header, and the body tiers it may ask for by service_tier, named tier:priority, tier:fast and tier:flex; at most 64. Omitted leaves the stored list; an empty array clears it, and then nothing can be asked for.",
+          "description": "The objectives a request of this tenant may ask for with the x-llm-d-inference-objective header, and the body tiers it may ask for by service_tier, named tier:priority, tier:fast and tier:flex; at most 64. Omitted leaves the stored list; an empty array clears it, and then only a hint at or below what the request gets without one is honoured (the list governs raises only).",
           "items": {
             "type": "string"
           },
@@ -41054,7 +41054,7 @@ func init() {
               "x-nullable": false
             },
             "ai_objective_strict": {
-              "description": "What happens to a request that names, with the x-llm-d-inference-objective header, an objective it may not use (unknown, not in its tenant's allowed_objectives, or not for this service). false (the default) - the request falls to its default objective and is admitted; the record says the objective was denied. true - the request is refused with 403 objective_not_allowed. Stored on any rule; it has an effect only where the admission gate runs (an AI-gateway service) and while a class is configured. The admission gate reads it per listener, as api_key_auth: declare the same value on each rule of a VIP and port. Changeable at runtime by a replace POST (the stored value is kept when omitted). Explicit JSON null is rejected.",
+              "description": "What happens to a request that names, with the x-llm-d-inference-objective header, an objective it may not use (unknown, not for this service, or above what the request gets without a hint and not in its tenant's allowed_objectives). false (the default) - the request falls to its default objective and is admitted; the record says the objective was denied. true - the request is refused with 403 objective_not_allowed. Stored on any rule; it has an effect only where the admission gate runs (an AI-gateway service) and while a class is configured. The admission gate reads it per listener, as api_key_auth: declare the same value on each rule of a VIP and port. Changeable at runtime by a replace POST (the stored value is kept when omitted). Explicit JSON null is rejected.",
               "type": "boolean",
               "default": false,
               "x-nullable": false
@@ -42329,7 +42329,7 @@ func init() {
           "x-nullable": false
         },
         "ai_objective_strict": {
-          "description": "What happens to a request that names, with the x-llm-d-inference-objective header, an objective it may not use (unknown, not in its tenant's allowed_objectives, or not for this service). false (the default) - the request falls to its default objective and is admitted; the record says the objective was denied. true - the request is refused with 403 objective_not_allowed. Stored on any rule; it has an effect only where the admission gate runs (an AI-gateway service) and while a class is configured. The admission gate reads it per listener, as api_key_auth: declare the same value on each rule of a VIP and port. Changeable at runtime by a replace POST (the stored value is kept when omitted). Explicit JSON null is rejected.",
+          "description": "What happens to a request that names, with the x-llm-d-inference-objective header, an objective it may not use (unknown, not for this service, or above what the request gets without a hint and not in its tenant's allowed_objectives). false (the default) - the request falls to its default objective and is admitted; the record says the objective was denied. true - the request is refused with 403 objective_not_allowed. Stored on any rule; it has an effect only where the admission gate runs (an AI-gateway service) and while a class is configured. The admission gate reads it per listener, as api_key_auth: declare the same value on each rule of a VIP and port. Changeable at runtime by a replace POST (the stored value is kept when omitted). Explicit JSON null is rejected.",
           "type": "boolean",
           "default": false,
           "x-nullable": false
@@ -46721,7 +46721,7 @@ func init() {
       ],
       "properties": {
         "allowed_objectives": {
-          "description": "The objectives a request of this tenant may ask for with the x-llm-d-inference-objective header, and the body tiers it may ask for by service_tier, named tier:priority, tier:fast and tier:flex; at most 64. Omitted leaves the stored list; an empty array clears it, and then nothing can be asked for.",
+          "description": "The objectives a request of this tenant may ask for with the x-llm-d-inference-objective header, and the body tiers it may ask for by service_tier, named tier:priority, tier:fast and tier:flex; at most 64. Omitted leaves the stored list; an empty array clears it, and then only a hint at or below what the request gets without one is honoured (the list governs raises only).",
           "type": "array",
           "items": {
             "type": "string"
