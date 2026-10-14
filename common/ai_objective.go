@@ -43,7 +43,8 @@ const (
 
 // AITierObjectivePrefix names the body's service_tier hints in a tenant's or
 // key's allowed_objectives: "tier:priority", "tier:fast" and "tier:flex"
-// let a request ask by body for what the hint stands for. They are not
+// let a request raise itself by body to what the hint stands for (a tier at
+// or below what it gets without a hint needs no entry). They are not
 // objective rows, and no objective may be named with this prefix.
 const AITierObjectivePrefix = "tier:"
 
@@ -90,8 +91,10 @@ type AIObjectiveList struct {
 // have. Empty sets no cap of its own; an identity none of whose parts sets
 // one is held at standard. DefaultObjective is the objective a request gets
 // when it names none (or one it may not use); AllowedObjectives are the
-// objective names a request may ask for by header, and the AITierObjectives
-// it may ask for by the body's service_tier. An empty list allows none.
+// objective names a request may raise itself to by header, and the
+// AITierObjectives it may raise itself to by the body's service_tier. The
+// list governs raises only: a hint at or below what the request gets without
+// one needs no entry, and an empty list allows no raise.
 type AIClassPolicy struct {
 	PriorityClass     string   `json:"priority_class,omitempty"`
 	DefaultObjective  string   `json:"default_objective,omitempty"`

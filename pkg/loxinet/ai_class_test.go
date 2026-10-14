@@ -50,6 +50,7 @@ func classSnap() *aikey.ClassSnapshot {
 			"k-narrow":  {AllowedObjectives: []string{"batch", "urgent-not-the-tenants"}, DefaultObjective: "batch"},
 			"k-default": {DefaultObjective: "urgent-not-the-tenants"},
 			"k-raise":   {PriorityClass: cmn.AIClassCritical},
+			"k-flex":    {AllowedObjectives: []string{"batch", "tier:flex"}, DefaultObjective: "batch"},
 		},
 	}
 }
@@ -82,11 +83,11 @@ func TestClassResolve(t *testing.T) {
 			classInput{tenant: "premium", hint: "ghost"}, classAnswer{denied: true}},
 		{"an unknown name is denied",
 			classInput{tenant: "premium", hint: "no-such"}, classAnswer{denied: true}},
-		{"an objective the tenant may not use is denied, and the default applies",
-			classInput{tenant: "vip", hint: "scoped"}, classAnswer{priority: 10, class: aiClassNumCritical, denied: true, objective: "realtime"}},
-		{"a tenant with no list may use none",
-			classInput{tenant: "free", hint: "batch"}, classAnswer{priority: -5, class: aiClassNumSheddable, denied: true, objective: "batch"}},
-		{"a tenant with no row may use none",
+		{"a raise the tenant may not ask for is denied, and the default applies",
+			classInput{tenant: "capped", hint: "urgent"}, classAnswer{priority: 0, class: aiClassNumStandard, denied: true, objective: "realtime"}},
+		{"a tenant with no list may raise to nothing",
+			classInput{tenant: "free", hint: "realtime"}, classAnswer{priority: -5, class: aiClassNumSheddable, denied: true, objective: "batch"}},
+		{"a tenant with no row may raise to nothing",
 			classInput{tenant: "nobody", hint: "realtime"}, classAnswer{denied: true}},
 		{"names are compared exactly",
 			classInput{tenant: "premium", hint: "Realtime"}, classAnswer{denied: true}},
@@ -155,14 +156,34 @@ func TestClassResolve(t *testing.T) {
 			classInput{tenant: "tiered", tier: aiTierFast}, classAnswer{denied: true}},
 		{"a tier wins over the default objective",
 			classInput{tenant: "vip", tier: aiTierFlex}, classAnswer{priority: -1, class: aiClassNumSheddable, objective: "tier:flex"}},
-		{"a key's list narrows the tiers too",
+		{"a key's list narrows the tiers too: flex is above the key's batch",
 			classInput{tenant: "vip", keyID: "k-narrow", tier: aiTierFlex}, classAnswer{priority: -5, class: aiClassNumSheddable, denied: true, objective: "batch"}},
+		{"the same key granted tier:flex: flex, no denied mark",
+			classInput{tenant: "vip", keyID: "k-flex", tier: aiTierFlex}, classAnswer{priority: -1, class: aiClassNumSheddable, objective: "tier:flex"}},
 		{"the header wins over the tier",
 			classInput{tenant: "vip", hint: "realtime", tier: aiTierFlex}, classAnswer{priority: 10, class: aiClassNumCritical, objective: "realtime"}},
 		{"a denied header is not rescued by the tier: the default applies",
-			classInput{tenant: "vip", hint: "scoped", tier: aiTierFlex}, classAnswer{priority: 10, class: aiClassNumCritical, denied: true, objective: "realtime"}},
+			classInput{tenant: "capped", hint: "urgent", tier: aiTierFlex}, classAnswer{priority: 0, class: aiClassNumStandard, denied: true, objective: "realtime"}},
 		{"an unknown tier value is no hint",
 			classInput{tenant: "vip", tier: 99}, classAnswer{priority: 10, class: aiClassNumCritical, objective: "realtime"}},
+
+		// ---- a hint that asks for no more than the default needs no grant
+		{"flex not granted is the request's: it asks for less",
+			classInput{tenant: "capped", tier: aiTierFlex}, classAnswer{priority: -1, class: aiClassNumSheddable, objective: "tier:flex"}},
+		{"flex from a tenant with no row is the request's",
+			classInput{tenant: "nobody", tier: aiTierFlex}, classAnswer{priority: -1, class: aiClassNumSheddable, objective: "tier:flex"}},
+		{"a header below the default, not granted, is the request's",
+			classInput{tenant: "vip", hint: "scoped"}, classAnswer{priority: 7, class: aiClassNumCritical, objective: "scoped"}},
+		{"a header equal to the default as held by the cap, not granted, is the request's",
+			classInput{tenant: "capped", hint: "default"}, classAnswer{priority: 0, class: aiClassNumStandard, objective: "default"}},
+		{"a header equal to the default, not granted, is the request's",
+			classInput{tenant: "free", hint: "batch"}, classAnswer{priority: -5, class: aiClassNumSheddable, objective: "batch"}},
+		{"the default is compared as the cap holds it: a tier above that is a raise",
+			classInput{tenant: "capped", tier: aiTierPriority}, classAnswer{priority: 0, class: aiClassNumStandard, denied: true, objective: "realtime"}},
+		{"a lowering header is still an objective: an unknown name is denied",
+			classInput{tenant: "capped", hint: "no-such"}, classAnswer{priority: 0, class: aiClassNumStandard, denied: true, objective: "realtime"}},
+		{"a lowering header is still scoped: another service's is denied",
+			classInput{tenant: "vip", hint: "elsewhere"}, classAnswer{priority: 10, class: aiClassNumCritical, denied: true, objective: "realtime"}},
 	}
 	for _, c := range cases {
 		c.in.svc = classSvc
@@ -188,6 +209,60 @@ func TestClassResolveWithoutSnapshot(t *testing.T) {
 	if got := classResolve(nil, classInput{tenant: "t", svc: classSvc, hint: "realtime"}); !got.denied || got.priority != 0 {
 		t.Errorf("no snapshot, a header hint = %+v, want denied at standard", got)
 	}
+	got = classResolve(nil, classInput{tenant: "t", svc: classSvc, tier: aiTierFlex})
+	if want := (classAnswer{priority: -1, class: aiClassNumSheddable, objective: "tier:flex"}); got != want {
+		t.Errorf("no snapshot, flex = %+v, want %+v: asking for less needs no list", got, want)
+	}
+}
+
+// A hint at or below what the request gets without one is never denied and
+// is applied, by the header and by the body, whatever the lists say: the
+// lists govern raises only.
+func TestClassLoweringHintIsNeverDenied(t *testing.T) {
+	snap := classSnap()
+	snap.Tenants["nobody"] = cmn.AIClassPolicy{}
+	hints := []string{"", "realtime", "default", "batch", "urgent", "scoped"}
+	n, unlisted := 0, 0
+	for tenant := range snap.Tenants {
+		for _, keyID := range []string{"", "k-shed", "k-narrow", "k-default", "k-raise", "k-flex"} {
+			for _, bind := range []string{"", cmn.AIClassStandard, cmn.AIClassCritical, cmn.AIClassSheddable} {
+				base := classResolve(snap, classInput{tenant: tenant, keyID: keyID, svc: classSvc, bindingClass: bind})
+				for _, hint := range hints {
+					for tier := aiTierNone; tier <= aiTierFast; tier++ {
+						asks := int32(0)
+						switch {
+						case hint != "":
+							asks = snap.Objectives[hint].Priority
+						case tier != aiTierNone:
+							asks = aiTierPriorityOf(tier)
+						default:
+							continue
+						}
+						if asks > base.priority {
+							continue
+						}
+						n++
+						name := hint
+						if name == "" {
+							name = cmn.AITierObjectivePrefix + tierName(tier)
+						}
+						tp, kp := snap.Tenants[tenant], snap.Keys[keyID]
+						if !inList(tp.AllowedObjectives, name) || (len(kp.AllowedObjectives) > 0 && !inList(kp.AllowedObjectives, name)) {
+							unlisted++
+						}
+						got := classResolve(snap, classInput{tenant: tenant, keyID: keyID, svc: classSvc, hint: hint, tier: tier, bindingClass: bind})
+						if got.denied || got.priority != asks {
+							t.Errorf("tenant %s key %q binding %q hint %q tier %d asks %d at or below %d: got %+v, want applied, not denied",
+								tenant, keyID, bind, hint, tier, asks, base.priority, got)
+						}
+					}
+				}
+			}
+		}
+	}
+	if n == 0 || unlisted == 0 {
+		t.Fatalf("lowering hints tried %d, of them not in the lists %d: both must be above 0", n, unlisted)
+	}
 }
 
 // A hint never raises a request above its identity's cap, whatever is asked
@@ -198,7 +273,7 @@ func TestClassHintNeverRaises(t *testing.T) {
 	snap.Tenants["nobody"] = cmn.AIClassPolicy{}
 	hints := []string{"", "realtime", "batch", "urgent", "scoped", "elsewhere", "ghost", "no-such"}
 	for tenant := range snap.Tenants {
-		for _, keyID := range []string{"", "k-shed", "k-narrow", "k-default", "k-raise"} {
+		for _, keyID := range []string{"", "k-shed", "k-narrow", "k-default", "k-raise", "k-flex"} {
 			for _, bind := range []string{"", cmn.AIClassStandard, cmn.AIClassCritical, cmn.AIClassSheddable} {
 				// The tenant grants, the others only lower: a tenant
 				// that sets no class grants standard.

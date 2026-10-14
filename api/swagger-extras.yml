@@ -755,6 +755,8 @@ paths:
                   The objectives a request with this key may ask for by header,
                   out of the ones its tenant allows; at most 64. Omitted or null
                   leaves the stored list unchanged; an empty array clears it.
+                  The list governs raises only: a hint at or below what the
+                  request gets without one needs no entry.
                   The three class fields are written by one statement of their
                   own, after the other fields.
       responses:

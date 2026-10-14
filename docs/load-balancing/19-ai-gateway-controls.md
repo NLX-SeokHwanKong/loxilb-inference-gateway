@@ -316,7 +316,7 @@ and `PATCH /config/ai/apikey/{key_id}`):
 |---|---|
 | `priority_class` | the highest class a request may have (`standard`, `critical`, `sheddable`); on a tenant, unset = `standard`; on a key, unset = the tenant's |
 | `default_objective` | the objective a request gets when it names none, or one it may not use |
-| `allowed_objectives` | the objectives a request may ask for by header, and the body tiers it may ask for (`tier:priority`, `tier:fast`, `tier:flex`); at most 64; empty = nothing can be asked for |
+| `allowed_objectives` | the objectives a request may raise itself to by header, and the body tiers it may raise itself to (`tier:priority`, `tier:fast`, `tier:flex`); at most 64; empty = no raise can be asked for. A hint at or below what the request gets without one needs no entry |
 
 A key can only narrow its tenant: its cap only lowers, its list counts only for names the
 tenant's list holds. A JWT auth profile and a network-identity binding carry
@@ -328,15 +328,22 @@ granted `critical`, and then only if no key, profile or binding lowers it. The o
 tenant's cap, then the key's or the JWT profile's, then the binding's, then the hint; each
 can only lower what the one before it allows.
 
-**How a request asks.** Two channels, under the same list:
+**How a request asks.** Two channels, under the same rule:
 
 - The header `x-llm-d-inference-objective: <name>` (the older `x-gateway-inference-objective`
   is read too; when both are present the new name wins). The name must be an objective that
-  applies to the service and is in `allowed_objectives`.
-- The body's top-level `service_tier`: `priority` and `fast` ask for `critical`, `flex` for
-  `sheddable`, and each only when `allowed_objectives` holds `tier:priority`, `tier:fast` or
-  `tier:flex`. Other values (`auto`, `default`, …) are no hint. The header, when it is there,
-  decides; a refused header is not rescued by the body.
+  applies to the service.
+- The body's top-level `service_tier`: `priority` and `fast` ask for `critical` (priority 1),
+  `flex` for `sheddable` (priority -1). Other values (`auto`, `default`, …) are no hint. The
+  header, when it is there, decides; a refused header is not rescued by the body.
+
+**`allowed_objectives` governs raises only.** A hint whose priority is at or below what the
+request gets without one (its default objective, held under its caps; `standard`, priority 0,
+when it has none) asks for less and is always applied, on strict and non-strict rules alike,
+listed or not: an OpenAI SDK client's `service_tier: flex` runs `sheddable` with no grant. A
+hint above that needs its name (`tier:priority`, `tier:fast`, `tier:flex` for the body) in
+`allowed_objectives`. The comparison is by priority, not class: on a key whose default is
+`batch` (priority -5), `flex` (-1) is a raise within `sheddable` and needs `tier:flex`.
 
 A request that asks for what it may not use is admitted on its default objective, with
 `objective_denied` on its records, or refused 403 `objective_not_allowed` on a rule with
@@ -368,8 +375,9 @@ curl -sk -X POST https://<LB>:11111/netlox/v1/config/ai/tenant/ratelimit -H "Aut
 ```
 
 On a rule, `ai_objective_strict: true` refuses a request that names an objective it may not
-use with 403 `objective_not_allowed`; by default such a request falls to its default
-objective.
+use (unknown, not for this service, or a raise it was not granted) with 403
+`objective_not_allowed`; by default such a request falls to its default objective. A
+lowering hint is never refused.
 
 **When the key store is away.** Every write above answers 503 (`ai_key_store_unavailable`,
 or `ai_key_store_unconfigured` with no store) and changes nothing. A running gateway keeps
