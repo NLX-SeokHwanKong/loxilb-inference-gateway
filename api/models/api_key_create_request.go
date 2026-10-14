@@ -23,7 +23,7 @@ type APIKeyCreateRequest struct {
 	// List of model identifiers this key may access
 	AllowedModels []string `json:"allowed_models"`
 
-	// The objectives a request with this key may ask for by header, out of the ones its tenant allows; at most 64. Empty means the key narrows nothing.
+	// The objectives a request with this key may ask for by header, and the body tiers (tier:priority, tier:fast, tier:flex) it may ask for by service_tier, out of the ones its tenant allows; at most 64. Empty means the key narrows nothing.
 	AllowedObjectives []string `json:"allowed_objectives,omitempty"`
 
 	// Optional imported credential; absent or empty generates a new key. Imports require 16-512 printable non-space ASCII bytes. GET/list never returns the credential. Create currently emits an empty raw_key string for imports, not omission. Length and invalid-character rejections both map to 400 with api_key validation fields.
@@ -45,7 +45,7 @@ type APIKeyCreateRequest struct {
 	// Human-readable label for the API key
 	Name string `json:"name,omitempty"`
 
-	// The highest priority class a request with this key may have. It can only lower what the key's tenant allows. Omitted means no cap from the key.
+	// The highest priority class a request with this key may have. It can only lower what the key's tenant allows (a tenant that sets no class allows standard). Omitted means no cap from the key.
 	// Enum: [standard critical sheddable]
 	PriorityClass string `json:"priority_class,omitempty"`
 

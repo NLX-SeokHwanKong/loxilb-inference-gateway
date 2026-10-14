@@ -44,6 +44,20 @@ func aiClassConfigSource() string {
 	return src
 }
 
+// aiClassStoreHealth fills the key store's reachability into a read-back:
+// nothing without a key store.
+func aiClassStoreHealth(eff *cmn.FcEffectiveArg) {
+	svc := mh.AIKeyService
+	if svc == nil {
+		return
+	}
+	reachable, lastOK := svc.StoreHealth()
+	eff.StoreReachable = &reachable
+	if !lastOK.IsZero() {
+		eff.StoreLastRead = &lastOK
+	}
+}
+
 // aiClassLKGIntervals is what loxilb_ai_class_config_lkg_intervals_total
 // reports: the refresh intervals served from the last-known-good file.
 func aiClassLKGIntervals() uint64 {

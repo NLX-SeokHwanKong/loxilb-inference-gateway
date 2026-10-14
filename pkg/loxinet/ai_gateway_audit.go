@@ -306,6 +306,11 @@ type aiDenyRecord struct {
 	// caused names the binding with the credential's own auth mode.
 	AuthSrc     int
 	NetIdentity string
+	// Priority, ClassInfo and Objective: as on a completion. ClassInfo is 0
+	// for a refusal made before the class stage ran.
+	Priority  int
+	ClassInfo int
+	Objective string
 }
 
 // emitAIDeny writes the sec.ai.deny record for a request the admission
@@ -338,6 +343,7 @@ func emitAIDeny(d aiDenyRecord) bool {
 		Stage:    aiDenyStage(d.Stage),
 		Decision: d.ErrorCode,
 	}
+	aiClassDetail(r.Data, d.Priority, d.ClassInfo, d.Objective)
 	return p.Emit(r)
 }
 

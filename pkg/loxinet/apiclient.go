@@ -2187,12 +2187,13 @@ func (na *NetAPIStruct) NetAPIKeyClassPatch(keyID string, patch cmn.AIClassPatch
 	return mh.AIKeyService.PatchAPIKeyClass(keyID, patch)
 }
 
-// NetAIObjectiveGet - list the objectives, as the store holds them.
-func (na *NetAPIStruct) NetAIObjectiveGet() ([]cmn.AIObjectiveEntry, error) {
+// NetAIObjectiveGet - list the objectives as the store holds them, or, while
+// it does not answer, as this gateway applies them, with their source.
+func (na *NetAPIStruct) NetAIObjectiveGet() (cmn.AIObjectiveList, error) {
 	if mh.AIKeyService == nil {
-		return nil, keyStoreAbsentErr()
+		return cmn.AIObjectiveList{}, keyStoreAbsentErr()
 	}
-	return mh.AIKeyService.ListObjectives()
+	return mh.AIKeyService.ObjectiveList()
 }
 
 // NetAIObjectiveAdd - create or replace an objective. The class snapshot

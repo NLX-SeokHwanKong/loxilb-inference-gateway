@@ -37,11 +37,13 @@ func classSnap() *aikey.ClassSnapshot {
 			"elsewhere": {Name: "elsewhere", Priority: 7, Services: []string{"10.0.0.9:80"}},
 		},
 		Tenants: map[string]cmn.AIClassPolicy{
-			"premium": {AllowedObjectives: []string{"batch", "elsewhere", "ghost", "realtime", "scoped"}},
-			"capped":  {PriorityClass: cmn.AIClassStandard, AllowedObjectives: []string{"batch", "realtime"}, DefaultObjective: "realtime"},
-			"free":    {PriorityClass: cmn.AIClassSheddable, DefaultObjective: "batch"},
-			"vip":     {PriorityClass: cmn.AIClassCritical, DefaultObjective: "realtime", AllowedObjectives: []string{"batch", "realtime", "urgent"}},
-			"plain":   {DefaultObjective: "elsewhere"},
+			"premium":   {PriorityClass: cmn.AIClassCritical, AllowedObjectives: []string{"batch", "elsewhere", "ghost", "realtime", "scoped"}},
+			"capped":    {PriorityClass: cmn.AIClassStandard, AllowedObjectives: []string{"batch", "realtime"}, DefaultObjective: "realtime"},
+			"free":      {PriorityClass: cmn.AIClassSheddable, DefaultObjective: "batch"},
+			"vip":       {PriorityClass: cmn.AIClassCritical, DefaultObjective: "realtime", AllowedObjectives: []string{"batch", "realtime", "tier:flex", "urgent"}},
+			"plain":     {DefaultObjective: "elsewhere"},
+			"tiered":    {PriorityClass: cmn.AIClassCritical, AllowedObjectives: []string{"tier:flex", "tier:priority"}},
+			"unclassed": {AllowedObjectives: []string{"realtime", "tier:fast", "tier:priority"}, DefaultObjective: "realtime"},
 		},
 		Keys: map[string]cmn.AIClassPolicy{
 			"k-shed":    {PriorityClass: cmn.AIClassSheddable},
@@ -97,7 +99,7 @@ func TestClassResolve(t *testing.T) {
 		{"a cap does not raise what is below it",
 			classInput{tenant: "capped", hint: "batch"}, classAnswer{priority: -5, class: aiClassNumSheddable, objective: "batch"}},
 		{"a sheddable cap makes every request sheddable",
-			classInput{tenant: "free", tier: aiTierPriority}, classAnswer{priority: -1, class: aiClassNumSheddable, objective: "tier:priority"}},
+			classInput{tenant: "free", tier: aiTierPriority}, classAnswer{priority: -5, class: aiClassNumSheddable, denied: true, objective: "batch"}},
 		{"a critical cap is no cap",
 			classInput{tenant: "vip", hint: "urgent"}, classAnswer{priority: 100, class: aiClassNumCritical, objective: "urgent"}},
 		{"the key's cap lowers the tenant's",
@@ -111,6 +113,22 @@ func TestClassResolve(t *testing.T) {
 		{"the lowest of the four decides",
 			classInput{tenant: "vip", keyID: "k-raise", bindingClass: cmn.AIClassStandard, profileClass: cmn.AIClassSheddable, hint: "urgent"},
 			classAnswer{priority: -1, class: aiClassNumSheddable, objective: "urgent"}},
+		{"an identity that sets no class is held at standard: its allowed objective",
+			classInput{tenant: "unclassed", hint: "realtime"}, classAnswer{priority: 0, class: aiClassNumStandard, objective: "realtime"}},
+		{"an identity that sets no class is held at standard: its default objective",
+			classInput{tenant: "unclassed"}, classAnswer{priority: 0, class: aiClassNumStandard, objective: "realtime"}},
+		{"an identity that sets no class is held at standard: an allowed tier",
+			classInput{tenant: "unclassed", tier: aiTierPriority}, classAnswer{priority: 0, class: aiClassNumStandard, objective: "tier:priority"}},
+		{"a key's critical does not raise a tenant that sets no class",
+			classInput{tenant: "unclassed", keyID: "k-raise", hint: "realtime"}, classAnswer{priority: 0, class: aiClassNumStandard, objective: "realtime"}},
+		{"a binding's critical does not raise a tenant that sets no class",
+			classInput{tenant: "unclassed", bindingClass: cmn.AIClassCritical, tier: aiTierFast}, classAnswer{priority: 0, class: aiClassNumStandard, objective: "tier:fast"}},
+		{"a profile's critical does not raise a tenant that sets no class",
+			classInput{tenant: "unclassed", profileClass: cmn.AIClassCritical, hint: "realtime"}, classAnswer{priority: 0, class: aiClassNumStandard, objective: "realtime"}},
+		{"a tenant with no row and a critical binding is standard",
+			classInput{tenant: "nobody", bindingClass: cmn.AIClassCritical, profileClass: cmn.AIClassCritical}, classAnswer{}},
+		{"a key lowers a tenant that sets no class",
+			classInput{tenant: "unclassed", keyID: "k-shed", hint: "realtime"}, classAnswer{priority: -1, class: aiClassNumSheddable, objective: "realtime"}},
 		{"a key of another tenant's snapshot row is not consulted without a key id",
 			classInput{tenant: "vip", hint: "urgent"}, classAnswer{priority: 100, class: aiClassNumCritical, objective: "urgent"}},
 
@@ -124,17 +142,21 @@ func TestClassResolve(t *testing.T) {
 		{"a key's default the tenant does not allow is not used",
 			classInput{tenant: "vip", keyID: "k-default"}, classAnswer{priority: 10, class: aiClassNumCritical, objective: "realtime"}},
 
-		// ---- the body's tier
-		{"flex is sheddable",
-			classInput{tenant: "nobody", tier: aiTierFlex}, classAnswer{priority: -1, class: aiClassNumSheddable, objective: "tier:flex"}},
-		{"priority is critical",
-			classInput{tenant: "nobody", tier: aiTierPriority}, classAnswer{priority: 1, class: aiClassNumCritical, objective: "tier:priority"}},
-		{"fast is critical",
-			classInput{tenant: "nobody", tier: aiTierFast}, classAnswer{priority: 1, class: aiClassNumCritical, objective: "tier:fast"}},
-		{"a tier needs no objective and no list, and is still under the cap",
-			classInput{tenant: "capped", tier: aiTierFast}, classAnswer{priority: 0, class: aiClassNumStandard, objective: "tier:fast"}},
+		// ---- the body's tier: a hint under the same list as the header's
+		{"a tier the identity may not use is denied, as a header would be",
+			classInput{tenant: "nobody", tier: aiTierPriority}, classAnswer{denied: true}},
+		{"a tier the identity may not use falls to its default",
+			classInput{tenant: "capped", tier: aiTierFast}, classAnswer{priority: 0, class: aiClassNumStandard, denied: true, objective: "realtime"}},
+		{"flex, allowed, is sheddable",
+			classInput{tenant: "tiered", tier: aiTierFlex}, classAnswer{priority: -1, class: aiClassNumSheddable, objective: "tier:flex"}},
+		{"priority, allowed, is critical",
+			classInput{tenant: "tiered", tier: aiTierPriority}, classAnswer{priority: 1, class: aiClassNumCritical, objective: "tier:priority"}},
+		{"fast is its own name: tier:priority does not allow it",
+			classInput{tenant: "tiered", tier: aiTierFast}, classAnswer{denied: true}},
 		{"a tier wins over the default objective",
 			classInput{tenant: "vip", tier: aiTierFlex}, classAnswer{priority: -1, class: aiClassNumSheddable, objective: "tier:flex"}},
+		{"a key's list narrows the tiers too",
+			classInput{tenant: "vip", keyID: "k-narrow", tier: aiTierFlex}, classAnswer{priority: -5, class: aiClassNumSheddable, denied: true, objective: "batch"}},
 		{"the header wins over the tier",
 			classInput{tenant: "vip", hint: "realtime", tier: aiTierFlex}, classAnswer{priority: 10, class: aiClassNumCritical, objective: "realtime"}},
 		{"a denied header is not rescued by the tier: the default applies",
@@ -156,28 +178,41 @@ func TestClassResolveWithoutSnapshot(t *testing.T) {
 	if got := classResolve(nil, classInput{tenant: "t", svc: classSvc}); got != (classAnswer{}) {
 		t.Errorf("no snapshot, nothing asked = %+v, want the zero answer", got)
 	}
-	got := classResolve(nil, classInput{tenant: "t", svc: classSvc, tier: aiTierFast, bindingClass: cmn.AIClassStandard})
-	if want := (classAnswer{priority: 0, class: aiClassNumStandard, objective: "tier:fast"}); got != want {
-		t.Errorf("no snapshot, a tier under a binding cap = %+v, want %+v", got, want)
+	got := classResolve(nil, classInput{tenant: "t", svc: classSvc, tier: aiTierFast, bindingClass: cmn.AIClassCritical})
+	if want := (classAnswer{denied: true}); got != want {
+		t.Errorf("no snapshot, a tier under a critical binding = %+v, want %+v: no list allows it", got, want)
+	}
+	if got := classResolve(nil, classInput{tenant: "t", svc: classSvc, bindingClass: cmn.AIClassSheddable}); got.class != aiClassNumSheddable || got.priority != -1 {
+		t.Errorf("no snapshot, a sheddable binding with nothing asked = %+v: a sheddable cap makes every request sheddable", got)
 	}
 	if got := classResolve(nil, classInput{tenant: "t", svc: classSvc, hint: "realtime"}); !got.denied || got.priority != 0 {
 		t.Errorf("no snapshot, a header hint = %+v, want denied at standard", got)
 	}
 }
 
-// A hint never raises a request above its identity's cap, whatever is asked.
+// A hint never raises a request above its identity's cap, whatever is asked
+// and by whichever channel, and an identity that sets no class is never
+// above standard.
 func TestClassHintNeverRaises(t *testing.T) {
 	snap := classSnap()
+	snap.Tenants["nobody"] = cmn.AIClassPolicy{}
 	hints := []string{"", "realtime", "batch", "urgent", "scoped", "elsewhere", "ghost", "no-such"}
 	for tenant := range snap.Tenants {
 		for _, keyID := range []string{"", "k-shed", "k-narrow", "k-default", "k-raise"} {
 			for _, bind := range []string{"", cmn.AIClassStandard, cmn.AIClassCritical, cmn.AIClassSheddable} {
-				limit := capOfClass(snap.Tenants[tenant].PriorityClass)
-				if v := capOfClass(snap.Keys[keyID].PriorityClass); v < limit {
-					limit = v
+				// The tenant grants, the others only lower: a tenant
+				// that sets no class grants standard.
+				limit := int32(0)
+				if snap.Tenants[tenant].PriorityClass == cmn.AIClassCritical {
+					limit = int32(1 << 30)
 				}
-				if v := capOfClass(bind); v < limit {
-					limit = v
+				for _, c := range []string{snap.Tenants[tenant].PriorityClass, snap.Keys[keyID].PriorityClass, bind} {
+					switch c {
+					case cmn.AIClassStandard:
+						limit = min(limit, 0)
+					case cmn.AIClassSheddable:
+						limit = min(limit, -1)
+					}
 				}
 				for _, hint := range hints {
 					for tier := aiTierNone; tier <= aiTierFast; tier++ {

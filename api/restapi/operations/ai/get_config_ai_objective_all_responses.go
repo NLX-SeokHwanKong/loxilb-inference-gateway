@@ -197,7 +197,7 @@ func (o *GetConfigAiObjectiveAllInternalServerError) WriteResponse(rw http.Respo
 const GetConfigAiObjectiveAllServiceUnavailableCode int = 503
 
 /*
-GetConfigAiObjectiveAllServiceUnavailable Maintenance mode, no AI key store configured, or the store does not answer
+GetConfigAiObjectiveAllServiceUnavailable Maintenance mode, no AI key store configured, or the store does not answer and nothing was applied yet
 
 swagger:response getConfigAiObjectiveAllServiceUnavailable
 */

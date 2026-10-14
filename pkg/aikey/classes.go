@@ -184,7 +184,7 @@ func ValidateClassPolicy(p cmn.AIClassPolicy) (cmn.AIClassPolicy, error) {
 	seen := make(map[string]struct{}, len(p.AllowedObjectives))
 	out := make([]string, 0, len(p.AllowedObjectives))
 	for _, name := range p.AllowedObjectives {
-		if !validObjectiveName(name) {
+		if !validObjectiveName(name) && !cmn.IsAITierObjective(name) {
 			return p, cmn.NewValidationError("allowed_objectives", "invalid objective name %q", name)
 		}
 		if _, dup := seen[name]; dup {
@@ -266,6 +266,31 @@ func (s *Service) ListObjectives() ([]cmn.AIObjectiveEntry, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
+}
+
+// ObjectiveList is the API's objective list: the store's, read now, when it
+// answers; else the objectives of the snapshot in force, with its source
+// and the time the store answered with it. Only a gateway that has applied
+// nothing yet has nothing to show while the store is away.
+//
+// StoreReachable and StoreLastRead say, whatever the source, whether the
+// store answered its latest read (this one) and when a read last answered:
+// an outage is seen in the answer, not only in the logs.
+func (s *Service) ObjectiveList() (cmn.AIObjectiveList, error) {
+	gen := s.class.readGen.Add(1)
+	objs, err := s.ListObjectives()
+	s.noteStoreRead(gen, err)
+	reachable, lastOK := s.StoreHealth()
+	if err == nil {
+		return cmn.AIObjectiveList{Objectives: objs, Source: cmn.AIClassSourceStore,
+			SourceTimestamp: time.Now().UTC(), StoreReachable: reachable, StoreLastRead: lastOK}, nil
+	}
+	applied, source, at, ok := s.AppliedObjectives()
+	if !ok {
+		return cmn.AIObjectiveList{}, err
+	}
+	return cmn.AIObjectiveList{Objectives: applied, Source: source, SourceTimestamp: at,
+		StoreReachable: reachable, StoreLastRead: lastOK}, nil
 }
 
 func readObjectives(db DBTX) (map[string]cmn.AIObjectiveEntry, error) {

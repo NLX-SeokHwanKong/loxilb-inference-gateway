@@ -3,7 +3,7 @@
   "scope": "LoadbalanceEntry fields and AI KV inventory query parameters; not a test-coverage claim",
   "sourceSha256": {
     "swagger-extras.yml": "7cf1fa625f075edbdae5e7b92155e90c1cd792f0d897a050fd89295827183b3f",
-    "swagger.yml": "fea607d2c6f71f182cd501b53a16da3463ce13c6dc26695581e9dcf0a8006439"
+    "swagger.yml": "21c8be59b83ee663ff554e5fdf9f95610d5cc6c92cb754d7be4855143fbc89f9"
   },
   "fields": [
     {
@@ -1138,6 +1138,25 @@
           "default"
         ],
         "type": "string"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/store_last_read",
+      "required": false,
+      "contract": {
+        "description": "When a read of the AI key store last answered in this process. A gateway started from the last-known-good file shows, until the store answers, the read that last CHANGED that file: the store may have answered later with nothing changed (the file is written only on a change). Absent when neither happened or no key store is configured.",
+        "format": "date-time",
+        "type": "string",
+        "x-nullable": true
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/store_reachable",
+      "required": false,
+      "contract": {
+        "description": "Whether the AI key store answered the gateway's latest read of it, whatever config_source says (a configuration read earlier stays in force through an outage). Absent when no key store is configured. The gateway's, the same on every rule.",
+        "type": "boolean",
+        "x-nullable": true
       }
     },
     {

@@ -25,6 +25,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/loxilb-io/loxilb/api/models"
 	"github.com/loxilb-io/loxilb/api/restapi/operations/ai"
@@ -37,6 +38,10 @@ import (
 type stubClassHook struct {
 	cmn.NetHookInterface
 	objectives []cmn.AIObjectiveEntry
+	source     string
+	sourceAt   time.Time
+	reachable  bool
+	lastRead   time.Time
 	err        error
 
 	added   *cmn.AIObjectiveEntry
@@ -52,8 +57,13 @@ type stubClassHook struct {
 	summary      *cmn.ApiKeySummary
 }
 
-func (s *stubClassHook) NetAIObjectiveGet() ([]cmn.AIObjectiveEntry, error) {
-	return s.objectives, s.err
+func (s *stubClassHook) NetAIObjectiveGet() (cmn.AIObjectiveList, error) {
+	src := s.source
+	if src == "" {
+		src = cmn.AIClassSourceStore
+	}
+	return cmn.AIObjectiveList{Objectives: s.objectives, Source: src, SourceTimestamp: s.sourceAt,
+		StoreReachable: s.reachable, StoreLastRead: s.lastRead}, s.err
 }
 func (s *stubClassHook) NetAIObjectiveAdd(e *cmn.AIObjectiveEntry) (int, error) {
 	s.added = e
@@ -143,6 +153,30 @@ func TestObjectivePostGetDeleteCarryEveryField(t *testing.T) {
 		got.ObjectiveAttr[1].Name != "realtime" || got.ObjectiveAttr[1].Services[0] != "20.20.20.1:8080" {
 		t.Fatalf("GET returned %s", body)
 	}
+	// While the store is away the list is the applied one, and says so.
+	stub.source, stub.sourceAt = cmn.AIClassSourceLKG, time.Date(2026, 10, 14, 4, 0, 0, 0, time.UTC)
+	_, body = renderResponder(t, ConfigGetAIObjectiveAll(ai.GetConfigAiObjectiveAllParams{HTTPRequest: req}, nil))
+	if !strings.Contains(body, `"source":"lkg"`) || !strings.Contains(body, `"source_timestamp":"2026-10-14T04:00:00`) {
+		t.Fatalf("the applied list does not name its source: %s", body)
+	}
+	// ... and that the store is away, with when it last answered, whatever
+	// the source; a store that never answered has no time to show.
+	stub.lastRead = time.Date(2026, 10, 14, 3, 0, 0, 0, time.UTC)
+	_, body = renderResponder(t, ConfigGetAIObjectiveAll(ai.GetConfigAiObjectiveAllParams{HTTPRequest: req}, nil))
+	if !strings.Contains(body, `"store_reachable":false`) || !strings.Contains(body, `"store_last_read":"2026-10-14T03:00:00`) {
+		t.Fatalf("the list during an outage does not say the store is away: %s", body)
+	}
+	stub.source, stub.lastRead = cmn.AIClassSourceStore, time.Time{}
+	_, body = renderResponder(t, ConfigGetAIObjectiveAll(ai.GetConfigAiObjectiveAllParams{HTTPRequest: req}, nil))
+	if !strings.Contains(body, `"store_reachable":false`) || strings.Contains(body, `store_last_read`) {
+		t.Fatalf("a store snapshot during an outage, no read ever answered: %s", body)
+	}
+	stub.reachable, stub.lastRead = true, time.Date(2026, 10, 14, 5, 0, 0, 0, time.UTC)
+	_, body = renderResponder(t, ConfigGetAIObjectiveAll(ai.GetConfigAiObjectiveAllParams{HTTPRequest: req}, nil))
+	if !strings.Contains(body, `"store_reachable":true`) || !strings.Contains(body, `"store_last_read":"2026-10-14T05:00:00`) {
+		t.Fatalf("the list read now does not say the store answered: %s", body)
+	}
+	stub.source, stub.sourceAt, stub.reachable, stub.lastRead = "", time.Time{}, false, time.Time{}
 	// A priority of zero is a value, not an absence.
 	stub.objectives = []cmn.AIObjectiveEntry{{Name: "plain"}}
 	_, body = renderResponder(t, ConfigGetAIObjectiveAll(ai.GetConfigAiObjectiveAllParams{HTTPRequest: req}, nil))
@@ -435,5 +469,23 @@ func TestAIObjectiveStrictCreateAndReadBack(t *testing.T) {
 	}})
 	if sa := out.ServiceArguments; !sa.AiObjectiveStrict || sa.FcEffective == nil || sa.FcEffective.ConfigSource != "lkg" {
 		t.Fatalf("read back as strict=%v fc_effective=%+v", sa.AiObjectiveStrict, sa.FcEffective)
+	}
+	// The key store's latest answer: absent without a store, false with
+	// the time of the last answered read during an outage.
+	if eff := out.ServiceArguments.FcEffective; eff.StoreReachable != nil || eff.StoreLastRead != nil {
+		t.Fatalf("store fields without a key store: %v %v", eff.StoreReachable, eff.StoreLastRead)
+	}
+	away, at := false, time.Date(2026, 10, 14, 3, 0, 0, 0, time.UTC)
+	out = serializeLBRule(cmn.LbRuleMod{Serv: cmn.LbServiceArg{
+		ServIP: "10.10.10.254", ServPort: 2050, Proto: "tcp",
+		FcEffective: &cmn.FcEffectiveArg{Mode: "off", ConfigSource: cmn.AIClassSourceStore,
+			StoreReachable: &away, StoreLastRead: &at},
+	}})
+	raw, err := json.Marshal(out.ServiceArguments.FcEffective)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"store_reachable":false`) || !strings.Contains(string(raw), `"store_last_read":"2026-10-14T03:00:00`) {
+		t.Fatalf("fc_effective during an outage: %s", raw)
 	}
 }

@@ -57,7 +57,8 @@ func ConfigPostAIObjective(params ai.PostConfigAiObjectiveParams, principal inte
 	return &ResultResponse{Result: "Success"}
 }
 
-// ConfigGetAIObjectiveAll lists the objectives, as the store holds them.
+// ConfigGetAIObjectiveAll lists the objectives as the store holds them, or,
+// while it does not answer, as this gateway applies them.
 func ConfigGetAIObjectiveAll(params ai.GetConfigAiObjectiveAllParams, principal interface{}) middleware.Responder {
 	tk.LogIt(tk.LogTrace, "api: AIObjective %s API called. url : %s\n",
 		params.HTTPRequest.Method, params.HTTPRequest.URL)
@@ -66,18 +67,25 @@ func ConfigGetAIObjectiveAll(params ai.GetConfigAiObjectiveAllParams, principal 
 	if err != nil {
 		return objectiveStoreError(err)
 	}
-	result := make([]*models.AIObjectiveEntry, 0, len(res))
-	for i := range res {
-		name := res[i].Name
+	result := make([]*models.AIObjectiveEntry, 0, len(res.Objectives))
+	for i := range res.Objectives {
+		o := res.Objectives[i]
+		name := o.Name
 		result = append(result, &models.AIObjectiveEntry{
 			Name:      &name,
-			Services:  res[i].Services,
-			Priority:  res[i].Priority,
-			UpdatedAt: strfmt.DateTime(res[i].UpdatedAt),
+			Services:  o.Services,
+			Priority:  o.Priority,
+			UpdatedAt: strfmt.DateTime(o.UpdatedAt),
 		})
 	}
-	return ai.NewGetConfigAiObjectiveAllOK().
-		WithPayload(&ai.GetConfigAiObjectiveAllOKBody{ObjectiveAttr: result})
+	body := &ai.GetConfigAiObjectiveAllOKBody{ObjectiveAttr: result,
+		Source: res.Source, SourceTimestamp: strfmt.DateTime(res.SourceTimestamp),
+		StoreReachable: res.StoreReachable}
+	if !res.StoreLastRead.IsZero() {
+		at := strfmt.DateTime(res.StoreLastRead)
+		body.StoreLastRead = &at
+	}
+	return ai.NewGetConfigAiObjectiveAllOK().WithPayload(body)
 }
 
 // ConfigDeleteAIObjective deletes an objective by name.

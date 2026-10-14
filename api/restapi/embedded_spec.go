@@ -191,7 +191,7 @@ func init() {
           "type": "array"
         },
         "allowed_objectives": {
-          "description": "The objectives a request with this key may ask for by header, out of the ones its tenant allows; at most 64. Empty means the key narrows nothing.",
+          "description": "The objectives a request with this key may ask for by header, and the body tiers (tier:priority, tier:fast, tier:flex) it may ask for by service_tier, out of the ones its tenant allows; at most 64. Empty means the key narrows nothing.",
           "items": {
             "type": "string"
           },
@@ -226,7 +226,7 @@ func init() {
           "type": "string"
         },
         "priority_class": {
-          "description": "The highest priority class a request with this key may have. It can only lower what the key's tenant allows. Omitted means no cap from the key.",
+          "description": "The highest priority class a request with this key may have. It can only lower what the key's tenant allows (a tenant that sets no class allows standard). Omitted means no cap from the key.",
           "enum": [
             "standard",
             "critical",
@@ -283,7 +283,7 @@ func init() {
           "type": "array"
         },
         "allowed_objectives": {
-          "description": "The objectives a request with this key may ask for by header, out of the ones its tenant allows; at most 64. Empty means the key narrows nothing.",
+          "description": "The objectives a request with this key may ask for by header, and the body tiers (tier:priority, tier:fast, tier:flex) it may ask for by service_tier, out of the ones its tenant allows; at most 64. Empty means the key narrows nothing.",
           "items": {
             "type": "string"
           },
@@ -322,7 +322,7 @@ func init() {
           "type": "string"
         },
         "priority_class": {
-          "description": "The highest priority class a request with this key may have. It can only lower what the key's tenant allows. Omitted means no cap from the key.",
+          "description": "The highest priority class a request with this key may have. It can only lower what the key's tenant allows (a tenant that sets no class allows standard). Omitted means no cap from the key.",
           "enum": [
             "standard",
             "critical",
@@ -3593,7 +3593,7 @@ func init() {
           "type": "string"
         },
         "priority_class": {
-          "description": "The highest priority class a request admitted by this profile's tokens may have. It can only lower what the tenant allows. Omitted means no cap from the profile.",
+          "description": "The highest priority class a request admitted by this profile's tokens may have. It can only lower what the tenant allows (a tenant that sets no class allows standard). Omitted means no cap from the profile.",
           "enum": [
             "standard",
             "critical",
@@ -5356,6 +5356,17 @@ func init() {
                   },
                   "type": "object"
                 },
+                "store_last_read": {
+                  "description": "When a read of the AI key store last answered in this process. A gateway started from the last-known-good file shows, until the store answers, the read that last CHANGED that file: the store may have answered later with nothing changed (the file is written only on a change). Absent when neither happened or no key store is configured.",
+                  "format": "date-time",
+                  "type": "string",
+                  "x-nullable": true
+                },
+                "store_reachable": {
+                  "description": "Whether the AI key store answered the gateway's latest read of it, whatever config_source says (a configuration read earlier stays in force through an outage). Absent when no key store is configured. The gateway's, the same on every rule.",
+                  "type": "boolean",
+                  "x-nullable": true
+                },
                 "telemetry_stale_ms": {
                   "description": "The P/D scorers' trust window for scraped queue depth, in milliseconds.",
                   "format": "int32",
@@ -6535,7 +6546,7 @@ func init() {
           "type": "string"
         },
         "priority_class": {
-          "description": "The highest priority class a request the binding names the tenant of may have. It can only lower what the tenant allows. Default standard - a binding that should not cap its requests says critical.",
+          "description": "The highest priority class a request the binding names the tenant of may have. It can only lower what the tenant allows (a tenant that sets no class allows standard). Default standard - a binding that should not cap its requests says critical.",
           "enum": [
             "standard",
             "critical",
@@ -8213,7 +8224,7 @@ func init() {
       "description": "Stored quotas, not enforcement status. Missing aggregate and model records produce 404; model-only state may lack an aggregate update timestamp. Zero aggregate rates disable their limiter while model quotas remain separate. burst_pct controls token capacity, not request-rate burst; zero uses the server default and positive values are clamped to 1-1000.",
       "properties": {
         "allowed_objectives": {
-          "description": "The objectives a request of this tenant may ask for by header",
+          "description": "The objectives a request of this tenant may ask for by header, and the body tiers (tier:priority, tier:fast, tier:flex)",
           "items": {
             "type": "string"
           },
@@ -8237,7 +8248,7 @@ func init() {
           "type": "array"
         },
         "priority_class": {
-          "description": "The highest priority class a request of this tenant may have; absent when no cap is set",
+          "description": "The highest priority class a request of this tenant may have; absent when none is set, which holds the tenant at standard",
           "type": "string"
         },
         "rps": {
@@ -8269,7 +8280,7 @@ func init() {
       "description": "POST replaces aggregate rps, tokens_per_min, and burst_pct; omission becomes zero, not preservation. Supplied model_limits are individual upserts or removals; omitted/empty model_limits preserves existing model rows. Aggregate and model writes are sequential, not one transaction, so failure can leave partial changes. Blank identifiers and malformed model entries are not consistently rejected as 400. Configuration alone does not enable enforcement on a service. The class fields (priority_class, default_objective, allowed_objectives) are written by their own statement and only when the body names one of them, so a POST of limits leaves the tenant's class as it is. A body that names a class field and carries no limit (rps, tokens_per_min and burst_pct absent or zero, no model_limits) writes the class only and leaves the limits as they are.",
       "properties": {
         "allowed_objectives": {
-          "description": "The objectives a request of this tenant may ask for with the x-llm-d-inference-objective header; at most 64. Omitted leaves the stored list; an empty array clears it, and then no objective can be asked for.",
+          "description": "The objectives a request of this tenant may ask for with the x-llm-d-inference-objective header, and the body tiers it may ask for by service_tier, named tier:priority, tier:fast and tier:flex; at most 64. Omitted leaves the stored list; an empty array clears it, and then nothing can be asked for.",
           "items": {
             "type": "string"
           },
@@ -8294,7 +8305,7 @@ func init() {
           "type": "array"
         },
         "priority_class": {
-          "description": "The highest priority class a request of this tenant may have: standard, critical or sheddable. Omitted leaves the stored value; an empty string clears it (no cap).",
+          "description": "The highest priority class a request of this tenant may have: standard, critical or sheddable. Omitted leaves the stored value; an empty string clears it, and a tenant that sets no class is held at standard.",
           "type": "string",
           "x-nullable": true
         },
@@ -10285,7 +10296,7 @@ func init() {
     },
     "/config/ai/objective": {
       "get": {
-        "description": "Returns every objective in name order, read from the AI key store. 503 while the store does not answer - the objectives a gateway is applying meanwhile are the last it read, and fc_effective.config_source on a rule says where they came from.",
+        "description": "Returns every objective in name order, read from the AI key store (source store). While the store does not answer, returns the objectives this gateway applies instead: the last it read from the store in this process (source store, with the time of that read), or the last-known-good file it started from (source lkg, with the time the store had answered with them). 503 only when the store does not answer and the gateway has applied nothing yet.",
         "operationId": "getConfigAiObjectiveAll",
         "responses": {
           "200": {
@@ -10297,6 +10308,30 @@ func init() {
                     "$ref": "#/definitions/AIObjectiveEntry"
                   },
                   "type": "array"
+                },
+                "source": {
+                  "description": "Where the list came from: store (the key store answered) or lkg (the last-known-good file this gateway started from, while the store has not answered since)",
+                  "enum": [
+                    "store",
+                    "lkg"
+                  ],
+                  "type": "string"
+                },
+                "source_timestamp": {
+                  "description": "When the key store answered with this list: now for a list read now, earlier for an applied list served during an outage",
+                  "format": "date-time",
+                  "type": "string"
+                },
+                "store_last_read": {
+                  "description": "When a read of the key store last answered: now when it answered this one; during an outage, the last read in this process. A gateway started from the last-known-good file shows the read that last CHANGED that file (the store may have answered later with nothing changed). Absent when neither happened",
+                  "format": "date-time",
+                  "type": "string",
+                  "x-nullable": true
+                },
+                "store_reachable": {
+                  "description": "Whether the key store answered this request's read of it: false during an outage, whatever source says",
+                  "type": "boolean",
+                  "x-omitempty": false
                 }
               },
               "type": "object"
@@ -10318,7 +10353,7 @@ func init() {
             }
           },
           "503": {
-            "description": "Maintenance mode, no AI key store configured, or the store does not answer",
+            "description": "Maintenance mode, no AI key store configured, or the store does not answer and nothing was applied yet",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -23640,7 +23675,7 @@ func init() {
     },
     "/config/ai/objective": {
       "get": {
-        "description": "Returns every objective in name order, read from the AI key store. 503 while the store does not answer - the objectives a gateway is applying meanwhile are the last it read, and fc_effective.config_source on a rule says where they came from.",
+        "description": "Returns every objective in name order, read from the AI key store (source store). While the store does not answer, returns the objectives this gateway applies instead: the last it read from the store in this process (source store, with the time of that read), or the last-known-good file it started from (source lkg, with the time the store had answered with them). 503 only when the store does not answer and the gateway has applied nothing yet.",
         "tags": [
           "ai"
         ],
@@ -23657,6 +23692,30 @@ func init() {
                   "items": {
                     "$ref": "#/definitions/AIObjectiveEntry"
                   }
+                },
+                "source": {
+                  "description": "Where the list came from: store (the key store answered) or lkg (the last-known-good file this gateway started from, while the store has not answered since)",
+                  "type": "string",
+                  "enum": [
+                    "store",
+                    "lkg"
+                  ]
+                },
+                "source_timestamp": {
+                  "description": "When the key store answered with this list: now for a list read now, earlier for an applied list served during an outage",
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "store_last_read": {
+                  "description": "When a read of the key store last answered: now when it answered this one; during an outage, the last read in this process. A gateway started from the last-known-good file shows the read that last CHANGED that file (the store may have answered later with nothing changed). Absent when neither happened",
+                  "type": "string",
+                  "format": "date-time",
+                  "x-nullable": true
+                },
+                "store_reachable": {
+                  "description": "Whether the key store answered this request's read of it: false during an outage, whatever source says",
+                  "type": "boolean",
+                  "x-omitempty": false
                 }
               }
             }
@@ -23680,7 +23739,7 @@ func init() {
             }
           },
           "503": {
-            "description": "Maintenance mode, no AI key store configured, or the store does not answer",
+            "description": "Maintenance mode, no AI key store configured, or the store does not answer and nothing was applied yet",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -35849,7 +35908,7 @@ func init() {
           }
         },
         "allowed_objectives": {
-          "description": "The objectives a request with this key may ask for by header, out of the ones its tenant allows; at most 64. Empty means the key narrows nothing.",
+          "description": "The objectives a request with this key may ask for by header, and the body tiers (tier:priority, tier:fast, tier:flex) it may ask for by service_tier, out of the ones its tenant allows; at most 64. Empty means the key narrows nothing.",
           "type": "array",
           "items": {
             "type": "string"
@@ -35884,7 +35943,7 @@ func init() {
           "type": "string"
         },
         "priority_class": {
-          "description": "The highest priority class a request with this key may have. It can only lower what the key's tenant allows. Omitted means no cap from the key.",
+          "description": "The highest priority class a request with this key may have. It can only lower what the key's tenant allows (a tenant that sets no class allows standard). Omitted means no cap from the key.",
           "type": "string",
           "enum": [
             "standard",
@@ -35941,7 +36000,7 @@ func init() {
           }
         },
         "allowed_objectives": {
-          "description": "The objectives a request with this key may ask for by header, out of the ones its tenant allows; at most 64. Empty means the key narrows nothing.",
+          "description": "The objectives a request with this key may ask for by header, and the body tiers (tier:priority, tier:fast, tier:flex) it may ask for by service_tier, out of the ones its tenant allows; at most 64. Empty means the key narrows nothing.",
           "type": "array",
           "items": {
             "type": "string"
@@ -35980,7 +36039,7 @@ func init() {
           "type": "string"
         },
         "priority_class": {
-          "description": "The highest priority class a request with this key may have. It can only lower what the key's tenant allows. Omitted means no cap from the key.",
+          "description": "The highest priority class a request with this key may have. It can only lower what the key's tenant allows (a tenant that sets no class allows standard). Omitted means no cap from the key.",
           "type": "string",
           "enum": [
             "standard",
@@ -39762,7 +39821,7 @@ func init() {
           "type": "string"
         },
         "priority_class": {
-          "description": "The highest priority class a request admitted by this profile's tokens may have. It can only lower what the tenant allows. Omitted means no cap from the profile.",
+          "description": "The highest priority class a request admitted by this profile's tokens may have. It can only lower what the tenant allows (a tenant that sets no class allows standard). Omitted means no cap from the profile.",
           "type": "string",
           "enum": [
             "standard",
@@ -41471,6 +41530,17 @@ func init() {
                     }
                   }
                 },
+                "store_last_read": {
+                  "description": "When a read of the AI key store last answered in this process. A gateway started from the last-known-good file shows, until the store answers, the read that last CHANGED that file: the store may have answered later with nothing changed (the file is written only on a change). Absent when neither happened or no key store is configured.",
+                  "type": "string",
+                  "format": "date-time",
+                  "x-nullable": true
+                },
+                "store_reachable": {
+                  "description": "Whether the AI key store answered the gateway's latest read of it, whatever config_source says (a configuration read earlier stays in force through an outage). Absent when no key store is configured. The gateway's, the same on every rule.",
+                  "type": "boolean",
+                  "x-nullable": true
+                },
                 "telemetry_stale_ms": {
                   "description": "The P/D scorers' trust window for scraped queue depth, in milliseconds.",
                   "type": "integer",
@@ -42735,6 +42805,17 @@ func init() {
                 }
               }
             },
+            "store_last_read": {
+              "description": "When a read of the AI key store last answered in this process. A gateway started from the last-known-good file shows, until the store answers, the read that last CHANGED that file: the store may have answered later with nothing changed (the file is written only on a change). Absent when neither happened or no key store is configured.",
+              "type": "string",
+              "format": "date-time",
+              "x-nullable": true
+            },
+            "store_reachable": {
+              "description": "Whether the AI key store answered the gateway's latest read of it, whatever config_source says (a configuration read earlier stays in force through an outage). Absent when no key store is configured. The gateway's, the same on every rule.",
+              "type": "boolean",
+              "x-nullable": true
+            },
             "telemetry_stale_ms": {
               "description": "The P/D scorers' trust window for scraped queue depth, in milliseconds.",
               "type": "integer",
@@ -43692,6 +43773,17 @@ func init() {
             }
           }
         },
+        "store_last_read": {
+          "description": "When a read of the AI key store last answered in this process. A gateway started from the last-known-good file shows, until the store answers, the read that last CHANGED that file: the store may have answered later with nothing changed (the file is written only on a change). Absent when neither happened or no key store is configured.",
+          "type": "string",
+          "format": "date-time",
+          "x-nullable": true
+        },
+        "store_reachable": {
+          "description": "Whether the AI key store answered the gateway's latest read of it, whatever config_source says (a configuration read earlier stays in force through an outage). Absent when no key store is configured. The gateway's, the same on every rule.",
+          "type": "boolean",
+          "x-nullable": true
+        },
         "telemetry_stale_ms": {
           "description": "The P/D scorers' trust window for scraped queue depth, in milliseconds.",
           "type": "integer",
@@ -44603,7 +44695,7 @@ func init() {
           "type": "string"
         },
         "priority_class": {
-          "description": "The highest priority class a request the binding names the tenant of may have. It can only lower what the tenant allows. Default standard - a binding that should not cap its requests says critical.",
+          "description": "The highest priority class a request the binding names the tenant of may have. It can only lower what the tenant allows (a tenant that sets no class allows standard). Default standard - a binding that should not cap its requests says critical.",
           "type": "string",
           "enum": [
             "standard",
@@ -46573,7 +46665,7 @@ func init() {
       ],
       "properties": {
         "allowed_objectives": {
-          "description": "The objectives a request of this tenant may ask for by header",
+          "description": "The objectives a request of this tenant may ask for by header, and the body tiers (tier:priority, tier:fast, tier:flex)",
           "type": "array",
           "items": {
             "type": "string"
@@ -46597,7 +46689,7 @@ func init() {
           }
         },
         "priority_class": {
-          "description": "The highest priority class a request of this tenant may have; absent when no cap is set",
+          "description": "The highest priority class a request of this tenant may have; absent when none is set, which holds the tenant at standard",
           "type": "string"
         },
         "rps": {
@@ -46629,7 +46721,7 @@ func init() {
       ],
       "properties": {
         "allowed_objectives": {
-          "description": "The objectives a request of this tenant may ask for with the x-llm-d-inference-objective header; at most 64. Omitted leaves the stored list; an empty array clears it, and then no objective can be asked for.",
+          "description": "The objectives a request of this tenant may ask for with the x-llm-d-inference-objective header, and the body tiers it may ask for by service_tier, named tier:priority, tier:fast and tier:flex; at most 64. Omitted leaves the stored list; an empty array clears it, and then nothing can be asked for.",
           "type": "array",
           "items": {
             "type": "string"
@@ -46654,7 +46746,7 @@ func init() {
           }
         },
         "priority_class": {
-          "description": "The highest priority class a request of this tenant may have: standard, critical or sheddable. Omitted leaves the stored value; an empty string clears it (no cap).",
+          "description": "The highest priority class a request of this tenant may have: standard, critical or sheddable. Omitted leaves the stored value; an empty string clears it, and a tenant that sets no class is held at standard.",
           "type": "string",
           "x-nullable": true
         },

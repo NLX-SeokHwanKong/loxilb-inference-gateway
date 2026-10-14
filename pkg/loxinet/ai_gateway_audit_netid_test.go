@@ -427,3 +427,60 @@ func TestAIDenyObjectiveStage(t *testing.T) {
 		t.Errorf("aiStageObjective = %d, want 6", got)
 	}
 }
+
+// A refusal names the class its request had, with the same fields and the
+// same meanings as a completion, so the records of one request agree; a
+// refusal made before the class stage ran names none. An objective refusal
+// stays stage objective, reason authz.
+func TestEmitAIDenyCarriesTheClass(t *testing.T) {
+	_, drain := startTrail(t)
+	base := aiDenyRecord{TenantID: "acme", SvcIdent: "10.0.0.1:8080", ModelName: "llama-3",
+		HTTPStatus: 403, WorkerID: 1}
+
+	obj := base
+	obj.RequestID, obj.Stage, obj.ErrorCode = "req-obj", aiStageObjective, "objective_not_allowed"
+	obj.Priority, obj.ClassInfo, obj.Objective = -5, aiClassInfoSet|aiClassNumSheddable|aiClassInfoDenied, "batch"
+	rate := base
+	rate.RequestID, rate.Stage, rate.HTTPStatus, rate.ErrorCode = "req-rate", aiStageRateLimit, 429, "rate_limit_exceeded"
+	rate.Priority, rate.ClassInfo, rate.Objective = 10, aiClassInfoSet|aiClassNumCritical, "realtime"
+	early := base
+	early.RequestID, early.Stage, early.HTTPStatus, early.ErrorCode = "req-early", aiStageAuth, 401, "invalid_api_key"
+	for _, d := range []aiDenyRecord{obj, rate, early} {
+		if !emitAIDeny(d) {
+			t.Fatal("emit refused")
+		}
+	}
+	seen := 0
+	for _, l := range drain() {
+		if l.str("event_type") != eventAIDeny {
+			continue
+		}
+		seen++
+		d := l.detail()
+		switch id := l.str("request_id"); id {
+		case "req-obj":
+			if d.str("priority_class") != "sheddable" || d.num("priority") != -5 ||
+				d.str("objective") != "batch" || d["objective_denied"] != true {
+				t.Errorf("%s: detail %v", id, d)
+			}
+			if d.str("stage") != "objective" || l.outcome().str("reason") != "authz" {
+				t.Errorf("%s: stage %q reason %q, want objective / authz", id, d.str("stage"), l.outcome().str("reason"))
+			}
+		case "req-rate":
+			if d.str("priority_class") != "critical" || d.num("priority") != 10 || d.str("objective") != "realtime" {
+				t.Errorf("%s: detail %v", id, d)
+			}
+		case "req-early":
+			for _, k := range []string{"priority_class", "priority", "objective", "objective_denied", "hint_not_applied"} {
+				if _, found := d[k]; found {
+					t.Errorf("%s: %q present on a refusal made before the class stage", id, k)
+				}
+			}
+		default:
+			t.Errorf("unexpected record %q", id)
+		}
+	}
+	if seen != 3 {
+		t.Fatalf("saw %d deny records, want 3", seen)
+	}
+}

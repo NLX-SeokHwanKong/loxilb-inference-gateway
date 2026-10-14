@@ -7,6 +7,7 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strconv"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/go-openapi/runtime/middleware"
 	"github.com/go-openapi/strfmt"
 	"github.com/go-openapi/swag"
+	"github.com/go-openapi/validate"
 
 	"github.com/loxilb-io/loxilb/api/models"
 )
@@ -41,7 +43,7 @@ func NewGetConfigAiObjectiveAll(ctx *middleware.Context, handler GetConfigAiObje
 
 # List objectives
 
-Returns every objective in name order, read from the AI key store. 503 while the store does not answer - the objectives a gateway is applying meanwhile are the last it read, and fc_effective.config_source on a rule says where they came from.
+Returns every objective in name order, read from the AI key store (source store). While the store does not answer, returns the objectives this gateway applies instead: the last it read from the store in this process (source store, with the time of that read), or the last-known-good file it started from (source lkg, with the time the store had answered with them). 503 only when the store does not answer and the gateway has applied nothing yet.
 */
 type GetConfigAiObjectiveAll struct {
 	Context *middleware.Context
@@ -84,6 +86,21 @@ type GetConfigAiObjectiveAllOKBody struct {
 
 	// objective attr
 	ObjectiveAttr []*models.AIObjectiveEntry `json:"objectiveAttr"`
+
+	// Where the list came from: store (the key store answered) or lkg (the last-known-good file this gateway started from, while the store has not answered since)
+	// Enum: [store lkg]
+	Source string `json:"source,omitempty"`
+
+	// When the key store answered with this list: now for a list read now, earlier for an applied list served during an outage
+	// Format: date-time
+	SourceTimestamp strfmt.DateTime `json:"source_timestamp,omitempty"`
+
+	// When a read of the key store last answered: now when it answered this one; during an outage, the last read in this process. A gateway started from the last-known-good file shows the read that last CHANGED that file (the store may have answered later with nothing changed). Absent when neither happened
+	// Format: date-time
+	StoreLastRead *strfmt.DateTime `json:"store_last_read,omitempty"`
+
+	// Whether the key store answered this request's read of it: false during an outage, whatever source says
+	StoreReachable bool `json:"store_reachable"`
 }
 
 // Validate validates this get config ai objective all o k body
@@ -91,6 +108,18 @@ func (o *GetConfigAiObjectiveAllOKBody) Validate(formats strfmt.Registry) error 
 	var res []error
 
 	if err := o.validateObjectiveAttr(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := o.validateSource(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := o.validateSourceTimestamp(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := o.validateStoreLastRead(formats); err != nil {
 		res = append(res, err)
 	}
 
@@ -121,6 +150,72 @@ func (o *GetConfigAiObjectiveAllOKBody) validateObjectiveAttr(formats strfmt.Reg
 			}
 		}
 
+	}
+
+	return nil
+}
+
+var getConfigAiObjectiveAllOKBodyTypeSourcePropEnum []interface{}
+
+func init() {
+	var res []string
+	if err := json.Unmarshal([]byte(`["store","lkg"]`), &res); err != nil {
+		panic(err)
+	}
+	for _, v := range res {
+		getConfigAiObjectiveAllOKBodyTypeSourcePropEnum = append(getConfigAiObjectiveAllOKBodyTypeSourcePropEnum, v)
+	}
+}
+
+const (
+
+	// GetConfigAiObjectiveAllOKBodySourceStore captures enum value "store"
+	GetConfigAiObjectiveAllOKBodySourceStore string = "store"
+
+	// GetConfigAiObjectiveAllOKBodySourceLkg captures enum value "lkg"
+	GetConfigAiObjectiveAllOKBodySourceLkg string = "lkg"
+)
+
+// prop value enum
+func (o *GetConfigAiObjectiveAllOKBody) validateSourceEnum(path, location string, value string) error {
+	if err := validate.EnumCase(path, location, value, getConfigAiObjectiveAllOKBodyTypeSourcePropEnum, true); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (o *GetConfigAiObjectiveAllOKBody) validateSource(formats strfmt.Registry) error {
+	if swag.IsZero(o.Source) { // not required
+		return nil
+	}
+
+	// value enum
+	if err := o.validateSourceEnum("getConfigAiObjectiveAllOK"+"."+"source", "body", o.Source); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (o *GetConfigAiObjectiveAllOKBody) validateSourceTimestamp(formats strfmt.Registry) error {
+	if swag.IsZero(o.SourceTimestamp) { // not required
+		return nil
+	}
+
+	if err := validate.FormatOf("getConfigAiObjectiveAllOK"+"."+"source_timestamp", "body", "date-time", o.SourceTimestamp.String(), formats); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (o *GetConfigAiObjectiveAllOKBody) validateStoreLastRead(formats strfmt.Registry) error {
+	if swag.IsZero(o.StoreLastRead) { // not required
+		return nil
+	}
+
+	if err := validate.FormatOf("getConfigAiObjectiveAllOK"+"."+"store_last_read", "body", "date-time", o.StoreLastRead.String(), formats); err != nil {
+		return err
 	}
 
 	return nil

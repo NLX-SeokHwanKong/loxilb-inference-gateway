@@ -20,7 +20,7 @@ import (
 // swagger:model TenantRateLimitMod
 type TenantRateLimitMod struct {
 
-	// The objectives a request of this tenant may ask for with the x-llm-d-inference-objective header; at most 64. Omitted leaves the stored list; an empty array clears it, and then no objective can be asked for.
+	// The objectives a request of this tenant may ask for with the x-llm-d-inference-objective header, and the body tiers it may ask for by service_tier, named tier:priority, tier:fast and tier:flex; at most 64. Omitted leaves the stored list; an empty array clears it, and then nothing can be asked for.
 	AllowedObjectives []string `json:"allowed_objectives,omitempty"`
 
 	// Token bucket capacity as a percent of tokens_per_min; 0 uses the server default
@@ -32,7 +32,7 @@ type TenantRateLimitMod struct {
 	// Per-model token quotas for the tenant
 	ModelLimits []*TenantModelRateLimit `json:"model_limits"`
 
-	// The highest priority class a request of this tenant may have: standard, critical or sheddable. Omitted leaves the stored value; an empty string clears it (no cap).
+	// The highest priority class a request of this tenant may have: standard, critical or sheddable. Omitted leaves the stored value; an empty string clears it, and a tenant that sets no class is held at standard.
 	PriorityClass *string `json:"priority_class,omitempty"`
 
 	// Maximum requests per second for the tenant

@@ -66,6 +66,10 @@ func TestAIClassConfigSource(t *testing.T) {
 	if got := aiClassConfigSource(); got != cmn.AIClassSourceNone {
 		t.Fatalf("source without a key store = %q, want none", got)
 	}
+	var eff cmn.FcEffectiveArg
+	if aiClassStoreHealth(&eff); eff.StoreReachable != nil || eff.StoreLastRead != nil {
+		t.Fatalf("store fields without a key store: %v %v", eff.StoreReachable, eff.StoreLastRead)
+	}
 	if n := aiClassLKGIntervals(); n != 0 {
 		t.Fatalf("file intervals without a key store = %d", n)
 	}
@@ -106,6 +110,14 @@ func TestAIClassConfigSource(t *testing.T) {
 			t.Fatal("an interval served from the file was not counted")
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+	// Served from the file, the store away: the read-back says so, with
+	// the time of the read the file was written after.
+	eff = cmn.FcEffectiveArg{}
+	aiClassStoreHealth(&eff)
+	if eff.StoreReachable == nil || *eff.StoreReachable || eff.StoreLastRead == nil ||
+		eff.StoreLastRead.Sub(time.Now().UTC().Add(-time.Hour)).Abs() > time.Minute {
+		t.Fatalf("store fields served from the file: %v %v", eff.StoreReachable, eff.StoreLastRead)
 	}
 	if snap := svc.Classes(); snap == nil || snap.Objectives["batch"].Priority != -5 ||
 		snap.Tenants["t1"].PriorityClass != cmn.AIClassSheddable {

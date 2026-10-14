@@ -235,14 +235,17 @@ func (s *Service) rememberRateLimit(cacheKey string, e *rateLimitCacheEntry) {
 	s.rlLastKnown.Store(cacheKey, e)
 }
 
-// lastKnownRateLimit retrieves the outage-fallback value for a cache key.
+// lastKnownRateLimit retrieves the outage-fallback value for a cache key:
+// what the store confirmed to this process, else, while the process serves
+// the last-known-good file because the store has not answered since it
+// started, the file's row (class_lkg_limits.go).
 func (s *Service) lastKnownRateLimit(cacheKey string) (*rateLimitCacheEntry, bool) {
 	if v, ok := s.rlLastKnown.Load(cacheKey); ok {
 		if e, ok2 := v.(*rateLimitCacheEntry); ok2 {
 			return e, true
 		}
 	}
-	return nil, false
+	return s.lkgRateLimit(cacheKey)
 }
 
 // New returns a service with no store attached. Every store-backed method on
@@ -730,6 +733,9 @@ func (s *Service) SetTenantRateLimit(tenantID string, rps, tokensPerMin, burstPc
 		&rateLimitCacheEntry{rps: rps, tokensPerMin: tokensPerMin, burstPct: burstPct})
 	tk.LogIt(tk.LogInfo, "[AIKey] Set rate limit for tenant %s: rps=%d tokensPerMin=%d burstPct=%d\n",
 		tenantID, rps, tokensPerMin, burstPct)
+	// The last-known-good file carries the limit rows: it follows the write
+	// at once, not one refresh interval later.
+	s.refreshClassesAfterWrite()
 	return nil
 }
 
@@ -822,6 +828,9 @@ func (s *Service) SetTenantModelRateLimit(tenantID, model string, tokensPerMin i
 		s.rememberRateLimit(cacheKey, &rateLimitCacheEntry{})
 		s.Cache.Delete(cacheKey)
 		tk.LogIt(tk.LogInfo, "[AIKey] Cleared model rate limit for tenant %s model %s\n", tenantID, model)
+		// The last-known-good file carries the limit rows: it follows the
+		// write at once, not one refresh interval later.
+		s.refreshClassesAfterWrite()
 		return nil
 	}
 	now := time.Now().UTC()
@@ -832,6 +841,9 @@ func (s *Service) SetTenantModelRateLimit(tenantID, model string, tokensPerMin i
 	s.rememberRateLimit(cacheKey, &rateLimitCacheEntry{tokensPerMin: tokensPerMin})
 	tk.LogIt(tk.LogInfo, "[AIKey] Set model rate limit for tenant %s model %s: tokensPerMin=%d\n",
 		tenantID, model, tokensPerMin)
+	// The last-known-good file carries the limit rows: it follows the write
+	// at once, not one refresh interval later.
+	s.refreshClassesAfterWrite()
 	return nil
 }
 

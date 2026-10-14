@@ -1270,6 +1270,7 @@ func (R *RuleH) GetLBRule() ([]cmn.LbRuleMod, error) {
 				data.tuples.path, data.tuples.pathPrefix, data.tuples.modelName); ok {
 				data.aiDefaultResv.fillEffective(&eff, data.tuples.l3Dst.addr.IP, data.tuples.l4Dst.valMin)
 				eff.ConfigSource = aiClassConfigSource()
+				aiClassStoreHealth(&eff)
 				ret.Serv.FcEffective = &eff
 			}
 		}
