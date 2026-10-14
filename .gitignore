@@ -127,3 +127,10 @@ QODER.md
 
 # Scenario helper pid records (cicd/common.sh track_helper/stop_helpers)
 cicd/**/.loxi-helpers.pid
+
+# Local working trees and scratch space kept inside the checkout. Listed here,
+# not only in .git/info/exclude: file watchers and indexers that read only the
+# root .gitignore (codegraph) otherwise descend into every nested worktree.
+/.worktrees/
+/3rdparty/
+/scratchpad/
