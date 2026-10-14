@@ -130,7 +130,7 @@ type Decision struct {
 type RuleCfg struct {
 	Endpoint    string // host:port
 	FailureMode string // cmn.EppFailureModeFailOpen | FailClose
-	TimeoutMs   uint32 // request-phase deadline (0 ⇒ cmn.EppDefaultTimeoutMs)
+	TimeoutMs   uint32 // request-phase deadline, dial included (0 ⇒ cmn.EppDefaultTimeoutMs)
 	Plaintext   bool   // true: no TLS; false: TLS without verification (D3)
 }
 
@@ -306,6 +306,13 @@ type recvMsg struct {
 	err error
 }
 
+// openedStream is the result of opening the ext_proc stream, delivered to
+// Submit so the open can be abandoned at the deadline.
+type openedStream struct {
+	stream extprocv3.ExternalProcessor_ProcessClient
+	err    error
+}
+
 // Submit runs the request phase: it opens the stream, sends the headers
 // and body, and waits at most the rule's deadline for the EPP's decision.
 // The caller's ctx bounds the whole call as well. With StatusOK the
@@ -316,21 +323,47 @@ func (c *Client) Submit(ctx context.Context, cfg RuleCfg, req *Request) (*Decisi
 	if err != nil {
 		return &Decision{Status: StatusError, Err: err}, nil
 	}
+	// One deadline covers opening the stream, sending and the wait for the
+	// decision. Opening includes the dial when the connection is down:
+	// gRPC blocks a new stream while the channel is CONNECTING (up to
+	// MinConnectTimeout, a dial a packet filter blackholes takes all of it),
+	// so the open runs apart from this goroutine and the timer decides.
+	// On a dead or wedged connection Send itself can block too (HTTP/2
+	// flow-control window never replenished); neither outlives the rule's
+	// timeout.
+	deadline := cfg.timeout()
+	timer := time.NewTimer(deadline)
+	defer timer.Stop()
 	sctx, cancel := context.WithCancel(context.Background())
-	stream, err := extprocv3.NewExternalProcessorClient(e.cc).Process(sctx)
-	if err != nil {
+	opened := make(chan openedStream, 1)
+	go func() {
+		st, err := extprocv3.NewExternalProcessorClient(e.cc).Process(sctx)
+		opened <- openedStream{stream: st, err: err}
+	}()
+	var stream extprocv3.ExternalProcessor_ProcessClient
+	select {
+	case o := <-opened:
+		if o.err != nil {
+			cancel()
+			return &Decision{Status: StatusError, Err: fmt.Errorf("epp: open stream: %w", o.err)}, nil
+		}
+		stream = o.stream
+	case <-timer.C:
+		// The cancel ends the pending open; its result is discarded. The
+		// connection is left to gRPC: its own connect timeout and backoff
+		// turn a dial that never answers into a channel in transient
+		// failure, on which the requests that follow fail at once instead
+		// of each waiting the deadline (dead-peer detection is for a
+		// connection that is up and silent, not for one that never came up).
 		cancel()
-		return &Decision{Status: StatusError, Err: fmt.Errorf("epp: open stream: %w", err)}, nil
+		return &Decision{Status: StatusError, Err: fmt.Errorf("epp: no connection within %s: %w", deadline, context.DeadlineExceeded)}, nil
+	case <-ctx.Done():
+		cancel()
+		return &Decision{Status: StatusError, Err: fmt.Errorf("epp: request abandoned: %w", ctx.Err())}, nil
 	}
 	s := &Stream{stream: stream, cancel: cancel, recv: make(chan recvMsg, 8)}
 	go s.receiver()
 
-	// One deadline covers sending and the wait for the decision: on a
-	// dead or wedged connection Send itself can block (HTTP/2 flow-control
-	// window never replenished), and must not outlive the rule's timeout.
-	deadline := cfg.timeout()
-	timer := time.NewTimer(deadline)
-	defer timer.Stop()
 	sent := make(chan error, 1)
 	go func() { sent <- s.sendRequest(req) }()
 	var dec *Decision

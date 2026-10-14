@@ -11341,7 +11341,9 @@ definitions:
               Longest wait, in milliseconds, for the EPP's request-phase
               decision (destination, header and body mutations) before the
               request is treated as an EPP failure and eppFailureMode applies.
-              Omitted or 0 resolves to 3000. Only meaningful with
+              The wait starts when the request is submitted and includes
+              connecting to the EPP when no connection is up. Omitted or 0
+              resolves to 3000. Only meaningful with
               eppEndpoint; accepted but inert otherwise.
           eppPlaintext:
             type: boolean

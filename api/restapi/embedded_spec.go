@@ -4935,7 +4935,7 @@ func init() {
             },
             "eppTimeoutMs": {
               "default": 0,
-              "description": "Longest wait, in milliseconds, for the EPP's request-phase decision (destination, header and body mutations) before the request is treated as an EPP failure and eppFailureMode applies. Omitted or 0 resolves to 3000. Only meaningful with eppEndpoint; accepted but inert otherwise.",
+              "description": "Longest wait, in milliseconds, for the EPP's request-phase decision (destination, header and body mutations) before the request is treated as an EPP failure and eppFailureMode applies. The wait starts when the request is submitted and includes connecting to the EPP when no connection is up. Omitted or 0 resolves to 3000. Only meaningful with eppEndpoint; accepted but inert otherwise.",
               "format": "int64",
               "maximum": 600000,
               "minimum": 0,
@@ -40146,7 +40146,7 @@ func init() {
               "x-nullable": false
             },
             "eppTimeoutMs": {
-              "description": "Longest wait, in milliseconds, for the EPP's request-phase decision (destination, header and body mutations) before the request is treated as an EPP failure and eppFailureMode applies. Omitted or 0 resolves to 3000. Only meaningful with eppEndpoint; accepted but inert otherwise.",
+              "description": "Longest wait, in milliseconds, for the EPP's request-phase decision (destination, header and body mutations) before the request is treated as an EPP failure and eppFailureMode applies. The wait starts when the request is submitted and includes connecting to the EPP when no connection is up. Omitted or 0 resolves to 3000. Only meaningful with eppEndpoint; accepted but inert otherwise.",
               "type": "integer",
               "format": "int64",
               "default": 0,
@@ -41335,7 +41335,7 @@ func init() {
           "x-nullable": false
         },
         "eppTimeoutMs": {
-          "description": "Longest wait, in milliseconds, for the EPP's request-phase decision (destination, header and body mutations) before the request is treated as an EPP failure and eppFailureMode applies. Omitted or 0 resolves to 3000. Only meaningful with eppEndpoint; accepted but inert otherwise.",
+          "description": "Longest wait, in milliseconds, for the EPP's request-phase decision (destination, header and body mutations) before the request is treated as an EPP failure and eppFailureMode applies. The wait starts when the request is submitted and includes connecting to the EPP when no connection is up. Omitted or 0 resolves to 3000. Only meaningful with eppEndpoint; accepted but inert otherwise.",
           "type": "integer",
           "format": "int64",
           "default": 0,

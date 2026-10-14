@@ -156,6 +156,51 @@ func TestEppClientTimeoutIsAnError(t *testing.T) {
 	}
 }
 
+// TestEppClientDialTimeoutIsTheRuleDeadline: an EPP address that accepts
+// the TCP connection but never completes the handshake (a packet filter
+// that drops silently, a wedged pod) is reported within eppTimeoutMs, not
+// after gRPC's own 2 s connect timeout: the dial is part of the request
+// phase the rule's deadline bounds (M2; cluster report 2026-10-13 item 1).
+func TestEppClientDialTimeoutIsTheRuleDeadline(t *testing.T) {
+	// Accept and hold: the gRPC handshake never gets its preface answered.
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lis.Close()
+	held := make(chan net.Conn, 4)
+	go func() {
+		for {
+			conn, err := lis.Accept()
+			if err != nil {
+				return
+			}
+			held <- conn
+		}
+	}()
+	defer func() {
+		for {
+			select {
+			case conn := <-held:
+				conn.Close()
+			default:
+				return
+			}
+		}
+	}()
+	c := epp.NewClient()
+	defer c.Close()
+	start := time.Now()
+	dec, s := c.Submit(context.Background(), epp.RuleCfg{Endpoint: lis.Addr().String(), Plaintext: true, TimeoutMs: 300}, sampleRequest())
+	el := time.Since(start)
+	if s != nil || dec.Status != epp.StatusError || !errors.Is(dec.Err, context.DeadlineExceeded) {
+		t.Fatalf("blackholed dial decision %+v stream=%v", dec, s)
+	}
+	if el < 250*time.Millisecond || el > 1200*time.Millisecond {
+		t.Fatalf("the dial took %s; want the rule's 300 ms deadline, not gRPC's 2 s connect timeout", el)
+	}
+}
+
 func TestEppClientUnreachableIsAnError(t *testing.T) {
 	lis, _ := net.Listen("tcp", "127.0.0.1:0")
 	addr := lis.Addr().String()
