@@ -79,11 +79,124 @@ binary behaves exactly like upstream loxilb.
   and a byte-shaper row. `GET /metrics` is exempt from management-plane bearer
   auth so a scraper needs no credential.
 
+- **Request priority: objectives and classes.** A request on an AI-gateway
+  rule has a priority and a class (`critical`, `standard`, `sheddable`). It
+  asks for an objective by name with the header `x-llm-d-inference-objective`
+  (the older `x-gateway-inference-objective` is accepted), or, without one,
+  with the body's `service_tier` (`flex`, `priority`, `fast`); what it gets is
+  held under the `priority_class` of its tenant, its API key or JWT auth
+  profile, and the network-identity binding that named its tenant, so a hint
+  can lower a request and never raise it above its cap. New:
+  `POST` / `GET` / `DELETE /config/ai/objective`; `priority_class`,
+  `default_objective` and `allowed_objectives` on tenants and API keys;
+  `priority_class` on JWT auth profiles and network-identity bindings; the
+  rule knob `ai_objective_strict` (403 `objective_not_allowed` for an
+  objective the caller may not use, instead of its default);
+  `X-Loxilb-Admission-Class` / `X-Loxilb-Admission-Objective` on admitted
+  responses of a rule with `fc_expose_headers`; `priority_class`, `priority`,
+  `objective`, `objective_denied` and `hint_not_applied` on the
+  `data.ai.complete` audit record. A `service_tier` the gateway read as a
+  hint is replaced by `null` in the forwarded body (same length). With no
+  objective and no class field configured anywhere nothing is read and
+  every request is handled as before. Objectives and classes live in the AI
+  key store and are served from the last-known-good file `aigw-lkg.json`
+  (under `--config-path`) by a gateway that starts while the store is away;
+  `fc_effective.config_source` and
+  `loxilb_ai_class_config_lkg_intervals_total` say when. See
+  `docs/load-balancing/19-ai-gateway-controls.md`.
+
 ### Changed
 
 - Container image renamed to `ghcr.io/loxilb-io/loxilb-inference-gateway`.
 - README rewritten around inference-gateway use cases; `loxilb-ebpf` submodule
   repointed to the `loxilb-ebpf-inference-gateway` fork.
+- **Audit trail: a request authenticated by a bearer token (JWT) is recorded
+  with `actor.auth: "bearer"`.** It used to be recorded as `"none"`, the
+  value an unauthenticated request has, because the data-path actor only
+  knew API keys. The new value is written on `data.ai.complete`,
+  `data.ai.settle` and `sec.ai.deny` once the token has validated; a request
+  whose token did not validate is still `"none"`, and API-key requests are
+  still `"apikey"`. `schema_version` stays `1`. **SIEM impact:** a rule or
+  dashboard that matches `actor.auth == "none"` no longer matches JWT
+  traffic, and a consumer that validates `actor.auth` against a closed list
+  must accept `"bearer"` (and `"network"`, written when a network-identity
+  binding decided the tenant).
+
+- **The default reservation is per rule.** Where several rules share a VIP
+  and port (told apart by host, path or model), a request without
+  `max_tokens` now reserves by `ai_default_reservation` /
+  `ai_default_max_tokens` of the rule it routes to. Before, the rule
+  installed first on the listener decided for all of them. With it go the
+  reply text `Success; warning: ai_default_reservation: …` on a rule whose
+  neighbours resolve differently, and the value `listener` of
+  `fc_effective.source.default_reservation` / `.default_max_tokens`: a
+  rule's read-back is its own. A client that matched either should stop.
+  A request an L7 policy forwards to another pool reserves by the rule its
+  host, path and model select.
+- **Log calls no longer wait for the log's device.** The gateway's log and
+  the data-plane log are written by one writer each, from an in-memory queue;
+  a worker thread that logs copies its line and returns. When the device is
+  slow or stalled, lines are dropped and counted in the new
+  `loxilb_log_lines_dropped_total{level}` and the writer reports the drop in
+  the log; requests are not held. Before, one stalled log write stopped every
+  connection of the worker that made it. The data-plane log is now rotated by
+  its own writer (rename and reopen; no line lost at a rotation). The stdout
+  copy of the gateway's log is unchanged except that a message with no
+  trailing newline now gets one. See `docs/LOG-ROTATION.md`.
+- **Per-request log lines of the AI gateway moved from `info` / `warn` to
+  `debug`**: key validated, empty or invalid key, expired key, model not
+  allowed, rate-limited, token quota exceeded, pre-admission denied, capacity
+  refused, request refused 413, stream start / end. Each of these is in the
+  audit trail (`data.ai.complete`, `sec.ai.deny`) and the metrics. **Impact:**
+  a log-based alert or a script that matches these lines sees them only at
+  `--loglevel debug`; use the audit trail or `loxilb_ai_*` counters instead.
+  Store-outage and fault lines are unchanged.
+
+### Fixed
+
+- **Bytes a client sends while a streamed answer is running are no longer
+  relayed to the backend.** On a rule with `sse_mode`, anything a client sent
+  on an HTTP/1.1 connection while its streamed answer was still in progress
+  went to the backend behind the request being answered, without passing the
+  admission gate: a second request sent early was served with no credential
+  checked, no model allowlist, no rate limit and no charge. On a JWT service
+  whose profile has `forward_identity` the gateway also wrote the first
+  request's verified `X-Auth-Tenant` / `X-Auth-User` into those bytes, so the
+  backend read them as an authenticated request. The gateway now closes the
+  connection when a client sends anything before its streamed answer has
+  ended; the unfinished stream is counted as one its client left, and each
+  such close is counted in `loxilb_ai_stream_early_bytes_closed_total{service}`
+  and logged once at debug. A streamed answer has ended when its framing
+  ends, whether or not it carried the `[DONE]` event, so the next request on
+  a kept connection is admitted as any request. **Impact:**
+  a client that pipelines a request behind a streamed answer on HTTP/1.1 has
+  the connection closed and must send that request on a new one (or wait for
+  the answer to end, or use HTTP/2). Clients that wait for their answer are
+  not affected.
+- **A request or response body is no longer edited as if it were a header
+  block.** On the path that relays a connection's later reads, any read that
+  held a blank line was taken for a header block: on a service that declares
+  `api_key_auth`, lines beginning `X-Api-Key:` (and on a service with a
+  forwarding network-identity binding, lines beginning `X-Auth-`) were
+  removed from it, in a request body, in a backend's response headers and in
+  a response body alike, leaving the message shorter than its
+  `Content-Length`. Header lines are now removed only from the header block
+  of a request, once, and a response body is never touched.
+- **A backend's `X-Api-Key` response header is removed on purpose, where it
+  was removed by accident.** On an HTTP/1.1 service that declares
+  `api_key_auth` (any declared value) the gateway already removed a
+  backend's `X-Api-Key` response header, as a side effect of the defect
+  above. It still does, now as a rule: `X-Api-Key` is the gateway's
+  credential header on such a service and a backend does not get to hand a
+  key to a client under that name. The header is removed from the response
+  head only, when the head arrives whole in one read. **Behaviour change:**
+  the rule now holds on HTTP/2 as well: on an HTTP/2 service that declares
+  `api_key_auth` a backend's `x-api-key` response field, which earlier
+  releases passed through, is dropped from the response head (not from
+  trailers). Unchanged from earlier releases: a backend's `X-Auth-*` response
+  headers pass through on every service; on a service that makes no
+  `api_key_auth` declaration, and on a rule whose response direction is
+  carried by `sockMapMode`, a backend's `X-Api-Key` passes through as well.
 
 ### Notes
 

@@ -128,6 +128,10 @@ var (
 		` rate_limit_rps, burst_size, tokens_per_min, created_at, expires_at, enabled`+
 		` FROM %s.api_keys`, Schema)
 
+	sqlCountKnownTenants = fmt.Sprintf(`SELECT COUNT(*) FROM (`+
+		`SELECT tenant_id FROM %s.api_keys UNION SELECT tenant_id FROM %s.tenant_rate_limits) t`,
+		Schema, Schema)
+
 	sqlUpdateAPIKeyEnabled = fmt.Sprintf(`UPDATE %s.api_keys SET enabled = $1 WHERE key_id = $2`, Schema)
 
 	sqlUpdateAPIKeyAllowedModels = fmt.Sprintf(`UPDATE %s.api_keys SET allowed_models = $1 WHERE key_id = $2`, Schema)
@@ -217,6 +221,9 @@ type Service struct {
 	// answered for is refused. Bounded by the number of distinct tenants and
 	// tenant|model pairs this process has served.
 	rlLastKnown sync.Map
+
+	// class is the objective and class snapshot (class_snapshot.go).
+	class classState
 }
 
 // rememberRateLimit records a store-confirmed rate-limit value in both the
@@ -470,6 +477,10 @@ func (s *Service) CreateAPIKey(entry cmn.ApiKeyEntry) (string, string, error) {
 	if err := ValidateQoSIdentity("tenant_id", entry.TenantID); err != nil {
 		return "", "", err
 	}
+	class, err := ValidateClassPolicy(entry.AIClassPolicy)
+	if err != nil {
+		return "", "", err
+	}
 	db, err := s.store()
 	if err != nil {
 		return "", "", err
@@ -517,6 +528,21 @@ func (s *Service) CreateAPIKey(entry cmn.ApiKeyEntry) (string, string, error) {
 		}
 		tk.LogIt(tk.LogError, "[AIKey] Failed to create API key for tenant %s: %v\n", entry.TenantID, err)
 		return "", "", err
+	}
+
+	// The class fields have their own statement. A key that was asked for
+	// with a class and would exist without it is not left behind: its
+	// requests would run above the class its operator set.
+	if !class.IsZero() {
+		if _, err := db.Exec(sqlUpdateKeyClass, keyID, class.PriorityClass, class.DefaultObjective,
+			joinList(class.AllowedObjectives)); err != nil {
+			tk.LogIt(tk.LogError, "[AIKey] Failed to set class of new key %s, removing it: %v\n", keyID, err)
+			if _, dErr := db.Exec(sqlDeleteAPIKeyByID, keyID); dErr != nil {
+				tk.LogIt(tk.LogError, "[AIKey] New key %s could not be removed either: it exists without its class\n", keyID)
+			}
+			return "", "", errStoreUnavailable
+		}
+		s.refreshClassesAfterWrite()
 	}
 
 	tk.LogIt(tk.LogInfo, "[AIKey] Created API key %s for tenant %s (supplied=%t)\n",
@@ -916,6 +942,20 @@ func (s *Service) GetAPIKeyByID(keyID string) (*cmn.ApiKeySummary, error) {
 	s.Cache.Set(cacheKey, &key, CacheExpirationTime*time.Minute)
 
 	return &key, nil
+}
+
+// KnownTenantCount returns how many distinct tenants the store knows: the
+// tenants that own an API key and the tenants that have a rate-limit row.
+func (s *Service) KnownTenantCount() (int, error) {
+	db, err := s.store()
+	if err != nil {
+		return 0, err
+	}
+	var n int
+	if err := db.QueryRow(sqlCountKnownTenants).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
 }
 
 // ListAPIKeys returns a summary of API keys. If tenantID is non-empty it

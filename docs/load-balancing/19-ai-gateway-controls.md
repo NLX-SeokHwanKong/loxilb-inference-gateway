@@ -124,6 +124,32 @@ quota errors: `502 backend_unreachable` / `503 no_healthy_backend` come from the
 connect-failover path, not from key enforcement — see the
 [troubleshooting guide](06-troubleshooting.md) §5.
 
+### 2.5 A backend's `X-Api-Key` and `X-Auth-*` response headers
+
+On a service that declares `api_key_auth`, `X-Api-Key` is the gateway's credential header.
+The caller's is consumed or removed on the way in; a backend's is removed on the way out, so
+a backend cannot hand a key to a client under the gateway's header name.
+
+| Service | A backend's `X-Api-Key` response header | A backend's `X-Auth-*` response headers |
+|---|---|---|
+| HTTP/1.1, `api_key_auth` declared (`required`, `disabled`, `jwt`, `apikey-or-jwt`), response relayed by the gateway | **removed** | passed through |
+| HTTP/1.1, no `api_key_auth` declaration | passed through | passed through |
+| HTTP/2, `api_key_auth` declared | **removed** (from the response head, interim or final; not from trailers) | passed through |
+| HTTP/2, no `api_key_auth` declaration | passed through | passed through |
+| Any service whose response direction is carried in the kernel (`sockMapMode` `response` or `both`) | passed through | passed through |
+
+Limits:
+
+- On HTTP/1.1 the header is removed from the response head only, and only when the head
+  arrives whole in one read from the backend. A head split across two reads is passed as it
+  is; so is the final head when an interim response (`100`, `103`) and the final one arrive
+  in the same read.
+- A rule accelerated with `sockMapMode` `response` or `both` does not see its responses, so
+  nothing is removed there.
+- A response body is never edited, and neither are HTTP/2 trailers.
+- The gateway does not remove `X-Auth-*` from responses on any service: a backend that must
+  not expose identity headers should not send them.
+
 ## 3. Per-tenant rate limiting
 
 Tenant-level ceilings apply across **all** keys of a tenant, on top of per-key limits:
@@ -163,6 +189,174 @@ with the `LLB_AI_QUOTA_BURST_PCT` environment variable.
 Note that a single request larger than the bucket can never be admitted — the pre-admission
 check refuses it outright rather than letting it queue — so `burst_pct` must leave room for
 the largest prompt-plus-`max_tokens` a tenant legitimately sends.
+
+### Requests without `max_tokens`: the default reservation
+
+Before a request is sent to a backend the gateway reserves its worst case against every
+token quota it counts on (tenant, tenant and model, user, user and model, key, and the
+service's shared bucket): the prompt estimate plus the completion ceiling the request
+declares in `max_tokens` or `max_completion_tokens`. The reservation is released when the
+response is settled and replaced by what was really used.
+
+A request that declares no ceiling — the field is absent, `-1` or any negative number, `0`,
+a string, a float, an object or an array — reserves its prompt estimate alone. That makes
+leaving the field out the cheaper choice at admission: the same request with a ceiling can
+be refused before dispatch, and without one it cannot, so a tenant's `tokens_per_min`
+bounds only its prompts until the usage is counted afterwards.
+
+The default reservation closes most of that gap. It is off unless set, per service:
+
+```bash
+curl -s -X POST http://127.0.0.1:11111/netlox/v1/config/loadbalancer \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"serviceArguments": {"externalIP": "10.10.10.254", "port": 2020, "protocol": "tcp",
+        "mode": 4, "sse_mode": true, "host": "10.10.10.254",
+        "ai_default_reservation": "on", "ai_default_max_tokens": 1024},
+       "endpoints": [{"endpointIP": "31.31.31.1", "targetPort": 8080, "weight": 1}]}'
+```
+
+| Field | Values | Meaning |
+|---|---|---|
+| `ai_default_reservation` | `on`, `off`, `inherit` | `on`: a request without a ceiling also reserves the default. `inherit` or omitted: the process default, `LLB_AI_DEFAULT_RESERVATION` (`on`/`off`), else off |
+| `ai_default_max_tokens` | `0`–`100000000` | the default in tokens. `0` or omitted: `LLB_AI_DEFAULT_MAX_TOKENS`, else the built-in `512` |
+
+How it behaves:
+
+- **It never refuses a request.** The default is reserved beside the prompt estimate, and
+  each quota bucket cuts it to what it can hold: to the bucket's capacity less the prompt
+  estimate, and to what earlier reservations have left, down to nothing. Only the prompt
+  estimate — and a ceiling the request declares — can be refused, exactly as before.
+- **A request admitted with less than the default is counted**, per service and by
+  reason, in `loxilb_ai_reservation_clamped_total{service, reason}` and on the rule's
+  `GET` (`fc_effective.reservation_clamped_burst` and `reservation_clamped_budget`):
+  - `burst`: the default beside the prompt estimate is more than a quota bucket can ever
+    hold, so the request is clamped even on an idle bucket. This does not pass by itself.
+    Lower `ai_default_max_tokens`, or raise the tenant's `tokens_per_min` or its burst.
+    Alert on this one.
+  - `budget`: the bucket's budget was already taken by other reservations or by spend.
+    It passes as the minute refills; a count that keeps rising means the budgets are
+    tight for the traffic.
+
+  A request both apply to is counted as `burst`.
+- **It sizes the reservation only.** Nothing is written into the request, a declared
+  ceiling is never replaced, and the response is charged for its real usage as before.
+- **It narrows the gap, it does not close it.** When a bucket is nearly empty the default
+  is cut to nothing and that request is prompt-only again; if its response then overruns
+  the budget, the tenant's next requests are refused `token_quota_exceeded` until the
+  bucket refills.
+- The built-in `512` is an estimate of a typical completion, not a measured one. Set
+  `ai_default_max_tokens` to what your clients' completions look like.
+
+**What is reserved right now.** The rule's `GET` also shows the reservations that
+admitted requests hold and have not settled, read from the quota store itself
+(`fc_effective.reservation_held_claims` and the list
+`reservation_held` with each bucket's `kind`, `bucket` and `tokens`). Read it to see
+which tenants hold budget on a service at this moment, or to check that a request
+that ended — completed, refused, cancelled, timed out in the queue — gave its claim
+back: its buckets must read what they read before it.
+
+- A request holds its claim on every quota bucket that applies to it (the tenant's,
+  the tenant's for the model, the user's, the key's, the service's shared keyless one),
+  and `reservation_held_claims` counts those claims: one per request and bucket, so one
+  in-flight request on three buckets reads 3. It is zero exactly when nothing is held;
+  it is a count of claims, not of tokens (each bucket's tokens are in the list).
+- A tenant's bucket belongs to the tenant, not to a service: every service the tenant
+  has used shows it, with the same number.
+- A reservation belongs to the minute it was made in (`reservation_epoch`) and is
+  dropped when the minute turns, whether or not its request has ended. Compare two
+  readings only inside one minute.
+- The list holds at most 64 buckets, largest first; `reservation_held_truncated` says
+  when there are more. This is a management read-back only. It is not exported to
+  Prometheus, because it is per tenant.
+
+**Per rule.** Where several rules share one listener (VIP and port) and are told apart
+by host, path or model, each has its own default reservation: the gateway takes the
+value from the rule the request routes to, by the same host, path and model lookup that
+selects the pool. Two rules on one listener may therefore declare different values, and
+`fc_effective.default_reservation` / `default_max_tokens` on a rule are what applies to
+that rule's requests (`source` reads `rule`, `env` or `default`). One exception: a
+request an L7 policy forwards to another pool reserves by the rule its host, path and
+model select, not by the pool the policy picked.
+
+Both fields follow the replace rules of the
+`fc_*` fields: omitted on a replace keeps the stored value, `inherit` and `0` return to the
+process default, `null` is refused, and a replace that changes nothing else applies in
+place, to requests admitted from then on. A streamed request body whose `max_tokens` the
+gateway has not read by the time it admits the request is treated as declaring none.
+
+### Request priority: objectives and classes
+
+A request has a priority, an integer, and a class that is its sign: `critical` (positive),
+`standard` (zero, and every request while nothing below is configured) or `sheddable`
+(negative). Three things decide it, all stored in the AI key store, so every gateway that
+shares the store applies a change within one refresh interval
+(`LLB_AI_OBJECTIVE_REFRESH_SEC`, default 10 s) and the one that took the write at once.
+
+**Objectives** are named priorities:
+
+```bash
+curl -sk -X POST https://<LB>:11111/netlox/v1/config/ai/objective -H "Authorization: Bearer $TOKEN" \
+  -d '{"name":"realtime-chat","priority":10}'
+curl -sk -X POST https://<LB>:11111/netlox/v1/config/ai/objective -H "Authorization: Bearer $TOKEN" \
+  -d '{"name":"batch","priority":-5,"services":["20.20.20.1:8080"]}'
+curl -sk https://<LB>:11111/netlox/v1/config/ai/objective -H "Authorization: Bearer $TOKEN"
+curl -sk -X DELETE https://<LB>:11111/netlox/v1/config/ai/objective/batch -H "Authorization: Bearer $TOKEN"
+```
+
+| Field | Values | Meaning |
+|---|---|---|
+| `name` | 1–63 of letters, digits, `-`, `_`, `.` | what a request's header names; compared exactly, case included |
+| `priority` | int32 | positive `critical`, negative `sheddable`, zero `standard` |
+| `services` | `["VIP:port", …]`, at most 256 | the services the objective applies to; empty or omitted = all |
+
+**Class fields** on a tenant (`POST /config/ai/tenant/ratelimit`) and on an API key (create,
+and `PATCH /config/ai/apikey/{key_id}`):
+
+| Field | Meaning |
+|---|---|
+| `priority_class` | the highest class a request may have (`standard`, `critical`, `sheddable`); unset = no cap |
+| `default_objective` | the objective a request gets when it names none, or one it may not use |
+| `allowed_objectives` | the objectives a request may ask for by header, at most 64; empty = none can be asked for |
+
+A key can only narrow its tenant: its cap only lowers, its list counts only for names the
+tenant's list holds. A JWT auth profile and a network-identity binding carry
+`priority_class` alone, as one more cap (a binding's default is `standard`: say `critical`
+on a binding that should not cap). The result is the lowest of what the request asks for
+and every cap that applies: a hint can lower a request, never raise it.
+
+The class fields and the limits of a tenant are separate writes. A POST of limits leaves the
+class as it is. A class field that is omitted is left as stored, an empty value (`""`, `[]`)
+clears it. A body that names a class field and no limit writes the class alone:
+
+```bash
+curl -sk -X POST https://<LB>:11111/netlox/v1/config/ai/tenant/ratelimit -H "Authorization: Bearer $TOKEN" \
+  -d '{"tenant_id":"acme","priority_class":"standard","default_objective":"batch","allowed_objectives":["batch","realtime-chat"]}'
+```
+
+On a rule, `ai_objective_strict: true` refuses a request that names an objective it may not
+use with 403 `objective_not_allowed`; by default such a request falls to its default
+objective.
+
+**When the key store is away.** Every write above answers 503 (`ai_key_store_unavailable`,
+or `ai_key_store_unconfigured` with no store) and changes nothing. A running gateway keeps
+applying what it last read. A gateway that starts while the store does not answer serves
+the last-known-good file `aigw-lkg.json` under `--config-path` (written, mode 0600, after
+every read whose content changed) until the store answers. `fc_effective.config_source` on
+any AI-gateway rule says which: `store`, `lkg` or `none`; while it is `lkg`,
+`loxilb_ai_class_config_lkg_intervals_total` counts one per refresh interval.
+
+**A restart while the key store is away.** API keys are never cached on disk, so the file
+does not carry them:
+
+- A request that presents an API key is refused with 503 `policy_store_unavailable`. It is
+  not admitted on a guess and it is not treated as keyless.
+- Requests that need no key are served: a tenant named by a network-identity binding, and
+  keyless services. Their objectives and classes come from the file.
+- The gateway keeps running. When the store answers again the gateway reads it within 20 s,
+  `config_source` returns to `store`, and keys validate again.
+
+So "no admission failure caused by the database" holds for requests that need no key; a
+keyed request fails closed until the store is back.
 
 ---
 
@@ -222,6 +416,24 @@ Three rule fields govern streaming behavior:
 
 This is a **stream-duration** quota; token-count budgets are enforced per key/tenant via
 `tokens_per_min` (§2–§3).
+
+### A request sent while a streamed answer is running (HTTP/1.1)
+
+On HTTP/1.1 a connection carries one exchange at a time. While the gateway relays a
+streamed answer the client must not send anything on that connection. If it does, the
+gateway closes the connection: the bytes are not relayed, and the stream in progress ends
+as one its client left. The request being answered was checked and charged as a whole;
+bytes behind it belong to no checked request and would otherwise reach the backend without
+a credential check, a model allowlist, a rate limit or a charge.
+
+A streamed answer has ended when its framing ends (the last chunk, or `Content-Length`
+bytes), with or without a `data: [DONE]` event; the next request on the connection is then
+admitted as any request. A client should wait for the answer to end, open a second
+connection, or use HTTP/2, where each request is its own stream.
+
+`loxilb_ai_stream_early_bytes_closed_total{service}` counts one per closed connection
+(absent until the first); at `--loglevel debug` the data-plane log has one
+`[STREAM_INTRUSION]` line for each.
 
 ---
 

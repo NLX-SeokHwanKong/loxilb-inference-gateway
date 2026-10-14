@@ -68,6 +68,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: make -C loxilb-ebpf/common test_abandon
 
+      - name: "test_log (operational log: per-thread rings, one writer thread; a full ring never blocks the caller)"
+        if: ${{ !cancelled() }}
+        run: make -C loxilb-ebpf/common test_log
+
       - name: "check_notify_arm (notify_add_ent is called from exactly one helper)"
         if: ${{ !cancelled() }}
         run: sh loxilb-ebpf/common/check_notify_arm.sh

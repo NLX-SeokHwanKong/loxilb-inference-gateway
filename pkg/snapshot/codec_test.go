@@ -47,6 +47,29 @@ func sampleDocument() *Document {
 			ForwardIdentity: true,
 		}},
 		HalfClose: &cmn.HalfCloseConfig{Allow: false, CapSeconds: 600, DefaultMode: cmn.HalfCloseModeHold},
+		NetIdentity: []cmn.NetIdentityMod{
+			{
+				Name:          "line-1",
+				Match:         cmn.NetIdentityMatch{CIDR: []string{"10.20.0.0/24", "10.20.4.0/22"}},
+				Services:      []string{"20.20.20.1:8080"},
+				Tenant:        "line-1",
+				AllowedModels: []string{"llama-3.1-8b"},
+				Enforce:       cmn.NetIdentityEnforceStrict,
+				Credential:    cmn.NetIdentityCredentialNone,
+				PriorityClass: cmn.NetIdentityClassCritical,
+				FailMode:      cmn.NetIdentityFailClosed,
+			},
+			{
+				Name:            "zone-b",
+				Match:           cmn.NetIdentityMatch{IngressIf: "vlan200"},
+				Tenant:          "zone-b",
+				Enforce:         cmn.NetIdentityEnforceAdvisory,
+				Credential:      cmn.NetIdentityCredentialNetwork,
+				ForwardIdentity: true,
+				PriorityClass:   cmn.NetIdentityClassStandard,
+				FailMode:        cmn.NetIdentityFailNeutral,
+			},
+		},
 		AuditSink: []cmn.AuditSinkConfig{
 			{
 				Name: cmn.AuditSinkCompliance, Address: "siem.example.net:6514",

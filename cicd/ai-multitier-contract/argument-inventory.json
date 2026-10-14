@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "scope": "LoadbalanceEntry fields and AI KV inventory query parameters; not a test-coverage claim",
   "sourceSha256": {
-    "swagger-extras.yml": "5e36fc44f7bcae7588611893ef158e68e0f26c2a0e67d0a9fc719ab3c026c3bc",
-    "swagger.yml": "a4226e5811e31bd35a900e6f00b37409d8691dd1482cac2da383755f444d8afc"
+    "swagger-extras.yml": "7cf1fa625f075edbdae5e7b92155e90c1cd792f0d897a050fd89295827183b3f",
+    "swagger.yml": "fea607d2c6f71f182cd501b53a16da3463ce13c6dc26695581e9dcf0a8006439"
   },
   "fields": [
     {
@@ -311,6 +311,43 @@
       "contract": {
         "description": "Service lifecycle flag. In the domain, absent/true enables new selection and false pauses new selection while retaining members. Implementation gap: POST drops this property, so false does not create a paused rule. The restricted L4 PATCH path handles explicit changes and GET reports effective state. Source behavior does not prove established-connection preservation.",
         "type": "boolean"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/ai_default_max_tokens",
+      "required": false,
+      "contract": {
+        "default": 0,
+        "description": "The default reservation in tokens, used while ai_default_reservation is in force as on. 0 or omitted leaves the process default (LLB_AI_DEFAULT_MAX_TOKENS) in force, else the built-in 512, which is an estimate of a typical completion and not a measured one; at most 100000000. Changeable at runtime by a replace POST (the stored value is kept when omitted, an explicit 0 resets to the process default). Explicit JSON null is rejected. The value in force and its source are read back in fc_effective.",
+        "format": "int32",
+        "maximum": 100000000,
+        "minimum": 0,
+        "type": "integer",
+        "x-nullable": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/ai_default_reservation",
+      "required": false,
+      "contract": {
+        "description": "Whether a request that declares no completion ceiling (no max_tokens or max_completion_tokens, or a value that is not a positive whole number: negative, 0, a string, a float, an object or an array) reserves a default number of completion tokens against the token quotas at admission. off reserves the prompt estimate alone, so leaving the field out is the cheaper choice at admission. on reserves ai_default_max_tokens beside the prompt estimate, as a claim each quota bucket may shrink: it is cut to what the bucket can hold beside the prompt estimate and to what is left of it, down to nothing, and it is never the reason a request is refused - only the prompt estimate and a declared ceiling are. A request admitted with less than the default is counted in fc_effective.reservation_clamped_burst or reservation_clamped_budget and in loxilb_ai_reservation_clamped_total, by reason: burst (the default is more than a bucket can ever hold beside the prompt) or budget (the bucket's budget was already taken). The claim is released when the response is settled, as a declared ceiling's is. Nothing is written into the forwarded request, and a declared ceiling is never replaced. inherit, or omitted on create, runs on the process default (LLB_AI_DEFAULT_RESERVATION, else off). Replace and null semantics as fc_mode; a replace that changes nothing else applies in place, to requests admitted from then on. Read back only when declared; what is in force is fc_effective.default_reservation. The gate reserves before a rule is selected by host, path or model, so the value is per listener: on a VIP and port that several rules share, the value of the rule installed first on it is the one in force for all of them, as with api_key_auth. Declare the same value on each. A rule applied on a VIP and port whose rules resolve to different values is accepted, and the reply and the log carry a warning that names the value in effect; fc_effective shows that value on every rule.",
+        "enum": [
+          "on",
+          "off",
+          "inherit"
+        ],
+        "type": "string",
+        "x-nullable": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/ai_objective_strict",
+      "required": false,
+      "contract": {
+        "default": false,
+        "description": "What happens to a request that names, with the x-llm-d-inference-objective header, an objective it may not use (unknown, not in its tenant's allowed_objectives, or not for this service). false (the default) - the request falls to its default objective and is admitted; the record says the objective was denied. true - the request is refused with 403 objective_not_allowed. Stored on any rule; it has an effect only where the admission gate runs (an AI-gateway service) and while a class is configured. The admission gate reads it per listener, as api_key_auth: declare the same value on each rule of a VIP and port. Changeable at runtime by a replace POST (the stored value is kept when omitted). Explicit JSON null is rejected.",
+        "type": "boolean",
+        "x-nullable": false
       }
     },
     {
@@ -663,6 +700,19 @@
       }
     },
     {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/config_source",
+      "required": false,
+      "contract": {
+        "description": "Where the objectives and the tenant and key classes this gateway is applying came from. store - the AI key store answered the last read. lkg - the store has not answered since the gateway started and the last-known-good file (aigw-lkg.json under the configuration path) is being served; writes are refused with 503 meanwhile and loxilb_ai_class_config_lkg_intervals_total counts. none - nothing was read (no store configured, or a store that has not answered and no file); every request is standard. The same value on every rule - it is the gateway's, not the rule's.",
+        "enum": [
+          "store",
+          "lkg",
+          "none"
+        ],
+        "type": "string"
+      }
+    },
+    {
       "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/decode_max_inflight",
       "required": false,
       "contract": {
@@ -670,6 +720,28 @@
         "format": "int32",
         "type": "integer",
         "x-omitempty": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/default_max_tokens",
+      "required": false,
+      "contract": {
+        "description": "The default reservation in tokens in force for requests that route to this rule; 0 while default_reservation is off.",
+        "format": "int32",
+        "type": "integer",
+        "x-omitempty": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/default_reservation",
+      "required": false,
+      "contract": {
+        "description": "Whether a request without a declared max_tokens that routes to this rule reserves a default for its completion. Each rule of a VIP and port has its own value - the gate takes it from the rule the request's host, path and model select.",
+        "enum": [
+          "on",
+          "off"
+        ],
+        "type": "string"
       }
     },
     {
@@ -783,6 +855,104 @@
       }
     },
     {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/reservation_clamped_budget",
+      "required": false,
+      "contract": {
+        "description": "Requests admitted with less than default_max_tokens reserved, since the process started, because the bucket's budget was already taken by other claims or by spend. Transient - it passes as the window refills. Counted per service, as reservation_clamped_burst. Never a refusal.",
+        "format": "int64",
+        "type": "integer",
+        "x-omitempty": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/reservation_clamped_burst",
+      "required": false,
+      "contract": {
+        "description": "Requests admitted with less than default_max_tokens reserved, since the process started, because default_max_tokens beside the prompt is more than a quota bucket can ever hold, so the request is clamped on an idle bucket too. A configuration to fix - lower the default or raise the quota or its burst. A request this applies to is counted here whatever the budgets held. Counted per service - every model pool of the same VIP and port reads the same number. Never a refusal.",
+        "format": "int64",
+        "type": "integer",
+        "x-omitempty": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/reservation_epoch",
+      "required": false,
+      "contract": {
+        "description": "The minute (Unix time divided by 60) the reservation_held_* fields below are a reading of. A token reservation belongs to the minute it was made in and does not outlive it - a request that ended without settling leaves its claim until the minute turns, and no longer. Compare two readings only when this value is the same in both.",
+        "format": "int64",
+        "type": "integer",
+        "x-omitempty": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/reservation_held",
+      "required": false,
+      "contract": {
+        "description": "The quota buckets holding reserved tokens right now, largest first, at most 64. Empty when nothing is held. A bucket not listed holds nothing unless reservation_held_truncated is true.",
+        "type": "array"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/reservation_held/items",
+      "required": false,
+      "contract": {
+        "type": "object"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/reservation_held/items/bucket",
+      "required": false,
+      "contract": {
+        "description": "The bucket's key in the quota store. It is built from identifiers only (tenant, user, model, key id, service) and never holds a credential.",
+        "type": "string"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/reservation_held/items/kind",
+      "required": false,
+      "contract": {
+        "description": "Which quota the bucket belongs to - the tenant's, the tenant's for one model, a user's, a user's for one model, an API key's own, or the service's shared keyless quota.",
+        "enum": [
+          "tenant",
+          "tenant_model",
+          "user",
+          "user_model",
+          "key",
+          "service"
+        ],
+        "type": "string"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/reservation_held/items/tokens",
+      "required": false,
+      "contract": {
+        "description": "Tokens reserved on the bucket and not yet settled.",
+        "format": "int64",
+        "type": "integer",
+        "x-omitempty": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/reservation_held_claims",
+      "required": false,
+      "contract": {
+        "description": "How many token reservations are held right now on the quota buckets this service's requests reserve on, counted one per request and bucket - a request holds one claim on every quota bucket that applies to it (tenant, tenant and model, user, user and model, key, service), so one in-flight request on three buckets is three claims. Zero exactly when nothing is held. It is a count of claims and says nothing about tokens - the tokens each bucket holds are in reservation_held. A tenant's bucket is shared by every service the tenant uses, and its claims are counted on each of them. Read from the quota store's own counters. Management read-back only - not exported as a metric.",
+        "format": "int64",
+        "type": "integer",
+        "x-omitempty": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/reservation_held_truncated",
+      "required": false,
+      "contract": {
+        "description": "true when reservation_held does not list every bucket holding a reservation - more than 64 hold one, or the service has reserved on more buckets than the gateway tracks for it (4096). reservation_held_claims covers the tracked buckets in either case.",
+        "type": "boolean",
+        "x-omitempty": false
+      }
+    },
+    {
       "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/source",
       "required": false,
       "contract": {
@@ -804,6 +974,30 @@
     },
     {
       "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/source/decode_max_inflight",
+      "required": false,
+      "contract": {
+        "enum": [
+          "rule",
+          "env",
+          "default"
+        ],
+        "type": "string"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/source/default_max_tokens",
+      "required": false,
+      "contract": {
+        "enum": [
+          "rule",
+          "env",
+          "default"
+        ],
+        "type": "string"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/source/default_reservation",
       "required": false,
       "contract": {
         "enum": [
@@ -961,6 +1155,16 @@
       "required": false,
       "contract": {
         "description": "The tenant share in force, in percent; 0 or 100 is no share.",
+        "format": "int32",
+        "type": "integer",
+        "x-omitempty": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/tenant_slots",
+      "required": false,
+      "contract": {
+        "description": "Tenants the pool tracks by name at once for the tenant share; tenants past it share one budget. Fixed when the pool is created (LLB_FC_TENANT_SLOTS).",
         "format": "int32",
         "type": "integer",
         "x-omitempty": false

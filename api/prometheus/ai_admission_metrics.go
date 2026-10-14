@@ -64,9 +64,10 @@ typedef struct proxy_fc_svc_stat {
     uint8_t  src_tenant;
     uint8_t  expose_headers;
     uint8_t  src_expose;
+    uint32_t tenant_slots;
 } proxy_fc_svc_stat_t;
 // Pinned to the layout in sockproxy_metrics.h.
-_Static_assert(sizeof(proxy_fc_svc_stat_t) == 368, "proxy_fc_svc_stat_t size");
+_Static_assert(sizeof(proxy_fc_svc_stat_t) == 376, "proxy_fc_svc_stat_t size");
 _Static_assert(offsetof(proxy_fc_svc_stat_t, decisions) == 40, "decisions offset");
 _Static_assert(offsetof(proxy_fc_svc_stat_t, pool) == 144, "pool offset");
 _Static_assert(offsetof(proxy_fc_svc_stat_t, queued) == 208, "queued offset");
@@ -79,6 +80,7 @@ _Static_assert(offsetof(proxy_fc_svc_stat_t, adaptive) == 332, "adaptive offset"
 _Static_assert(offsetof(proxy_fc_svc_stat_t, warming_eps) == 338, "warming_eps offset");
 _Static_assert(offsetof(proxy_fc_svc_stat_t, adapt_down) == 344, "adapt_down offset");
 _Static_assert(offsetof(proxy_fc_svc_stat_t, tenants_active) == 360, "tenants_active offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, tenant_slots) == 368, "tenant_slots offset");
 
 extern int proxy_get_fc_stats(proxy_fc_svc_stat_t *out, int max);
 extern uint64_t proxy_get_fc_anomaly(int kind);
@@ -189,6 +191,7 @@ type admissionSample struct {
 	warmingEps     float64
 
 	tenantsActive float64
+	tenantSlots   float64
 }
 
 // admissionStore is the state shared between the collection loop (writer)
@@ -209,6 +212,7 @@ var admissionAnomalyLabelNames = []string{"kind"}
 var admissionStateLabelNames = []string{"service", "pool", "state"}
 var admissionAdaptReasonLabelNames = []string{"service", "pool", "reason"}
 var admissionDirectionLabelNames = []string{"service", "pool", "direction"}
+var admissionTenantSlotsLabelNames = []string{"service", "kind"}
 
 var (
 	admissionModeDesc = prometheus.NewDesc(
@@ -271,6 +275,11 @@ var (
 		"Tenants holding a capacity unit or waiting on the pool right now, counted while the pool holds tenants to a share (fc_tenant_max_share_pct); zero otherwise. Requests without a tenant count as one.",
 		admissionPoolLabels, nil,
 	)
+	admissionTenantSlotsDesc = prometheus.NewDesc(
+		"loxilb_ai_fc_tenant_slots",
+		"The tenant table of the capacity gate, per service: kind=\"max\" is how many tenants a model pool tracks by name at once (LLB_FC_TENANT_SLOTS, fixed when the pool is created), kind=\"used\" is how many hold a unit or wait right now on the service's fullest pool. used above max means tenants past the table are sharing one budget. used is zero while no pool of the service holds tenants to a share.",
+		admissionTenantSlotsLabelNames, nil,
+	)
 	admissionAnomaliesDesc = prometheus.NewDesc(
 		"loxilb_ai_admission_anomalies_total",
 		"Accounting anomalies in the capacity gate, process-wide: underflow (a release found its counter at zero), unknown_permit (an executing permit with no pool) and tenant_table_full (a request whose tenant found the pool's tenant table full and shared the last slot with the other tenants past it). underflow and unknown_permit are defects; tenant_table_full means more tenants than the table holds are active on one pool.",
@@ -297,6 +306,7 @@ func (admissionCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- admissionAdaptMovesDesc
 	ch <- admissionWarmingDesc
 	ch <- admissionTenantsDesc
+	ch <- admissionTenantSlotsDesc
 	ch <- admissionAnomaliesDesc
 }
 
@@ -335,6 +345,10 @@ func (admissionCollector) Collect(ch chan<- prometheus.Metric) {
 		ch <- prometheus.MustNewConstMetric(admissionWarmingDesc, prometheus.GaugeValue, s.warmingEps, s.service, s.pool)
 		ch <- prometheus.MustNewConstMetric(admissionTenantsDesc, prometheus.GaugeValue, s.tenantsActive, s.service, s.pool)
 	}
+	for _, t := range admissionTenantSlotsByService(samples) {
+		ch <- prometheus.MustNewConstMetric(admissionTenantSlotsDesc, prometheus.GaugeValue, t.used, t.service, "used")
+		ch <- prometheus.MustNewConstMetric(admissionTenantSlotsDesc, prometheus.GaugeValue, t.max, t.service, "max")
+	}
 	for k, kind := range admissionAnomalyLabels {
 		ch <- prometheus.MustNewConstMetric(admissionAnomaliesDesc, prometheus.CounterValue, anomalies[k], kind)
 	}
@@ -344,6 +358,37 @@ func (admissionCollector) Collect(ch chan<- prometheus.Metric) {
 // same registry the promauto metrics use).
 func init() {
 	prometheus.MustRegister(admissionCollector{})
+}
+
+// admissionServiceTenantSlots is one service's tenant-table reading.
+type admissionServiceTenantSlots struct {
+	service string
+	used    float64
+	max     float64
+}
+
+// admissionTenantSlotsByService folds the pools of each service into one
+// reading, in the order the services first appear: the table size, and the
+// tenants on the pool that has the most. A service's pools are sized alike,
+// and it is the fullest one that reaches the table's end first. Pure Go.
+func admissionTenantSlotsByService(samples []admissionSample) []admissionServiceTenantSlots {
+	out := make([]admissionServiceTenantSlots, 0, len(samples))
+	at := make(map[string]int, len(samples))
+	for _, s := range samples {
+		i, seen := at[s.service]
+		if !seen {
+			i = len(out)
+			at[s.service] = i
+			out = append(out, admissionServiceTenantSlots{service: s.service})
+		}
+		if s.tenantsActive > out[i].used {
+			out[i].used = s.tenantsActive
+		}
+		if s.tenantSlots > out[i].max {
+			out[i].max = s.tenantSlots
+		}
+	}
+	return out
 }
 
 // admissionOneHot is a state-set member's value. Pure Go.
@@ -469,6 +514,7 @@ func refreshAdmissionStore() {
 		s.adaptMoves[1] = float64(st.adapt_up)
 		s.warmingEps = float64(st.warming_eps)
 		s.tenantsActive = float64(st.tenants_active)
+		s.tenantSlots = float64(st.tenant_slots)
 		samples = append(samples, s)
 	}
 	sortAdmissionSamples(samples)

@@ -110,7 +110,27 @@ import (
 // migration is restamp-only. Builds that predate it refuse 1.9 documents
 // via the minor-version gate - so a downgraded build cannot take a document
 // whose default is hold and quietly run its services off.
-const SchemaVersion = "1.9"
+//
+// 1.10: a load-balancer rule gained ai_default_reservation and
+// ai_default_max_tokens, the default token reservation of a request that
+// declares no max_tokens. A rule without them runs on the process default,
+// which is what absent values read as, so the 1.9->1.10 migration is
+// restamp-only. Builds that predate it refuse 1.10 documents via the
+// minor-version gate: their decoder does not know the two fields, and a
+// rule restored without them would reserve less than its operator set.
+//
+// 1.11: added the netidentity domain: the network-identity bindings, which
+// name the tenant of requests by the network they arrive from. Additive:
+// older documents carry none, and their included_domains never lists it, so
+// restoring them leaves the live bindings untouched. Builds that predate it
+// refuse 1.11 documents via the minor-version gate - a document whose
+// bindings admit or hold requests cannot be restored without them quietly.
+// Within 1.11, before any build that writes it was released: a JWT auth
+// profile gained priority_class and a load-balancer rule ai_objective_strict.
+// Both are absent in a document that does not set them, and absent reads as
+// what it was before (no cap from the profile, a request that names an
+// objective it may not use falls to its default).
+const SchemaVersion = "1.11"
 
 // DocKind identifies the document type, matching §4's "kind" field.
 const DocKind = "loxilb-snapshot"
@@ -136,6 +156,7 @@ const (
 	DomainEndpoint       = "endpoint"
 	DomainJWTAuthProfile = "jwtauthprofile"
 	DomainHalfClose      = "halfclose"
+	DomainNetIdentity    = "netidentity"
 	DomainLoadBalancer   = "loadbalancer"
 	DomainKvExactBinding = "kvexactbinding"
 	DomainL7Policy       = "l7policy"
@@ -220,7 +241,16 @@ type Domains struct {
 	// force (not configuration, not captured). Applied BEFORE loadbalancer,
 	// so that a restored block is in force before the rules that would hold
 	// come back. Added in schema 1.7; absent in older documents.
-	HalfClose    *cmn.HalfCloseConfig `json:"halfclose,omitempty"`
+	HalfClose *cmn.HalfCloseConfig `json:"halfclose,omitempty"`
+	// NetIdentity carries the network-identity bindings (the tenant of
+	// requests by source network). Applied BEFORE loadbalancer: a binding
+	// names its services by VIP and port and needs no rule to exist, and a
+	// service restored first would run its sources unattributed - outside
+	// their tenant's limits, or refused where the binding stands in for a
+	// credential - until its bindings followed. Node-local: a binding names
+	// this node's interfaces. Added in schema 1.11; absent in older
+	// documents.
+	NetIdentity  []cmn.NetIdentityMod `json:"netidentity,omitempty"`
 	LoadBalancer []cmn.LbRuleMod      `json:"loadbalancer"`
 	// KvExactBinding carries each rule's KV-exact composed-binding identity
 	// (model-profile ref, engine-contract ref, binding generation + digest,

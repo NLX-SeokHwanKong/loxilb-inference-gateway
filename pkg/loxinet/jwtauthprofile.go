@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	tk "github.com/loxilb-io/loxilib"
 
@@ -46,6 +47,10 @@ type JWTAuthProfileH struct {
 	// with the bearer admission arm; until then nothing can reference a
 	// profile and this returns nil.
 	ruleRefs func(name string) []string
+
+	// classes is each profile's priority_class by name, replaced whole on
+	// every change so the request path reads it without the mutex.
+	classes atomic.Pointer[map[string]string]
 }
 
 // JWTAuthProfileInit builds the profile holder with a live manager.
@@ -122,6 +127,12 @@ func jwtProfileFromMod(pm *cmn.JWTAuthProfileMod) jwtauth.Profile {
 // ProfileAdd creates or replaces a profile. Replacement restarts the key
 // lifecycle fail-closed (the manager handles the unchanged-re-set no-op).
 func (h *JWTAuthProfileH) ProfileAdd(pm *cmn.JWTAuthProfileMod) (int, error) {
+	switch pm.PriorityClass {
+	case "", cmn.AIClassStandard, cmn.AIClassCritical, cmn.AIClassSheddable:
+	default:
+		return JwtAuthProfileArgErr, cmn.NewValidationError("priority_class",
+			"invalid priority_class %q: want standard, critical or sheddable", pm.PriorityClass)
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if err := h.mgr.SetProfile(jwtProfileFromMod(pm)); err != nil {
@@ -133,6 +144,7 @@ func (h *JWTAuthProfileH) ProfileAdd(pm *cmn.JWTAuthProfileMod) (int, error) {
 		return JwtAuthProfileArgErr, &cmn.ValidationError{Err: err}
 	}
 	h.profiles[pm.Name] = *pm
+	h.publishClasses()
 	tk.LogIt(tk.LogInfo, "[JWTAuth] profile %s stored (issuer %s)\n", pm.Name, pm.Issuer)
 	return 0, nil
 }
@@ -160,6 +172,7 @@ func (h *JWTAuthProfileH) ProfileDel(name string) (int, error) {
 	}
 	h.mgr.RemoveProfile(name)
 	delete(h.profiles, name)
+	h.publishClasses()
 	tk.LogIt(tk.LogInfo, "[JWTAuth] profile %s deleted\n", name)
 	return 0, nil
 }
@@ -214,3 +227,42 @@ const (
 	JwtAuthProfileNoExistErr
 	JwtAuthProfileRefErr
 )
+
+// publishClasses republishes the profiles' classes. Called with mu held.
+func (h *JWTAuthProfileH) publishClasses() {
+	m := make(map[string]string, len(h.profiles))
+	for name, pm := range h.profiles {
+		if pm.PriorityClass != "" {
+			m[name] = pm.PriorityClass
+		}
+	}
+	h.classes.Store(&m)
+	aiClassRecompute()
+}
+
+// ProfileClass returns the priority_class of a profile: the cap on the
+// requests its tokens authenticate ("" = none). Lock-free.
+func (h *JWTAuthProfileH) ProfileClass(name string) string {
+	if h == nil || name == "" {
+		return ""
+	}
+	if m := h.classes.Load(); m != nil {
+		return (*m)[name]
+	}
+	return ""
+}
+
+// lowersClass reports whether a profile makes its requests sheddable.
+func (h *JWTAuthProfileH) lowersClass() bool {
+	if h == nil {
+		return false
+	}
+	if m := h.classes.Load(); m != nil {
+		for _, c := range *m {
+			if c == cmn.AIClassSheddable {
+				return true
+			}
+		}
+	}
+	return false
+}

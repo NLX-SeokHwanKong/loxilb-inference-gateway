@@ -23,6 +23,39 @@ func init() {
     "application/json"
   ],
   "definitions": {
+    "AIObjectiveEntry": {
+      "description": "A named request priority. name is 1 to 63 characters of letters, digits, '-', '_' and '.', compared exactly (case-sensitive), and must not begin with tier:. services limits the objective to the listed services (\"VIP:port\"); empty or omitted means every service. priority is a signed integer - positive is the critical class, negative sheddable, zero standard; the order between two objectives of the same class is not kept.",
+      "properties": {
+        "name": {
+          "description": "Name of the objective, as a request's header names it",
+          "type": "string"
+        },
+        "priority": {
+          "description": "The priority a request with this objective has",
+          "format": "int32",
+          "type": "integer",
+          "x-omitempty": false
+        },
+        "services": {
+          "description": "Services the objective applies to, as \"VIP:port\"; at most 256. Empty means all",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-omitempty": true
+        },
+        "updated_at": {
+          "description": "When the objective was last written. Ignored on input",
+          "format": "date-time",
+          "readOnly": true,
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
     "AiModelProfileEntry": {
       "description": "One published model-prompt profile (list and detail representations are identical). Presence conveys validity by construction - publication is all-or-nothing, so every entry has already passed artifact digest verification and tokenizer load; there is no partial or invalid state. tokenizerSha256 is always present (publication requires it); templateSha256/templateContentFormat are present iff a chat template is bound. The sha256 digests are the immutable audit/drift identities of the profile's artifacts. Artifact locator paths, the registry root, and any host filesystem information are deliberately EXCLUDED from this representation.",
       "properties": {
@@ -157,6 +190,14 @@ func init() {
           },
           "type": "array"
         },
+        "allowed_objectives": {
+          "description": "The objectives a request with this key may ask for by header, out of the ones its tenant allows; at most 64. Empty means the key narrows nothing.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-omitempty": true
+        },
         "api_key": {
           "description": "Optional imported credential; absent or empty generates a new key. Imports require 16-512 printable non-space ASCII bytes. GET/list never returns the credential. Create currently emits an empty raw_key string for imports, not omission. Length and invalid-character rejections both map to 400 with api_key validation fields.",
           "type": "string"
@@ -165,6 +206,10 @@ func init() {
           "description": "Total request-bucket capacity, not additional capacity above RPS. Zero uses per-key RPS. Nonpositive RPS skips this limiter; negative-value validation remains incomplete.",
           "format": "int64",
           "type": "integer"
+        },
+        "default_objective": {
+          "description": "The objective a request with this key gets when it names none, or one it may not use. Counts only when the tenant's allowed_objectives hold it.",
+          "type": "string"
         },
         "enabled": {
           "description": "Whether the API key is active. Absent = enabled (optional, nullable to distinguish unset).",
@@ -178,6 +223,15 @@ func init() {
         },
         "name": {
           "description": "Human-readable label for the API key",
+          "type": "string"
+        },
+        "priority_class": {
+          "description": "The highest priority class a request with this key may have. It can only lower what the key's tenant allows. Omitted means no cap from the key.",
+          "enum": [
+            "standard",
+            "critical",
+            "sheddable"
+          ],
           "type": "string"
         },
         "rate_limit_rps": {
@@ -228,6 +282,14 @@ func init() {
           },
           "type": "array"
         },
+        "allowed_objectives": {
+          "description": "The objectives a request with this key may ask for by header, out of the ones its tenant allows; at most 64. Empty means the key narrows nothing.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-omitempty": true
+        },
         "burst_size": {
           "description": "Total request-bucket capacity, not additional capacity above RPS. Nonpositive burst uses per-key RPS; nonpositive RPS skips that limiter.",
           "format": "int64",
@@ -236,6 +298,10 @@ func init() {
         "created_at": {
           "description": "Timestamp when the key was created",
           "format": "date-time",
+          "type": "string"
+        },
+        "default_objective": {
+          "description": "The objective a request with this key gets when it names none, or one it may not use. Counts only when the tenant's allowed_objectives hold it.",
           "type": "string"
         },
         "enabled": {
@@ -253,6 +319,15 @@ func init() {
         },
         "name": {
           "description": "Human-readable label for the API key",
+          "type": "string"
+        },
+        "priority_class": {
+          "description": "The highest priority class a request with this key may have. It can only lower what the key's tenant allows. Omitted means no cap from the key.",
+          "enum": [
+            "standard",
+            "critical",
+            "sheddable"
+          ],
           "type": "string"
         },
         "rate_limit_rps": {
@@ -3517,6 +3592,15 @@ func init() {
           "description": "Profile name (the identity LB rules reference)",
           "type": "string"
         },
+        "priority_class": {
+          "description": "The highest priority class a request admitted by this profile's tokens may have. It can only lower what the tenant allows. Omitted means no cap from the profile.",
+          "enum": [
+            "standard",
+            "critical",
+            "sheddable"
+          ],
+          "type": "string"
+        },
         "refresh_sec": {
           "description": "Periodic JWKS refresh interval in seconds (default 3600)",
           "format": "int64",
@@ -4753,6 +4837,31 @@ func init() {
               "description": "Service lifecycle flag. In the domain, absent/true enables new selection and false pauses new selection while retaining members. Implementation gap: POST drops this property, so false does not create a paused rule. The restricted L4 PATCH path handles explicit changes and GET reports effective state. Source behavior does not prove established-connection preservation.",
               "type": "boolean"
             },
+            "ai_default_max_tokens": {
+              "default": 0,
+              "description": "The default reservation in tokens, used while ai_default_reservation is in force as on. 0 or omitted leaves the process default (LLB_AI_DEFAULT_MAX_TOKENS) in force, else the built-in 512, which is an estimate of a typical completion and not a measured one; at most 100000000. Changeable at runtime by a replace POST (the stored value is kept when omitted, an explicit 0 resets to the process default). Explicit JSON null is rejected. The value in force and its source are read back in fc_effective.",
+              "format": "int32",
+              "maximum": 100000000,
+              "minimum": 0,
+              "type": "integer",
+              "x-nullable": false
+            },
+            "ai_default_reservation": {
+              "description": "Whether a request that declares no completion ceiling (no max_tokens or max_completion_tokens, or a value that is not a positive whole number: negative, 0, a string, a float, an object or an array) reserves a default number of completion tokens against the token quotas at admission. off reserves the prompt estimate alone, so leaving the field out is the cheaper choice at admission. on reserves ai_default_max_tokens beside the prompt estimate, as a claim each quota bucket may shrink: it is cut to what the bucket can hold beside the prompt estimate and to what is left of it, down to nothing, and it is never the reason a request is refused - only the prompt estimate and a declared ceiling are. A request admitted with less than the default is counted in fc_effective.reservation_clamped_burst or reservation_clamped_budget and in loxilb_ai_reservation_clamped_total, by reason: burst (the default is more than a bucket can ever hold beside the prompt) or budget (the bucket's budget was already taken). The claim is released when the response is settled, as a declared ceiling's is. Nothing is written into the forwarded request, and a declared ceiling is never replaced. inherit, or omitted on create, runs on the process default (LLB_AI_DEFAULT_RESERVATION, else off). Replace and null semantics as fc_mode; a replace that changes nothing else applies in place, to requests admitted from then on. Read back only when declared; what is in force is fc_effective.default_reservation. The gate reserves before a rule is selected by host, path or model, so the value is per listener: on a VIP and port that several rules share, the value of the rule installed first on it is the one in force for all of them, as with api_key_auth. Declare the same value on each. A rule applied on a VIP and port whose rules resolve to different values is accepted, and the reply and the log carry a warning that names the value in effect; fc_effective shows that value on every rule.",
+              "enum": [
+                "on",
+                "off",
+                "inherit"
+              ],
+              "type": "string",
+              "x-nullable": false
+            },
+            "ai_objective_strict": {
+              "default": false,
+              "description": "What happens to a request that names, with the x-llm-d-inference-objective header, an objective it may not use (unknown, not in its tenant's allowed_objectives, or not for this service). false (the default) - the request falls to its default objective and is admitted; the record says the objective was denied. true - the request is refused with 403 objective_not_allowed. Stored on any rule; it has an effect only where the admission gate runs (an AI-gateway service) and while a class is configured. The admission gate reads it per listener, as api_key_auth: declare the same value on each rule of a VIP and port. Changeable at runtime by a replace POST (the stored value is kept when omitted). Explicit JSON null is rejected.",
+              "type": "boolean",
+              "x-nullable": false
+            },
             "alpn_protocols": {
               "description": "HTTP ALPN capability list, typically [h2, http/1.1], [h2] or [http/1.1]. Recognized values override backend_protocol through a shared capability used by listener and backend TLS setup; list order is not preserved as preference order. Empty leaves backend_protocol in use. Implementation limitations: unknown tokens are ignored, an entirely unrecognized list falls back to backend_protocol, and the H1/both listener callback can select H1 without a common advertised protocol. This is not strict ALPN allow-list enforcement. See shared readback/update warnings.",
               "items": {
@@ -4966,11 +5075,34 @@ func init() {
                   ],
                   "type": "string"
                 },
+                "config_source": {
+                  "description": "Where the objectives and the tenant and key classes this gateway is applying came from. store - the AI key store answered the last read. lkg - the store has not answered since the gateway started and the last-known-good file (aigw-lkg.json under the configuration path) is being served; writes are refused with 503 meanwhile and loxilb_ai_class_config_lkg_intervals_total counts. none - nothing was read (no store configured, or a store that has not answered and no file); every request is standard. The same value on every rule - it is the gateway's, not the rule's.",
+                  "enum": [
+                    "store",
+                    "lkg",
+                    "none"
+                  ],
+                  "type": "string"
+                },
                 "decode_max_inflight": {
                   "description": "Per-endpoint ceiling for decode legs; 0 is unlimited.",
                   "format": "int32",
                   "type": "integer",
                   "x-omitempty": false
+                },
+                "default_max_tokens": {
+                  "description": "The default reservation in tokens in force for requests that route to this rule; 0 while default_reservation is off.",
+                  "format": "int32",
+                  "type": "integer",
+                  "x-omitempty": false
+                },
+                "default_reservation": {
+                  "description": "Whether a request without a declared max_tokens that routes to this rule reserves a default for its completion. Each rule of a VIP and port has its own value - the gate takes it from the rule the request's host, path and model select.",
+                  "enum": [
+                    "on",
+                    "off"
+                  ],
+                  "type": "string"
                 },
                 "effective_max_outstanding": {
                   "description": "The service ceiling in force now; below max_outstanding while an adaptive pool is tightened.",
@@ -5038,6 +5170,66 @@ func init() {
                   "type": "integer",
                   "x-omitempty": false
                 },
+                "reservation_clamped_budget": {
+                  "description": "Requests admitted with less than default_max_tokens reserved, since the process started, because the bucket's budget was already taken by other claims or by spend. Transient - it passes as the window refills. Counted per service, as reservation_clamped_burst. Never a refusal.",
+                  "format": "int64",
+                  "type": "integer",
+                  "x-omitempty": false
+                },
+                "reservation_clamped_burst": {
+                  "description": "Requests admitted with less than default_max_tokens reserved, since the process started, because default_max_tokens beside the prompt is more than a quota bucket can ever hold, so the request is clamped on an idle bucket too. A configuration to fix - lower the default or raise the quota or its burst. A request this applies to is counted here whatever the budgets held. Counted per service - every model pool of the same VIP and port reads the same number. Never a refusal.",
+                  "format": "int64",
+                  "type": "integer",
+                  "x-omitempty": false
+                },
+                "reservation_epoch": {
+                  "description": "The minute (Unix time divided by 60) the reservation_held_* fields below are a reading of. A token reservation belongs to the minute it was made in and does not outlive it - a request that ended without settling leaves its claim until the minute turns, and no longer. Compare two readings only when this value is the same in both.",
+                  "format": "int64",
+                  "type": "integer",
+                  "x-omitempty": false
+                },
+                "reservation_held": {
+                  "description": "The quota buckets holding reserved tokens right now, largest first, at most 64. Empty when nothing is held. A bucket not listed holds nothing unless reservation_held_truncated is true.",
+                  "items": {
+                    "properties": {
+                      "bucket": {
+                        "description": "The bucket's key in the quota store. It is built from identifiers only (tenant, user, model, key id, service) and never holds a credential.",
+                        "type": "string"
+                      },
+                      "kind": {
+                        "description": "Which quota the bucket belongs to - the tenant's, the tenant's for one model, a user's, a user's for one model, an API key's own, or the service's shared keyless quota.",
+                        "enum": [
+                          "tenant",
+                          "tenant_model",
+                          "user",
+                          "user_model",
+                          "key",
+                          "service"
+                        ],
+                        "type": "string"
+                      },
+                      "tokens": {
+                        "description": "Tokens reserved on the bucket and not yet settled.",
+                        "format": "int64",
+                        "type": "integer",
+                        "x-omitempty": false
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "reservation_held_claims": {
+                  "description": "How many token reservations are held right now on the quota buckets this service's requests reserve on, counted one per request and bucket - a request holds one claim on every quota bucket that applies to it (tenant, tenant and model, user, user and model, key, service), so one in-flight request on three buckets is three claims. Zero exactly when nothing is held. It is a count of claims and says nothing about tokens - the tokens each bucket holds are in reservation_held. A tenant's bucket is shared by every service the tenant uses, and its claims are counted on each of them. Read from the quota store's own counters. Management read-back only - not exported as a metric.",
+                  "format": "int64",
+                  "type": "integer",
+                  "x-omitempty": false
+                },
+                "reservation_held_truncated": {
+                  "description": "true when reservation_held does not list every bucket holding a reservation - more than 64 hold one, or the service has reserved on more buckets than the gateway tracks for it (4096). reservation_held_claims covers the tracked buckets in either case.",
+                  "type": "boolean",
+                  "x-omitempty": false
+                },
                 "source": {
                   "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default).",
                   "properties": {
@@ -5050,6 +5242,22 @@ func init() {
                       "type": "string"
                     },
                     "decode_max_inflight": {
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ],
+                      "type": "string"
+                    },
+                    "default_max_tokens": {
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ],
+                      "type": "string"
+                    },
+                    "default_reservation": {
                       "enum": [
                         "rule",
                         "env",
@@ -5156,6 +5364,12 @@ func init() {
                 },
                 "tenant_max_share_pct": {
                   "description": "The tenant share in force, in percent; 0 or 100 is no share.",
+                  "format": "int32",
+                  "type": "integer",
+                  "x-omitempty": false
+                },
+                "tenant_slots": {
+                  "description": "Tenants the pool tracks by name at once for the tenant share; tenants past it share one budget. Fixed when the pool is created (LLB_FC_TENANT_SLOTS).",
                   "format": "int32",
                   "type": "integer",
                   "x-omitempty": false
@@ -6238,6 +6452,114 @@ func init() {
         "dev",
         "ipAddress",
         "macAddress"
+      ],
+      "type": "object"
+    },
+    "NetIdentityEntry": {
+      "description": "A network-identity binding: the tenant of the requests that reach an AI service from a network. A cidr match says where a request came from; it does not prove who sent it, and any host that can send from the range is attributed to the tenant. Use it for limits, fairness and records, never in place of a credential. An ingress_if match is as strong as the network boundary behind the interface. Where several bindings match a request, an ingress_if match wins over a cidr match, the longest prefix wins among cidr matches, and a binding that names the service wins over one that names none.",
+      "properties": {
+        "allowed_models": {
+          "description": "The models a request admitted or held by this binding may name, compared exactly. Empty or omitted allows any. At most 256.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-omitempty": true
+        },
+        "credential": {
+          "description": "none (default): the binding never stands in for a credential. network: on a service that requires a credential, a request that presents none is admitted as the binding's tenant. Accepted with an interface match only (ingress_if, vlan, vni or ipsec_tunnel); refused with a cidr match. Also refused when a named service has a rule that is not an AI-gateway service and runs sockMapMode request or both: the gateway does not see every request on it.",
+          "enum": [
+            "none",
+            "network"
+          ],
+          "type": "string"
+        },
+        "enforce": {
+          "description": "advisory (default): a request that presents a credential is decided by it and the binding is only noted. strict: a credential whose tenant is not the binding's is refused with 403 network_tenant_mismatch, and the model must also pass allowed_models. In both, a request with no credential on a service that does not require one is admitted as the binding's tenant.",
+          "enum": [
+            "advisory",
+            "strict"
+          ],
+          "type": "string"
+        },
+        "fail_mode": {
+          "description": "What the binding's services do with a request while the binding lookup itself cannot answer (an internal fault, counted in loxilb_ai_netid_resolver_faults_total). neutral (default): the request is decided as if the service had no binding - it is never admitted by its network, and a valid credential is not refused, so a strict binding is not enforced during the fault. closed: every request the lookup would have decided is refused with 503 netid_unavailable until it answers again. The setting is per service in effect, not per binding: a service fails closed when any binding that applies to it says closed, whether that binding names the service or names none, and then it does so for every source. When the bindings that apply to a service disagree, the reply to the POST is \"Success; warning: fail_mode: ...\" and names them.",
+          "enum": [
+            "neutral",
+            "closed"
+          ],
+          "type": "string"
+        },
+        "forward_identity": {
+          "description": "Forward the request's tenant upstream as X-Auth-Tenant, and its user as X-Auth-User when it has one, on a request whose source matched this binding. Needs a non-empty services list, and is refused without one. The services the binding names then also drop every header whose name starts with X-Auth- that a client sends, on every request and whatever the rule's api_key_auth, whether or not the request's source matched a binding. A service no such binding applies to is unchanged. The identity is injected only on an AI-gateway service, where the admission gate decides it, and not into a chunked HTTP/1.1 request. Refused when a service the binding names has a rule that is not an AI-gateway service and runs sockMapMode request or both: the gateway does not see every request on it. Such a rule is refused in turn while the binding exists. Default false.",
+          "type": "boolean"
+        },
+        "match": {
+          "description": "The source the binding applies to. Exactly one of cidr, ingress_if, vlan, vni and ipsec_tunnel. All but cidr match on the interface the connection arrived on.",
+          "properties": {
+            "cidr": {
+              "description": "IPv4 networks in a.b.c.d/len form, without host bits, that the socket peer of the request is in. At most 256.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array",
+              "x-omitempty": true
+            },
+            "ingress_if": {
+              "description": "Name of the interface the connection arrived on, at most 15 characters: the logical device, which for a tagged VLAN is its bridge (vlan\u003cid\u003e), for a VXLAN its device (vxlan\u003cvni\u003e) and for an IPsec tunnel its VTI. The name is stored, never an index, so an interface that is removed and created again keeps its binding. A name that does not exist on the node is accepted with a warning in the reply and matches nothing until it exists; an interface that is removed later is logged and matches nothing until it is back. The interface is that of the connection's first packet and holds for the life of the connection.",
+              "type": "string"
+            },
+            "ipsec_tunnel": {
+              "description": "Name of an IPsec tunnel configured on this node (/config/ipsec/tunnel). Another spelling of ingress_if: the tunnel's VTI interface, vti\u003cmark\u003e. A tunnel that is not configured, or has no mark, is accepted with a warning and matches nothing until it has one.",
+              "type": "string"
+            },
+            "vlan": {
+              "description": "A VLAN ID. Another spelling of ingress_if: the VLAN's bridge interface on this node, vlan\u003cid\u003e.",
+              "maximum": 4094,
+              "minimum": 1,
+              "type": "integer",
+              "x-omitempty": true
+            },
+            "vni": {
+              "description": "A VXLAN network identifier. Another spelling of ingress_if: the interface vxlan\u003cvni\u003e on this node.",
+              "maximum": 16777215,
+              "minimum": 1,
+              "type": "integer",
+              "x-omitempty": true
+            }
+          },
+          "type": "object"
+        },
+        "name": {
+          "description": "Binding name, 1 to 63 characters of letters, digits, '-', '_' and '.', starting with a letter or digit. It is what request records carry.",
+          "type": "string"
+        },
+        "priority_class": {
+          "description": "The highest priority class a request the binding names the tenant of may have. It can only lower what the tenant allows. Default standard - a binding that should not cap its requests says critical.",
+          "enum": [
+            "standard",
+            "critical",
+            "sheddable"
+          ],
+          "type": "string"
+        },
+        "services": {
+          "description": "The AI services the binding applies to, each as VIP:port (IPv4). Empty or omitted applies it to every AI service. A service does not have to exist yet. At most 256.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-omitempty": true
+        },
+        "tenant": {
+          "description": "The tenant a matching request is attributed to, 1 to 127 bytes. The same namespace as API-key and JWT tenants: its limits are the ones configured for that tenant.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "match",
+        "tenant"
       ],
       "type": "object"
     },
@@ -7890,10 +8212,22 @@ func init() {
     "TenantRateLimitEntry": {
       "description": "Stored quotas, not enforcement status. Missing aggregate and model records produce 404; model-only state may lack an aggregate update timestamp. Zero aggregate rates disable their limiter while model quotas remain separate. burst_pct controls token capacity, not request-rate burst; zero uses the server default and positive values are clamped to 1-1000.",
       "properties": {
+        "allowed_objectives": {
+          "description": "The objectives a request of this tenant may ask for by header",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-omitempty": true
+        },
         "burst_pct": {
           "description": "Token bucket capacity as a percent of tokens_per_min; 0 uses the server default",
           "format": "int64",
           "type": "integer"
+        },
+        "default_objective": {
+          "description": "The objective a request of this tenant gets when it names none, or one it may not use",
+          "type": "string"
         },
         "model_limits": {
           "description": "Per-model token quotas for the tenant",
@@ -7901,6 +8235,10 @@ func init() {
             "$ref": "#/definitions/TenantModelRateLimit"
           },
           "type": "array"
+        },
+        "priority_class": {
+          "description": "The highest priority class a request of this tenant may have; absent when no cap is set",
+          "type": "string"
         },
         "rps": {
           "description": "Maximum requests per second for the tenant",
@@ -7928,12 +8266,25 @@ func init() {
       "type": "object"
     },
     "TenantRateLimitMod": {
-      "description": "POST replaces aggregate rps, tokens_per_min, and burst_pct; omission becomes zero, not preservation. Supplied model_limits are individual upserts or removals; omitted/empty model_limits preserves existing model rows. Aggregate and model writes are sequential, not one transaction, so failure can leave partial changes. Blank identifiers and malformed model entries are not consistently rejected as 400. Configuration alone does not enable enforcement on a service.",
+      "description": "POST replaces aggregate rps, tokens_per_min, and burst_pct; omission becomes zero, not preservation. Supplied model_limits are individual upserts or removals; omitted/empty model_limits preserves existing model rows. Aggregate and model writes are sequential, not one transaction, so failure can leave partial changes. Blank identifiers and malformed model entries are not consistently rejected as 400. Configuration alone does not enable enforcement on a service. The class fields (priority_class, default_objective, allowed_objectives) are written by their own statement and only when the body names one of them, so a POST of limits leaves the tenant's class as it is. A body that names a class field and carries no limit (rps, tokens_per_min and burst_pct absent or zero, no model_limits) writes the class only and leaves the limits as they are.",
       "properties": {
+        "allowed_objectives": {
+          "description": "The objectives a request of this tenant may ask for with the x-llm-d-inference-objective header; at most 64. Omitted leaves the stored list; an empty array clears it, and then no objective can be asked for.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-omitempty": true
+        },
         "burst_pct": {
           "description": "Token bucket capacity as a percent of tokens_per_min; 0 uses the server default",
           "format": "int64",
           "type": "integer"
+        },
+        "default_objective": {
+          "description": "The objective a request of this tenant gets when it names none, or one it may not use. Omitted leaves the stored value; an empty string clears it.",
+          "type": "string",
+          "x-nullable": true
         },
         "model_limits": {
           "description": "Per-model token quotas for the tenant",
@@ -7941,6 +8292,11 @@ func init() {
             "$ref": "#/definitions/TenantModelRateLimit"
           },
           "type": "array"
+        },
+        "priority_class": {
+          "description": "The highest priority class a request of this tenant may have: standard, critical or sheddable. Omitted leaves the stored value; an empty string clears it (no cap).",
+          "type": "string",
+          "x-nullable": true
         },
         "rps": {
           "description": "Maximum requests per second for the tenant",
@@ -9761,6 +10117,322 @@ func init() {
           }
         },
         "summary": "Get one published model-prompt profile",
+        "tags": [
+          "ai"
+        ]
+      }
+    },
+    "/config/ai/netidentity": {
+      "get": {
+        "description": "Returns every network-identity binding in name order, as stored: enumerated fields spelled out, addresses and services in their canonical form.",
+        "operationId": "getConfigAiNetidentityAll",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "properties": {
+                "netIdentityAttr": {
+                  "items": {
+                    "$ref": "#/definitions/NetIdentityEntry"
+                  },
+                  "type": "array"
+                }
+              },
+              "type": "object"
+            }
+          },
+          "401": {
+            "description": "Invalid authentication credentials",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "$ref": "#/responses/ManagementForbidden"
+          },
+          "500": {
+            "description": "Internal service error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Maintenance mode",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        },
+        "summary": "List network-identity bindings",
+        "tags": [
+          "ai"
+        ]
+      },
+      "post": {
+        "description": "Binds the requests that reach AI services from a network to a tenant. Posting an existing name replaces the binding. A binding applies from the next request, on connections that are already open as well. It is refused with 409 when another binding matches the same source on the same service as specifically and names another tenant. A binding is the configuration of the node it is posted to: it is not replicated to a high-availability peer.",
+        "operationId": "postConfigAiNetidentity",
+        "parameters": [
+          {
+            "description": "Attributes of the network-identity binding",
+            "in": "body",
+            "name": "attr",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/NetIdentityEntry"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/OperationResult"
+            }
+          },
+          "400": {
+            "description": "Malformed arguments for API call",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "401": {
+            "description": "Invalid authentication credentials",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "$ref": "#/responses/ManagementForbidden"
+          },
+          "409": {
+            "description": "Resource Conflict. Another binding maps the same source on the same service to another tenant",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "500": {
+            "description": "Internal service error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Maintenance mode",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        },
+        "summary": "Create or replace a network-identity binding",
+        "tags": [
+          "ai"
+        ]
+      }
+    },
+    "/config/ai/netidentity/{name}": {
+      "delete": {
+        "description": "Removes the named binding. Requests from its network are decided without it from the next request.",
+        "operationId": "deleteConfigAiNetidentityName",
+        "parameters": [
+          {
+            "description": "Name of the network-identity binding",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/OperationResult"
+            }
+          },
+          "401": {
+            "description": "Invalid authentication credentials",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "$ref": "#/responses/ManagementForbidden"
+          },
+          "404": {
+            "description": "Resource not found",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "500": {
+            "description": "Internal service error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Maintenance mode",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        },
+        "summary": "Delete a network-identity binding",
+        "tags": [
+          "ai"
+        ]
+      }
+    },
+    "/config/ai/objective": {
+      "get": {
+        "description": "Returns every objective in name order, read from the AI key store. 503 while the store does not answer - the objectives a gateway is applying meanwhile are the last it read, and fc_effective.config_source on a rule says where they came from.",
+        "operationId": "getConfigAiObjectiveAll",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "properties": {
+                "objectiveAttr": {
+                  "items": {
+                    "$ref": "#/definitions/AIObjectiveEntry"
+                  },
+                  "type": "array"
+                }
+              },
+              "type": "object"
+            }
+          },
+          "401": {
+            "description": "Invalid authentication credentials",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "$ref": "#/responses/ManagementForbidden"
+          },
+          "500": {
+            "description": "Internal service error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Maintenance mode, no AI key store configured, or the store does not answer",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        },
+        "summary": "List objectives",
+        "tags": [
+          "ai"
+        ]
+      },
+      "post": {
+        "description": "An objective is a named priority a request can ask for with the x-llm-d-inference-objective header, or get as its tenant's or key's default. A positive priority is the critical class, a negative one sheddable, zero standard. Posting an existing name replaces the objective. Objectives live in the AI key store, so every gateway that shares the store applies a change within one refresh interval (LLB_AI_OBJECTIVE_REFRESH_SEC, default 10 s), this one at once. Without a key store, or while it does not answer, the call is refused with 503 and nothing changes.",
+        "operationId": "postConfigAiObjective",
+        "parameters": [
+          {
+            "description": "Attributes of the objective",
+            "in": "body",
+            "name": "attr",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/AIObjectiveEntry"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/OperationResult"
+            }
+          },
+          "400": {
+            "description": "Malformed arguments for API call",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "401": {
+            "description": "Invalid authentication credentials",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "$ref": "#/responses/ManagementForbidden"
+          },
+          "500": {
+            "description": "Internal service error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Maintenance mode, no AI key store configured (ai_key_store_unconfigured), or the store does not answer (ai_key_store_unavailable)",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        },
+        "summary": "Create or replace an objective",
+        "tags": [
+          "ai"
+        ]
+      }
+    },
+    "/config/ai/objective/{name}": {
+      "delete": {
+        "description": "Removes the named objective. A tenant or key that still names it keeps the name; a request that asks for it is then treated as one that asked for an unknown objective.",
+        "operationId": "deleteConfigAiObjectiveName",
+        "parameters": [
+          {
+            "description": "Name of the objective",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/OperationResult"
+            }
+          },
+          "401": {
+            "description": "Invalid authentication credentials",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "$ref": "#/responses/ManagementForbidden"
+          },
+          "404": {
+            "description": "Resource not found",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "500": {
+            "description": "Internal service error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Maintenance mode, no AI key store configured, or the store does not answer",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        },
+        "summary": "Delete an objective",
         "tags": [
           "ai"
         ]
@@ -22788,7 +23460,341 @@ func init() {
             }
           },
           "503": {
-            "description": "Credential store unavailable \u2014 the credential was never examined; retry after a moment",
+            "description": "Credential store unavailable — the credential was never examined; retry after a moment",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        }
+      }
+    },
+    "/config/ai/netidentity": {
+      "get": {
+        "description": "Returns every network-identity binding in name order, as stored: enumerated fields spelled out, addresses and services in their canonical form.",
+        "tags": [
+          "ai"
+        ],
+        "summary": "List network-identity bindings",
+        "operationId": "getConfigAiNetidentityAll",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "netIdentityAttr": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/definitions/NetIdentityEntry"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid authentication credentials",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "description": "Authenticated principal is not authorized for this operation",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "500": {
+            "description": "Internal service error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Maintenance mode",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        }
+      },
+      "post": {
+        "description": "Binds the requests that reach AI services from a network to a tenant. Posting an existing name replaces the binding. A binding applies from the next request, on connections that are already open as well. It is refused with 409 when another binding matches the same source on the same service as specifically and names another tenant. A binding is the configuration of the node it is posted to: it is not replicated to a high-availability peer.",
+        "tags": [
+          "ai"
+        ],
+        "summary": "Create or replace a network-identity binding",
+        "operationId": "postConfigAiNetidentity",
+        "parameters": [
+          {
+            "description": "Attributes of the network-identity binding",
+            "name": "attr",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/NetIdentityEntry"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/OperationResult"
+            }
+          },
+          "400": {
+            "description": "Malformed arguments for API call",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "401": {
+            "description": "Invalid authentication credentials",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "description": "Authenticated principal is not authorized for this operation",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "409": {
+            "description": "Resource Conflict. Another binding maps the same source on the same service to another tenant",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "500": {
+            "description": "Internal service error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Maintenance mode",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        }
+      }
+    },
+    "/config/ai/netidentity/{name}": {
+      "delete": {
+        "description": "Removes the named binding. Requests from its network are decided without it from the next request.",
+        "tags": [
+          "ai"
+        ],
+        "summary": "Delete a network-identity binding",
+        "operationId": "deleteConfigAiNetidentityName",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "Name of the network-identity binding",
+            "name": "name",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/OperationResult"
+            }
+          },
+          "401": {
+            "description": "Invalid authentication credentials",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "description": "Authenticated principal is not authorized for this operation",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "500": {
+            "description": "Internal service error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Maintenance mode",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        }
+      }
+    },
+    "/config/ai/objective": {
+      "get": {
+        "description": "Returns every objective in name order, read from the AI key store. 503 while the store does not answer - the objectives a gateway is applying meanwhile are the last it read, and fc_effective.config_source on a rule says where they came from.",
+        "tags": [
+          "ai"
+        ],
+        "summary": "List objectives",
+        "operationId": "getConfigAiObjectiveAll",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "objectiveAttr": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/definitions/AIObjectiveEntry"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid authentication credentials",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "description": "Authenticated principal is not authorized for this operation",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "500": {
+            "description": "Internal service error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Maintenance mode, no AI key store configured, or the store does not answer",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        }
+      },
+      "post": {
+        "description": "An objective is a named priority a request can ask for with the x-llm-d-inference-objective header, or get as its tenant's or key's default. A positive priority is the critical class, a negative one sheddable, zero standard. Posting an existing name replaces the objective. Objectives live in the AI key store, so every gateway that shares the store applies a change within one refresh interval (LLB_AI_OBJECTIVE_REFRESH_SEC, default 10 s), this one at once. Without a key store, or while it does not answer, the call is refused with 503 and nothing changes.",
+        "tags": [
+          "ai"
+        ],
+        "summary": "Create or replace an objective",
+        "operationId": "postConfigAiObjective",
+        "parameters": [
+          {
+            "description": "Attributes of the objective",
+            "name": "attr",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/AIObjectiveEntry"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/OperationResult"
+            }
+          },
+          "400": {
+            "description": "Malformed arguments for API call",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "401": {
+            "description": "Invalid authentication credentials",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "description": "Authenticated principal is not authorized for this operation",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "500": {
+            "description": "Internal service error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Maintenance mode, no AI key store configured (ai_key_store_unconfigured), or the store does not answer (ai_key_store_unavailable)",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        }
+      }
+    },
+    "/config/ai/objective/{name}": {
+      "delete": {
+        "description": "Removes the named objective. A tenant or key that still names it keeps the name; a request that asks for it is then treated as one that asked for an unknown objective.",
+        "tags": [
+          "ai"
+        ],
+        "summary": "Delete an objective",
+        "operationId": "deleteConfigAiObjectiveName",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "Name of the objective",
+            "name": "name",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/OperationResult"
+            }
+          },
+          "401": {
+            "description": "Invalid authentication credentials",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "description": "Authenticated principal is not authorized for this operation",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "500": {
+            "description": "Internal service error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Maintenance mode, no AI key store configured, or the store does not answer",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -32833,7 +33839,7 @@ func init() {
     },
     "/config/vlan": {
       "post": {
-        "description": "Create Linux bridge vlan<ID> with MTU 9000. The REST helper does not consistently enforce the VLAN range documented elsewhere, and successful creation does not prove completion of subsequent link setup.",
+        "description": "Create Linux bridge vlan\u003cID\u003e with MTU 9000. The REST helper does not consistently enforce the VLAN range documented elsewhere, and successful creation does not prove completion of subsequent link setup.",
         "summary": "Create vlan interface in the device",
         "parameters": [
           {
@@ -32946,7 +33952,7 @@ func init() {
     },
     "/config/vlan/{vlan_id}": {
       "delete": {
-        "description": "Delete Linux bridge vlan<ID>. The REST helper does not enforce a no-members precondition; do not assume a populated bridge will be rejected. Downstream failures are not guaranteed to use the documented conflict or not-found status.",
+        "description": "Delete Linux bridge vlan\u003cID\u003e. The REST helper does not enforce a no-members precondition; do not assume a populated bridge will be rejected. Downstream failures are not guaranteed to use the documented conflict or not-found status.",
         "summary": "Delete vlan in the device",
         "parameters": [
           {
@@ -33011,7 +34017,7 @@ func init() {
     },
     "/config/vlan/{vlan_id}/member": {
       "post": {
-        "description": "Attach a member to bridge vlan<ID>. Omitted tagged means false and attaches the named interface; tagged true creates and attaches <interface>.<ID>. The helper does not enforce existing-master ownership or the documented VLAN range, and failures can leave partial state. Verify existing membership before submission; automatic reparenting must not be treated as a safe update contract.",
+        "description": "Attach a member to bridge vlan\u003cID\u003e. Omitted tagged means false and attaches the named interface; tagged true creates and attaches \u003cinterface\u003e.\u003cID\u003e. The helper does not enforce existing-master ownership or the documented VLAN range, and failures can leave partial state. Verify existing membership before submission; automatic reparenting must not be treated as a safe update contract.",
         "summary": "Add a physical port to a vlan interface",
         "parameters": [
           {
@@ -33086,7 +34092,7 @@ func init() {
     },
     "/config/vlan/{vlan_id}/member/{if_name}/tagged/{tagged}": {
       "delete": {
-        "description": "Request removal of a member from bridge vlan<ID>; tagged deletion also deletes <interface>.<ID>. Safety limitation: the helper checks that the requested bridge exists but does not verify that it owns the member before unmastering it. Verify membership before submission; wrong-bridge deletion is an implementation gap.",
+        "description": "Request removal of a member from bridge vlan\u003cID\u003e; tagged deletion also deletes \u003cinterface\u003e.\u003cID\u003e. Safety limitation: the helper checks that the requested bridge exists but does not verify that it owns the member before unmastering it. Verify membership before submission; wrong-bridge deletion is an implementation gap.",
         "summary": "Remove a vlan member from a vlan interface",
         "parameters": [
           {
@@ -34671,6 +35677,39 @@ func init() {
     }
   },
   "definitions": {
+    "AIObjectiveEntry": {
+      "description": "A named request priority. name is 1 to 63 characters of letters, digits, '-', '_' and '.', compared exactly (case-sensitive), and must not begin with tier:. services limits the objective to the listed services (\"VIP:port\"); empty or omitted means every service. priority is a signed integer - positive is the critical class, negative sheddable, zero standard; the order between two objectives of the same class is not kept.",
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "description": "Name of the objective, as a request's header names it",
+          "type": "string"
+        },
+        "priority": {
+          "description": "The priority a request with this objective has",
+          "type": "integer",
+          "format": "int32",
+          "x-omitempty": false
+        },
+        "services": {
+          "description": "Services the objective applies to, as \"VIP:port\"; at most 256. Empty means all",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-omitempty": true
+        },
+        "updated_at": {
+          "description": "When the objective was last written. Ignored on input",
+          "type": "string",
+          "format": "date-time",
+          "readOnly": true
+        }
+      }
+    },
     "AiModelProfileEntry": {
       "description": "One published model-prompt profile (list and detail representations are identical). Presence conveys validity by construction - publication is all-or-nothing, so every entry has already passed artifact digest verification and tokenizer load; there is no partial or invalid state. tokenizerSha256 is always present (publication requires it); templateSha256/templateContentFormat are present iff a chat template is bound. The sha256 digests are the immutable audit/drift identities of the profile's artifacts. Artifact locator paths, the registry root, and any host filesystem information are deliberately EXCLUDED from this representation.",
       "type": "object",
@@ -34809,6 +35848,14 @@ func init() {
             "type": "string"
           }
         },
+        "allowed_objectives": {
+          "description": "The objectives a request with this key may ask for by header, out of the ones its tenant allows; at most 64. Empty means the key narrows nothing.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-omitempty": true
+        },
         "api_key": {
           "description": "Optional imported credential; absent or empty generates a new key. Imports require 16-512 printable non-space ASCII bytes. GET/list never returns the credential. Create currently emits an empty raw_key string for imports, not omission. Length and invalid-character rejections both map to 400 with api_key validation fields.",
           "type": "string"
@@ -34817,6 +35864,10 @@ func init() {
           "description": "Total request-bucket capacity, not additional capacity above RPS. Zero uses per-key RPS. Nonpositive RPS skips this limiter; negative-value validation remains incomplete.",
           "type": "integer",
           "format": "int64"
+        },
+        "default_objective": {
+          "description": "The objective a request with this key gets when it names none, or one it may not use. Counts only when the tenant's allowed_objectives hold it.",
+          "type": "string"
         },
         "enabled": {
           "description": "Whether the API key is active. Absent = enabled (optional, nullable to distinguish unset).",
@@ -34831,6 +35882,15 @@ func init() {
         "name": {
           "description": "Human-readable label for the API key",
           "type": "string"
+        },
+        "priority_class": {
+          "description": "The highest priority class a request with this key may have. It can only lower what the key's tenant allows. Omitted means no cap from the key.",
+          "type": "string",
+          "enum": [
+            "standard",
+            "critical",
+            "sheddable"
+          ]
         },
         "rate_limit_rps": {
           "description": "Maximum requests per second allowed for this key",
@@ -34880,6 +35940,14 @@ func init() {
             "type": "string"
           }
         },
+        "allowed_objectives": {
+          "description": "The objectives a request with this key may ask for by header, out of the ones its tenant allows; at most 64. Empty means the key narrows nothing.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-omitempty": true
+        },
         "burst_size": {
           "description": "Total request-bucket capacity, not additional capacity above RPS. Nonpositive burst uses per-key RPS; nonpositive RPS skips that limiter.",
           "type": "integer",
@@ -34889,6 +35957,10 @@ func init() {
           "description": "Timestamp when the key was created",
           "type": "string",
           "format": "date-time"
+        },
+        "default_objective": {
+          "description": "The objective a request with this key gets when it names none, or one it may not use. Counts only when the tenant's allowed_objectives hold it.",
+          "type": "string"
         },
         "enabled": {
           "description": "Whether this key is currently active",
@@ -34906,6 +35978,15 @@ func init() {
         "name": {
           "description": "Human-readable label for the API key",
           "type": "string"
+        },
+        "priority_class": {
+          "description": "The highest priority class a request with this key may have. It can only lower what the key's tenant allows. Omitted means no cap from the key.",
+          "type": "string",
+          "enum": [
+            "standard",
+            "critical",
+            "sheddable"
+          ]
         },
         "rate_limit_rps": {
           "description": "Maximum requests per second allowed for this key",
@@ -38680,6 +39761,15 @@ func init() {
           "description": "Profile name (the identity LB rules reference)",
           "type": "string"
         },
+        "priority_class": {
+          "description": "The highest priority class a request admitted by this profile's tokens may have. It can only lower what the tenant allows. Omitted means no cap from the profile.",
+          "type": "string",
+          "enum": [
+            "standard",
+            "critical",
+            "sheddable"
+          ]
+        },
         "refresh_sec": {
           "description": "Periodic JWKS refresh interval in seconds (default 3600)",
           "type": "integer",
@@ -39885,6 +40975,31 @@ func init() {
               "description": "Service lifecycle flag. In the domain, absent/true enables new selection and false pauses new selection while retaining members. Implementation gap: POST drops this property, so false does not create a paused rule. The restricted L4 PATCH path handles explicit changes and GET reports effective state. Source behavior does not prove established-connection preservation.",
               "type": "boolean"
             },
+            "ai_default_max_tokens": {
+              "description": "The default reservation in tokens, used while ai_default_reservation is in force as on. 0 or omitted leaves the process default (LLB_AI_DEFAULT_MAX_TOKENS) in force, else the built-in 512, which is an estimate of a typical completion and not a measured one; at most 100000000. Changeable at runtime by a replace POST (the stored value is kept when omitted, an explicit 0 resets to the process default). Explicit JSON null is rejected. The value in force and its source are read back in fc_effective.",
+              "type": "integer",
+              "format": "int32",
+              "default": 0,
+              "maximum": 100000000,
+              "minimum": 0,
+              "x-nullable": false
+            },
+            "ai_default_reservation": {
+              "description": "Whether a request that declares no completion ceiling (no max_tokens or max_completion_tokens, or a value that is not a positive whole number: negative, 0, a string, a float, an object or an array) reserves a default number of completion tokens against the token quotas at admission. off reserves the prompt estimate alone, so leaving the field out is the cheaper choice at admission. on reserves ai_default_max_tokens beside the prompt estimate, as a claim each quota bucket may shrink: it is cut to what the bucket can hold beside the prompt estimate and to what is left of it, down to nothing, and it is never the reason a request is refused - only the prompt estimate and a declared ceiling are. A request admitted with less than the default is counted in fc_effective.reservation_clamped_burst or reservation_clamped_budget and in loxilb_ai_reservation_clamped_total, by reason: burst (the default is more than a bucket can ever hold beside the prompt) or budget (the bucket's budget was already taken). The claim is released when the response is settled, as a declared ceiling's is. Nothing is written into the forwarded request, and a declared ceiling is never replaced. inherit, or omitted on create, runs on the process default (LLB_AI_DEFAULT_RESERVATION, else off). Replace and null semantics as fc_mode; a replace that changes nothing else applies in place, to requests admitted from then on. Read back only when declared; what is in force is fc_effective.default_reservation. The gate reserves before a rule is selected by host, path or model, so the value is per listener: on a VIP and port that several rules share, the value of the rule installed first on it is the one in force for all of them, as with api_key_auth. Declare the same value on each. A rule applied on a VIP and port whose rules resolve to different values is accepted, and the reply and the log carry a warning that names the value in effect; fc_effective shows that value on every rule.",
+              "type": "string",
+              "enum": [
+                "on",
+                "off",
+                "inherit"
+              ],
+              "x-nullable": false
+            },
+            "ai_objective_strict": {
+              "description": "What happens to a request that names, with the x-llm-d-inference-objective header, an objective it may not use (unknown, not in its tenant's allowed_objectives, or not for this service). false (the default) - the request falls to its default objective and is admitted; the record says the objective was denied. true - the request is refused with 403 objective_not_allowed. Stored on any rule; it has an effect only where the admission gate runs (an AI-gateway service) and while a class is configured. The admission gate reads it per listener, as api_key_auth: declare the same value on each rule of a VIP and port. Changeable at runtime by a replace POST (the stored value is kept when omitted). Explicit JSON null is rejected.",
+              "type": "boolean",
+              "default": false,
+              "x-nullable": false
+            },
             "alpn_protocols": {
               "description": "HTTP ALPN capability list, typically [h2, http/1.1], [h2] or [http/1.1]. Recognized values override backend_protocol through a shared capability used by listener and backend TLS setup; list order is not preserved as preference order. Empty leaves backend_protocol in use. Implementation limitations: unknown tokens are ignored, an entirely unrecognized list falls back to backend_protocol, and the H1/both listener callback can select H1 without a common advertised protocol. This is not strict ALPN allow-list enforcement. See shared readback/update warnings.",
               "type": "array",
@@ -40099,11 +41214,34 @@ func init() {
                     "off"
                   ]
                 },
+                "config_source": {
+                  "description": "Where the objectives and the tenant and key classes this gateway is applying came from. store - the AI key store answered the last read. lkg - the store has not answered since the gateway started and the last-known-good file (aigw-lkg.json under the configuration path) is being served; writes are refused with 503 meanwhile and loxilb_ai_class_config_lkg_intervals_total counts. none - nothing was read (no store configured, or a store that has not answered and no file); every request is standard. The same value on every rule - it is the gateway's, not the rule's.",
+                  "type": "string",
+                  "enum": [
+                    "store",
+                    "lkg",
+                    "none"
+                  ]
+                },
                 "decode_max_inflight": {
                   "description": "Per-endpoint ceiling for decode legs; 0 is unlimited.",
                   "type": "integer",
                   "x-omitempty": false,
                   "format": "int32"
+                },
+                "default_max_tokens": {
+                  "description": "The default reservation in tokens in force for requests that route to this rule; 0 while default_reservation is off.",
+                  "type": "integer",
+                  "format": "int32",
+                  "x-omitempty": false
+                },
+                "default_reservation": {
+                  "description": "Whether a request without a declared max_tokens that routes to this rule reserves a default for its completion. Each rule of a VIP and port has its own value - the gate takes it from the rule the request's host, path and model select.",
+                  "type": "string",
+                  "enum": [
+                    "on",
+                    "off"
+                  ]
                 },
                 "effective_max_outstanding": {
                   "description": "The service ceiling in force now; below max_outstanding while an adaptive pool is tightened.",
@@ -40168,8 +41306,44 @@ func init() {
                 "queued": {
                   "description": "Inference requests waiting for a unit right now.",
                   "type": "integer",
-                  "x-omitempty": false,
-                  "format": "int32"
+                  "format": "int32",
+                  "x-omitempty": false
+                },
+                "reservation_clamped_budget": {
+                  "description": "Requests admitted with less than default_max_tokens reserved, since the process started, because the bucket's budget was already taken by other claims or by spend. Transient - it passes as the window refills. Counted per service, as reservation_clamped_burst. Never a refusal.",
+                  "type": "integer",
+                  "format": "int64",
+                  "x-omitempty": false
+                },
+                "reservation_clamped_burst": {
+                  "description": "Requests admitted with less than default_max_tokens reserved, since the process started, because default_max_tokens beside the prompt is more than a quota bucket can ever hold, so the request is clamped on an idle bucket too. A configuration to fix - lower the default or raise the quota or its burst. A request this applies to is counted here whatever the budgets held. Counted per service - every model pool of the same VIP and port reads the same number. Never a refusal.",
+                  "type": "integer",
+                  "format": "int64",
+                  "x-omitempty": false
+                },
+                "reservation_epoch": {
+                  "description": "The minute (Unix time divided by 60) the reservation_held_* fields below are a reading of. A token reservation belongs to the minute it was made in and does not outlive it - a request that ended without settling leaves its claim until the minute turns, and no longer. Compare two readings only when this value is the same in both.",
+                  "type": "integer",
+                  "format": "int64",
+                  "x-omitempty": false
+                },
+                "reservation_held": {
+                  "description": "The quota buckets holding reserved tokens right now, largest first, at most 64. Empty when nothing is held. A bucket not listed holds nothing unless reservation_held_truncated is true.",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/definitions/LoadbalanceEntryServiceArgumentsFcEffectiveReservationHeldItems0"
+                  }
+                },
+                "reservation_held_claims": {
+                  "description": "How many token reservations are held right now on the quota buckets this service's requests reserve on, counted one per request and bucket - a request holds one claim on every quota bucket that applies to it (tenant, tenant and model, user, user and model, key, service), so one in-flight request on three buckets is three claims. Zero exactly when nothing is held. It is a count of claims and says nothing about tokens - the tokens each bucket holds are in reservation_held. A tenant's bucket is shared by every service the tenant uses, and its claims are counted on each of them. Read from the quota store's own counters. Management read-back only - not exported as a metric.",
+                  "type": "integer",
+                  "format": "int64",
+                  "x-omitempty": false
+                },
+                "reservation_held_truncated": {
+                  "description": "true when reservation_held does not list every bucket holding a reservation - more than 64 hold one, or the service has reserved on more buckets than the gateway tracks for it (4096). reservation_held_claims covers the tracked buckets in either case.",
+                  "type": "boolean",
+                  "x-omitempty": false
                 },
                 "source": {
                   "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default).",
@@ -40184,6 +41358,22 @@ func init() {
                       ]
                     },
                     "decode_max_inflight": {
+                      "type": "string",
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ]
+                    },
+                    "default_max_tokens": {
+                      "type": "string",
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ]
+                    },
+                    "default_reservation": {
                       "type": "string",
                       "enum": [
                         "rule",
@@ -40289,6 +41479,12 @@ func init() {
                 },
                 "tenant_max_share_pct": {
                   "description": "The tenant share in force, in percent; 0 or 100 is no share.",
+                  "type": "integer",
+                  "x-omitempty": false,
+                  "format": "int32"
+                },
+                "tenant_slots": {
+                  "description": "Tenants the pool tracks by name at once for the tenant share; tenants past it share one budget. Fixed when the pool is created (LLB_FC_TENANT_SLOTS).",
                   "type": "integer",
                   "x-omitempty": false,
                   "format": "int32"
@@ -41043,6 +42239,31 @@ func init() {
           "description": "Service lifecycle flag. In the domain, absent/true enables new selection and false pauses new selection while retaining members. Implementation gap: POST drops this property, so false does not create a paused rule. The restricted L4 PATCH path handles explicit changes and GET reports effective state. Source behavior does not prove established-connection preservation.",
           "type": "boolean"
         },
+        "ai_default_max_tokens": {
+          "description": "The default reservation in tokens, used while ai_default_reservation is in force as on. 0 or omitted leaves the process default (LLB_AI_DEFAULT_MAX_TOKENS) in force, else the built-in 512, which is an estimate of a typical completion and not a measured one; at most 100000000. Changeable at runtime by a replace POST (the stored value is kept when omitted, an explicit 0 resets to the process default). Explicit JSON null is rejected. The value in force and its source are read back in fc_effective.",
+          "type": "integer",
+          "format": "int32",
+          "default": 0,
+          "maximum": 100000000,
+          "minimum": 0,
+          "x-nullable": false
+        },
+        "ai_default_reservation": {
+          "description": "Whether a request that declares no completion ceiling (no max_tokens or max_completion_tokens, or a value that is not a positive whole number: negative, 0, a string, a float, an object or an array) reserves a default number of completion tokens against the token quotas at admission. off reserves the prompt estimate alone, so leaving the field out is the cheaper choice at admission. on reserves ai_default_max_tokens beside the prompt estimate, as a claim each quota bucket may shrink: it is cut to what the bucket can hold beside the prompt estimate and to what is left of it, down to nothing, and it is never the reason a request is refused - only the prompt estimate and a declared ceiling are. A request admitted with less than the default is counted in fc_effective.reservation_clamped_burst or reservation_clamped_budget and in loxilb_ai_reservation_clamped_total, by reason: burst (the default is more than a bucket can ever hold beside the prompt) or budget (the bucket's budget was already taken). The claim is released when the response is settled, as a declared ceiling's is. Nothing is written into the forwarded request, and a declared ceiling is never replaced. inherit, or omitted on create, runs on the process default (LLB_AI_DEFAULT_RESERVATION, else off). Replace and null semantics as fc_mode; a replace that changes nothing else applies in place, to requests admitted from then on. Read back only when declared; what is in force is fc_effective.default_reservation. The gate reserves before a rule is selected by host, path or model, so the value is per listener: on a VIP and port that several rules share, the value of the rule installed first on it is the one in force for all of them, as with api_key_auth. Declare the same value on each. A rule applied on a VIP and port whose rules resolve to different values is accepted, and the reply and the log carry a warning that names the value in effect; fc_effective shows that value on every rule.",
+          "type": "string",
+          "enum": [
+            "on",
+            "off",
+            "inherit"
+          ],
+          "x-nullable": false
+        },
+        "ai_objective_strict": {
+          "description": "What happens to a request that names, with the x-llm-d-inference-objective header, an objective it may not use (unknown, not in its tenant's allowed_objectives, or not for this service). false (the default) - the request falls to its default objective and is admitted; the record says the objective was denied. true - the request is refused with 403 objective_not_allowed. Stored on any rule; it has an effect only where the admission gate runs (an AI-gateway service) and while a class is configured. The admission gate reads it per listener, as api_key_auth: declare the same value on each rule of a VIP and port. Changeable at runtime by a replace POST (the stored value is kept when omitted). Explicit JSON null is rejected.",
+          "type": "boolean",
+          "default": false,
+          "x-nullable": false
+        },
         "alpn_protocols": {
           "description": "HTTP ALPN capability list, typically [h2, http/1.1], [h2] or [http/1.1]. Recognized values override backend_protocol through a shared capability used by listener and backend TLS setup; list order is not preserved as preference order. Empty leaves backend_protocol in use. Implementation limitations: unknown tokens are ignored, an entirely unrecognized list falls back to backend_protocol, and the H1/both listener callback can select H1 without a common advertised protocol. This is not strict ALPN allow-list enforcement. See shared readback/update warnings.",
           "type": "array",
@@ -41257,11 +42478,34 @@ func init() {
                 "off"
               ]
             },
+            "config_source": {
+              "description": "Where the objectives and the tenant and key classes this gateway is applying came from. store - the AI key store answered the last read. lkg - the store has not answered since the gateway started and the last-known-good file (aigw-lkg.json under the configuration path) is being served; writes are refused with 503 meanwhile and loxilb_ai_class_config_lkg_intervals_total counts. none - nothing was read (no store configured, or a store that has not answered and no file); every request is standard. The same value on every rule - it is the gateway's, not the rule's.",
+              "type": "string",
+              "enum": [
+                "store",
+                "lkg",
+                "none"
+              ]
+            },
             "decode_max_inflight": {
               "description": "Per-endpoint ceiling for decode legs; 0 is unlimited.",
               "type": "integer",
               "x-omitempty": false,
               "format": "int32"
+            },
+            "default_max_tokens": {
+              "description": "The default reservation in tokens in force for requests that route to this rule; 0 while default_reservation is off.",
+              "type": "integer",
+              "format": "int32",
+              "x-omitempty": false
+            },
+            "default_reservation": {
+              "description": "Whether a request without a declared max_tokens that routes to this rule reserves a default for its completion. Each rule of a VIP and port has its own value - the gate takes it from the rule the request's host, path and model select.",
+              "type": "string",
+              "enum": [
+                "on",
+                "off"
+              ]
             },
             "effective_max_outstanding": {
               "description": "The service ceiling in force now; below max_outstanding while an adaptive pool is tightened.",
@@ -41326,8 +42570,44 @@ func init() {
             "queued": {
               "description": "Inference requests waiting for a unit right now.",
               "type": "integer",
-              "x-omitempty": false,
-              "format": "int32"
+              "format": "int32",
+              "x-omitempty": false
+            },
+            "reservation_clamped_budget": {
+              "description": "Requests admitted with less than default_max_tokens reserved, since the process started, because the bucket's budget was already taken by other claims or by spend. Transient - it passes as the window refills. Counted per service, as reservation_clamped_burst. Never a refusal.",
+              "type": "integer",
+              "format": "int64",
+              "x-omitempty": false
+            },
+            "reservation_clamped_burst": {
+              "description": "Requests admitted with less than default_max_tokens reserved, since the process started, because default_max_tokens beside the prompt is more than a quota bucket can ever hold, so the request is clamped on an idle bucket too. A configuration to fix - lower the default or raise the quota or its burst. A request this applies to is counted here whatever the budgets held. Counted per service - every model pool of the same VIP and port reads the same number. Never a refusal.",
+              "type": "integer",
+              "format": "int64",
+              "x-omitempty": false
+            },
+            "reservation_epoch": {
+              "description": "The minute (Unix time divided by 60) the reservation_held_* fields below are a reading of. A token reservation belongs to the minute it was made in and does not outlive it - a request that ended without settling leaves its claim until the minute turns, and no longer. Compare two readings only when this value is the same in both.",
+              "type": "integer",
+              "format": "int64",
+              "x-omitempty": false
+            },
+            "reservation_held": {
+              "description": "The quota buckets holding reserved tokens right now, largest first, at most 64. Empty when nothing is held. A bucket not listed holds nothing unless reservation_held_truncated is true.",
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/LoadbalanceEntryServiceArgumentsFcEffectiveReservationHeldItems0"
+              }
+            },
+            "reservation_held_claims": {
+              "description": "How many token reservations are held right now on the quota buckets this service's requests reserve on, counted one per request and bucket - a request holds one claim on every quota bucket that applies to it (tenant, tenant and model, user, user and model, key, service), so one in-flight request on three buckets is three claims. Zero exactly when nothing is held. It is a count of claims and says nothing about tokens - the tokens each bucket holds are in reservation_held. A tenant's bucket is shared by every service the tenant uses, and its claims are counted on each of them. Read from the quota store's own counters. Management read-back only - not exported as a metric.",
+              "type": "integer",
+              "format": "int64",
+              "x-omitempty": false
+            },
+            "reservation_held_truncated": {
+              "description": "true when reservation_held does not list every bucket holding a reservation - more than 64 hold one, or the service has reserved on more buckets than the gateway tracks for it (4096). reservation_held_claims covers the tracked buckets in either case.",
+              "type": "boolean",
+              "x-omitempty": false
             },
             "source": {
               "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default).",
@@ -41342,6 +42622,22 @@ func init() {
                   ]
                 },
                 "decode_max_inflight": {
+                  "type": "string",
+                  "enum": [
+                    "rule",
+                    "env",
+                    "default"
+                  ]
+                },
+                "default_max_tokens": {
+                  "type": "string",
+                  "enum": [
+                    "rule",
+                    "env",
+                    "default"
+                  ]
+                },
+                "default_reservation": {
                   "type": "string",
                   "enum": [
                     "rule",
@@ -41447,6 +42743,12 @@ func init() {
             },
             "tenant_max_share_pct": {
               "description": "The tenant share in force, in percent; 0 or 100 is no share.",
+              "type": "integer",
+              "x-omitempty": false,
+              "format": "int32"
+            },
+            "tenant_slots": {
+              "description": "Tenants the pool tracks by name at once for the tenant share; tenants past it share one budget. Fixed when the pool is created (LLB_FC_TENANT_SLOTS).",
               "type": "integer",
               "x-omitempty": false,
               "format": "int32"
@@ -42149,10 +43451,32 @@ func init() {
             "off"
           ]
         },
+        "config_source": {
+          "description": "Where the objectives and the tenant and key classes this gateway is applying came from. store - the AI key store answered the last read. lkg - the store has not answered since the gateway started and the last-known-good file (aigw-lkg.json under the configuration path) is being served; writes are refused with 503 meanwhile and loxilb_ai_class_config_lkg_intervals_total counts. none - nothing was read (no store configured, or a store that has not answered and no file); every request is standard. The same value on every rule - it is the gateway's, not the rule's.",
+          "type": "string",
+          "enum": [
+            "store",
+            "lkg",
+            "none"
+          ]
+        },
         "decode_max_inflight": {
           "description": "Per-endpoint ceiling for decode legs; 0 is unlimited.",
           "type": "integer",
           "format": "int32"
+        },
+        "default_max_tokens": {
+          "description": "The default reservation in tokens in force for requests that route to this rule; 0 while default_reservation is off.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "default_reservation": {
+          "description": "Whether a request without a declared max_tokens that routes to this rule reserves a default for its completion. Each rule of a VIP and port has its own value - the gate takes it from the rule the request's host, path and model select.",
+          "type": "string",
+          "enum": [
+            "on",
+            "off"
+          ]
         },
         "effective_max_outstanding": {
           "description": "The service ceiling in force now; below max_outstanding while an adaptive pool is tightened.",
@@ -42211,6 +43535,37 @@ func init() {
           "type": "integer",
           "format": "int32"
         },
+        "reservation_clamped_budget": {
+          "description": "Requests admitted with less than default_max_tokens reserved, since the process started, because the bucket's budget was already taken by other claims or by spend. Transient - it passes as the window refills. Counted per service, as reservation_clamped_burst. Never a refusal.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "reservation_clamped_burst": {
+          "description": "Requests admitted with less than default_max_tokens reserved, since the process started, because default_max_tokens beside the prompt is more than a quota bucket can ever hold, so the request is clamped on an idle bucket too. A configuration to fix - lower the default or raise the quota or its burst. A request this applies to is counted here whatever the budgets held. Counted per service - every model pool of the same VIP and port reads the same number. Never a refusal.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "reservation_epoch": {
+          "description": "The minute (Unix time divided by 60) the reservation_held_* fields below are a reading of. A token reservation belongs to the minute it was made in and does not outlive it - a request that ended without settling leaves its claim until the minute turns, and no longer. Compare two readings only when this value is the same in both.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "reservation_held": {
+          "description": "The quota buckets holding reserved tokens right now, largest first, at most 64. Empty when nothing is held. A bucket not listed holds nothing unless reservation_held_truncated is true.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/LoadbalanceEntryServiceArgumentsFcEffectiveReservationHeldItems0"
+          }
+        },
+        "reservation_held_claims": {
+          "description": "How many token reservations are held right now on the quota buckets this service's requests reserve on, counted one per request and bucket - a request holds one claim on every quota bucket that applies to it (tenant, tenant and model, user, user and model, key, service), so one in-flight request on three buckets is three claims. Zero exactly when nothing is held. It is a count of claims and says nothing about tokens - the tokens each bucket holds are in reservation_held. A tenant's bucket is shared by every service the tenant uses, and its claims are counted on each of them. Read from the quota store's own counters. Management read-back only - not exported as a metric.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "reservation_held_truncated": {
+          "description": "true when reservation_held does not list every bucket holding a reservation - more than 64 hold one, or the service has reserved on more buckets than the gateway tracks for it (4096). reservation_held_claims covers the tracked buckets in either case.",
+          "type": "boolean"
+        },
         "source": {
           "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default).",
           "type": "object",
@@ -42224,6 +43579,22 @@ func init() {
               ]
             },
             "decode_max_inflight": {
+              "type": "string",
+              "enum": [
+                "rule",
+                "env",
+                "default"
+              ]
+            },
+            "default_max_tokens": {
+              "type": "string",
+              "enum": [
+                "rule",
+                "env",
+                "default"
+              ]
+            },
+            "default_reservation": {
               "type": "string",
               "enum": [
                 "rule",
@@ -42331,6 +43702,11 @@ func init() {
           "type": "integer",
           "format": "int32"
         },
+        "tenant_slots": {
+          "description": "Tenants the pool tracks by name at once for the tenant share; tenants past it share one budget. Fixed when the pool is created (LLB_FC_TENANT_SLOTS).",
+          "type": "integer",
+          "format": "int32"
+        },
         "tenants_active": {
           "description": "Tenants holding a unit or waiting on the pool now, while it holds tenants to a share.",
           "type": "integer",
@@ -42352,6 +43728,33 @@ func init() {
       },
       "readOnly": true
     },
+    "LoadbalanceEntryServiceArgumentsFcEffectiveReservationHeldItems0": {
+      "type": "object",
+      "properties": {
+        "bucket": {
+          "description": "The bucket's key in the quota store. It is built from identifiers only (tenant, user, model, key id, service) and never holds a credential.",
+          "type": "string"
+        },
+        "kind": {
+          "description": "Which quota the bucket belongs to - the tenant's, the tenant's for one model, a user's, a user's for one model, an API key's own, or the service's shared keyless quota.",
+          "type": "string",
+          "enum": [
+            "tenant",
+            "tenant_model",
+            "user",
+            "user_model",
+            "key",
+            "service"
+          ]
+        },
+        "tokens": {
+          "description": "Tokens reserved on the bucket and not yet settled.",
+          "type": "integer",
+          "format": "int64",
+          "x-omitempty": false
+        }
+      }
+    },
     "LoadbalanceEntryServiceArgumentsFcEffectiveSource": {
       "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default).",
       "type": "object",
@@ -42365,6 +43768,22 @@ func init() {
           ]
         },
         "decode_max_inflight": {
+          "type": "string",
+          "enum": [
+            "rule",
+            "env",
+            "default"
+          ]
+        },
+        "default_max_tokens": {
+          "type": "string",
+          "enum": [
+            "rule",
+            "env",
+            "default"
+          ]
+        },
+        "default_reservation": {
           "type": "string",
           "enum": [
             "rule",
@@ -43095,6 +44514,150 @@ func init() {
         "macAddress": {
           "description": "MAC address to neighbor",
           "type": "string"
+        }
+      }
+    },
+    "NetIdentityEntry": {
+      "description": "A network-identity binding: the tenant of the requests that reach an AI service from a network. A cidr match says where a request came from; it does not prove who sent it, and any host that can send from the range is attributed to the tenant. Use it for limits, fairness and records, never in place of a credential. An ingress_if match is as strong as the network boundary behind the interface. Where several bindings match a request, an ingress_if match wins over a cidr match, the longest prefix wins among cidr matches, and a binding that names the service wins over one that names none.",
+      "type": "object",
+      "required": [
+        "name",
+        "match",
+        "tenant"
+      ],
+      "properties": {
+        "allowed_models": {
+          "description": "The models a request admitted or held by this binding may name, compared exactly. Empty or omitted allows any. At most 256.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-omitempty": true
+        },
+        "credential": {
+          "description": "none (default): the binding never stands in for a credential. network: on a service that requires a credential, a request that presents none is admitted as the binding's tenant. Accepted with an interface match only (ingress_if, vlan, vni or ipsec_tunnel); refused with a cidr match. Also refused when a named service has a rule that is not an AI-gateway service and runs sockMapMode request or both: the gateway does not see every request on it.",
+          "type": "string",
+          "enum": [
+            "none",
+            "network"
+          ]
+        },
+        "enforce": {
+          "description": "advisory (default): a request that presents a credential is decided by it and the binding is only noted. strict: a credential whose tenant is not the binding's is refused with 403 network_tenant_mismatch, and the model must also pass allowed_models. In both, a request with no credential on a service that does not require one is admitted as the binding's tenant.",
+          "type": "string",
+          "enum": [
+            "advisory",
+            "strict"
+          ]
+        },
+        "fail_mode": {
+          "description": "What the binding's services do with a request while the binding lookup itself cannot answer (an internal fault, counted in loxilb_ai_netid_resolver_faults_total). neutral (default): the request is decided as if the service had no binding - it is never admitted by its network, and a valid credential is not refused, so a strict binding is not enforced during the fault. closed: every request the lookup would have decided is refused with 503 netid_unavailable until it answers again. The setting is per service in effect, not per binding: a service fails closed when any binding that applies to it says closed, whether that binding names the service or names none, and then it does so for every source. When the bindings that apply to a service disagree, the reply to the POST is \"Success; warning: fail_mode: ...\" and names them.",
+          "type": "string",
+          "enum": [
+            "neutral",
+            "closed"
+          ]
+        },
+        "forward_identity": {
+          "description": "Forward the request's tenant upstream as X-Auth-Tenant, and its user as X-Auth-User when it has one, on a request whose source matched this binding. Needs a non-empty services list, and is refused without one. The services the binding names then also drop every header whose name starts with X-Auth- that a client sends, on every request and whatever the rule's api_key_auth, whether or not the request's source matched a binding. A service no such binding applies to is unchanged. The identity is injected only on an AI-gateway service, where the admission gate decides it, and not into a chunked HTTP/1.1 request. Refused when a service the binding names has a rule that is not an AI-gateway service and runs sockMapMode request or both: the gateway does not see every request on it. Such a rule is refused in turn while the binding exists. Default false.",
+          "type": "boolean"
+        },
+        "match": {
+          "description": "The source the binding applies to. Exactly one of cidr, ingress_if, vlan, vni and ipsec_tunnel. All but cidr match on the interface the connection arrived on.",
+          "type": "object",
+          "properties": {
+            "cidr": {
+              "description": "IPv4 networks in a.b.c.d/len form, without host bits, that the socket peer of the request is in. At most 256.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "x-omitempty": true
+            },
+            "ingress_if": {
+              "description": "Name of the interface the connection arrived on, at most 15 characters: the logical device, which for a tagged VLAN is its bridge (vlan\u003cid\u003e), for a VXLAN its device (vxlan\u003cvni\u003e) and for an IPsec tunnel its VTI. The name is stored, never an index, so an interface that is removed and created again keeps its binding. A name that does not exist on the node is accepted with a warning in the reply and matches nothing until it exists; an interface that is removed later is logged and matches nothing until it is back. The interface is that of the connection's first packet and holds for the life of the connection.",
+              "type": "string"
+            },
+            "ipsec_tunnel": {
+              "description": "Name of an IPsec tunnel configured on this node (/config/ipsec/tunnel). Another spelling of ingress_if: the tunnel's VTI interface, vti\u003cmark\u003e. A tunnel that is not configured, or has no mark, is accepted with a warning and matches nothing until it has one.",
+              "type": "string"
+            },
+            "vlan": {
+              "description": "A VLAN ID. Another spelling of ingress_if: the VLAN's bridge interface on this node, vlan\u003cid\u003e.",
+              "type": "integer",
+              "maximum": 4094,
+              "minimum": 1,
+              "x-omitempty": true
+            },
+            "vni": {
+              "description": "A VXLAN network identifier. Another spelling of ingress_if: the interface vxlan\u003cvni\u003e on this node.",
+              "type": "integer",
+              "maximum": 16777215,
+              "minimum": 1,
+              "x-omitempty": true
+            }
+          }
+        },
+        "name": {
+          "description": "Binding name, 1 to 63 characters of letters, digits, '-', '_' and '.', starting with a letter or digit. It is what request records carry.",
+          "type": "string"
+        },
+        "priority_class": {
+          "description": "The highest priority class a request the binding names the tenant of may have. It can only lower what the tenant allows. Default standard - a binding that should not cap its requests says critical.",
+          "type": "string",
+          "enum": [
+            "standard",
+            "critical",
+            "sheddable"
+          ]
+        },
+        "services": {
+          "description": "The AI services the binding applies to, each as VIP:port (IPv4). Empty or omitted applies it to every AI service. A service does not have to exist yet. At most 256.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-omitempty": true
+        },
+        "tenant": {
+          "description": "The tenant a matching request is attributed to, 1 to 127 bytes. The same namespace as API-key and JWT tenants: its limits are the ones configured for that tenant.",
+          "type": "string"
+        }
+      }
+    },
+    "NetIdentityEntryMatch": {
+      "description": "The source the binding applies to. Exactly one of cidr, ingress_if, vlan, vni and ipsec_tunnel. All but cidr match on the interface the connection arrived on.",
+      "type": "object",
+      "properties": {
+        "cidr": {
+          "description": "IPv4 networks in a.b.c.d/len form, without host bits, that the socket peer of the request is in. At most 256.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-omitempty": true
+        },
+        "ingress_if": {
+          "description": "Name of the interface the connection arrived on, at most 15 characters: the logical device, which for a tagged VLAN is its bridge (vlan\u003cid\u003e), for a VXLAN its device (vxlan\u003cvni\u003e) and for an IPsec tunnel its VTI. The name is stored, never an index, so an interface that is removed and created again keeps its binding. A name that does not exist on the node is accepted with a warning in the reply and matches nothing until it exists; an interface that is removed later is logged and matches nothing until it is back. The interface is that of the connection's first packet and holds for the life of the connection.",
+          "type": "string"
+        },
+        "ipsec_tunnel": {
+          "description": "Name of an IPsec tunnel configured on this node (/config/ipsec/tunnel). Another spelling of ingress_if: the tunnel's VTI interface, vti\u003cmark\u003e. A tunnel that is not configured, or has no mark, is accepted with a warning and matches nothing until it has one.",
+          "type": "string"
+        },
+        "vlan": {
+          "description": "A VLAN ID. Another spelling of ingress_if: the VLAN's bridge interface on this node, vlan\u003cid\u003e.",
+          "type": "integer",
+          "maximum": 4094,
+          "minimum": 1,
+          "x-omitempty": true
+        },
+        "vni": {
+          "description": "A VXLAN network identifier. Another spelling of ingress_if: the interface vxlan\u003cvni\u003e on this node.",
+          "type": "integer",
+          "maximum": 16777215,
+          "minimum": 1,
+          "x-omitempty": true
         }
       }
     },
@@ -45009,10 +46572,22 @@ func init() {
         "tenant_id"
       ],
       "properties": {
+        "allowed_objectives": {
+          "description": "The objectives a request of this tenant may ask for by header",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-omitempty": true
+        },
         "burst_pct": {
           "description": "Token bucket capacity as a percent of tokens_per_min; 0 uses the server default",
           "type": "integer",
           "format": "int64"
+        },
+        "default_objective": {
+          "description": "The objective a request of this tenant gets when it names none, or one it may not use",
+          "type": "string"
         },
         "model_limits": {
           "description": "Per-model token quotas for the tenant",
@@ -45020,6 +46595,10 @@ func init() {
           "items": {
             "$ref": "#/definitions/TenantModelRateLimit"
           }
+        },
+        "priority_class": {
+          "description": "The highest priority class a request of this tenant may have; absent when no cap is set",
+          "type": "string"
         },
         "rps": {
           "description": "Maximum requests per second for the tenant",
@@ -45043,16 +46622,29 @@ func init() {
       }
     },
     "TenantRateLimitMod": {
-      "description": "POST replaces aggregate rps, tokens_per_min, and burst_pct; omission becomes zero, not preservation. Supplied model_limits are individual upserts or removals; omitted/empty model_limits preserves existing model rows. Aggregate and model writes are sequential, not one transaction, so failure can leave partial changes. Blank identifiers and malformed model entries are not consistently rejected as 400. Configuration alone does not enable enforcement on a service.",
+      "description": "POST replaces aggregate rps, tokens_per_min, and burst_pct; omission becomes zero, not preservation. Supplied model_limits are individual upserts or removals; omitted/empty model_limits preserves existing model rows. Aggregate and model writes are sequential, not one transaction, so failure can leave partial changes. Blank identifiers and malformed model entries are not consistently rejected as 400. Configuration alone does not enable enforcement on a service. The class fields (priority_class, default_objective, allowed_objectives) are written by their own statement and only when the body names one of them, so a POST of limits leaves the tenant's class as it is. A body that names a class field and carries no limit (rps, tokens_per_min and burst_pct absent or zero, no model_limits) writes the class only and leaves the limits as they are.",
       "type": "object",
       "required": [
         "tenant_id"
       ],
       "properties": {
+        "allowed_objectives": {
+          "description": "The objectives a request of this tenant may ask for with the x-llm-d-inference-objective header; at most 64. Omitted leaves the stored list; an empty array clears it, and then no objective can be asked for.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-omitempty": true
+        },
         "burst_pct": {
           "description": "Token bucket capacity as a percent of tokens_per_min; 0 uses the server default",
           "type": "integer",
           "format": "int64"
+        },
+        "default_objective": {
+          "description": "The objective a request of this tenant gets when it names none, or one it may not use. Omitted leaves the stored value; an empty string clears it.",
+          "type": "string",
+          "x-nullable": true
         },
         "model_limits": {
           "description": "Per-model token quotas for the tenant",
@@ -45060,6 +46652,11 @@ func init() {
           "items": {
             "$ref": "#/definitions/TenantModelRateLimit"
           }
+        },
+        "priority_class": {
+          "description": "The highest priority class a request of this tenant may have: standard, critical or sheddable. Omitted leaves the stored value; an empty string clears it (no cap).",
+          "type": "string",
+          "x-nullable": true
         },
         "rps": {
           "description": "Maximum requests per second for the tenant",
@@ -45392,7 +46989,7 @@ func init() {
       }
     },
     "VlanBridgeEntry": {
-      "description": "Linux bridge identifier used to form vlan<ID>. The REST creation helper does not enforce all documented VLAN bounds; successful bridge creation does not establish completion of link setup.",
+      "description": "Linux bridge identifier used to form vlan\u003cID\u003e. The REST creation helper does not enforce all documented VLAN bounds; successful bridge creation does not establish completion of link setup.",
       "type": "object",
       "required": [
         "vid"

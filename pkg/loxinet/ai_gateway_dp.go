@@ -215,7 +215,7 @@ func rateLimitCheckInternal(svc rateLimitService, store *rl.RateLimiterStore, ke
 		}
 		if d.vipRPS > 0 {
 			if allowed, retrySec := store.CheckVipShared(svcIdent, d.vipRPS); !allowed {
-				tk.LogIt(tk.LogWarning, "[AIGateway] rateLimitCheckInternal: service %s keyless bucket rate-limited (retry %ds)\n", svcIdent, retrySec)
+				tk.LogIt(tk.LogDebug, "[AIGateway] rateLimitCheckInternal: service %s keyless bucket rate-limited (retry %ds)\n", svcIdent, retrySec)
 				return 3, retrySec, "rate_limit_exceeded"
 			}
 		}
@@ -231,7 +231,7 @@ func rateLimitCheckInternal(svc rateLimitService, store *rl.RateLimiterStore, ke
 				return 3, 1, "token_quota_warming"
 			}
 			if store.IsTokenQuotaExceeded(rl.VipSharedQuotaKey(svcIdent)) {
-				tk.LogIt(tk.LogWarning, "[AIGateway] rateLimitCheckInternal: service %s keyless bucket token quota exceeded\n", svcIdent)
+				tk.LogIt(tk.LogDebug, "[AIGateway] rateLimitCheckInternal: service %s keyless bucket token quota exceeded\n", svcIdent)
 				return 3, 60, "token_quota_exceeded"
 			}
 		}
@@ -269,7 +269,7 @@ func rateLimitCheckInternal(svc rateLimitService, store *rl.RateLimiterStore, ke
 		}
 		allowed, retrySec := store.CheckKey(keyIDStr, keyRPS, keyBurst)
 		if !allowed {
-			tk.LogIt(tk.LogWarning, "[AIGateway] rateLimitCheckInternal: key %s rate-limited (retry %ds)\n", keyIDStr, retrySec)
+			tk.LogIt(tk.LogDebug, "[AIGateway] rateLimitCheckInternal: key %s rate-limited (retry %ds)\n", keyIDStr, retrySec)
 			return 3, retrySec, "rate_limit_exceeded"
 		}
 	}
@@ -298,7 +298,7 @@ func rateLimitCheckInternal(svc rateLimitService, store *rl.RateLimiterStore, ke
 		}
 		allowed, retrySec := store.CheckUser(tenantIDStr, userIDStr, userRPS, userBurst)
 		if !allowed {
-			tk.LogIt(tk.LogWarning, "[AIGateway] rateLimitCheckInternal: user %s/%s rate-limited (retry %ds)\n", tenantIDStr, userIDStr, retrySec)
+			tk.LogIt(tk.LogDebug, "[AIGateway] rateLimitCheckInternal: user %s/%s rate-limited (retry %ds)\n", tenantIDStr, userIDStr, retrySec)
 			return 3, retrySec, "user_rate_limit_exceeded"
 		}
 	}
@@ -331,7 +331,7 @@ func rateLimitCheckInternal(svc rateLimitService, store *rl.RateLimiterStore, ke
 		}
 		allowed, retrySec := store.CheckTenant(tenantIDStr, tenantRPS)
 		if !allowed {
-			tk.LogIt(tk.LogWarning, "[AIGateway] rateLimitCheckInternal: tenant %s rate-limited (retry %ds)\n", tenantIDStr, retrySec)
+			tk.LogIt(tk.LogDebug, "[AIGateway] rateLimitCheckInternal: tenant %s rate-limited (retry %ds)\n", tenantIDStr, retrySec)
 			return 3, retrySec, "tenant_quota_exceeded"
 		}
 
@@ -368,19 +368,19 @@ func rateLimitCheckInternal(svc rateLimitService, store *rl.RateLimiterStore, ke
 		// silently admitting against a zeroed quota.
 		anyTPM := tenantTPM > 0 || modelTPM > 0 || userTPM > 0 || userModelTPM > 0 || keyTPM > 0
 		if anyTPM && store.QuotaWarming() {
-			tk.LogIt(tk.LogWarning, "[AIGateway] rateLimitCheckInternal: tenant %s denied during token-quota warmup\n", tenantIDStr)
+			tk.LogIt(tk.LogDebug, "[AIGateway] rateLimitCheckInternal: tenant %s denied during token-quota warmup\n", tenantIDStr)
 			return 3, 1, "token_quota_warming"
 		}
 		if keyTPM > 0 && store.IsTokenQuotaExceeded(rl.KeyQuotaKey(keyIDStr)) {
-			tk.LogIt(tk.LogWarning, "[AIGateway] rateLimitCheckInternal: key %s token quota exceeded\n", keyIDStr)
+			tk.LogIt(tk.LogDebug, "[AIGateway] rateLimitCheckInternal: key %s token quota exceeded\n", keyIDStr)
 			return 3, 60, "token_quota_exceeded"
 		}
 		if userTPM > 0 && store.IsTokenQuotaExceeded(rl.UserQuotaKey(tenantIDStr, userIDStr)) {
-			tk.LogIt(tk.LogWarning, "[AIGateway] rateLimitCheckInternal: user %s/%s token quota exceeded\n", tenantIDStr, userIDStr)
+			tk.LogIt(tk.LogDebug, "[AIGateway] rateLimitCheckInternal: user %s/%s token quota exceeded\n", tenantIDStr, userIDStr)
 			return 3, 60, "token_quota_exceeded"
 		}
 		if userModelTPM > 0 && store.IsTokenQuotaExceeded(rl.UserModelQuotaKey(tenantIDStr, userIDStr, modelName)) {
-			tk.LogIt(tk.LogWarning, "[AIGateway] rateLimitCheckInternal: user %s/%s model %s token quota exceeded\n", tenantIDStr, userIDStr, modelName)
+			tk.LogIt(tk.LogDebug, "[AIGateway] rateLimitCheckInternal: user %s/%s model %s token quota exceeded\n", tenantIDStr, userIDStr, modelName)
 			return 3, 60, "token_quota_exceeded"
 		}
 		// Guarded like its four siblings, and for the same reason the
@@ -397,11 +397,11 @@ func rateLimitCheckInternal(svc rateLimitService, store *rl.RateLimiterStore, ke
 		// token quota — the tenant rate-limit surface has no DELETE — so
 		// unguarded, the lift does not take effect at all.
 		if tenantTPM > 0 && store.IsTokenQuotaExceeded(tenantIDStr) {
-			tk.LogIt(tk.LogWarning, "[AIGateway] rateLimitCheckInternal: tenant %s token quota exceeded\n", tenantIDStr)
+			tk.LogIt(tk.LogDebug, "[AIGateway] rateLimitCheckInternal: tenant %s token quota exceeded\n", tenantIDStr)
 			return 3, 60, "token_quota_exceeded"
 		}
 		if modelTPM > 0 && store.IsTokenQuotaExceeded(modelQuotaKey(tenantIDStr, modelName)) {
-			tk.LogIt(tk.LogWarning, "[AIGateway] rateLimitCheckInternal: tenant %s model %s token quota exceeded\n", tenantIDStr, modelName)
+			tk.LogIt(tk.LogDebug, "[AIGateway] rateLimitCheckInternal: tenant %s model %s token quota exceeded\n", tenantIDStr, modelName)
 			return 3, 60, "token_quota_exceeded"
 		}
 	}
@@ -421,8 +421,11 @@ func rateLimitCheckInternal(svc rateLimitService, store *rl.RateLimiterStore, ke
 //	modelOut   – model name echoed back on allow
 //	errorCode  – "invalid_api_key" or "model_not_allowed" on deny
 func validateAPIKeyInternal(svc apiKeyValidator, rawKey, modelName string) (decision int, tenantID, keyID, modelOut, errorCode string) {
+	// A refused or admitted request is in the audit record and the metrics;
+	// its log lines here are debug lines, so that the worker that runs this
+	// callback writes none at the default level.
 	if rawKey == "" {
-		tk.LogIt(tk.LogWarning, "[AIGateway] llb_ai_validate_key: empty raw key\n")
+		tk.LogIt(tk.LogDebug, "[AIGateway] llb_ai_validate_key: empty raw key\n")
 		return 1, "", "", "", "invalid_api_key"
 	}
 
@@ -438,7 +441,7 @@ func validateAPIKeyInternal(svc apiKeyValidator, rawKey, modelName string) (deci
 		// false and permanent-sounding. The management plane had this same
 		// defect and had it fixed; this is its data-plane twin.
 		if errors.Is(err, aikey.ErrInvalidKey) {
-			tk.LogIt(tk.LogWarning, "[AIGateway] llb_ai_validate_key: key validation failed: %v\n", err)
+			tk.LogIt(tk.LogDebug, "[AIGateway] llb_ai_validate_key: key validation failed: %v\n", err)
 			return 1, "", "", "", "invalid_api_key"
 		}
 		tk.LogIt(tk.LogError, "[AIGateway] llb_ai_validate_key: key store could not answer: %v\n", err)
@@ -448,7 +451,7 @@ func validateAPIKeyInternal(svc apiKeyValidator, rawKey, modelName string) (deci
 
 	// Check expiry (ValidateAPIKey only filters on enabled=1, not expires_at).
 	if entry.ExpiresAt != nil && time.Now().After(*entry.ExpiresAt) {
-		tk.LogIt(tk.LogWarning, "[AIGateway] llb_ai_validate_key: key %s has expired\n", entry.KeyID)
+		tk.LogIt(tk.LogDebug, "[AIGateway] llb_ai_validate_key: key %s has expired\n", entry.KeyID)
 		return 1, "", "", "", "invalid_api_key"
 	}
 
@@ -462,7 +465,7 @@ func validateAPIKeyInternal(svc apiKeyValidator, rawKey, modelName string) (deci
 			}
 		}
 		if !allowed {
-			tk.LogIt(tk.LogWarning, "[AIGateway] llb_ai_validate_key: model %q not allowed for key %s\n", modelName, entry.KeyID)
+			tk.LogIt(tk.LogDebug, "[AIGateway] llb_ai_validate_key: model %q not allowed for key %s\n", modelName, entry.KeyID)
 			// Only the model was refused: the key itself validated, so both
 			// halves of its identity are known here. They are returned so
 			// the refusal can be counted against the right tenant and
@@ -471,7 +474,7 @@ func validateAPIKeyInternal(svc apiKeyValidator, rawKey, modelName string) (deci
 		}
 	}
 
-	tk.LogIt(tk.LogInfo, "[AIGateway] llb_ai_validate_key: key %s validated for tenant %s\n", entry.KeyID, entry.TenantID)
+	tk.LogIt(tk.LogDebug, "[AIGateway] llb_ai_validate_key: key %s validated for tenant %s\n", entry.KeyID, entry.TenantID)
 	return 0, entry.TenantID, entry.KeyID, modelName, ""
 }
 
@@ -990,7 +993,7 @@ func llb_ai_ratelimit_check(keyID *C.char, tenantID *C.char, userID *C.char, svc
 				prom.RecordTokenQuotaDenied(tenantIDStr)
 			}
 		}
-		tk.LogIt(tk.LogWarning, "[AIGateway] llb_ai_ratelimit_check: denied key=%s tenant=%s error=%s\n", keyIDStr, tenantIDStr, errorCode)
+		tk.LogIt(tk.LogDebug, "[AIGateway] llb_ai_ratelimit_check: denied key=%s tenant=%s error=%s\n", keyIDStr, tenantIDStr, errorCode)
 		return -1
 	}
 
@@ -1041,6 +1044,9 @@ func tokenQuotaReserveInternal(svc rateLimitService, store *rl.RateLimiterStore,
 		taken = i + 1
 		if resEpoch == 0 {
 			resEpoch = bEpoch
+		}
+		if bEpoch != 0 {
+			noteReservedBucket(svcIdent, b)
 		}
 	}
 	return true, 0, resEpoch
@@ -1103,6 +1109,8 @@ type quotaBucket struct {
 	key      string
 	tpm      int
 	burstPct int
+	// kind names the ladder level, for the reservation read-back.
+	kind string
 }
 
 // quotaBucketsFor resolves the token buckets a request's spend lands on, in
@@ -1139,11 +1147,11 @@ func quotaBucketsFor(svc rateLimitService, tenantID, modelName, userID, keyID, s
 			tenantTPM = defaults.tenantTPM
 		}
 		if tenantTPM > 0 {
-			out = append(out, quotaBucket{key: tenantID, tpm: tenantTPM, burstPct: burstPct})
+			out = append(out, quotaBucket{key: tenantID, tpm: tenantTPM, burstPct: burstPct, kind: cmn.FcResvBucketTenant})
 		}
 		if modelName != "" {
 			if modelTPM, err := svc.GetTenantModelRateLimit(tenantID, modelName); err == nil && modelTPM > 0 {
-				out = append(out, quotaBucket{key: modelQuotaKey(tenantID, modelName), tpm: modelTPM, burstPct: burstPct})
+				out = append(out, quotaBucket{key: modelQuotaKey(tenantID, modelName), tpm: modelTPM, burstPct: burstPct, kind: cmn.FcResvBucketTenantModel})
 			}
 		}
 	}
@@ -1156,21 +1164,21 @@ func quotaBucketsFor(svc rateLimitService, tenantID, modelName, userID, keyID, s
 			userTPM = defaults.userTPM
 		}
 		if userTPM > 0 {
-			out = append(out, quotaBucket{key: rl.UserQuotaKey(tenantID, userID), tpm: userTPM, burstPct: burstPct})
+			out = append(out, quotaBucket{key: rl.UserQuotaKey(tenantID, userID), tpm: userTPM, burstPct: burstPct, kind: cmn.FcResvBucketUser})
 		}
 		if modelName != "" {
 			if umTPM, err := svc.GetUserModelRateLimit(tenantID, userID, modelName); err == nil && umTPM > 0 {
-				out = append(out, quotaBucket{key: rl.UserModelQuotaKey(tenantID, userID, modelName), tpm: umTPM, burstPct: burstPct})
+				out = append(out, quotaBucket{key: rl.UserModelQuotaKey(tenantID, userID, modelName), tpm: umTPM, burstPct: burstPct, kind: cmn.FcResvBucketUserModel})
 			}
 		}
 	}
 	if keyID != "" {
 		if key, err := svc.GetAPIKeyByID(keyID); err == nil && key.TokensPerMin > 0 {
-			out = append(out, quotaBucket{key: rl.KeyQuotaKey(keyID), tpm: key.TokensPerMin, burstPct: burstPct})
+			out = append(out, quotaBucket{key: rl.KeyQuotaKey(keyID), tpm: key.TokensPerMin, burstPct: burstPct, kind: cmn.FcResvBucketKey})
 		}
 	}
 	if svcIdent != "" && defaults.vipTPM > 0 {
-		out = append(out, quotaBucket{key: rl.VipSharedQuotaKey(svcIdent), tpm: defaults.vipTPM, burstPct: 0})
+		out = append(out, quotaBucket{key: rl.VipSharedQuotaKey(svcIdent), tpm: defaults.vipTPM, burstPct: 0, kind: cmn.FcResvBucketService})
 	}
 	return out
 }
@@ -1276,8 +1284,15 @@ func tokenQuotaConsumeInternal(svc rateLimitService, store *rl.RateLimiterStore,
 // user|model, key and per-VIP buckets next to the tenant aggregate;
 // parameter order mirrors tokenQuotaReserveInternal.
 //
+// defaultTokens is the rule's default reservation and counts only when the
+// request declares no ceiling (maxTokens <= 0); 0 is off. It is claimed as
+// an elastic part: shrunk to what the buckets still hold and never the
+// reason for a denial. *granted is what the buckets hold after the call,
+// which is the amount the C caller must echo at settlement; with no default
+// in play it is the plain prompt + max_tokens claim.
+//
 //export llb_ai_token_quota_reserve
-func llb_ai_token_quota_reserve(tenantID *C.char, modelName *C.char, userID *C.char, keyID *C.char, svcIdent *C.char, promptEst C.int, maxTokens C.int, resEpoch *C.longlong, result *C.ai_gw_decision_t) (ret C.int) {
+func llb_ai_token_quota_reserve(tenantID *C.char, modelName *C.char, userID *C.char, keyID *C.char, svcIdent *C.char, promptEst C.int, maxTokens C.int, defaultTokens C.int, resEpoch *C.longlong, granted *C.int, result *C.ai_gw_decision_t) (ret C.int) {
 	// See llb_ai_validate_key for why the denial is recorded in the deferred
 	// function rather than at each deny arm.
 	var metricTenant, metricModel string
@@ -1300,6 +1315,9 @@ func llb_ai_token_quota_reserve(tenantID *C.char, modelName *C.char, userID *C.c
 	if resEpoch != nil {
 		*resEpoch = 0
 	}
+	if granted != nil {
+		*granted = 0
+	}
 
 	tenant := C.GoString(tenantID)
 	metricTenant, metricModel = tenant, C.GoString(modelName)
@@ -1310,9 +1328,14 @@ func llb_ai_token_quota_reserve(tenantID *C.char, modelName *C.char, userID *C.c
 	if maxTokens > 0 {
 		want += int(maxTokens)
 	}
+	elastic := 0
+	if maxTokens <= 0 && defaultTokens > 0 {
+		elastic = int(defaultTokens)
+	}
 	// A keyless caller (no tenant) may still reserve against the per-VIP
 	// shared bucket when it names the service.
-	if want <= 0 || (tenant == "" && C.GoString(svcIdent) == "") {
+	service := C.GoString(svcIdent)
+	if (want <= 0 && elastic <= 0) || (tenant == "" && service == "") {
 		return 0
 	}
 
@@ -1322,7 +1345,7 @@ func llb_ai_token_quota_reserve(tenantID *C.char, modelName *C.char, userID *C.c
 	}
 
 	store := getGlobalRL()
-	allowed, retrySecs, epoch := tokenQuotaReserveInternal(svc, store, tenant, C.GoString(modelName), C.GoString(userID), C.GoString(keyID), C.GoString(svcIdent), want)
+	allowed, retrySecs, epoch, held, clamped := tokenQuotaReserveElasticReason(svc, store, tenant, C.GoString(modelName), C.GoString(userID), C.GoString(keyID), service, want, elastic)
 	if !allowed {
 		if result != nil {
 			result.decision = 3
@@ -1331,12 +1354,18 @@ func llb_ai_token_quota_reserve(tenantID *C.char, modelName *C.char, userID *C.c
 		}
 		prom.RecordRateLimitHit(tenant, "token_quota_would_exceed")
 		prom.RecordTokenQuotaDenied(tenant)
-		tk.LogIt(tk.LogWarning, "[AIGateway] llb_ai_token_quota_reserve: tenant %s denied pre-admission (want %d, model %s)\n",
+		tk.LogIt(tk.LogDebug, "[AIGateway] llb_ai_token_quota_reserve: tenant %s denied pre-admission (want %d, model %s)\n",
 			tenant, want, C.GoString(modelName))
 		return -1
 	}
+	if clamped != resvClampNone {
+		noteReservationClamped(service, clamped)
+	}
 	if resEpoch != nil {
 		*resEpoch = C.longlong(epoch)
+	}
+	if granted != nil {
+		*granted = C.int(held)
 	}
 	return 0
 }
@@ -1375,10 +1404,12 @@ func llb_ai_token_quota_reserve(tenantID *C.char, modelName *C.char, userID *C.c
 // with the refusal record if the gate turned it away, so the three can be
 // joined on a key rather than guessed at by timestamp. producerID is the
 // emitting thread's worker identity, negative on the teardown path that
-// releases a reservation off a worker.
+// releases a reservation off a worker. authSrc and netIdentity carry the
+// meanings llb_ai_record_request documents, so a request's charge names the
+// actor its completion does.
 //
 //export llb_ai_token_quota_consume
-func llb_ai_token_quota_consume(tenantID *C.char, modelName *C.char, userID *C.char, keyID *C.char, svcIdent *C.char, promptTokens C.int, completTokens C.int, estimated C.int, reservedToks C.int, resEpoch C.longlong, requestID *C.char, producerID C.int, result *C.ai_gw_decision_t) (ret C.int) {
+func llb_ai_token_quota_consume(tenantID *C.char, modelName *C.char, userID *C.char, keyID *C.char, svcIdent *C.char, promptTokens C.int, completTokens C.int, estimated C.int, reservedToks C.int, resEpoch C.longlong, requestID *C.char, producerID C.int, authSrc C.int, netIdentity *C.char, result *C.ai_gw_decision_t) (ret C.int) {
 	// Fail-open on panic: the response is already served, so accounting must
 	// never take down the datapath — the quota simply misses this response.
 	defer func() {
@@ -1434,6 +1465,9 @@ func llb_ai_token_quota_consume(tenantID *C.char, modelName *C.char, userID *C.c
 		ResEpoch:  int64(resEpoch),
 		Allowed:   allowed,
 		WorkerID:  int(producerID),
+
+		AuthSrc:     int(authSrc),
+		NetIdentity: C.GoString(netIdentity),
 	})
 
 	if !allowed {
@@ -1442,7 +1476,7 @@ func llb_ai_token_quota_consume(tenantID *C.char, modelName *C.char, userID *C.c
 			result.retry_after = C.int(retrySecs)
 			cCopyStr((*C.char)(unsafe.Pointer(&result.error_code[0])), "token_quota_exceeded", 64)
 		}
-		tk.LogIt(tk.LogWarning, "[AIGateway] llb_ai_token_quota_consume: tenant %s over token quota (charged %d, model %s)\n",
+		tk.LogIt(tk.LogDebug, "[AIGateway] llb_ai_token_quota_consume: tenant %s over token quota (charged %d, model %s)\n",
 			tenant, count, C.GoString(modelName))
 		return -1
 	}
@@ -1532,7 +1566,7 @@ func llb_ai_stream_start(tenantID *C.char, modelName *C.char) C.int {
 
 	prom.AdjustActiveStreams(modelStr, 1.0)
 
-	tk.LogIt(tk.LogInfo, "[AIGateway] llb_ai_stream_start: tenant=%s model=%s\n", tenantStr, modelStr)
+	tk.LogIt(tk.LogDebug, "[AIGateway] llb_ai_stream_start: tenant=%s model=%s\n", tenantStr, modelStr)
 	return 0
 }
 
@@ -1569,7 +1603,7 @@ func llb_ai_stream_end(tenantID *C.char, modelName *C.char) C.int {
 
 	prom.AdjustActiveStreams(modelStr, -1.0)
 
-	tk.LogIt(tk.LogInfo, "[AIGateway] llb_ai_stream_end: tenant=%s model=%s\n", tenantStr, modelStr)
+	tk.LogIt(tk.LogDebug, "[AIGateway] llb_ai_stream_end: tenant=%s model=%s\n", tenantStr, modelStr)
 	return 0
 }
 
@@ -1611,14 +1645,27 @@ func llb_ai_stream_end(tenantID *C.char, modelName *C.char) C.int {
 //	               peer
 //	trustedHops:   how many of our own hops the attribution walk stepped
 //	               past; read only as a pair with originIP
+//	authSrc:       what decided the tenant: 0 an API key (or nothing), 1 a
+//	               network-identity binding, 2 a validated bearer token
+//	netIdentity:   the binding that matched the request's source, "" when
+//	               none did; set with authSrc 0 or 2 when a credential
+//	               decided and the binding only matched beside it
+//	priority:      the request's priority after the cap
+//	classInfo:     the class and how it was reached (AI_GW_CLASSF_*); 0
+//	               when the class stage did not run for the request
+//	objective:     the hint that was applied, "" when none was
 //
 //export llb_ai_record_request
-func llb_ai_record_request(tenantID *C.char, modelName *C.char, statusCode C.int, latencyMs C.int64_t, promptTokens C.int, completTokens C.int, streamStart C.int, streamEnd C.int, errorCode *C.char, requestID *C.char, userID *C.char, keyID *C.char, svcIdent *C.char, isStream C.int, producerID C.int, clientIP *C.char, originIP *C.char, trustedHops C.int) {
+func llb_ai_record_request(tenantID *C.char, modelName *C.char, statusCode C.int, latencyMs C.int64_t, promptTokens C.int, completTokens C.int, streamStart C.int, streamEnd C.int, errorCode *C.char, requestID *C.char, userID *C.char, keyID *C.char, svcIdent *C.char, isStream C.int, producerID C.int, clientIP *C.char, originIP *C.char, trustedHops C.int, authSrc C.int, netIdentity *C.char, priority C.int, classInfo C.int, objective *C.char) {
 	defer cgoRecover("llb_ai_record_request")
 	tenantIDStr := C.GoString(tenantID)
 	modelNameStr := C.GoString(modelName)
+	netIdentityStr := C.GoString(netIdentity)
 
 	prom.RecordAIRequest(tenantIDStr, modelNameStr, int(statusCode), int64(latencyMs))
+	if netIdentityStr != "" {
+		prom.RecordNetIDRequest(netIdentityStr, tenantIDStr, netIDCompleteOutcome(int(authSrc)))
+	}
 
 	// The trail is written after the metric on purpose: the metric is what
 	// the existing alerting reads, and it must not be skipped because the
@@ -1641,27 +1688,51 @@ func llb_ai_record_request(tenantID *C.char, modelName *C.char, statusCode C.int
 		ClientIP:    C.GoString(clientIP),
 		OriginIP:    C.GoString(originIP),
 		TrustedHops: int(trustedHops),
+
+		AuthSrc:     int(authSrc),
+		NetIdentity: netIdentityStr,
+
+		Priority:  int(priority),
+		ClassInfo: int(classInfo),
+		Objective: C.GoString(objective),
 	})
+}
+
+// netIDCompleteOutcome names, for the binding's request counter, what the
+// binding did for a request that was admitted: it decided the tenant, or
+// it matched beside a credential that did.
+func netIDCompleteOutcome(authSrc int) string {
+	if authSrc == aiAuthSrcNetwork {
+		return prom.NetIDOutcomeAdmitted
+	}
+	return prom.NetIDOutcomeMatched
 }
 
 // llb_ai_record_deny records one request the admission gate refused.
 //
 // The C gate calls this once per refusal from its single verdict frame, so
 // an arm added to the decision cannot refuse a request unrecorded. There
-// is no metric here: the deny counters are already raised on the export
-// that produced the decision; counting it twice would double every denial
-// rate. The attribution triple carries the meanings llb_ai_record_request
+// is no request metric here: the deny counters are already raised on the
+// export that produced the decision; counting it twice would double every
+// denial rate. The one counter raised is the binding's own, when the
+// refused request's source matched one. The attribution triple carries the meanings llb_ai_record_request
 // documents; note the gate runs BEFORE the header splice, so on a refused
 // request originIP is normally "" -- nothing derived -- while clientIP is
 // always known.
 //
 //export llb_ai_record_deny
-func llb_ai_record_deny(requestID *C.char, producerID C.int, svcIdent *C.char, modelName *C.char, tenantID *C.char, keyID *C.char, userID *C.char, stage C.int, httpStatus C.int, errorCode *C.char, clientIP *C.char, originIP *C.char, trustedHops C.int) {
+func llb_ai_record_deny(requestID *C.char, producerID C.int, svcIdent *C.char, modelName *C.char, tenantID *C.char, keyID *C.char, userID *C.char, stage C.int, httpStatus C.int, errorCode *C.char, clientIP *C.char, originIP *C.char, trustedHops C.int, authSrc C.int, netIdentity *C.char) {
 	defer cgoRecover("llb_ai_record_deny")
+	tenantIDStr := C.GoString(tenantID)
+	netIdentityStr := C.GoString(netIdentity)
+
+	if netIdentityStr != "" {
+		prom.RecordNetIDRequest(netIdentityStr, tenantIDStr, prom.NetIDOutcomeDenied)
+	}
 
 	emitAIDeny(aiDenyRecord{
 		RequestID:  C.GoString(requestID),
-		TenantID:   C.GoString(tenantID),
+		TenantID:   tenantIDStr,
 		UserID:     C.GoString(userID),
 		KeyID:      C.GoString(keyID),
 		SvcIdent:   C.GoString(svcIdent),
@@ -1674,6 +1745,9 @@ func llb_ai_record_deny(requestID *C.char, producerID C.int, svcIdent *C.char, m
 		ClientIP:    C.GoString(clientIP),
 		OriginIP:    C.GoString(originIP),
 		TrustedHops: int(trustedHops),
+
+		AuthSrc:     int(authSrc),
+		NetIdentity: netIdentityStr,
 	})
 }
 

@@ -9,7 +9,7 @@
 | Producer | File(s) | Rotation mechanism |
 |---|---|---|
 | `tk.LogIt` (loxilib classic logger) | `/var/log/loxilb<HOSTNAME>.log` | in-process `pkg/logrotate.Writer` — loxilib opens a plain append file, so all level writers are re-pointed at the rotating writer at startup (`pkg/loxinet/loxinet.go`) |
-| eBPF data-plane C library | `/var/log/loxilbdp.log` | copy-truncate sweeper (`logrotate.StartSweeper`, 1-min interval) — the C side holds its own `FILE*` for the process lifetime, so the file is copied to a backup and truncated in place; the C writer keeps appending unaffected (`O_APPEND` semantics). Lines written in the copy→truncate window are lost — the standard copytruncate trade-off |
+| eBPF data-plane C library | `/var/log/loxilbdp.log` | the data-plane log's own writer thread renames the file to its backup name and opens a new one when the next write would pass the size limit (`log_rotate_fp` in `loxilb-ebpf/common/log.c`); the descriptor keeps its number, so nothing else notices. A sweeper (`logrotate.StartBackupSweeper`, 1-min interval) compresses and prunes the backups once they have been left alone for 10 s. No line is lost at a rotation |
 | `pkg/loxilog` structured logs (CP+DP, json+text) | `/var/log/loxilb/loxilb-audit.json.log`, `loxilb<HOST>.log`, `loxilb-dp-audit.json.log`, `loxilb-dp<HOST>.log` | `logrotate.Writer` underneath the zerolog/diode pipeline |
 | loxilb-mcp bridge audit trail | `<audit_dir>/audit.jsonl` | `logrotate.Writer`, fixed policy: 20 MB / 8 backups / 90 days / gzip (long forensic window, bounded disk) |
 | process stdout (`LogTTY`) | container runtime log | **not rotated by loxilb** — see "Container deployments" below |
@@ -58,18 +58,54 @@ In the cicd testbed loxilb is started via `docker exec`, so its stdout bypasses
 the container log — production images that exec loxilb as PID 1 must set the
 runtime limits above.
 
+## Log calls never wait for the disk
+
+A log line is not written by the thread that logs it. The data plane's worker
+threads serve many connections each, and a log write that waits for a slow or
+stalled device would hold every one of them, so:
+
+- The data-plane log (`log_*` in C) copies each line into the calling thread's
+  own in-memory ring (256 KiB); one writer thread writes stderr and
+  `/var/log/loxilbdp.log`, and rotates the file.
+- The gateway's log (`tk.LogIt`, and logrus) copies each line into an
+  in-memory queue (8,192 lines); one goroutine writes
+  `/var/log/loxilb<HOSTNAME>.log`, the stdout copy and stderr, and the file's
+  rotation happens inside its write.
+
+When the device is slower than the lines arrive, the ring or queue fills and
+**lines are dropped, never requests held**. Dropped lines are counted in
+`loxilb_log_lines_dropped_total{level}` (both logs together; `error`, `warn`,
+`notice`, `info`, `debug`, `trace`, all reported from start at zero), and the
+writer says so in the log once a second for each thread that dropped, when it
+can write again. Alert on `rate(loxilb_log_lines_dropped_total[5m]) > 0`: it
+means the log device cannot keep up, or the log level is too verbose for it.
+
+Lines are written by their caller only during start-up, after shutdown has
+stopped the writers (each is given 2 s to write what is queued), for
+fatal-level lines, and in the fatal-signal handler, which also writes the
+faulting worker's queued lines to stderr. After a hard kill (`SIGKILL`, power
+loss) the lines still queued, normally the last few milliseconds, are lost.
+
+At the default level (`info`) an admitted or refused AI request writes no log
+line: it is in the audit trail and the metrics. The per-request lines are at
+`debug`.
+
 ## Validation
 
 - `pkg/logrotate` unit tests (`-race`): rotation trigger, gzip integrity,
   backup-count and age pruning, copytruncate sweep with a live foreign
-  `O_APPEND` handle, disabled-config passthrough, concurrent writers.
+  `O_APPEND` handle, the backup sweeper behind a writer that rotates for
+  itself, disabled-config passthrough, concurrent writers.
+- `make -C loxilb-ebpf/common test_log` and `go test -race ./pkg/logring`: a
+  log call does not wait when the destination does not return; drops are
+  counted by level and reported; nothing is lost across a rotation.
 - End-to-end on a running gateway (`--log-max-size=1`): 1 MB of debug logs →
   timestamped `.log.gz` backup, active file reset mid-stream with zero process
   disruption; `GET /log-archives` listed it, and the download passed `gunzip -t`.
 
 ## Known limits / follow-ups
 
-- The copytruncate window can drop a few DP log lines per rotation.
+- `Sweep` / `StartSweeper` (copy-truncate, for a file another process appends to) is kept in `pkg/logrotate` but no longer used for the data-plane log.
 - goBGP (`-b` mode) runs as a separate process with its own logging — not
   covered here; bound it via the container runtime limits.
 - Stale per-hostname files from *previous* container identities (e.g. a

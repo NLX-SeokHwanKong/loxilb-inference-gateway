@@ -1,17 +1,17 @@
 {
  "schema_version": 1,
  "provenance": {
-  "generated_at": "2026-10-11T09:21:18+00:00",
-  "source_revision": "25fd81eb05a966ed11c4846088e373b35718b898",
+  "generated_at": "2026-10-14T03:31:35+00:00",
+  "source_revision": "fed475f9f0576a3b09fc0966faa5b993eb9bd4f9",
   "upstream_repository": "https://github.com/loxilb-io/loxilb",
   "upstream_revision": "98487453eaf1853690de5928eab95a51817ba5d7"
  },
  "contract": {
-  "gateway_families": 325,
+  "gateway_families": 332,
   "upstream_families": 60,
   "present_identical": 35,
   "present_divergent": 0,
-  "absent": 290,
+  "absent": 297,
   "upstream_only": 25
  },
  "upstream_only": [
@@ -788,6 +788,17 @@
    }
   },
   {
+   "name": "loxilb_ai_class_config_lkg_intervals_total",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "counter",
+    "labels": []
+   }
+  },
+  {
    "name": "loxilb_ai_engine_info",
    "owner": "loxilb",
    "class": "default",
@@ -797,6 +808,20 @@
     "type": "gauge",
     "labels": [
      "engine",
+     "service"
+    ]
+   }
+  },
+  {
+   "name": "loxilb_ai_fc_tenant_slots",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "gauge",
+    "labels": [
+     "kind",
      "service"
     ]
    }
@@ -1011,6 +1036,34 @@
    }
   },
   {
+   "name": "loxilb_ai_netid_requests_total",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "counter",
+    "labels": [
+     "binding",
+     "outcome",
+     "tenant"
+    ]
+   }
+  },
+  {
+   "name": "loxilb_ai_netid_resolver_faults_total",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "counter",
+    "labels": [
+     "service"
+    ]
+   }
+  },
+  {
    "name": "loxilb_ai_normal_session_hits_total",
    "owner": "loxilb",
    "class": "default",
@@ -1169,6 +1222,33 @@
      "outcome",
      "status",
      "tenant"
+    ]
+   }
+  },
+  {
+   "name": "loxilb_ai_reservation_clamped_total",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "counter",
+    "labels": [
+     "reason",
+     "service"
+    ]
+   }
+  },
+  {
+   "name": "loxilb_ai_stream_early_bytes_closed_total",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "counter",
+    "labels": [
+     "service"
     ]
    }
   },
@@ -2370,6 +2450,19 @@
    "gateway": {
     "type": "counter",
     "labels": []
+   }
+  },
+  {
+   "name": "loxilb_log_lines_dropped_total",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "counter",
+    "labels": [
+     "level"
+    ]
    }
   },
   {

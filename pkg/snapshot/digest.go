@@ -254,6 +254,8 @@ func domainItemJSONs(name string, d *Domains) ([]string, error) {
 			return nil, nil
 		}
 		return itemJSONs([]cmn.HalfCloseConfig{*d.HalfClose})
+	case DomainNetIdentity:
+		return itemJSONs(d.NetIdentity)
 	case DomainLoadBalancer:
 		return itemJSONs(d.LoadBalancer)
 	case DomainKvExactBinding:

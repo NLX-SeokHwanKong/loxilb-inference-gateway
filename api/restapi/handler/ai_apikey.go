@@ -89,6 +89,11 @@ func ConfigPostAIApikey(params aiops.PostConfigAiApikeyParams, principal interfa
 		BurstSize:     int(req.BurstSize),
 		TokensPerMin:  int(req.TokensPerMin),
 		Enabled:       true, // default to enabled
+		AIClassPolicy: cmn.AIClassPolicy{
+			PriorityClass:     req.PriorityClass,
+			DefaultObjective:  req.DefaultObjective,
+			AllowedObjectives: req.AllowedObjectives,
+		},
 	}
 	// Allow caller to explicitly disable the key at creation time
 	if req.Enabled != nil {
@@ -216,6 +221,11 @@ func ConfigPatchAIApikey(w http.ResponseWriter, r *http.Request, keyID string) {
 		RateLimitRPS *int `json:"rate_limit_rps"`
 		BurstSize    *int `json:"burst_size"`
 		TokensPerMin *int `json:"tokens_per_min"`
+		// The class fields: absent leaves a field as it is, an empty
+		// value clears it.
+		PriorityClass     *string   `json:"priority_class"`
+		DefaultObjective  *string   `json:"default_objective"`
+		AllowedObjectives *[]string `json:"allowed_objectives"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		w.Header().Set("Content-Type", "application/json")
@@ -234,13 +244,17 @@ func ConfigPatchAIApikey(w http.ResponseWriter, r *http.Request, keyID string) {
 	// exists — so `PATCH /config/ai/apikey/no-such-key {}` answered 204 for a
 	// key that is absent, and a provisioning loop of "patch, create on 404"
 	// would never create. Both were confirmed live before this was written.
+	classPatch := cmn.AIClassPatch{PriorityClass: body.PriorityClass,
+		DefaultObjective: body.DefaultObjective, AllowedObjectives: body.AllowedObjectives}
 	if body.AllowedModels == nil && body.Enabled == nil &&
-		body.RateLimitRPS == nil && body.BurstSize == nil && body.TokensPerMin == nil {
+		body.RateLimitRPS == nil && body.BurstSize == nil && body.TokensPerMin == nil &&
+		classPatch.IsZero() {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]string{
 			"error": "no patchable field supplied: name at least one of " +
-				"allowed_models, enabled, rate_limit_rps, burst_size, tokens_per_min"})
+				"allowed_models, enabled, rate_limit_rps, burst_size, tokens_per_min, " +
+				"priority_class, default_objective, allowed_objectives"})
 		return
 	}
 
@@ -275,6 +289,12 @@ func ConfigPatchAIApikey(w http.ResponseWriter, r *http.Request, keyID string) {
 			return
 		}
 	}
+	if !classPatch.IsZero() {
+		if err := ApiHooks.NetAPIKeyClassPatch(keyID, classPatch); err != nil {
+			writePatchErr(err)
+			return
+		}
+	}
 
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -301,12 +321,34 @@ func ConfigPostAITenantRateLimit(params aiops.PostConfigAiTenantRatelimitParams,
 		})
 	}
 
-	if err := ApiHooks.NetTenantRateLimitSet(*body.TenantID, int(body.Rps), int(body.TokensPerMin), int(body.BurstPct), modelLimits); err != nil {
-		tk.LogIt(tk.LogError, "[AITenantRateLimit] Failed to set rate limit for tenant %s: %v\n", *body.TenantID, err)
-		if resp := keyStoreFailure(err); resp != nil {
-			return resp
+	// The class fields and the limits are two writes that do not touch each
+	// other. The limits are written as before, omission meaning zero, unless
+	// the body is about the class alone: it names a class field and carries
+	// no limit at all. Such a body leaves the tenant's limits as they are.
+	classPatch := cmn.AIClassPatch{PriorityClass: body.PriorityClass, DefaultObjective: body.DefaultObjective}
+	if body.AllowedObjectives != nil {
+		classPatch.AllowedObjectives = &body.AllowedObjectives
+	}
+	classOnly := !classPatch.IsZero() && body.Rps == 0 && body.TokensPerMin == 0 &&
+		body.BurstPct == 0 && len(modelLimits) == 0
+
+	if !classOnly {
+		if err := ApiHooks.NetTenantRateLimitSet(*body.TenantID, int(body.Rps), int(body.TokensPerMin), int(body.BurstPct), modelLimits); err != nil {
+			tk.LogIt(tk.LogError, "[AITenantRateLimit] Failed to set rate limit for tenant %s: %v\n", *body.TenantID, err)
+			if resp := keyStoreFailure(err); resp != nil {
+				return resp
+			}
+			return &ErrorResponse{Payload: ResultErrorResponseError(err)}
 		}
-		return &ErrorResponse{Payload: ResultErrorResponseError(err)}
+	}
+	if !classPatch.IsZero() {
+		if err := ApiHooks.NetTenantClassPatch(*body.TenantID, classPatch); err != nil {
+			tk.LogIt(tk.LogError, "[AITenantRateLimit] Failed to set class of tenant %s: %v\n", *body.TenantID, err)
+			if resp := keyStoreFailure(err); resp != nil {
+				return resp
+			}
+			return &ErrorResponse{Payload: ResultErrorResponseError(err)}
+		}
 	}
 
 	return aiops.NewPostConfigAiTenantRatelimitNoContent()
@@ -334,6 +376,10 @@ func ConfigGetAITenantRateLimit(params aiops.GetConfigAiTenantRatelimitTenantIDP
 		TokensPerMin: int64(entry.TokensPerMin),
 		BurstPct:     int64(entry.BurstPct),
 		UpdatedAt:    strfmt.DateTime(entry.UpdatedAt),
+
+		PriorityClass:     entry.PriorityClass,
+		DefaultObjective:  entry.DefaultObjective,
+		AllowedObjectives: entry.AllowedObjectives,
 	}
 	for _, ml := range entry.ModelLimits {
 		result.ModelLimits = append(result.ModelLimits, &models.TenantModelRateLimit{
@@ -359,6 +405,10 @@ func apiKeySummaryToModel(k cmn.ApiKeySummary) *models.APIKeySummary {
 		// the schema marks enabled required, so the generated field is a
 		// pointer; k is a by-value copy, so its address is stable here
 		Enabled: &k.Enabled,
+
+		PriorityClass:     k.PriorityClass,
+		DefaultObjective:  k.DefaultObjective,
+		AllowedObjectives: k.AllowedObjectives,
 	}
 	if k.ExpiresAt != nil {
 		summary.ExpiresAt = strfmt.DateTime(*k.ExpiresAt)

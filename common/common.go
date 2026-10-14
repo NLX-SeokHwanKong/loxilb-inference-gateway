@@ -1078,6 +1078,24 @@ type LbServiceArg struct {
 	HalfCloseMode string `json:"half_close_mode,omitempty"`
 	// HalfCloseModePresent is the presence bit for replace semantics.
 	HalfCloseModePresent bool `json:"-"`
+	// AIDefaultReservation - "on" makes the admission gate reserve a default
+	// number of completion tokens for a request that declares no max_tokens;
+	// "off" reserves the prompt estimate alone. Empty (or "inherit" on
+	// input) runs on LLB_AI_DEFAULT_RESERVATION, else off.
+	AIDefaultReservation string `json:"ai_default_reservation,omitempty"`
+	// AIDefaultReservationPresent is the presence bit for replace semantics.
+	AIDefaultReservationPresent bool `json:"-"`
+	// AIDefaultMaxTokens - the default reservation in tokens. 0 leaves
+	// LLB_AI_DEFAULT_MAX_TOKENS, else the built-in 512, in force.
+	AIDefaultMaxTokens uint32 `json:"ai_default_max_tokens,omitempty"`
+	// AIDefaultMaxTokensPresent is the presence bit for replace semantics.
+	AIDefaultMaxTokensPresent bool `json:"-"`
+	// AIObjectiveStrict - true refuses, with 403 objective_not_allowed, a
+	// request that names an objective it may not use; false lets it fall
+	// to its default objective. Read where the admission gate runs.
+	AIObjectiveStrict bool `json:"ai_objective_strict,omitempty"`
+	// AIObjectiveStrictPresent is the presence bit for replace semantics.
+	AIObjectiveStrictPresent bool `json:"-"`
 	// Egress - Egress Rule
 	Egress bool `json:"egress"`
 	// Id - Stable opaque identifier for the LB rule (Octavia).
@@ -1676,6 +1694,9 @@ type JWTAuthProfileMod struct {
 	ForwardIdentity bool `json:"forward_identity,omitempty"`
 	// AuthorizationPassthrough - keep the Authorization header upstream
 	AuthorizationPassthrough bool `json:"authorization_passthrough,omitempty"`
+	// PriorityClass caps the class of the requests this profile's tokens
+	// authenticate: standard, critical or sheddable. Empty is no cap.
+	PriorityClass string `json:"priority_class,omitempty"`
 }
 
 // LbSecIPArg - Secondary IP
@@ -1739,15 +1760,76 @@ type FcEffectiveArg struct {
 	// WarmingEndpoints counts endpoints inside their warm-up window.
 	WarmingEndpoints uint32 `json:"warming_endpoints"`
 	// TenantMaxSharePct is the tenant share in force (0 or 100: none);
-	// TenantsActive counts tenants holding a unit or waiting right now.
+	// TenantsActive counts tenants holding a unit or waiting right now;
+	// TenantSlots is how many the pool tracks by name at once (tenants past
+	// it share one budget), fixed when the pool was created.
 	TenantMaxSharePct uint32 `json:"tenant_max_share_pct"`
 	TenantsActive     uint32 `json:"tenants_active"`
+	TenantSlots       uint32 `json:"tenant_slots"`
 	// ExposeHeaders is "on" when admitted responses carry the admission
 	// headers, else "off".
 	ExposeHeaders string `json:"expose_headers"`
+	// DefaultReservation is "on" when a request without max_tokens reserves
+	// a default for its completion, else "off"; DefaultMaxTokens is that
+	// default in tokens (0 while off). Both are what the gate runs the
+	// rule's VIP and port on, which is one value per listener: where the
+	// rule resolves to another, Source says "listener".
+	// ReservationClampedBurst and ReservationClampedBudget count the
+	// requests of the service (every model pool of its VIP and port) whose
+	// default was admitted smaller than DefaultMaxTokens, since the process
+	// started, by reason: Burst, the default beside the prompt is more
+	// than a quota bucket can ever hold; Budget, the bucket's budget was
+	// already taken.
+	DefaultReservation       string `json:"default_reservation"`
+	DefaultMaxTokens         uint32 `json:"default_max_tokens"`
+	ReservationClampedBurst  uint64 `json:"reservation_clamped_burst"`
+	ReservationClampedBudget uint64 `json:"reservation_clamped_budget"`
+	// The token reservations outstanding right now on the quota buckets
+	// the service's requests reserve on: what admitted requests hold and
+	// have not settled. ReservationEpoch is the minute the read is of; a
+	// claim does not outlive its minute. ReservationHeldClaims counts the
+	// claims: one for each bucket each request holds a reservation on, so
+	// a request whose ladder has three buckets is three claims. It is zero
+	// exactly when nothing is held and says nothing about tokens.
+	// ReservationHeld lists the buckets holding tokens, largest first, at
+	// most FcResvHeldMax of them (ReservationHeldTruncated says more
+	// exist). A tenant's bucket is shared by every service the tenant uses
+	// and reads the same on each. Management read-back only; not exported
+	// as metrics.
+	ReservationEpoch         int64           `json:"reservation_epoch"`
+	ReservationHeldClaims    uint64          `json:"reservation_held_claims"`
+	ReservationHeldTruncated bool            `json:"reservation_held_truncated"`
+	ReservationHeld          []FcResvHeldArg `json:"reservation_held"`
 	// Source names where each value in force came from: "rule", "env" or
 	// "default".
-	Source FcEffectiveSource `json:"source"`
+	// ConfigSource is where the objectives and the tenant and key classes
+	// this gateway is applying came from: AIClassSourceStore, AIClassSourceLKG
+	// or AIClassSourceNone. The gateway's, the same on every rule.
+	ConfigSource string            `json:"config_source,omitempty"`
+	Source       FcEffectiveSource `json:"source"`
+}
+
+// FcResvHeldMax - the most buckets one read-back lists.
+const FcResvHeldMax = 64
+
+// The quota-bucket kinds of FcResvHeldArg.Kind: the levels of the ladder a
+// request's reservation lands on.
+const (
+	FcResvBucketTenant      = "tenant"
+	FcResvBucketTenantModel = "tenant_model"
+	FcResvBucketUser        = "user"
+	FcResvBucketUserModel   = "user_model"
+	FcResvBucketKey         = "key"
+	FcResvBucketService     = "service"
+)
+
+// FcResvHeldArg - one quota bucket holding a token reservation. Bucket is
+// the bucket's key as the quota store names it: identifiers (tenant, user,
+// model, key id, service), never a credential.
+type FcResvHeldArg struct {
+	Kind   string `json:"kind"`
+	Bucket string `json:"bucket"`
+	Tokens uint64 `json:"tokens"`
 }
 
 // FcEffectiveSource - the origin of each value in FcEffectiveArg.
@@ -1765,6 +1847,8 @@ type FcEffectiveSource struct {
 	TtftTargetMs       string `json:"ttft_target_ms"`
 	TenantMaxSharePct  string `json:"tenant_max_share_pct"`
 	ExposeHeaders      string `json:"expose_headers"`
+	DefaultReservation string `json:"default_reservation"`
+	DefaultMaxTokens   string `json:"default_max_tokens"`
 }
 
 // LbRuleMod - Info related to a load-balancer entry
@@ -2592,6 +2676,15 @@ type NetHookInterface interface {
 	// NetJWTAuthProfileDel removes a profile; refused while any LB rule
 	// references it.
 	NetJWTAuthProfileDel(name string) (int, error)
+	// NetAINetIdentityGet returns every network-identity binding, in name
+	// order, as it was stored.
+	NetAINetIdentityGet() ([]NetIdentityMod, error)
+	// NetAINetIdentityAdd creates or replaces a binding by name. It is
+	// refused when another binding matches the same source on the same
+	// service as specifically and names another tenant.
+	NetAINetIdentityAdd(*NetIdentityMod) (int, error)
+	// NetAINetIdentityDel removes a binding.
+	NetAINetIdentityDel(name string) (int, error)
 	NetCIStateMod(*HASMod) (int, error)
 	NetCIStateGet() ([]HASMod, error)
 	NetFwRuleAdd(*FwRuleMod) (int, error)
@@ -2722,6 +2815,14 @@ type NetHookInterface interface {
 	NetAPIKeyRateLimitPatch(keyID string, rps, burstSize, tokensPerMin *int) error
 	NetTenantRateLimitSet(tenantID string, rps, tokensPerMin, burstPct int, modelLimits []TenantModelRateLimit) error
 	NetTenantRateLimitGet(tenantID string) (*TenantRateLimitEntry, error)
+
+	// AI Gateway - objectives (named priorities) and the class fields of
+	// tenants and keys. All of it lives in the key store.
+	NetAIObjectiveGet() ([]AIObjectiveEntry, error)
+	NetAIObjectiveAdd(*AIObjectiveEntry) (int, error)
+	NetAIObjectiveDel(name string) (int, error)
+	NetTenantClassPatch(tenantID string, patch AIClassPatch) error
+	NetAPIKeyClassPatch(keyID string, patch AIClassPatch) error
 
 	// AI Gateway - QoS ladder: per-user limits and configurable defaults.
 	NetUserRateLimitSet(entry UserRateLimitEntry) error
@@ -2958,6 +3059,8 @@ type ApiKeyEntry struct {
 	CreatedAt     time.Time  `json:"created_at"`
 	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
 	Enabled       bool       `json:"enabled"`
+	// The key's class fields; they can only narrow its tenant's.
+	AIClassPolicy
 }
 
 // ApiKeySummary - API key summary without the secret hash
@@ -2972,6 +3075,8 @@ type ApiKeySummary struct {
 	CreatedAt     time.Time  `json:"created_at"`
 	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
 	Enabled       bool       `json:"enabled"`
+	// The key's class fields; they can only narrow its tenant's.
+	AIClassPolicy
 }
 
 // TenantModelRateLimit - one model's token quota inside a tenant's rate
@@ -2994,6 +3099,8 @@ type TenantRateLimitEntry struct {
 	BurstPct    int                    `json:"burst_pct"`
 	ModelLimits []TenantModelRateLimit `json:"model_limits,omitempty"`
 	UpdatedAt   time.Time              `json:"updated_at"`
+	// The tenant's class fields.
+	AIClassPolicy
 }
 
 // UserModelRateLimit - one model's token quota inside a user's rate limit

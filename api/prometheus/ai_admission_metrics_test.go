@@ -113,6 +113,7 @@ func TestAdmissionCollectorEmitsLabelledSeries(t *testing.T) {
 		adaptMoves:     [2]float64{3, 1},
 		warmingEps:     1,
 		tenantsActive:  2,
+		tenantSlots:    256,
 	}}, [3]float64{0, 1, 0})
 
 	want := `
@@ -271,12 +272,60 @@ loxilb_ai_admission_tenants_active{pool="llm",service="192.168.1.10:8080"} 2
 		t.Errorf("tenants active mismatch: %v", err)
 	}
 
+	want = `
+# HELP loxilb_ai_fc_tenant_slots The tenant table of the capacity gate, per service: kind="max" is how many tenants a model pool tracks by name at once (LLB_FC_TENANT_SLOTS, fixed when the pool is created), kind="used" is how many hold a unit or wait right now on the service's fullest pool. used above max means tenants past the table are sharing one budget. used is zero while no pool of the service holds tenants to a share.
+# TYPE loxilb_ai_fc_tenant_slots gauge
+loxilb_ai_fc_tenant_slots{kind="max",service="192.168.1.10:8080"} 256
+loxilb_ai_fc_tenant_slots{kind="used",service="192.168.1.10:8080"} 2
+`
+	if err := testutil.CollectAndCompare(admissionCollector{}, strings.NewReader(want),
+		"loxilb_ai_fc_tenant_slots"); err != nil {
+		t.Errorf("tenant slots mismatch: %v", err)
+	}
+
 	// Per pool: 1 mode + 4 inflight + 5 limit + 1 queued + 1 wait histogram
 	// + 13 decisions + 1 effective limit + 4 adapt states + 5 adapt reasons
-	// + 2 adapt moves + 1 warming + 1 tenants = 39, plus the 3 process-wide
-	// anomaly counters.
-	if n := testutil.CollectAndCount(admissionCollector{}); n != 42 {
-		t.Errorf("collected %d metrics for one pool, want 42", n)
+	// + 2 adapt moves + 1 warming + 1 tenants = 39, plus the 2 tenant-table
+	// series of its service and the 3 process-wide anomaly counters.
+	if n := testutil.CollectAndCount(admissionCollector{}); n != 44 {
+		t.Errorf("collected %d metrics for one pool, want 44", n)
+	}
+}
+
+// The tenant-table gauge has one pair of series per service however many
+// model pools the service has: the size, and the tenants on its fullest
+// pool. A second service is reported on its own, and a service past its
+// table reads used above max.
+func TestAdmissionTenantSlotsArePerService(t *testing.T) {
+	withAdmissionStore(t, []admissionSample{
+		{service: "10.0.0.1:2020", pool: "llama", tenantsActive: 3, tenantSlots: 256},
+		{service: "10.0.0.1:2020", pool: "qwen", tenantsActive: 40, tenantSlots: 256},
+		{service: "10.0.0.1:2020", pool: "*", tenantsActive: 0, tenantSlots: 256},
+		{service: "10.0.0.2:2021", pool: "llama", tenantsActive: 65, tenantSlots: 64},
+		{service: "10.0.0.3:2022", pool: "llama", tenantsActive: 0, tenantSlots: 4096},
+	}, [3]float64{})
+
+	want := `
+# HELP loxilb_ai_fc_tenant_slots The tenant table of the capacity gate, per service: kind="max" is how many tenants a model pool tracks by name at once (LLB_FC_TENANT_SLOTS, fixed when the pool is created), kind="used" is how many hold a unit or wait right now on the service's fullest pool. used above max means tenants past the table are sharing one budget. used is zero while no pool of the service holds tenants to a share.
+# TYPE loxilb_ai_fc_tenant_slots gauge
+loxilb_ai_fc_tenant_slots{kind="max",service="10.0.0.1:2020"} 256
+loxilb_ai_fc_tenant_slots{kind="used",service="10.0.0.1:2020"} 40
+loxilb_ai_fc_tenant_slots{kind="max",service="10.0.0.2:2021"} 64
+loxilb_ai_fc_tenant_slots{kind="used",service="10.0.0.2:2021"} 65
+loxilb_ai_fc_tenant_slots{kind="max",service="10.0.0.3:2022"} 4096
+loxilb_ai_fc_tenant_slots{kind="used",service="10.0.0.3:2022"} 0
+`
+	if err := testutil.CollectAndCompare(admissionCollector{}, strings.NewReader(want),
+		"loxilb_ai_fc_tenant_slots"); err != nil {
+		t.Errorf("tenant slots per service mismatch: %v", err)
+	}
+	if n := testutil.CollectAndCount(admissionCollector{}, "loxilb_ai_fc_tenant_slots"); n != 6 {
+		t.Errorf("collected %d tenant-table series for three services, want 6", n)
+	}
+
+	got := admissionTenantSlotsByService(nil)
+	if len(got) != 0 {
+		t.Errorf("no pools: got %v, want no reading", got)
 	}
 }
 

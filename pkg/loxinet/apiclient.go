@@ -758,6 +758,68 @@ func (na *NetAPIStruct) NetJWTAuthProfileDel(name string) (int, error) {
 	return mh.JWTAuthProfiles.ProfileDel(name)
 }
 
+// NetAINetIdentityGet - list the network-identity bindings
+func (na *NetAPIStruct) NetAINetIdentityGet() ([]cmn.NetIdentityMod, error) {
+	if na.BgpPeerMode {
+		return nil, errors.New("running in bgp only mode")
+	}
+	// Built during loxinet init, which finishes after the REST server
+	// starts serving; "not initialized" is the wording the boot replay and
+	// the REST commit restore retry on.
+	if mh.NetIdentity == nil {
+		return nil, errors.New("network-identity bindings not initialized")
+	}
+	return mh.NetIdentity.BindingGet()
+}
+
+// NetAINetIdentityAdd - create or replace a network-identity binding. The
+// one question that needs rule state, whether a credential: network or
+// forward_identity binding names a service the gateway does not see every
+// request of, is asked under the configuration mutex, and the binding is
+// stored before the mutex is released: a rule change cannot slip between
+// the answer and the store. The holder's own lock is taken inside the
+// configuration mutex, the one order the two are ever held in.
+func (na *NetAPIStruct) NetAINetIdentityAdd(pm *cmn.NetIdentityMod) (int, error) {
+	if na.BgpPeerMode {
+		return NetIdentityArgErr, errors.New("running in bgp only mode")
+	}
+	if mh.NetIdentity == nil {
+		return NetIdentityArgErr, errors.New("network-identity bindings not initialized")
+	}
+	var rules *RuleH
+	if mh.zr != nil {
+		rules = mh.zr.Rules
+	}
+	return netidAddUnderConfig(&mh.mtx, rules, mh.NetIdentity, pm)
+}
+
+// NetAINetIdentityDel - delete a network-identity binding
+func (na *NetAPIStruct) NetAINetIdentityDel(name string) (int, error) {
+	if na.BgpPeerMode {
+		return NetIdentityArgErr, errors.New("running in bgp only mode")
+	}
+	if mh.NetIdentity == nil {
+		return NetIdentityArgErr, errors.New("network-identity bindings not initialized")
+	}
+	return mh.NetIdentity.BindingDel(name)
+}
+
+// NetAINetIdentityWarning returns what is worth saying about a binding that
+// was just applied, and logs it. It refuses nothing.
+func (na *NetAPIStruct) NetAINetIdentityWarning(pm *cmn.NetIdentityMod) string {
+	if mh.NetIdentity == nil {
+		return ""
+	}
+	msg := mh.NetIdentity.BindingWarning(pm)
+	if mh.AIKeyService == nil {
+		msg = netidJoinWarning(msg, netidNoKeyStoreWarning)
+	}
+	if msg != "" {
+		tk.LogIt(tk.LogWarning, "[NetIdentity] binding %s: %s\n", pm.Name, msg)
+	}
+	return msg
+}
+
 // NetCIStateGet - Get current node cluster state
 func (na *NetAPIStruct) NetCIStateGet() ([]cmn.HASMod, error) {
 	if na.BgpPeerMode {
@@ -1977,19 +2039,41 @@ func (na *NetAPIStruct) NetAPIKeyCreate(entry cmn.ApiKeyEntry) (string, string, 
 }
 
 // NetAPIKeyList - List API keys. If tenantID is empty, returns all keys.
+// Each key carries its class fields as the store holds them.
 func (na *NetAPIStruct) NetAPIKeyList(tenantID string) ([]cmn.ApiKeySummary, error) {
 	if mh.AIKeyService == nil {
 		return nil, keyStoreAbsentErr()
 	}
-	return mh.AIKeyService.ListAPIKeys(tenantID)
+	keys, err := mh.AIKeyService.ListAPIKeys(tenantID)
+	if err != nil {
+		return nil, err
+	}
+	classes, err := mh.AIKeyService.ListAPIKeyClasses()
+	if err != nil {
+		return nil, err
+	}
+	for i := range keys {
+		keys[i].AIClassPolicy = classes[keys[i].KeyID]
+	}
+	return keys, nil
 }
 
-// NetAPIKeyGet - Retrieve a single API key by its key_id.
+// NetAPIKeyGet - Retrieve a single API key by its key_id, with its class
+// fields as the store holds them. The summary the store hands out may be
+// its cached one, so the class is laid over a copy.
 func (na *NetAPIStruct) NetAPIKeyGet(keyID string) (*cmn.ApiKeySummary, error) {
 	if mh.AIKeyService == nil {
 		return nil, keyStoreAbsentErr()
 	}
-	return mh.AIKeyService.GetAPIKeyByID(keyID)
+	key, err := mh.AIKeyService.GetAPIKeyByID(keyID)
+	if err != nil {
+		return nil, err
+	}
+	out := *key
+	if out.AIClassPolicy, err = mh.AIKeyService.GetAPIKeyClass(keyID); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // NetAPIKeyRevoke - Disable an API key and evict it from cache.
@@ -2069,12 +2153,73 @@ func (na *NetAPIStruct) NetTenantRateLimitSet(tenantID string, rps, tokensPerMin
 	return nil
 }
 
-// NetTenantRateLimitGet - Retrieve the full rate limit entry for a tenant.
+// NetTenantRateLimitGet - Retrieve the full rate limit entry for a tenant,
+// with its class fields.
 func (na *NetAPIStruct) NetTenantRateLimitGet(tenantID string) (*cmn.TenantRateLimitEntry, error) {
 	if mh.AIKeyService == nil {
 		return nil, keyStoreAbsentErr()
 	}
-	return mh.AIKeyService.GetTenantRateLimitEntry(tenantID)
+	entry, err := mh.AIKeyService.GetTenantRateLimitEntry(tenantID)
+	if err != nil {
+		return nil, err
+	}
+	if entry.AIClassPolicy, err = mh.AIKeyService.GetTenantClass(tenantID); err != nil {
+		return nil, err
+	}
+	return entry, nil
+}
+
+// NetTenantClassPatch - change the class fields of a tenant that the patch
+// names. The tenant's limits are not touched.
+func (na *NetAPIStruct) NetTenantClassPatch(tenantID string, patch cmn.AIClassPatch) error {
+	if mh.AIKeyService == nil {
+		return keyStoreAbsentErr()
+	}
+	return mh.AIKeyService.PatchTenantClass(tenantID, patch)
+}
+
+// NetAPIKeyClassPatch - change the class fields of a key that the patch
+// names.
+func (na *NetAPIStruct) NetAPIKeyClassPatch(keyID string, patch cmn.AIClassPatch) error {
+	if mh.AIKeyService == nil {
+		return keyStoreAbsentErr()
+	}
+	return mh.AIKeyService.PatchAPIKeyClass(keyID, patch)
+}
+
+// NetAIObjectiveGet - list the objectives, as the store holds them.
+func (na *NetAPIStruct) NetAIObjectiveGet() ([]cmn.AIObjectiveEntry, error) {
+	if mh.AIKeyService == nil {
+		return nil, keyStoreAbsentErr()
+	}
+	return mh.AIKeyService.ListObjectives()
+}
+
+// NetAIObjectiveAdd - create or replace an objective. The class snapshot
+// is refreshed by the store before it returns, so the next request on this
+// node is decided with it.
+func (na *NetAPIStruct) NetAIObjectiveAdd(e *cmn.AIObjectiveEntry) (int, error) {
+	if mh.AIKeyService == nil {
+		return -1, keyStoreAbsentErr()
+	}
+	if e == nil {
+		return -1, cmn.NewValidationError("name", "an objective is required")
+	}
+	if err := mh.AIKeyService.SetObjective(*e); err != nil {
+		return -1, err
+	}
+	return 0, nil
+}
+
+// NetAIObjectiveDel - delete an objective.
+func (na *NetAPIStruct) NetAIObjectiveDel(name string) (int, error) {
+	if mh.AIKeyService == nil {
+		return -1, keyStoreAbsentErr()
+	}
+	if err := mh.AIKeyService.DeleteObjective(name); err != nil {
+		return -1, err
+	}
+	return 0, nil
 }
 
 // NetUserRateLimitSet - Upsert one user's explicit rate limits (QoS ladder

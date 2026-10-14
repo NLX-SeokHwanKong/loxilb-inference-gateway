@@ -989,6 +989,18 @@ func (w *Writer) emitProducerGaps() {
 		for i := range totals {
 			totals[i] = p.dropped[i].Load()
 		}
+		// Said in the operational log as well as in the trail: the trail is
+		// what was just shown not to keep up. Once per producer and drain,
+		// from this goroutine; the producer that dropped was never held. The
+		// count is the counters' own, not the ring's: the ring holds the
+		// last few hundred drops and a long stall drops far more.
+		var total uint64
+		for _, n := range totals {
+			total += n
+		}
+		w.logf("audit: WARNING: producer %s dropped %d %s records (%s first) since the last heartbeat; the trail has a gap, no request was held",
+			p.id, total-p.droppedSeen, p.stream, dropReasons[runs[0].reason])
+		p.droppedSeen = total
 		for _, run := range runs {
 			ex := exact
 			ov := overflow

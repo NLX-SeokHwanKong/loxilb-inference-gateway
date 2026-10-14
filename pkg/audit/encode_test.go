@@ -350,6 +350,66 @@ func TestEncodeReservationFieldsAreAddOnly(t *testing.T) {
 	}
 }
 
+// The class fields ride priority_class: a record whose request was given no
+// class carries none of them and is byte for byte what it was, and one that
+// was carries the priority at zero too, since zero is a class's own value.
+func TestEncodeClassFieldsAreAddOnly(t *testing.T) {
+	e := newEncoder()
+	keys := []string{"priority_class", "priority", "objective", "objective_denied", "hint_not_applied"}
+
+	plain, err := e.encode(goldenData(), goldenStamp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The other four mean nothing without the class.
+	r := goldenData()
+	r.Data.Priority, r.Data.Objective, r.Data.ObjectiveDenied, r.Data.HintNotApplied = 7, "x", true, true
+	got, err := e.encode(r, goldenStamp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(plain) {
+		t.Errorf("class fields written without a class:\n%s\n%s", got, plain)
+	}
+	for _, key := range keys {
+		if strings.Contains(string(plain), `"`+key+`"`) {
+			t.Errorf("record with no class carries %q", key)
+		}
+	}
+
+	r = goldenData()
+	r.Data.PriorityClass = "standard"
+	got, err = e.encode(r, goldenStamp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), `"priority_class":"standard","priority":0`) {
+		t.Errorf("standard class not encoded with its priority: %s", got)
+	}
+	for _, key := range keys[2:] {
+		if strings.Contains(string(got), `"`+key+`"`) {
+			t.Errorf("standard request with no hint carries %q: %s", key, got)
+		}
+	}
+
+	r = goldenData()
+	r.Data.PriorityClass, r.Data.Priority, r.Data.Objective = "sheddable", -5, "batch"
+	r.Data.ObjectiveDenied, r.Data.HintNotApplied = true, true
+	got, err = e.encode(r, goldenStamp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"priority_class":"sheddable"`, `"priority":-5`, `"objective":"batch"`,
+		`"objective_denied":true`, `"hint_not_applied":true`} {
+		if !strings.Contains(string(got), want) {
+			t.Errorf("%s missing: %s", want, got)
+		}
+	}
+	if !json.Valid(got) {
+		t.Errorf("not valid JSON: %s", got)
+	}
+}
+
 // TestEncodeOriginFieldsAreAddOnly states the three-field attribution
 // contract on the wire. The hop count rides the origin: it is written
 // whenever an origin was derived, INCLUDING at zero, because zero is the
@@ -416,5 +476,80 @@ func TestEncodeOriginFieldsAreAddOnly(t *testing.T) {
 	}
 	if strings.Contains(string(got), `"trusted_hops"`) {
 		t.Errorf("hop count written with no origin derived: %s", got)
+	}
+}
+
+// TestEncodeNetIdentityIsAddOnly states the network-identity addition on the
+// wire: the key is absent from a record no binding matched, so every
+// existing record is byte-for-byte what it was, and present beside either
+// auth mode when one did.
+func TestEncodeNetIdentityIsAddOnly(t *testing.T) {
+	e := newEncoder()
+
+	got, err := e.encode(goldenData(), goldenStamp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(got), `"net_identity"`) {
+		t.Errorf("record with no binding carries net_identity: %s", got)
+	}
+
+	// The binding decided the tenant.
+	r := goldenData()
+	r.Actor = Actor{Auth: AuthNetwork, Tenant: "line-1-tenant", NetIdentity: "line-1", Remote: "10.20.0.7"}
+	got, err = e.encode(r, goldenStamp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !json.Valid(got) {
+		t.Fatalf("not valid JSON: %s", got)
+	}
+	if want := `"actor":{"auth":"network","tenant":"line-1-tenant","net_identity":"line-1","remote":"10.20.0.7"}`; !strings.Contains(string(got), want) {
+		t.Errorf("missing %s: %s", want, got)
+	}
+
+	// A key decided and the binding matched beside it.
+	r = goldenData()
+	r.Actor.NetIdentity = "line-1"
+	got, err = e.encode(r, goldenStamp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"auth":"apikey"`, `"key_id":"k-17"`, `"net_identity":"line-1"`} {
+		if !strings.Contains(string(got), want) {
+			t.Errorf("missing %s: %s", want, got)
+		}
+	}
+}
+
+// A bearer-token actor is written with the mode's own value and the same
+// fields any other actor has: a reader that does not know the value reads a
+// well-formed record with an auth string it has not seen, nothing else.
+func TestEncodeBearerAuth(t *testing.T) {
+	e := newEncoder()
+	r := goldenData()
+	r.Actor = Actor{Auth: AuthBearer, Tenant: "acme", User: "alice", Remote: "10.20.0.7"}
+	got, err := e.encode(r, goldenStamp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		SchemaVersion int `json:"schema_version"`
+		Actor         map[string]any
+	}
+	if err := json.Unmarshal(got, &doc); err != nil {
+		t.Fatalf("not readable as JSON: %v: %s", err, got)
+	}
+	if doc.SchemaVersion != SchemaVersion || SchemaVersion != 1 {
+		t.Errorf("schema_version = %d, package says %d, want 1", doc.SchemaVersion, SchemaVersion)
+	}
+	want := map[string]any{"auth": "bearer", "tenant": "acme", "user": "alice", "remote": "10.20.0.7"}
+	if len(doc.Actor) != len(want) {
+		t.Errorf("actor = %v, want exactly %v", doc.Actor, want)
+	}
+	for k, v := range want {
+		if doc.Actor[k] != v {
+			t.Errorf("actor.%s = %v, want %v", k, doc.Actor[k], v)
+		}
 	}
 }

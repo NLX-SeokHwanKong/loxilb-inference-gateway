@@ -80,6 +80,14 @@ const (
 	AuthMTLS    AuthMode = "mtls"
 	AuthSession AuthMode = "session"
 	AuthNone    AuthMode = "none"
+	// AuthNetwork is a data-path request whose tenant was decided by a
+	// network-identity binding of its source and by no credential. It says
+	// where the request came from, as far as the network can vouch for
+	// that; it is not proof of who sent it.
+	AuthNetwork AuthMode = "network"
+	// AuthBearer is a data-path request whose tenant was decided by a
+	// bearer token the gateway validated (a JWT).
+	AuthBearer AuthMode = "bearer"
 )
 
 // Reason is the closed vocabulary of outcome.reason. It is the only
@@ -132,6 +140,12 @@ type Actor struct {
 	User   string
 	Role   string
 	Tenant string
+	// NetIdentity is the network-identity binding that matched the
+	// request's source. With Auth network it is what decided Tenant; beside
+	// a credential it is the binding the credential was matched against,
+	// and on a refusal it may be the binding that refused it. Empty when no
+	// binding matched.
+	NetIdentity string
 	// Remote is the direct peer address.
 	Remote string
 	// Origin is the address the request is ATTRIBUTED to: the peer at the
@@ -256,6 +270,20 @@ type DataDetail struct {
 	// two reservations, without joining on time.
 	Reserved int64
 	ResEpoch int64
+	// PriorityClass, Priority, Objective, ObjectiveDenied and
+	// HintNotApplied are the class the admission gate gave the request.
+	// PriorityClass is empty, and the other four absent with it, on a
+	// request the class stage did not run for: no class is configured, or
+	// the request has no tenant. Objective is the hint that was applied (an
+	// objective name, or "tier:<value>" for the body's service_tier).
+	// ObjectiveDenied: the request named an objective it may not use and
+	// was given its default. HintNotApplied: the body was streamed, so a
+	// service_tier in it could not be read.
+	PriorityClass   string
+	Priority        int64
+	Objective       string
+	ObjectiveDenied bool
+	HintNotApplied  bool
 }
 
 // SysDetail is the detail object of an audit_system record. Fields are

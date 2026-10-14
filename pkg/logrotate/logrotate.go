@@ -246,6 +246,63 @@ func StartSweeper(path string, cfg Config, interval time.Duration) {
 	}()
 }
 
+// backupSettle is how long a backup must have been left alone before
+// SweepBackups compresses it: the writer that renamed it may still hold it
+// open for a moment.
+const backupSettle = 10 * time.Second
+
+// SweepBackups finishes rotations another writer began: that writer renames
+// its file to a BackupName and opens a new one, and SweepBackups compresses
+// (if configured) the backups it finds uncompressed and prunes the old ones.
+// It never touches the live file.
+func SweepBackups(path string, cfg Config) error {
+	return sweepBackups(path, cfg, time.Now())
+}
+
+func sweepBackups(path string, cfg Config, now time.Time) error {
+	if !cfg.enabled() {
+		return nil
+	}
+	dir := filepath.Dir(path)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	if cfg.Compress {
+		for _, e := range entries {
+			name := e.Name()
+			if e.IsDir() || strings.HasSuffix(name, ".gz") || !isBackupOf(path, name) {
+				continue
+			}
+			info, err := e.Info()
+			if err != nil || now.Sub(info.ModTime()) < backupSettle {
+				continue
+			}
+			if err := gzipFile(filepath.Join(dir, name)); err != nil {
+				fmt.Fprintf(os.Stderr, "logrotate: compress %s: %v\n", name, err)
+			}
+		}
+	}
+	return pruneBackups(path, cfg)
+}
+
+// StartBackupSweeper runs SweepBackups(path) every interval for the process
+// lifetime.
+func StartBackupSweeper(path string, cfg Config, interval time.Duration) {
+	if !cfg.enabled() || interval <= 0 {
+		return
+	}
+	go func() {
+		t := time.NewTicker(interval)
+		defer t.Stop()
+		for range t.C {
+			if err := SweepBackups(path, cfg); err != nil && !os.IsNotExist(err) {
+				fmt.Fprintf(os.Stderr, "logrotate: sweep backups of %s: %v\n", path, err)
+			}
+		}
+	}()
+}
+
 // finishRotation compresses the backup (if configured) and prunes old
 // backups of the same base file.
 func finishRotation(orig, bak string, cfg Config) {

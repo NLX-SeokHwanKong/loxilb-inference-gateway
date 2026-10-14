@@ -207,5 +207,10 @@ func ensureSchema(db *sql.DB) error {
 			return fmt.Errorf("aikey: failed to create %s: %w", s.what, err)
 		}
 	}
+	for _, s := range classSchemaStmts() {
+		if _, err := db.Exec(s.sql); err != nil {
+			return fmt.Errorf("aikey: failed to create %s: %w", s.what, err)
+		}
+	}
 	return nil
 }
