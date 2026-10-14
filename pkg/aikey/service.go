@@ -221,6 +221,9 @@ type Service struct {
 	// answered for is refused. Bounded by the number of distinct tenants and
 	// tenant|model pairs this process has served.
 	rlLastKnown sync.Map
+
+	// class is the objective and class snapshot (class_snapshot.go).
+	class classState
 }
 
 // rememberRateLimit records a store-confirmed rate-limit value in both the
