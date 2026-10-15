@@ -22,6 +22,13 @@ func getBGPPolicyAssignment(h Hooks, d *Document) error {
 	return nil
 }
 func applyBGPPolicyAssignment(h Hooks, d *Document, tolerateExists bool) (int, int, error) {
+	// Empty captured domains are valid when the optional speaker is disabled.
+	// Boot replay has no wipe to perform and no bindings to reconcile here.
+	// Nonempty desired assignments still require a successful speaker read.
+	if len(d.Domains.BGPPolicyAssignment) == 0 {
+		return 0, 0, nil
+	}
+
 	n, skipped := 0, 0
 	var live []cmn.GoBGPPolicyApply
 	if tolerateExists {

@@ -235,3 +235,51 @@ func TestBGPAssignmentDeleteContinuesAfterOneFailure(t *testing.T) {
 		t.Fatalf("remaining assignments not attempted: n=%d err=%v left=%v", n, err, h.bgpAssignments)
 	}
 }
+
+type disabledAssignmentHooks struct{ *mockHooks }
+
+func (h disabledAssignmentHooks) NetGoBGPPolicyApplyGet() ([]cmn.GoBGPPolicyApply, error) {
+	h.log("NetGoBGPPolicyApplyGet")
+	return nil, errors.New("loxilb BGP mode is disabled")
+}
+func (h disabledAssignmentHooks) NetGoBGPPolicyApplyAdd(*cmn.GoBGPPolicyApply) (int, error) {
+	h.log("NetGoBGPPolicyApplyAdd")
+	return -1, errors.New("loxilb BGP mode is disabled")
+}
+
+func TestEmptyBGPAssignmentBootDoesNotRequireSpeaker(t *testing.T) {
+	h := disabledAssignmentHooks{newMockHooks()}
+	for _, items := range [][]cmn.GoBGPPolicyApply{nil, {}} {
+		h.Calls = nil
+		n, skipped, err := applyBGPPolicyAssignment(h, &Document{Domains: Domains{BGPPolicyAssignment: items}}, true)
+		if err != nil || n != 0 || skipped != 0 {
+			t.Fatalf("empty boot apply: %d %d %v", n, skipped, err)
+		}
+		if len(h.Calls) != 0 {
+			t.Fatalf("empty boot queried an optional subsystem: %v", h.Calls)
+		}
+	}
+}
+
+func TestNonemptyBGPAssignmentBootStillRequiresSpeaker(t *testing.T) {
+	h := disabledAssignmentHooks{newMockHooks()}
+	doc := &Document{Domains: Domains{BGPPolicyAssignment: assignmentFixture()}}
+	if _, _, err := applyBGPPolicyAssignment(h, doc, true); err == nil {
+		t.Fatal("nonempty desired assignments silently dropped")
+	}
+}
+
+func TestSnapshotBootWithoutBGPReplaysOtherDomains(t *testing.T) {
+	h := disabledAssignmentHooks{newMockHooks()}
+	doc := restoreDoc("restored")
+	if len(doc.Domains.BGPPolicyAssignment) != 0 {
+		t.Fatal("fixture must have no BGP assignments")
+	}
+	result, err := newTestEngine(h, t.TempDir()).Restore(encodeDoc(t, doc), RestoreOptions{Boot: true})
+	if err != nil || result.Result != ResultOK {
+		t.Fatalf("non-BGP boot rejected: %+v %v", result, err)
+	}
+	if len(h.lbRules) == 0 {
+		t.Fatal("boot failed to replay the load balancer")
+	}
+}
