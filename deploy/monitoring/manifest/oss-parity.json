@@ -1,17 +1,17 @@
 {
  "schema_version": 1,
  "provenance": {
-  "generated_at": "2026-10-14T10:59:47+00:00",
-  "source_revision": "0b4273446012c5a5307de50d1a6ca3e33e999ed3",
+  "generated_at": "2026-10-14T23:39:18+00:00",
+  "source_revision": "25717f3d60db0c8dd325403f8f4db70d718e599f",
   "upstream_repository": "https://github.com/loxilb-io/loxilb",
   "upstream_revision": "98487453eaf1853690de5928eab95a51817ba5d7"
  },
  "contract": {
-  "gateway_families": 332,
+  "gateway_families": 334,
   "upstream_families": 60,
   "present_identical": 35,
   "present_divergent": 0,
-  "absent": 297,
+  "absent": 299,
   "upstream_only": 25
  },
  "upstream_only": [
@@ -3627,6 +3627,28 @@
    "present_upstream": false,
    "gateway": {
     "type": "counter",
+    "labels": []
+   }
+  },
+  {
+   "name": "loxilb_proxy_pools_freed_total",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "counter",
+    "labels": []
+   }
+  },
+  {
+   "name": "loxilb_proxy_pools_live",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "gauge",
     "labels": []
    }
   },

@@ -170,6 +170,27 @@ binary behaves exactly like upstream loxilb.
 
 ### Fixed
 
+- **Deleting or re-creating a full-proxy rule no longer leaks its endpoint
+  pool, and no longer frees state that live connections still use.** Every
+  delete of a full-proxy rule, and every replace that changes more than the
+  admission gate (a replace with new endpoints is a delete and an add), left
+  the rule's pool allocated: 58,368 bytes per pool, for the life of the
+  process, so a controller that churns rules grew the gateway without bound.
+  The pool could not simply be freed at the delete, because connections,
+  HTTP/2 sessions and streams, and held admission permits kept using it; the
+  delete also destroyed two locks of the pool those users still took. A pool
+  is now reference-counted by everything that holds it and freed when the last
+  holder lets go, after every proxy worker has passed a quiescent point (an
+  idle worker counts as quiescent, so a quiet gateway frees promptly). The
+  lookups that find a pool by its rule read an index that is replaced, never
+  edited in place, and an old index is freed the same way, so a request routed
+  while a rule is deleted can no longer read a table entry that was just freed.
+  Nothing changes in the configuration, the API or the answers a client gets.
+  Two new metrics show it: `loxilb_proxy_pools_live` (pools allocated and not
+  yet freed, a deleted rule's pool included until its last holder is gone) and
+  `loxilb_proxy_pools_freed_total`. Under rule churn the live count returns to
+  the number of rules once the deleted rules' connections end; one that only
+  grows is a holder that never lets go.
 - **Bytes a client sends while a streamed answer is running are no longer
   relayed to the backend.** On a rule with `sse_mode`, anything a client sent
   on an HTTP/1.1 connection while its streamed answer was still in progress
