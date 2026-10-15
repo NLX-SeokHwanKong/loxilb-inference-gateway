@@ -1731,6 +1731,9 @@ func (gbh *GoBgpH) GetPolicy(name string) (*api.Policy, error) {
 		policies = append(policies, r.Policy)
 	}
 
+	if len(policies) == 0 {
+		return nil, nil
+	}
 	return policies[0], nil
 }
 
@@ -1809,12 +1812,45 @@ func (gbh *GoBgpH) resetSingleNeighAdj(remoteIP string) error {
 
 // BGPGlobalConfigAdd - Routine to add global config in goBGP server
 func (gbh *GoBgpH) BGPGlobalConfigAdd(config cmn.GoBGPGlobalConfig) (int, error) {
+	// A repeated snapshot apply must not append duplicate actions to the
+	// generated statements. Reuse an already running, identical speaker and
+	// only reconcile the next-hop-self assignment when that flag changes.
+	current, err := gbh.BGPGlobalConfigGet()
+	if err != nil {
+		return 0, err
+	}
+	if current.LocalAs != 0 && current.LocalAs == config.LocalAs && current.RouterID == config.RouterID && (config.ListenPort == 0 || current.ListenPort == config.ListenPort) {
+		if current.SetNHSelf == config.SetNHSelf {
+			return 0, nil
+		}
+		if !config.SetNHSelf {
+			return gbh.removeExportPolicy("global", "set-next-hop-self-gpolicy")
+		}
+		policy, lookupErr := gbh.GetPolicy("set-next-hop-self-gpolicy")
+		if lookupErr != nil {
+			return 0, lookupErr
+		}
+		if policy == nil {
+			if _, err := gbh.createNHpolicyStmt("set-next-hop-self-gstmt", "self"); err != nil {
+				return 0, err
+			}
+			if _, err := gbh.addPolicy("set-next-hop-self-gpolicy", "set-next-hop-self-gstmt"); err != nil {
+				return 0, err
+			}
+		}
+		return gbh.applyExportPolicy("global", "set-next-hop-self-gpolicy")
+	}
+
+	if current.LocalAs != 0 {
+		return 0, cmn.NewValidationError("bgp.global", "running BGP ASN/router/listen-port changes require snapshot replacement")
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
 	lalist := make([]string, 0, 1)
 	lalist = append(lalist, "0.0.0.0")
 
-	_, err := gbh.client.StartBgp(ctx, &api.StartBgpRequest{
+	_, err = gbh.client.StartBgp(ctx, &api.StartBgpRequest{
 		Global: &api.Global{
 			Asn:             uint32(config.LocalAs),
 			RouterId:        config.RouterID,
@@ -1910,7 +1946,7 @@ func (gbh *GoBgpH) BGPGlobalConfigGet() (cmn.GoBGPGlobalConfig, error) {
 	})
 	if err != nil {
 		tk.LogIt(tk.LogError, "[GoBGP] Error listing global policy assignment %s\n", err.Error())
-		return gc, nil
+		return gc, err
 	}
 	for {
 		resp, lerr := stream.Recv()
@@ -1919,7 +1955,7 @@ func (gbh *GoBgpH) BGPGlobalConfigGet() (cmn.GoBGPGlobalConfig, error) {
 		}
 		if lerr != nil {
 			tk.LogIt(tk.LogError, "[GoBGP] Error reading policy assignment %s\n", lerr.Error())
-			break
+			return gc, lerr
 		}
 		for _, p := range resp.GetAssignment().GetPolicies() {
 			if p.GetName() == "set-next-hop-self-gpolicy" {
@@ -2032,4 +2068,108 @@ func (gbh *GoBgpH) goBGPTicker() {
 			gbh.goBGPHouseKeeper()
 		}
 	}
+}
+
+// GetPolicyAssignments reads actual speaker state rather than a second cache.
+// Speaker-owned export policies are recreated by LB/HA and are not operator
+// configuration. Preserve policy order: GoBGP evaluates a binding in order.
+func (gbh *GoBgpH) GetPolicyAssignments() ([]cmn.GoBGPPolicyApply, error) {
+	gc, err := gbh.BGPGlobalConfigGet()
+	if err != nil {
+		return nil, err
+	}
+	if gc.LocalAs == 0 {
+		return nil, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	stream, err := gbh.client.ListPolicyAssignment(ctx, &api.ListPolicyAssignmentRequest{})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]cmn.GoBGPPolicyApply, 0)
+	for {
+		response, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		a := response.Assignment
+		if a == nil {
+			continue
+		}
+		direction := ""
+		switch a.Direction {
+		case api.PolicyDirection_IMPORT:
+			direction = "import"
+		case api.PolicyDirection_EXPORT:
+			direction = "export"
+		default:
+			continue
+		}
+		names := make([]string, 0, len(a.Policies))
+		for _, p := range a.Policies {
+			if p != nil && !strings.HasSuffix(p.Name, "-gpolicy") {
+				names = append(names, p.Name)
+			}
+		}
+		// An explicit default action is desired state even with no policies.
+		if len(names) == 0 && a.DefaultAction != api.RouteAction_REJECT {
+			continue
+		}
+		action := "none"
+		switch a.DefaultAction {
+		case api.RouteAction_ACCEPT:
+			action = "accept"
+		case api.RouteAction_REJECT:
+			action = "reject"
+		}
+		out = append(out, cmn.GoBGPPolicyApply{NeighIPAddress: a.Name, PolicyType: direction, Polices: names, RouteAction: action})
+	}
+	return out, nil
+}
+
+func (gbh *GoBgpH) ResetOperatorPolicyAssignment(a *cmn.GoBGPPolicyApply) (int, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	direction := api.PolicyDirection_IMPORT
+	if a.PolicyType == "export" {
+		direction = api.PolicyDirection_EXPORT
+	}
+	stream, err := gbh.client.ListPolicyAssignment(ctx, &api.ListPolicyAssignmentRequest{Name: a.NeighIPAddress, Direction: direction})
+	if err != nil {
+		return 0, err
+	}
+	response, err := stream.Recv()
+	if err != nil {
+		return 0, err
+	}
+	keep := make([]*api.Policy, 0)
+	for _, p := range response.Assignment.Policies {
+		if strings.HasSuffix(p.Name, "-gpolicy") {
+			keep = append(keep, &api.Policy{Name: p.Name})
+		}
+	}
+	_, err = gbh.client.SetPolicyAssignment(ctx, &api.SetPolicyAssignmentRequest{Assignment: &api.PolicyAssignment{Name: a.NeighIPAddress, Direction: direction, Policies: keep, DefaultAction: api.RouteAction_ACCEPT}})
+	return 0, err
+}
+
+// BGPGlobalConfigReplace is used only by snapshot replay, after BGP teardown
+// and before LB re-application. The ordinary POST must never restart a live
+// speaker and discard unrelated neighbor/policy configuration.
+func (gbh *GoBgpH) BGPGlobalConfigReplace(target cmn.GoBGPGlobalConfig) (int, error) {
+	current, err := gbh.BGPGlobalConfigGet()
+	if err != nil {
+		return 0, err
+	}
+	if current.LocalAs != 0 && (current.LocalAs != target.LocalAs || current.RouterID != target.RouterID || (target.ListenPort != 0 && current.ListenPort != target.ListenPort)) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, err = gbh.client.StopBgp(ctx, &api.StopBgpRequest{}); err != nil {
+			return 0, err
+		}
+	}
+	return gbh.BGPGlobalConfigAdd(target)
 }

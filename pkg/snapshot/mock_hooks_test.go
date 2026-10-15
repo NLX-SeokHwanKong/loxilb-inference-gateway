@@ -56,10 +56,11 @@ type mockHooks struct {
 	secRate   *cmn.SecurityRateState
 	bfds      []cmn.BFDMod
 
-	bgpNeighbors  []cmn.GoBGPNeighGetMod
-	bgpDefined    map[string][]cmn.GoBGPPolicyDefinedSetMod // by DefinedTypeString
-	bgpPolicyDefs []cmn.GoBGPPolicyDefinitionsMod
-	bgpGC         *cmn.GoBGPGlobalConfig
+	bgpNeighbors   []cmn.GoBGPNeighGetMod
+	bgpDefined     map[string][]cmn.GoBGPPolicyDefinedSetMod // by DefinedTypeString
+	bgpPolicyDefs  []cmn.GoBGPPolicyDefinitionsMod
+	bgpAssignments []cmn.GoBGPPolicyApply
+	bgpGC          *cmn.GoBGPGlobalConfig
 
 	corsCfg    *cmn.CORSConfig
 	tracingCfg *cmn.TracingConfig
@@ -1150,3 +1151,42 @@ func (m *mockHooks) NetRecoveryDepVerify(dep cmn.RecoveryDependency) (string, er
 
 // compile-time assertion that mockHooks satisfies Hooks.
 var _ Hooks = (*mockHooks)(nil)
+
+func (m *mockHooks) NetGoBGPPolicyApplyGet() ([]cmn.GoBGPPolicyApply, error) {
+	m.log("NetGoBGPPolicyApplyGet")
+	if err := m.failIfConfigured("NetGoBGPPolicyApplyGet"); err != nil {
+		return nil, err
+	}
+	return resizeOverride(m, "NetGoBGPPolicyApplyGet", func() []cmn.GoBGPPolicyApply { return append([]cmn.GoBGPPolicyApply(nil), m.bgpAssignments...) }), nil
+}
+func (m *mockHooks) NetGoBGPPolicyApplyAdd(a *cmn.GoBGPPolicyApply) (int, error) {
+	m.log("NetGoBGPPolicyApplyAdd:%s:%s", a.NeighIPAddress, a.PolicyType)
+	if err := m.failIfConfigured("NetGoBGPPolicyApplyAdd"); err != nil {
+		return -1, err
+	}
+	m.bgpAssignments = append(m.bgpAssignments, *a)
+	return 0, nil
+}
+func (m *mockHooks) NetGoBGPPolicyApplyDel(a *cmn.GoBGPPolicyApply) (int, error) {
+	m.log("NetGoBGPPolicyApplyDel:%s:%s", a.NeighIPAddress, a.PolicyType)
+	if err := m.failIfConfigured("NetGoBGPPolicyApplyDel"); err != nil {
+		return -1, err
+	}
+	out := m.bgpAssignments[:0]
+	for _, item := range m.bgpAssignments {
+		if item.NeighIPAddress != a.NeighIPAddress || item.PolicyType != a.PolicyType {
+			out = append(out, item)
+		}
+	}
+	m.bgpAssignments = out
+	return 0, nil
+}
+
+func (m *mockHooks) NetGoBGPPolicyApplyReset(a *cmn.GoBGPPolicyApply) (int, error) {
+	return m.NetGoBGPPolicyApplyDel(a)
+}
+
+func (m *mockHooks) NetGoBGPGCReplace(target *cmn.GoBGPGlobalConfig) (int, error) {
+	m.log("NetGoBGPGCReplace")
+	return m.NetGoBGPGCAdd(target)
+}

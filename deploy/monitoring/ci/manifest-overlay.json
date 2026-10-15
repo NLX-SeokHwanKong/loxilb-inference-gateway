@@ -1227,7 +1227,7 @@
     "status": "verified-static",
     "writer_sources": [
      { "symbol": "observeRestore", "kind": "func", "file": "pkg/snapshot/metrics.go", "def_line": 181, "writes": "restoreTotal", "note": "result label comes from restoreResultLabel, which folds a nil result to \"rejected\" and an error to \"error\"; the mode/result children are pre-created in init at :139 so the series exist at 0 from the first scrape" },
-     { "symbol": "Restore", "kind": "method", "receiver": "Engine", "file": "pkg/snapshot/restore.go", "def_line": 219, "call_line": 224, "calls": "observeRestore", "note": "deferred, so every Restore outcome is counted once" },
+     { "symbol": "Restore", "kind": "method", "receiver": "Engine", "file": "pkg/snapshot/restore.go", "def_line": 220, "call_line": 225, "calls": "observeRestore", "note": "deferred, so every Restore outcome is counted once" },
      { "symbol": "ConfigPostRestore", "kind": "func", "file": "api/restapi/handler/snapshot.go", "def_line": 286, "call_line": 335, "calls": "Restore", "entry_point": "http-handler", "note": "boot replay reaches the same writer through applySnapshotBoot (api/loxinlp/nlp.go:1821)" }
     ],
     "evidence": "pkg/snapshot/metrics_test.go TestMetricsCommitOKIncrementsRestoreAndSnapshotSeries and TestMetricsParseFailureCountsAsRejected assert exact per-label deltas of 1. Not yet observed on a bed; scenario M15 owns the runtime proof."
@@ -1236,7 +1236,7 @@
     "status": "verified-static",
     "writer_sources": [
      { "symbol": "observeRestore", "kind": "func", "file": "pkg/snapshot/metrics.go", "def_line": 181, "writes": "restoreDuration" },
-     { "symbol": "Restore", "kind": "method", "receiver": "Engine", "file": "pkg/snapshot/restore.go", "def_line": 219, "call_line": 224, "calls": "observeRestore" },
+     { "symbol": "Restore", "kind": "method", "receiver": "Engine", "file": "pkg/snapshot/restore.go", "def_line": 220, "call_line": 225, "calls": "observeRestore" },
      { "symbol": "ConfigPostRestore", "kind": "func", "file": "api/restapi/handler/snapshot.go", "def_line": 286, "call_line": 335, "calls": "Restore", "entry_point": "http-handler" }
     ],
     "evidence": "pkg/snapshot/metrics_test.go restoreDurationCount at :42 reads the histogram's sample count and TestMetricsCommitOKIncrementsRestoreAndSnapshotSeries asserts a delta of exactly 1. Scenario M15 owns the runtime proof."
@@ -1245,7 +1245,7 @@
     "status": "verified-static",
     "writer_sources": [
      { "symbol": "observeRestore", "kind": "func", "file": "pkg/snapshot/metrics.go", "def_line": 181, "writes": "lastRestoreTimestamp", "note": "advanced only when committed is true, so dry-runs deliberately leave it unchanged" },
-     { "symbol": "Restore", "kind": "method", "receiver": "Engine", "file": "pkg/snapshot/restore.go", "def_line": 219, "call_line": 224, "calls": "observeRestore" },
+     { "symbol": "Restore", "kind": "method", "receiver": "Engine", "file": "pkg/snapshot/restore.go", "def_line": 220, "call_line": 225, "calls": "observeRestore" },
      { "symbol": "ConfigPostRestore", "kind": "func", "file": "api/restapi/handler/snapshot.go", "def_line": 286, "call_line": 335, "calls": "Restore", "entry_point": "http-handler" }
     ],
     "evidence": "pkg/snapshot/metrics_test.go TestMetricsLastRestoreTimestampAdvancesOnCommitNotDryRun asserts 0 after a dry-run and the exact fixed Unix time after a commit -- the dry-run arm is the red twin. Scenario M15 owns the runtime proof."
@@ -1283,7 +1283,7 @@
      { "symbol": "RecordAutoPersistFailure", "kind": "func", "file": "pkg/snapshot/opstate.go", "def_line": 74, "writes": "autoPersistFailStreak", "note": "set to the running streak; any successful persist resets it to 0 at recordPersistSuccess:67, whichever path wrote the document" },
      { "symbol": "autoPersistFire", "kind": "func", "file": "api/restapi/handler/snapshot.go", "def_line": 659, "call_line": 677, "calls": "RecordAutoPersistFailure" },
      { "symbol": "InitAutoPersist", "kind": "func", "file": "api/restapi/handler/snapshot.go", "def_line": 638, "call_line": 643, "calls": "autoPersistFire", "note": "registration, not a call: autoPersistFire is handed to NewAutoPersister as the debouncer callback. Returns early when --config-auto-persist=off, which is the one configuration that stops this writer entirely" },
-     { "symbol": "configureAPI", "kind": "func", "file": "api/restapi/configure_loxilb_rest_api.go", "def_line": 72, "call_line": 492, "calls": "InitAutoPersist" },
+     { "symbol": "configureAPI", "kind": "func", "file": "api/restapi/configure_loxilb_rest_api.go", "def_line": 71, "call_line": 491, "calls": "InitAutoPersist" },
      { "tail": "restapi-configure-main" }
     ],
     "evidence": "source re-verification 2026-09-10 (plan Part E, WP-0 burn-down): pkg/snapshot/opstate.go:74-83 with the reset at :67. pkg/snapshot/opstate_test.go TestAutoPersistFailureRecord asserts the state record, not the gauge, so this is mapped rather than verified."

@@ -2,7 +2,6 @@ package handler
 
 import (
 	"encoding/json"
-	"github.com/go-openapi/errors"
 	"github.com/go-openapi/runtime"
 	"github.com/go-openapi/runtime/middleware"
 	"github.com/go-openapi/strfmt"
@@ -99,14 +98,22 @@ func TestHostStateBindingRendersInvalidInput400(t *testing.T) {
 		request.Header.Set("Content-Type", "application/json")
 		params := operations.NewPostConfigEndpointhoststateParams()
 		err := params.BindRequest(request, route)
-		if err == nil {
-			t.Fatalf("binder accepted invalid body %s", body)
-		}
-		if params.Attr != nil {
-			t.Fatalf("invalid body published handler attributes: %s", body)
-		}
+
 		recorder := httptest.NewRecorder()
-		errors.ServeError(recorder, request, err)
+		tupleOnly := body == `{"epPort":8201}` || body == `{"epProto":"tcp"}` || body == `{"epPort":0,"epProto":"tcp"}`
+		if err == nil {
+			if !tupleOnly {
+				t.Fatalf("binder accepted invalid range/enum: %s", body)
+			}
+			// Swagger 2 cannot express this cross-field tuple constraint.
+			// The actual handler must refuse it before the state hook.
+			ConfigPostEndPointHostState(params, nil).WriteResponse(recorder, runtime.JSONProducer())
+		} else {
+			if params.Attr != nil {
+				t.Fatalf("invalid range/enum published attributes: %s", body)
+			}
+			ServeAPIError(recorder, request, err)
+		}
 		if recorder.Code != http.StatusBadRequest {
 			t.Fatalf("binder error for %s rendered HTTP %d: %s", body, recorder.Code, recorder.Body.String())
 		}

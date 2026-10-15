@@ -25,7 +25,6 @@ import (
 
 	opts "github.com/loxilb-io/loxilb/options"
 
-	"github.com/go-openapi/errors"
 	"github.com/go-openapi/runtime"
 	"github.com/go-openapi/swag"
 
@@ -71,7 +70,7 @@ func configureFlags(api *operations.LoxilbRestAPIAPI) {
 
 func configureAPI(api *operations.LoxilbRestAPIAPI) http.Handler {
 	// configure the api here
-	api.ServeError = errors.ServeError
+	api.ServeError = handler.ServeAPIError
 
 	// Set your custom logger if needed. Default one is log.Printf
 	// Expected interface func(string, ...interface{})
