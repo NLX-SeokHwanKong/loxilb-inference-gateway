@@ -54,12 +54,15 @@ const (
 )
 
 type ConfigArgs struct {
-	RemoteIP string
-	SourceIP string
-	Port     uint16
-	Interval uint32
-	Multi    uint8
-	Instance string
+	// StartGate defers protocol traffic while keeping accepted configuration
+	// visible to capture. A nil gate starts immediately.
+	StartGate <-chan struct{}
+	RemoteIP  string
+	SourceIP  string
+	Port      uint16
+	Interval  uint32
+	Multi     uint8
+	Instance  string
 }
 
 type WireRaw struct {
@@ -79,6 +82,7 @@ type Notifer interface {
 }
 
 type bfdSession struct {
+	StartGate      <-chan struct{}
 	RemoteName     string
 	Instance       string
 	Cxn            net.Conn
@@ -122,6 +126,13 @@ func (bs *Struct) BFDAddRemote(args ConfigArgs, cbs Notifer) error {
 
 	sess := bs.BFDSessMap[args.RemoteIP]
 	if sess != nil {
+		source := net.ParseIP(args.SourceIP)
+		if source == nil || (!source.IsUnspecified() && !sess.MyIP.Equal(source)) || sess.RemoteName != fmt.Sprintf("%s:%d", args.RemoteIP, args.Port) || sess.Instance != args.Instance {
+			return errors.New("bfd existing session source, port or instance differs")
+		}
+		if (args.Interval == 0 || sess.DesMinTxInt == args.Interval) && (args.Multi == 0 || sess.MyMulti == args.Multi) {
+			return nil
+		}
 		var update bool
 		if sess.Instance == args.Instance {
 			if args.Interval != 0 && sess.DesMinTxInt != args.Interval {
@@ -157,6 +168,7 @@ func (bs *Struct) BFDAddRemote(args ConfigArgs, cbs Notifer) error {
 	sess = new(bfdSession)
 	sess.Instance = args.Instance
 	sess.Notify = cbs
+	sess.StartGate = args.StartGate
 
 	err := sess.initialize(args.RemoteIP, args.SourceIP, args.Port, args.Interval, args.Multi)
 	if err != nil {
@@ -246,7 +258,7 @@ func (bs *Struct) processBFD(conn *net.UDPConn) {
 		defer bs.BFDMtx.Unlock()
 
 		sess := bs.BFDSessMap[remIP.String()]
-		if sess != nil {
+		if sess != nil && sess.active() {
 			sess.RunSessionSM(raw)
 		} /* else {
 			tk.LogIt(tk.LogDebug, "bfd session(%s) not found\n", remIP.String())
@@ -367,7 +379,27 @@ func (b *bfdSession) sendStateNotification(newState, oldState SessionState, inst
 	}
 }
 
+func (b *bfdSession) active() bool {
+	if b.StartGate == nil {
+		return true
+	}
+	select {
+	case <-b.StartGate:
+		return true
+	default:
+		return false
+	}
+}
+
 func (b *bfdSession) bfdSessionTicker() {
+	if b.StartGate != nil {
+		select {
+		case <-b.StartGate:
+		case <-b.Fin:
+			return
+		}
+	}
+
 	for {
 		select {
 		case <-b.Fin:
@@ -462,9 +494,11 @@ func (b *bfdSession) destruct() {
 	b.Fin <- true
 	b.TxTicker.Stop()
 	b.RxTicker.Stop()
-	// Signal ADMIN Down to peer
-	b.encodeCtrlPacket()
-	b.sendBFDPacket()
+	// A pending session has not communicated with its peer yet.
+	if b.active() {
+		b.encodeCtrlPacket()
+		b.sendBFDPacket()
+	}
 }
 
 func (b *bfdSession) encodeCtrlPacket() error {

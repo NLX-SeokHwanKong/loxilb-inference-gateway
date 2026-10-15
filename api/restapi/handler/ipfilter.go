@@ -131,42 +131,6 @@ func ConfigDeleteIPFilter(params operations.DeleteConfigIpfilterParams, principa
 	return &ResultResponse{Result: "Success"}
 }
 
-// ConfigGetIPFilter - Get all IP filter rules with statistics
-func ConfigGetIPFilter(params operations.GetConfigIpfilterParams, principal interface{}) middleware.Responder {
-	tk.LogIt(tk.LogTrace, "api: IPFilter %s API called by IP: %s. url : %s\n",
-		params.HTTPRequest.Method, params.HTTPRequest.RemoteAddr, params.HTTPRequest.URL)
-
-	res, err := ApiHooks.NetIPFilterGet()
-	if err != nil {
-		tk.LogIt(tk.LogError, "[IPFILTER] Failed to get rules: %v\n", err)
-		return &ErrorResponse{Payload: ResultErrorResponseErrorMessage(err.Error())}
-	}
-
-	var result []*models.IPFilterEntry
-	for _, ipf := range res {
-		filterType := ipf.FilterType
-		cidr := ipf.CIDR
-		priority := int64(ipf.Priority)
-		action := ipf.Action
-
-		entry := models.IPFilterEntry{
-			FilterType: &filterType,
-			Cidr:       &cidr,
-			Zone:       int64(ipf.Zone),
-			Priority:   &priority,
-			Action:     &action,
-			Packets:    int64(ipf.Packets),
-			Bytes:      int64(ipf.Bytes),
-		}
-
-		result = append(result, &entry)
-	}
-
-	return operations.NewGetConfigIpfilterOK().WithPayload(&operations.GetConfigIpfilterOKBody{
-		IPFilterAttr: result,
-	})
-}
-
 // ConfigGetIPFilterAll - Get all IP filter rules with statistics (for /all endpoint)
 func ConfigGetIPFilterAll(params operations.GetConfigIpfilterAllParams, principal interface{}) middleware.Responder {
 	tk.LogIt(tk.LogTrace, "api: IPFilter %s API called by IP: %s. url : %s\n",

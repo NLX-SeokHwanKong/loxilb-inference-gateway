@@ -139,10 +139,26 @@ func NormalizeDomains(d *Domains) error {
 		d.SecurityRate.Stats = cmn.SecurityRateStats{} // runtime counters
 	}
 
+	for i := range d.BFD {
+		d.BFD[i].State = ""
+	} // live peer state
 	if err := sortByJSON(d.BFD); err != nil {
 		return err
 	}
 
+	// GoBGP's empty ACCEPT binding is its factory default, including after
+	// clearing an operator binding. It is equivalent to an absent binding.
+	assignments := d.BGPPolicyAssignment[:0:0]
+	for _, a := range d.BGPPolicyAssignment {
+		if len(a.Polices) == 0 && (a.RouteAction == "accept" || a.RouteAction == "none" || a.RouteAction == "") {
+			continue
+		}
+		assignments = append(assignments, a)
+	}
+	d.BGPPolicyAssignment = assignments
+	if err := sortByJSON(d.BGPPolicyAssignment); err != nil {
+		return err
+	}
 	for i := range d.BGP.Neighbors {
 		n := &d.BGP.Neighbors[i]
 		n.State, n.Uptime = "", "" // session state, not config
@@ -154,6 +170,13 @@ func NormalizeDomains(d *Domains) error {
 		if err != nil {
 			return err
 		}
+	}
+
+	if d.IPsec.Config != nil {
+		c := *d.IPsec.Config
+		c.SupportedAlgorithms = nil
+		c.HwCapabilities = cmn.IPsecConfig{}.HwCapabilities
+		d.IPsec.Config = &c
 	}
 
 	for i, t := range d.IPsec.Tunnels {
@@ -303,6 +326,8 @@ func domainItemJSONs(name string, d *Domains) ([]string, error) {
 		return itemJSONs(d.AuditSink)
 	case DomainBFD:
 		return itemJSONs(d.BFD)
+	case DomainBGPPolicyAssignment:
+		return itemJSONs(d.BGPPolicyAssignment)
 	case DomainBGP:
 		nj, err := itemJSONs(d.BGP.Neighbors)
 		if err != nil {

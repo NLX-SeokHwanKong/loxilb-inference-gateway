@@ -96,8 +96,8 @@ func TestNetIdentityRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Capture: %v", err)
 	}
-	if doc.SchemaVersion != "1.11" {
-		t.Fatalf("a document with bindings rides schema %s, want 1.11", doc.SchemaVersion)
+	if doc.SchemaVersion != SchemaVersion {
+		t.Fatalf("a document with bindings rides schema %s, want %s", doc.SchemaVersion, SchemaVersion)
 	}
 	raw := encodeDoc(t, doc)
 	for _, field := range []string{`"netidentity"`, `"ingress_if":"vlan200"`, `"fail_mode":"closed"`,
@@ -228,7 +228,7 @@ func TestRestoreOfAnOlderDocumentLeavesTheBindings(t *testing.T) {
 // is to a 1.10 build.
 func TestDocumentOfANewerSchemaIsRefusedByAnOlderGate(t *testing.T) {
 	doc := sampleDocument()
-	doc.SchemaVersion = "1.12"
+	doc.SchemaVersion = "1.13"
 	hooks := newMockHooks()
 	e := newTestEngine(hooks, t.TempDir())
 	res, err := e.Restore(encodeDoc(t, doc), RestoreOptions{Mode: ModeDryRun})

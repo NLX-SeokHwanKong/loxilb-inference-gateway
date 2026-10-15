@@ -117,6 +117,9 @@ func ConfigDeleteEndPoint(params operations.DeleteConfigEndpointEpipaddressIPAdd
 func ConfigPostEndPointHostState(params operations.PostConfigEndpointhoststateParams, principal interface{}) middleware.Responder {
 	tk.LogIt(tk.LogTrace, "api: EndPoint %s API called. url : %s\n", params.HTTPRequest.Method, params.HTTPRequest.URL)
 
+	if params.Attr == nil {
+		return &ErrorResponse{Payload: ResultErrorResponseError(cmn.NewValidationError("body", "request body is required"))}
+	}
 	if err := params.Attr.Validate(strfmt.Default); err != nil {
 		return &ErrorResponse{Payload: ResultErrorResponseError(&cmn.ValidationError{Err: err})}
 	}

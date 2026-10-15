@@ -2722,11 +2722,14 @@ type NetHookInterface interface {
 	NetGoBGPPolicyDefinitionAdd(nm *GoBGPPolicyDefinitionsMod) (int, error)
 	NetGoBGPPolicyDefinitionDel(nm *GoBGPPolicyDefinitionsMod) (int, error)
 
+	NetGoBGPPolicyApplyGet() ([]GoBGPPolicyApply, error)
+	NetGoBGPPolicyApplyReset(*GoBGPPolicyApply) (int, error)
 	NetGoBGPPolicyApplyAdd(nm *GoBGPPolicyApply) (int, error)
 
 	NetGoBGPPolicyApplyDel(nm *GoBGPPolicyApply) (int, error)
 	NetGoBGPGCAdd(gc *GoBGPGlobalConfig) (int, error)
 	NetGoBGPGCGet() (GoBGPGlobalConfig, error)
+	NetGoBGPGCReplace(*GoBGPGlobalConfig) (int, error)
 	NetBFDGet() ([]BFDMod, error)
 	NetBFDAdd(bm *BFDMod) (int, error)
 	NetBFDDel(bm *BFDMod) (int, error)

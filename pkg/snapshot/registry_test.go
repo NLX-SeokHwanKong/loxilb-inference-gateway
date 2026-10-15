@@ -97,7 +97,7 @@ func TestRegistryOrder(t *testing.T) {
 		DomainEndpoint, DomainJWTAuthProfile, DomainHalfClose, DomainNetIdentity, DomainLoadBalancer, DomainKvExactBinding,
 		DomainL7Policy, DomainFirewall, DomainPolicy,
 		DomainMirror, DomainSession, DomainSessionUlCl, DomainIPFilter,
-		DomainSecurityRate, DomainBFD, DomainBGP, DomainIPsec, DomainCORS,
+		DomainSecurityRate, DomainBFD, DomainBGP, DomainBGPPolicyAssignment, DomainIPsec, DomainCORS,
 		DomainTracing, DomainCert, DomainAuditSink,
 	}
 	got := domainNames(ApplyOrder())
