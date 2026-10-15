@@ -8,12 +8,14 @@ import (
 	"net/http"
 )
 
-// ServeAPIError gives generated binding validation the same 400 envelope as
-// validation performed by handlers. The default go-openapi renderer uses 422
-// and an internal 600-series code for these identical caller-input errors.
+// ServeAPIError preserves the endpoint host-state POST's existing 400 contract
+// after clean model generation. Other operations retain go-openapi's binding
+// statuses (including 422 for invalid QoS scope enums).
 func ServeAPIError(w http.ResponseWriter, r *http.Request, err error) {
 	var typed apierrors.Error
-	if errors.As(err, &typed) && (typed.Code() == http.StatusUnprocessableEntity || typed.Code() >= 600) {
+	hostStatePost := r.Method == http.MethodPost &&
+		(r.URL.Path == "/config/endpointhoststate" || r.URL.Path == "/netlox/v1/config/endpointhoststate")
+	if hostStatePost && errors.As(err, &typed) && (typed.Code() == http.StatusUnprocessableEntity || typed.Code() >= 600) {
 		(&ErrorResponse{Payload: ResultErrorResponseError(&cmn.ValidationError{Err: err})}).WriteResponse(w, runtime.JSONProducer())
 		return
 	}
