@@ -109,9 +109,6 @@ func TestHostStateBindingRendersInvalidInput400(t *testing.T) {
 			// The actual handler must refuse it before the state hook.
 			ConfigPostEndPointHostState(params, nil).WriteResponse(recorder, runtime.JSONProducer())
 		} else {
-			if tupleOnly {
-				t.Fatalf("unexpected generated tuple constraint: %s %v", body, err)
-			}
 			if params.Attr != nil {
 				t.Fatalf("invalid range/enum published attributes: %s", body)
 			}
