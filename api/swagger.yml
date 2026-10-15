@@ -230,11 +230,11 @@ paths:
   '/config/snapshot':
     get:
       summary: Download a complete instance snapshot
-      description: Returns a versioned, checksummed snapshot document using schema 1.5. Supported snapshot domains exclude some runtime-only state and externally stored secrets. Replaces deprecated /config/export. Response carries Content-Disposition and X-Snapshot-Checksum headers.
+      description: Returns a versioned, checksummed snapshot document using schema 1.12. Supported snapshot domains exclude some runtime-only state and externally stored secrets. Replaces deprecated /config/export. Response carries Content-Disposition and X-Snapshot-Checksum headers.
       parameters:
         - name: components
           in: query
-          description: Comma-separated domains (endpoint, loadbalancer, kvexactbinding, l7policy, firewall, policy, mirror, session, sessionulcl, ipfilter, securityrate, bfd, bgp, ipsec, cors, tracing, cert). Omitted or empty selection captures all supported domains. Inspect included_domains and excluded_domains for actual coverage; certificate material and OTLP header values remain external.
+          description: Comma-separated domains (endpoint, jwtauthprofile, halfclose, netidentity, loadbalancer, kvexactbinding, l7policy, firewall, policy, mirror, session, sessionulcl, ipfilter, securityrate, bfd, bgp, bgppolicyassignment, ipsec, cors, tracing, cert, auditsink). Omitted or empty selection captures all supported domains. Inspect included_domains and excluded_domains for actual coverage; certificate material and OTLP header values remain external.
           type: string
       produces:
         - application/json
@@ -13039,6 +13039,7 @@ definitions:
         description: "Literal endpoint host IP used for monitor matching, not a hostname or CIDR."
       epPort:
         type: integer
+        x-nullable: false
         minimum: 0
         maximum: 65535
         description: "Nonzero port in 1..65535 requires epProto; zero or omission requires epProto empty for host-wide targeting."
@@ -14309,7 +14310,7 @@ definitions:
 
 
   BGPGlobalConfig:
-    description: "BGP startup input, not an atomic general replacement. Local ASN narrows to uint32 and listenPort to uint16; omitted or zero listenPort selects 179. SetNextHopSelf is a case-sensitive wire field and triggers additional policy setup. Failure can occur after partial startup or policy creation."
+    description: "BGP startup input, not an atomic general replacement. An identical running core is reused and SetNextHopSelf is reconciled. Changes to a running ASN/router ID/listen port are refused with 400; use a scoped snapshot replacement, which prepares the speaker before LB re-application. Local ASN narrows to uint32 and listenPort to uint16; omitted or zero listenPort selects 179. SetNextHopSelf is a case-sensitive wire field and triggers additional policy setup. Failure can occur after partial startup or policy creation."
     type: object
     required:
       - routerId

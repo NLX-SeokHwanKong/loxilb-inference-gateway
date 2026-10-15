@@ -1,8 +1,8 @@
 {
  "schema_version": 1,
  "provenance": {
-  "generated_at": "2026-10-14T10:59:43+00:00",
-  "source_revision": "0b4273446012c5a5307de50d1a6ca3e33e999ed3"
+  "generated_at": "2026-10-15T06:12:59+00:00",
+  "source_revision": "e30026978639f6ff150fe0d2d27f6a15de90f884"
  },
  "contract": {
   "total": 332,
@@ -5741,8 +5741,8 @@
      "symbol": "configureAPI",
      "kind": "func",
      "file": "api/restapi/configure_loxilb_rest_api.go",
-     "def_line": 72,
-     "call_line": 492,
+     "def_line": 71,
+     "call_line": 491,
      "calls": "InitAutoPersist"
     },
     {
@@ -8238,8 +8238,8 @@
      "kind": "method",
      "receiver": "Engine",
      "file": "pkg/snapshot/restore.go",
-     "def_line": 219,
-     "call_line": 224,
+     "def_line": 220,
+     "call_line": 225,
      "calls": "observeRestore"
     },
     {
@@ -14970,8 +14970,8 @@
      "kind": "method",
      "receiver": "Engine",
      "file": "pkg/snapshot/restore.go",
-     "def_line": 219,
-     "call_line": 224,
+     "def_line": 220,
+     "call_line": 225,
      "calls": "observeRestore"
     },
     {
@@ -15024,8 +15024,8 @@
      "kind": "method",
      "receiver": "Engine",
      "file": "pkg/snapshot/restore.go",
-     "def_line": 219,
-     "call_line": 224,
+     "def_line": 220,
+     "call_line": 225,
      "calls": "observeRestore",
      "note": "deferred, so every Restore outcome is counted once"
     },

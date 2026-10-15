@@ -101,6 +101,8 @@ func withoutDomain(names []string, drop string) []string {
 func legacyGoldenDocument(schemaVersion string) *Document {
 	doc := goldenDocument()
 	doc.SchemaVersion = schemaVersion
+	doc.Domains.BGPPolicyAssignment = nil
+	doc.IncludedDomains = withoutDomain(doc.IncludedDomains, DomainBGPPolicyAssignment)
 	// netidentity is a 1.11 domain -- every legacy schema predates it, in
 	// content and in declared coverage alike.
 	doc.Domains.NetIdentity = nil
@@ -322,7 +324,7 @@ func TestGoldenLegacySchemas(t *testing.T) {
 						t.Fatalf("%s golden gained %q coverage through migration: %v", version, name, doc.IncludedDomains)
 					}
 				}
-				if len(doc.IncludedDomains) != len(Registry)-4 {
+				if len(doc.IncludedDomains) != len(Registry)-5 {
 					t.Fatalf("unexpected coverage width for %s: %v", version, doc.IncludedDomains)
 				}
 			case "1.6":
@@ -335,7 +337,7 @@ func TestGoldenLegacySchemas(t *testing.T) {
 						t.Fatalf("1.6 golden gained %q coverage through migration: %v", name, doc.IncludedDomains)
 					}
 				}
-				if len(doc.IncludedDomains) != len(Registry)-3 {
+				if len(doc.IncludedDomains) != len(Registry)-4 {
 					t.Fatalf("unexpected coverage width for 1.6: %v", doc.IncludedDomains)
 				}
 			case "1.7":
@@ -347,7 +349,7 @@ func TestGoldenLegacySchemas(t *testing.T) {
 						t.Fatalf("1.7 golden gained %q coverage through migration: %v", name, doc.IncludedDomains)
 					}
 				}
-				if len(doc.IncludedDomains) != len(Registry)-2 {
+				if len(doc.IncludedDomains) != len(Registry)-3 {
 					t.Fatalf("unexpected coverage width for 1.7: %v", doc.IncludedDomains)
 				}
 			case "1.8", "1.9", "1.10":
@@ -361,7 +363,7 @@ func TestGoldenLegacySchemas(t *testing.T) {
 						t.Fatalf("%s golden gained netidentity coverage through migration: %v", version, doc.IncludedDomains)
 					}
 				}
-				if len(doc.IncludedDomains) != len(Registry)-1 {
+				if len(doc.IncludedDomains) != len(Registry)-2 {
 					t.Fatalf("unexpected coverage width for %s: %v", version, doc.IncludedDomains)
 				}
 				for _, lb := range doc.Domains.LoadBalancer {

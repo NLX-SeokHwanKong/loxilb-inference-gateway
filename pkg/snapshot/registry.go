@@ -117,11 +117,16 @@ type Hooks interface {
 	// NetGoBGPGCGet returns the zero value (LocalAs 0) when global config
 	// has not been set; it errors only on real failures (G-7).
 	NetGoBGPGCGet() (cmn.GoBGPGlobalConfig, error)
+	NetGoBGPGCReplace(*cmn.GoBGPGlobalConfig) (int, error)
 	NetGoBGPGCAdd(*cmn.GoBGPGlobalConfig) (int, error)
 	NetGoBGPPolicyDefinedSetGet(name string, definedTypeString string) ([]cmn.GoBGPPolicyDefinedSetMod, error)
 	NetGoBGPPolicyDefinedSetAdd(*cmn.GoBGPPolicyDefinedSetMod) (int, error)
 	NetGoBGPPolicyDefinedSetDel(*cmn.GoBGPPolicyDefinedSetMod) (int, error)
 	NetGoBGPPolicyDefinitionsGet() ([]cmn.GoBGPPolicyDefinitionsMod, error)
+	NetGoBGPPolicyApplyGet() ([]cmn.GoBGPPolicyApply, error)
+	NetGoBGPPolicyApplyReset(*cmn.GoBGPPolicyApply) (int, error)
+	NetGoBGPPolicyApplyAdd(*cmn.GoBGPPolicyApply) (int, error)
+	NetGoBGPPolicyApplyDel(*cmn.GoBGPPolicyApply) (int, error)
 	NetGoBGPPolicyDefinitionAdd(*cmn.GoBGPPolicyDefinitionsMod) (int, error)
 	NetGoBGPPolicyDefinitionDel(*cmn.GoBGPPolicyDefinitionsMod) (int, error)
 
@@ -247,6 +252,7 @@ var Registry = []DomainEntry{
 	{Name: DomainSecurityRate, Get: getSecurityRate, Apply: applySecurityRate, Delete: deleteSecurityRate},
 	{Name: DomainBFD, Get: getBFD, Apply: applyBFD, Delete: deleteBFD},
 	{Name: DomainBGP, Get: getBGP, Apply: applyBGP, Delete: deleteBGP},
+	{Name: DomainBGPPolicyAssignment, Get: getBGPPolicyAssignment, Apply: applyBGPPolicyAssignment, Delete: deleteBGPPolicyAssignment},
 	{Name: DomainIPsec, Get: getIPsec, Apply: applyIPsec, Delete: deleteIPsec},
 	{Name: DomainCORS, Get: getCORS, Apply: applyCORS, Delete: deleteCORS},
 	{Name: DomainTracing, Get: getTracing, Apply: applyTracing, Delete: deleteTracing},
@@ -1366,25 +1372,6 @@ func deleteBGP(hooks Hooks) (int, error) {
 		n++
 	}
 
-	for _, ts := range bgpDefinedSetTypes {
-		sets, err := hooks.NetGoBGPPolicyDefinedSetGet("all", ts)
-		if isSubsystemUnavailable(err) {
-			continue // speaker (still) not up for this call: nothing to delete
-		}
-		if err != nil {
-			errs = append(errs, fmt.Errorf("delete bgp: get defined_sets (%s): %w", ts, err))
-			continue
-		}
-		for i := range sets {
-			ds := &sets[i]
-			if _, err := hooks.NetGoBGPPolicyDefinedSetDel(ds); err != nil {
-				errs = append(errs, fmt.Errorf("delete bgp defined_set %q: %w", ds.Name, err))
-				continue
-			}
-			n++
-		}
-	}
-
 	policyDefs, err := hooks.NetGoBGPPolicyDefinitionsGet()
 	if isSubsystemUnavailable(err) {
 		return n, errors.Join(errs...)
@@ -1405,6 +1392,25 @@ func deleteBGP(hooks Hooks) (int, error) {
 			continue
 		}
 		n++
+	}
+
+	for _, ts := range bgpDefinedSetTypes {
+		sets, err := hooks.NetGoBGPPolicyDefinedSetGet("all", ts)
+		if isSubsystemUnavailable(err) {
+			continue // speaker (still) not up for this call: nothing to delete
+		}
+		if err != nil {
+			errs = append(errs, fmt.Errorf("delete bgp: get defined_sets (%s): %w", ts, err))
+			continue
+		}
+		for i := range sets {
+			ds := &sets[i]
+			if _, err := hooks.NetGoBGPPolicyDefinedSetDel(ds); err != nil {
+				errs = append(errs, fmt.Errorf("delete bgp defined_set %q: %w", ds.Name, err))
+				continue
+			}
+			n++
+		}
 	}
 
 	// No delete hook exists for BGP global config (NetGoBGPGCAdd has no

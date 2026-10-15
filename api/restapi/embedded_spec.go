@@ -972,7 +972,7 @@ func init() {
       "type": "object"
     },
     "BGPGlobalConfig": {
-      "description": "BGP startup input, not an atomic general replacement. Local ASN narrows to uint32 and listenPort to uint16; omitted or zero listenPort selects 179. SetNextHopSelf is a case-sensitive wire field and triggers additional policy setup. Failure can occur after partial startup or policy creation.",
+      "description": "BGP startup input, not an atomic general replacement. An identical running core is reused and SetNextHopSelf is reconciled. Changes to a running ASN/router ID/listen port are refused with 400; use a scoped snapshot replacement, which prepares the speaker before LB re-application. Local ASN narrows to uint32 and listenPort to uint16; omitted or zero listenPort selects 179. SetNextHopSelf is a case-sensitive wire field and triggers additional policy setup. Failure can occur after partial startup or policy creation.",
       "properties": {
         "SetNextHopSelf": {
           "description": "Adds policy to set next hop as self, if enabled",
@@ -2102,7 +2102,8 @@ func init() {
           "description": "Nonzero port in 1..65535 requires epProto; zero or omission requires epProto empty for host-wide targeting.",
           "maximum": 65535,
           "minimum": 0,
-          "type": "integer"
+          "type": "integer",
+          "x-nullable": false
         },
         "epProto": {
           "description": "Generated monitor-key probe type: tcp, udp, sctp, http, https, ping, tls-hello or none. Supply together with nonzero epPort or omit both. This selector cannot resolve a custom monitor name and is not a universal transport-protocol selector.",
@@ -19054,10 +19055,10 @@ func init() {
     },
     "/config/snapshot": {
       "get": {
-        "description": "Returns a versioned, checksummed snapshot document using schema 1.5. Supported snapshot domains exclude some runtime-only state and externally stored secrets. Replaces deprecated /config/export. Response carries Content-Disposition and X-Snapshot-Checksum headers.",
+        "description": "Returns a versioned, checksummed snapshot document using schema 1.12. Supported snapshot domains exclude some runtime-only state and externally stored secrets. Replaces deprecated /config/export. Response carries Content-Disposition and X-Snapshot-Checksum headers.",
         "parameters": [
           {
-            "description": "Comma-separated domains (endpoint, loadbalancer, kvexactbinding, l7policy, firewall, policy, mirror, session, sessionulcl, ipfilter, securityrate, bfd, bgp, ipsec, cors, tracing, cert). Omitted or empty selection captures all supported domains. Inspect included_domains and excluded_domains for actual coverage; certificate material and OTLP header values remain external.",
+            "description": "Comma-separated domains (endpoint, jwtauthprofile, halfclose, netidentity, loadbalancer, kvexactbinding, l7policy, firewall, policy, mirror, session, sessionulcl, ipfilter, securityrate, bfd, bgp, bgppolicyassignment, ipsec, cors, tracing, cert, auditsink). Omitted or empty selection captures all supported domains. Inspect included_domains and excluded_domains for actual coverage; certificate material and OTLP header values remain external.",
             "in": "query",
             "name": "components",
             "type": "string"

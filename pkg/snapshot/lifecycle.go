@@ -15,7 +15,7 @@
  */
 
 // Configuration-lifecycle registry: every mutating REST route of the
-// gateway API (api/swagger.yml) is classified into exactly one lifecycle
+// gateway API (api/swagger.yml and api/swagger-extras.yml) is classified into exactly one lifecycle
 // class, so that "is this configuration recovered after a reboot, and
 // from where?" has a single, code-level answer instead of folklore.
 //
@@ -246,8 +246,8 @@ var RouteLifecycles = []RouteLifecycle{
 	{Method: "post", Path: "/config/bgp/global", Class: ClassSnapshot, Area: DomainBGP, DesiredState: true},
 	{Method: "post", Path: "/config/bgp/neigh", Class: ClassSnapshot, Area: DomainBGP, DesiredState: true},
 	{Method: "delete", Path: "/config/bgp/neigh/{ip_address}", Class: ClassSnapshot, Area: DomainBGP, DesiredState: true},
-	{Method: "post", Path: "/config/bgp/policy/apply", Class: ClassSnapshot, Area: DomainBGP, DesiredState: true},
-	{Method: "delete", Path: "/config/bgp/policy/apply", Class: ClassSnapshot, Area: DomainBGP, DesiredState: true},
+	{Method: "post", Path: "/config/bgp/policy/apply", Class: ClassSnapshot, Area: DomainBGPPolicyAssignment, DesiredState: true},
+	{Method: "delete", Path: "/config/bgp/policy/apply", Class: ClassSnapshot, Area: DomainBGPPolicyAssignment, DesiredState: true},
 	{Method: "post", Path: "/config/bgp/policy/definedsets/{defineset_type}", Class: ClassSnapshot, Area: DomainBGP, DesiredState: true},
 	{Method: "delete", Path: "/config/bgp/policy/definedsets/{defineset_type}/{type_name}", Class: ClassSnapshot, Area: DomainBGP, DesiredState: true},
 	{Method: "post", Path: "/config/bgp/policy/definitions", Class: ClassSnapshot, Area: DomainBGP, DesiredState: true},
@@ -382,27 +382,28 @@ func RouteLifecycleIndex() map[string]RouteLifecycle {
 
 // snapshotDomainSet is the set of Domains struct field names (doc.go).
 var snapshotDomainSet = map[string]bool{
-	DomainEndpoint:       true,
-	DomainJWTAuthProfile: true,
-	DomainHalfClose:      true,
-	DomainNetIdentity:    true,
-	DomainLoadBalancer:   true,
-	DomainKvExactBinding: true,
-	DomainL7Policy:       true,
-	DomainFirewall:       true,
-	DomainPolicy:         true,
-	DomainMirror:         true,
-	DomainSession:        true,
-	DomainSessionUlCl:    true,
-	DomainIPFilter:       true,
-	DomainSecurityRate:   true,
-	DomainBFD:            true,
-	DomainBGP:            true,
-	DomainIPsec:          true,
-	DomainCORS:           true,
-	DomainTracing:        true,
-	DomainCert:           true,
-	DomainAuditSink:      true,
+	DomainEndpoint:            true,
+	DomainJWTAuthProfile:      true,
+	DomainHalfClose:           true,
+	DomainNetIdentity:         true,
+	DomainLoadBalancer:        true,
+	DomainKvExactBinding:      true,
+	DomainL7Policy:            true,
+	DomainFirewall:            true,
+	DomainPolicy:              true,
+	DomainMirror:              true,
+	DomainSession:             true,
+	DomainSessionUlCl:         true,
+	DomainIPFilter:            true,
+	DomainSecurityRate:        true,
+	DomainBFD:                 true,
+	DomainBGP:                 true,
+	DomainBGPPolicyAssignment: true,
+	DomainIPsec:               true,
+	DomainCORS:                true,
+	DomainTracing:             true,
+	DomainCert:                true,
+	DomainAuditSink:           true,
 }
 
 // ExcludedDomainsFromLifecycle derives the excluded_domains honesty list

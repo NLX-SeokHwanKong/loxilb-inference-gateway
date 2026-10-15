@@ -2348,3 +2348,27 @@ func (na *NetAPIStruct) NetLbSourceCheckSlotsGet() (cmn.LbSourceCheckSlots, erro
 	defer mh.mtx.Unlock()
 	return mh.zr.Rules.LbSourceCheckSlots(), nil
 }
+
+// NetGoBGPPolicyApplyGet returns operator-owned policy assignments.
+func (na *NetAPIStruct) NetGoBGPPolicyApplyGet() ([]cmn.GoBGPPolicyApply, error) {
+	if mh.bgp == nil {
+		return nil, errors.New("loxilb BGP mode is disabled")
+	}
+	return mh.bgp.GetPolicyAssignments()
+}
+
+// NetGoBGPPolicyApplyReset clears operator bindings without detaching the
+// speaker-owned LB/HA export policies.
+func (na *NetAPIStruct) NetGoBGPPolicyApplyReset(a *cmn.GoBGPPolicyApply) (int, error) {
+	if mh.bgp == nil {
+		return 0, errors.New("loxilb BGP mode is disabled")
+	}
+	return mh.bgp.ResetOperatorPolicyAssignment(a)
+}
+
+func (na *NetAPIStruct) NetGoBGPGCReplace(target *cmn.GoBGPGlobalConfig) (int, error) {
+	if mh.bgp == nil {
+		return 0, errors.New("loxilb BGP mode is disabled")
+	}
+	return mh.bgp.BGPGlobalConfigReplace(*target)
+}

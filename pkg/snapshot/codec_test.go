@@ -125,8 +125,9 @@ func sampleDocument() *Document {
 		IPFilter: []cmn.IPFilterEntry{{
 			IPFilterMod: cmn.IPFilterMod{FilterType: "whitelist", CIDR: "10.0.0.0/8", Action: "allow"},
 		}},
-		SecurityRate: &cmn.SecurityRateState{Config: cmn.SecurityRateConfig{SYNEnabled: true, SYNThreshold: 100}},
-		BFD:          []cmn.BFDMod{{Instance: "bfd1", Port: 3784}},
+		SecurityRate:        &cmn.SecurityRateState{Config: cmn.SecurityRateConfig{SYNEnabled: true, SYNThreshold: 100}},
+		BFD:                 []cmn.BFDMod{{Instance: "bfd1", Port: 3784}},
+		BGPPolicyAssignment: []cmn.GoBGPPolicyApply{{NeighIPAddress: "10.0.0.2", PolicyType: "import", Polices: []string{"pd1"}, RouteAction: "reject"}},
 		BGP: BGPDomain{
 			Neighbors:         []cmn.GoBGPNeighGetMod{{Addr: "10.0.0.2", RemoteAS: 65001}},
 			DefinedSets:       []cmn.GoBGPPolicyDefinedSetMod{{Name: "set1", DefinedTypeString: "prefix"}},

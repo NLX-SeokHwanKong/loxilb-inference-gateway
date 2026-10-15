@@ -650,7 +650,22 @@ func (ch *CIStateH) CIBFDSessionAdd(bm cmn.BFDMod) (int, error) {
 		bfdSessConfigArgs := bfd.ConfigArgs{RemoteIP: bm.RemoteIP.String(), SourceIP: bm.SourceIP.String(),
 			Port: cmn.BFDPort, Interval: uint32(bm.Interval),
 			Multi: bm.RetryCount, Instance: bm.Instance}
-		go ch.startBFDProto(bfdSessConfigArgs)
+		// Register before acknowledging configuration, but retain the initial
+		// HA synchronization/cool-off gate before sending or processing BFD.
+		ready := make(chan struct{})
+		bfdSessConfigArgs.StartGate = ready
+		if err := ch.Bs.BFDAddRemote(bfdSessConfigArgs, ch); err != nil {
+			ch.SpawnKa = false
+			return -1, err
+		}
+		go func() {
+			if mh.dp != nil {
+				mh.dp.WaitXsyncReady("ka")
+				time.Sleep(KAInitTiVal * time.Second)
+			}
+			close(ready)
+		}()
+
 	} else {
 		bfdSessConfigArgs := bfd.ConfigArgs{RemoteIP: bm.RemoteIP.String(), SourceIP: bm.SourceIP.String(),
 			Port: cmn.BFDPort, Interval: uint32(bm.Interval),
