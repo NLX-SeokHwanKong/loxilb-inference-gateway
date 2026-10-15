@@ -180,6 +180,10 @@ typedef struct proxy_metrics_snapshot {
     uint64_t stream_abandon_age_sum_s[3];
     uint64_t stream_abandon_age_count[3];
     uint64_t stream_stall_abort_sec;
+
+    // Pools allocated and not yet freed, and pools freed (sockproxy_pool.h). TAIL-APPEND ONLY — same three-way lockstep.
+    uint64_t pools_live;
+    uint64_t pools_freed_total;
 } proxy_metrics_snapshot_t;
 
 // C function from sockproxy.c
@@ -1111,6 +1115,12 @@ func streamAbandonFromC(m *C.proxy_metrics_snapshot_t) streamAbandonSnapshot {
 	return s
 }
 
+// poolFromC copies the pool counts out of a snapshot; the rest is in
+// sockproxy_pool_metrics.go.
+func poolFromC(m *C.proxy_metrics_snapshot_t) poolSnapshot {
+	return poolSnapshot{live: uint64(m.pools_live), freed: uint64(m.pools_freed_total)}
+}
+
 // holdFromC copies the half-close hold state out of a snapshot; the rest is
 // in halfclose_hold_metrics.go.
 func holdFromC(m *C.proxy_metrics_snapshot_t) holdSnapshot {
@@ -1251,6 +1261,8 @@ func RunSockproxyMetrics(ctx context.Context) {
 		updateKvExactStore(kvExactFromC(&current))
 		// Unfinished streams by reason → streamAbandonCollector.
 		updateStreamAbandonStore(streamAbandonFromC(&current))
+		// Pools live and freed → poolCollector.
+		updatePoolStore(poolFromC(&current))
 		updateHoldStore(holdFromC(&current))
 
 		// 3c. P/D buffer overflow counter
