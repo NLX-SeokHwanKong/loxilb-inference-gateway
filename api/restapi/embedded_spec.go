@@ -3982,7 +3982,7 @@ func init() {
       "description": "Action selected by kind. FORWARD requires forward; REDIRECT requires redirect; REJECT permits an omitted reject object. Implementation warning: validation does not reject extra objects for other kinds. H1 synthetic REJECT/REDIRECT responses use raw socket writes without an SSL write branch; encrypted H1 response correctness is not established. H2 uses a separate framed responder.",
       "properties": {
         "forward": {
-          "description": "Target within the listener's base endpoint pool. With no references the resolver returns the base pool; with references it constructs a subset using RR or WRR selection. Implementation warnings: poolId is not used to resolve an independent pool, and allocation failure can return the whole base pool instead of the subset. The fallback is a safety defect, not a promised routing policy.",
+          "description": "Target within the listener's base endpoint pool. With no references the request is selected as the base pool selects. With references it selects only among the referenced members of the base pool, round-robin, or weighted round-robin when the references' weights differ, skipping members that are down or circuit-broken; no copy of the pool is made, so member health and per-member accounting are the base pool's. On an AI-gateway pool the request passes the pool's capacity gate. Implementation warning: poolId is not used to resolve an independent pool.",
           "properties": {
             "backendRefs": {
               "description": "Endpoint-slot references within the base pool. Empty means the whole base pool. Invalid indices are skipped at resolution; admission does not check pool membership or enforce the 32-reference C limit.",
@@ -40209,7 +40209,7 @@ func init() {
       ],
       "properties": {
         "forward": {
-          "description": "Target within the listener's base endpoint pool. With no references the resolver returns the base pool; with references it constructs a subset using RR or WRR selection. Implementation warnings: poolId is not used to resolve an independent pool, and allocation failure can return the whole base pool instead of the subset. The fallback is a safety defect, not a promised routing policy.",
+          "description": "Target within the listener's base endpoint pool. With no references the request is selected as the base pool selects. With references it selects only among the referenced members of the base pool, round-robin, or weighted round-robin when the references' weights differ, skipping members that are down or circuit-broken; no copy of the pool is made, so member health and per-member accounting are the base pool's. On an AI-gateway pool the request passes the pool's capacity gate. Implementation warning: poolId is not used to resolve an independent pool.",
           "type": "object",
           "properties": {
             "backendRefs": {
@@ -40283,7 +40283,7 @@ func init() {
       }
     },
     "L7ActionForward": {
-      "description": "Target within the listener's base endpoint pool. With no references the resolver returns the base pool; with references it constructs a subset using RR or WRR selection. Implementation warnings: poolId is not used to resolve an independent pool, and allocation failure can return the whole base pool instead of the subset. The fallback is a safety defect, not a promised routing policy.",
+      "description": "Target within the listener's base endpoint pool. With no references the request is selected as the base pool selects. With references it selects only among the referenced members of the base pool, round-robin, or weighted round-robin when the references' weights differ, skipping members that are down or circuit-broken; no copy of the pool is made, so member health and per-member accounting are the base pool's. On an AI-gateway pool the request passes the pool's capacity gate. Implementation warning: poolId is not used to resolve an independent pool.",
       "type": "object",
       "properties": {
         "backendRefs": {

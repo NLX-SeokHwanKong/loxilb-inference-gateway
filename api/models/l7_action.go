@@ -253,7 +253,7 @@ func (m *L7Action) UnmarshalBinary(b []byte) error {
 	return nil
 }
 
-// L7ActionForward Target within the listener's base endpoint pool. With no references the resolver returns the base pool; with references it constructs a subset using RR or WRR selection. Implementation warnings: poolId is not used to resolve an independent pool, and allocation failure can return the whole base pool instead of the subset. The fallback is a safety defect, not a promised routing policy.
+// L7ActionForward Target within the listener's base endpoint pool. With no references the request is selected as the base pool selects. With references it selects only among the referenced members of the base pool, round-robin, or weighted round-robin when the references' weights differ, skipping members that are down or circuit-broken; no copy of the pool is made, so member health and per-member accounting are the base pool's. On an AI-gateway pool the request passes the pool's capacity gate. Implementation warning: poolId is not used to resolve an independent pool.
 //
 // swagger:model L7ActionForward
 type L7ActionForward struct {
