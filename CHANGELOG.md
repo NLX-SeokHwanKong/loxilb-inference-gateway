@@ -20,6 +20,12 @@ binary behaves exactly like upstream loxilb.
 
 ### Added
 
+- **Every HTTP/2 client connection logs one line when it ends, naming why**
+  (client closed, header deadline, idle timeout, a backend connection ending,
+  listener delete, endpoint teardown, the P/D reaper, an error), the backend
+  connection and endpoint when one caused it, the open streams and the time
+  since the last request. Info for an ordinary end, warning when requests were
+  lost or the gateway decided.
 - **KV-cache-aware routing** for LLM serving fleets: cache-locality-aware
   endpoint selection driven by the serving engines' native contracts
   (vLLM `--kv-events-config` ZMQ events; SGLang radix-cache semantics).
@@ -123,6 +129,12 @@ binary behaves exactly like upstream loxilb.
 
 ### Changed
 
+- **On an AI-gateway pool, requests matched by an L7 FORWARD route now pass
+  the pool's capacity gate (ceiling and queue) like every other request;** the
+  route's private pool copy used to bypass it. Selection inside the route is
+  unchanged — round-robin, weighted when the route's weights differ.
+- **An HTTP/2 request body is held in its own copy while it is sent to the
+  backend,** so memory per in-flight HTTP/2 request grows by the body size.
 - Container image renamed to `ghcr.io/loxilb-io/loxilb-inference-gateway`.
 - README rewritten around inference-gateway use cases; `loxilb-ebpf` submodule
   repointed to the `loxilb-ebpf-inference-gateway` fork.
@@ -170,6 +182,72 @@ binary behaves exactly like upstream loxilb.
 
 ### Fixed
 
+- **HTTP/2 requests on a busy, healthy client connection occasionally failed
+  together with no response (the connection was closed)** — the
+  header-completion (slowloris) deadline charged the connection with a header
+  block start that was not its current one: the start was read by the health
+  pass with no ordering against the worker that wrote it, and on HTTP/2 a
+  header block reset before its headers completed left the clock running — the
+  deadline now times only the header block in progress on that connection; it
+  never runs while a request is in flight or between requests.
+- **On a non-AI-gateway listener, a WebSocket or CONNECT upgrade — or any
+  connection relayed raw after its headers — was closed by the
+  header-completion deadline about ten seconds in.** The HTTP/1.1 header clock
+  kept running after the header block had completed; it now stops at header
+  completion, and the deadline pass reads only that clock.
+- **An HTTP/2 client connection is no longer closed when one of its backend
+  connections ends;** in-flight requests on the other backends continue.
+  Requests that were on the backend connection that ended are answered on
+  their own streams: 503 backend_unreachable when no response had started, a
+  stream reset when one was in progress.
+- **On a P/D pool, an HTTP/2 backend connection that ended no longer released
+  a prefill and a decode unit charged to endpoint 0** (and, with an admission
+  queue, no longer woke a request waiting for endpoint 0), so endpoint 0's
+  in-flight counts stay correct.
+- **An HTTP/2 request the gateway answered itself (no pool for the model, an
+  admission or capacity refusal, an L7 reject or redirect) could corrupt
+  memory** — the stream was still read, and on a capacity refusal written,
+  after the answer had freed it. The answer is now the last thing that touches
+  the stream.
+- **An HTTP/2 client sending several requests at once could crash the gateway
+  when one request's answer was waiting on the client's flow-control window**
+  — forwarding the next request flushed that answer and freed its stream while
+  the gateway was still walking the list. Each request is now looked up again
+  before it is forwarded.
+- **On a CHWBL pool, an HTTP/2 request with an invalid cache_salt got no
+  answer and hung until the client timed out** — the refusal went through a
+  responder that only works during L7 routing. The client now gets 400
+  invalid_cache_salt on that stream.
+- **An HTTP/2 client that reset a request while its body was still going to
+  the backend could crash the gateway** — the backend read the body from the
+  client stream's buffer, which the reset had freed. The body is now sent from
+  its own copy, and a failed allocation while forwarding no longer leaks it.
+- **HTTP/2 requests on a pool using default round-robin could land on the same
+  backend when two workers picked at the same moment, skewing the spread.**
+  The shared round-robin counter was read and written without synchronisation;
+  each pick now takes its value with one atomic add.
+- **Immediately after a gateway start (rollout or HA failover), an HTTP/1.1
+  client could wait indefinitely for a response the backend had already sent,
+  or have its next request held.** Two workers handling their first responses
+  at the same moment both initialised the shared response-parser settings, and
+  the second could clear them under the first. The settings are now
+  initialised once, before any connection uses them, on the request and
+  response sides.
+- **An L7 policy FORWARD that names some of a listener's endpoints no longer
+  routes through a shared copy of the pool.** Such a route used one scratch
+  copy of the listener's pool, rewritten by every request on every worker
+  and freed when the policy was replaced or detached while connections
+  routed through it still wrote to it. It now selects among the named
+  endpoints of the listener's own pool, so endpoint health, circuit
+  breakers, drains and per-endpoint accounting are the pool's, and on an
+  AI-gateway pool the request passes the capacity gate it used to skip.
+  Policy routes are also read under the proxy lock: a replace or detach
+  could free them, compiled patterns included, under a request being
+  routed.
+- **A rule add whose routing index cannot be built is refused cleanly.** The
+  rule no longer stays in the table while the API answers an error; a
+  delete in the same case lets go of the pool at the next change instead of
+  keeping it for the life of the process.
 - **Deleting or re-creating a full-proxy rule no longer leaks its endpoint
   pool, and no longer frees state that live connections still use.** Every
   delete of a full-proxy rule, and every replace that changes more than the
