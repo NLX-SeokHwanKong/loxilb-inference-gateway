@@ -132,6 +132,14 @@ import (
 // objective it may not use falls to its default).
 // 1.12: bgppolicyassignment captures operator BGP import/export bindings.
 // Older documents do not cover this domain; migration never widens coverage.
+// Within 1.12, before any build that writes it was released: a load-balancer
+// rule gained the priority band knobs (fc_wake_policy, fc_band_weights,
+// fc_band_min_share_pct, fc_critical_reserve_pct, fc_band_wait_ms,
+// fc_band_queue_pct, fc_shed_queue, fc_tenant_wake, fc_llmd_headers). All
+// are absent in a document that does not set them, and absent reads as the
+// default: the switches inherit the process default, the triples and the
+// reserve are none (strict wake, no floor, no reserve, the queue's window
+// and depth for every band).
 const SchemaVersion = "1.12"
 
 // DocKind identifies the document type, matching §4's "kind" field.

@@ -912,8 +912,8 @@
      "kind": "method",
      "receiver": "ruleEnt",
      "file": "pkg/loxinet/fc_rule.go",
-     "def_line": 181,
-     "call_line": 217,
+     "def_line": 455,
+     "call_line": 491,
      "calls": "Run",
      "note": "the scraper goroutine runs while something reads what it scrapes: a rule with pdDisaggMode (the P/D scorers) or an AI-gateway rule whose admission ceiling adapts (fc_adaptive, else LLB_FC_ADAPTIVE); at a hard-coded 10s interval, against each endpoint's own xIP:xPort -- the same port the data connect uses. Restarted when a replace moves the endpoints, stopped when neither reader remains"
     },
@@ -922,8 +922,8 @@
      "kind": "method",
      "receiver": "RuleH",
      "file": "pkg/loxinet/rules.go",
-     "def_line": 4072,
-     "call_line": 5625,
+     "def_line": 4076,
+     "call_line": 5633,
      "calls": "syncVllmScraper",
      "note": "on create; the replace path calls it too (rules.go:5143), so a replace that turns adaptation on or off, or moves the endpoints, reaches the scraper"
     },
@@ -931,7 +931,7 @@
    ],
    "kv-subscriber-rule-config": [
     { "symbol": "KvSubscriberStartRank", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 1236, "call_line": 1385, "calls": "runKvSubscriberLoopBinding", "note": "one subscriber goroutine per (service, endpoint, rank)" },
-    { "symbol": "AddLbRule", "kind": "method", "receiver": "RuleH", "file": "pkg/loxinet/rules.go", "def_line": 4072, "call_line": 5577, "calls": "KvSubscriberStartRank" },
+    { "symbol": "AddLbRule", "kind": "method", "receiver": "RuleH", "file": "pkg/loxinet/rules.go", "def_line": 4076, "call_line": 5585, "calls": "KvSubscriberStartRank" },
     { "symbol": "NetLbRuleAdd", "kind": "method", "receiver": "NetAPIStruct", "file": "pkg/loxinet/apiclient.go", "def_line": 374, "call_line": 381, "calls": "AddLbRule", "entry_point": "http-handler", "note": "the API-hooks implementation behind the LB-rule REST call; the same path replays saved rules at boot from api/loxinlp/nlp.go" }
    ],
    "kv-attest-controller-loop": [
@@ -940,7 +940,7 @@
     { "symbol": "KvAttestStart", "kind": "func", "file": "pkg/loxinet/ai_kv_attest.go", "def_line": 329, "call_line": 354, "calls": "loop" },
     { "symbol": "kvAttestActivate", "kind": "func", "file": "pkg/loxinet/ai_kv_attest.go", "def_line": 930, "call_line": 937, "calls": "KvAttestStart" },
     { "symbol": "kvDataplaneContractInstallAsync", "kind": "func", "file": "pkg/loxinet/ai_kv_dataplane.go", "def_line": 383, "call_line": 387, "calls": "kvAttestActivate", "note": "the controller starts only after a full dataplane contract install ACK, which is the only path to eligible=1" },
-    { "symbol": "AddLbRule", "kind": "method", "receiver": "RuleH", "file": "pkg/loxinet/rules.go", "def_line": 4072, "call_line": 5163, "calls": "kvDataplaneContractInstallAsync" },
+    { "symbol": "AddLbRule", "kind": "method", "receiver": "RuleH", "file": "pkg/loxinet/rules.go", "def_line": 4076, "call_line": 5171, "calls": "kvDataplaneContractInstallAsync" },
     { "symbol": "NetLbRuleAdd", "kind": "method", "receiver": "NetAPIStruct", "file": "pkg/loxinet/apiclient.go", "def_line": 374, "call_line": 381, "calls": "AddLbRule", "entry_point": "http-handler", "note": "the API-hooks implementation behind the LB-rule REST call; the same path replays saved rules at boot from api/loxinlp/nlp.go" }
    ],
    "kv-best-worker-cgo": [
@@ -1334,8 +1334,8 @@
     "status": "verified-static",
     "activation_precondition": "an AI-gateway service (ai_gw_mode) with at least one model pool; emitted in every gate mode, including off, so a scrape can tell an ungated AI pool from a non-AI service. The values move only when LLB_FC_MODE is observe or enforce.",
     "writer_sources": [
-     { "symbol": "Collect", "kind": "method", "receiver": "admissionCollector", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 314, "writes": "admissionModeDesc", "note": "read from the Go-side store the 10s collection cycle refreshes from proxy_get_fc_stats; each Desc is named at its own MustNewConstMetric call because the extractor resolves the runtime type by reading that call and cannot follow an identifier" },
-     { "symbol": "init", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 359, "call_line": 360, "calls": "admissionCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
+     { "symbol": "Collect", "kind": "method", "receiver": "admissionCollector", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 337, "writes": "admissionModeDesc", "note": "read from the Go-side store the 10s collection cycle refreshes from proxy_get_fc_stats; each Desc is named at its own MustNewConstMetric call because the extractor resolves the runtime type by reading that call and cannot follow an identifier" },
+     { "symbol": "init", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 382, "call_line": 383, "calls": "admissionCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
     ],
     "data_sources": [
      { "symbol": "refreshAdmissionStore", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 475, "writes": "admissionStore" },
@@ -1348,8 +1348,8 @@
     "status": "verified-static",
     "activation_precondition": "an AI-gateway service (ai_gw_mode) with at least one model pool; emitted in every gate mode, including off, so a scrape can tell an ungated AI pool from a non-AI service. The values move only when LLB_FC_MODE is observe or enforce.",
     "writer_sources": [
-     { "symbol": "Collect", "kind": "method", "receiver": "admissionCollector", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 314, "writes": "admissionInflightDesc", "note": "read from the Go-side store the 10s collection cycle refreshes from proxy_get_fc_stats; each Desc is named at its own MustNewConstMetric call because the extractor resolves the runtime type by reading that call and cannot follow an identifier" },
-     { "symbol": "init", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 359, "call_line": 360, "calls": "admissionCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
+     { "symbol": "Collect", "kind": "method", "receiver": "admissionCollector", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 337, "writes": "admissionInflightDesc", "note": "read from the Go-side store the 10s collection cycle refreshes from proxy_get_fc_stats; each Desc is named at its own MustNewConstMetric call because the extractor resolves the runtime type by reading that call and cannot follow an identifier" },
+     { "symbol": "init", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 382, "call_line": 383, "calls": "admissionCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
     ],
     "data_sources": [
      { "symbol": "refreshAdmissionStore", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 475, "writes": "admissionStore" },
@@ -1362,8 +1362,8 @@
     "status": "verified-static",
     "activation_precondition": "an AI-gateway service (ai_gw_mode) with at least one model pool; emitted in every gate mode, including off, so a scrape can tell an ungated AI pool from a non-AI service. The values move only when LLB_FC_MODE is observe or enforce.",
     "writer_sources": [
-     { "symbol": "Collect", "kind": "method", "receiver": "admissionCollector", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 314, "writes": "admissionLimitDesc", "note": "read from the Go-side store the 10s collection cycle refreshes from proxy_get_fc_stats; each Desc is named at its own MustNewConstMetric call because the extractor resolves the runtime type by reading that call and cannot follow an identifier" },
-     { "symbol": "init", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 359, "call_line": 360, "calls": "admissionCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
+     { "symbol": "Collect", "kind": "method", "receiver": "admissionCollector", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 337, "writes": "admissionLimitDesc", "note": "read from the Go-side store the 10s collection cycle refreshes from proxy_get_fc_stats; each Desc is named at its own MustNewConstMetric call because the extractor resolves the runtime type by reading that call and cannot follow an identifier" },
+     { "symbol": "init", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 382, "call_line": 383, "calls": "admissionCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
     ],
     "data_sources": [
      { "symbol": "refreshAdmissionStore", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 475, "writes": "admissionStore" },
@@ -1376,8 +1376,8 @@
     "status": "verified-static",
     "activation_precondition": "an AI-gateway service (ai_gw_mode) with at least one model pool; emitted in every gate mode, including off, so a scrape can tell an ungated AI pool from a non-AI service. The values move only when LLB_FC_MODE is observe or enforce.",
     "writer_sources": [
-     { "symbol": "Collect", "kind": "method", "receiver": "admissionCollector", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 314, "writes": "admissionDecisionsDesc", "note": "read from the Go-side store the 10s collection cycle refreshes from proxy_get_fc_stats; each Desc is named at its own MustNewConstMetric call because the extractor resolves the runtime type by reading that call and cannot follow an identifier" },
-     { "symbol": "init", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 359, "call_line": 360, "calls": "admissionCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
+     { "symbol": "Collect", "kind": "method", "receiver": "admissionCollector", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 337, "writes": "admissionDecisionsDesc", "note": "read from the Go-side store the 10s collection cycle refreshes from proxy_get_fc_stats; each Desc is named at its own MustNewConstMetric call because the extractor resolves the runtime type by reading that call and cannot follow an identifier" },
+     { "symbol": "init", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 382, "call_line": 383, "calls": "admissionCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
     ],
     "data_sources": [
      { "symbol": "refreshAdmissionStore", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 475, "writes": "admissionStore" },
@@ -1390,8 +1390,8 @@
     "status": "verified-static",
     "activation_precondition": "none: the two process-wide anomaly counters are emitted from start, at zero, so absence and quiet are distinguishable.",
     "writer_sources": [
-     { "symbol": "Collect", "kind": "method", "receiver": "admissionCollector", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 314, "writes": "admissionAnomaliesDesc", "note": "read from the process-wide fc_anomaly_total counters through proxy_get_fc_anomaly on the same 10s cycle; emitted whether or not any AI service exists" },
-     { "symbol": "init", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 359, "call_line": 360, "calls": "admissionCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
+     { "symbol": "Collect", "kind": "method", "receiver": "admissionCollector", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 337, "writes": "admissionAnomaliesDesc", "note": "read from the process-wide fc_anomaly_total counters through proxy_get_fc_anomaly on the same 10s cycle; emitted whether or not any AI service exists" },
+     { "symbol": "init", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 382, "call_line": 383, "calls": "admissionCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
     ],
     "data_sources": [
      { "symbol": "refreshAdmissionStore", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 475, "writes": "admissionStore" },
@@ -1409,7 +1409,7 @@
       "kind": "method",
       "receiver": "admissionCollector",
       "file": "api/prometheus/ai_admission_metrics.go",
-      "def_line": 314,
+      "def_line": 337,
       "writes": "admissionEffectiveLimitDesc",
       "note": "read from the Go-side store the 10s collection cycle refreshes from proxy_get_fc_stats; each Desc is named at its own MustNewConstMetric call because the extractor resolves the runtime type by reading that call and cannot follow an identifier"
      },
@@ -1417,8 +1417,8 @@
       "symbol": "init",
       "kind": "func",
       "file": "api/prometheus/ai_admission_metrics.go",
-      "def_line": 359,
-      "call_line": 360,
+      "def_line": 382,
+      "call_line": 383,
       "calls": "admissionCollector",
       "entry_point": "registry-collector",
       "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
@@ -1429,7 +1429,7 @@
       "symbol": "refreshAdmissionStore",
       "kind": "func",
       "file": "api/prometheus/ai_admission_metrics.go",
-      "def_line": 475,
+      "def_line": 498,
       "writes": "admissionStore"
      },
      {
@@ -1461,7 +1461,7 @@
       "kind": "method",
       "receiver": "admissionCollector",
       "file": "api/prometheus/ai_admission_metrics.go",
-      "def_line": 314,
+      "def_line": 337,
       "writes": "admissionAdaptStateDesc",
       "note": "read from the Go-side store the 10s collection cycle refreshes from proxy_get_fc_stats; each Desc is named at its own MustNewConstMetric call because the extractor resolves the runtime type by reading that call and cannot follow an identifier"
      },
@@ -1469,8 +1469,8 @@
       "symbol": "init",
       "kind": "func",
       "file": "api/prometheus/ai_admission_metrics.go",
-      "def_line": 359,
-      "call_line": 360,
+      "def_line": 382,
+      "call_line": 383,
       "calls": "admissionCollector",
       "entry_point": "registry-collector",
       "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
@@ -1481,7 +1481,7 @@
       "symbol": "refreshAdmissionStore",
       "kind": "func",
       "file": "api/prometheus/ai_admission_metrics.go",
-      "def_line": 475,
+      "def_line": 498,
       "writes": "admissionStore"
      },
      {
@@ -1513,7 +1513,7 @@
       "kind": "method",
       "receiver": "admissionCollector",
       "file": "api/prometheus/ai_admission_metrics.go",
-      "def_line": 314,
+      "def_line": 337,
       "writes": "admissionAdaptReasonDesc",
       "note": "read from the Go-side store the 10s collection cycle refreshes from proxy_get_fc_stats; each Desc is named at its own MustNewConstMetric call because the extractor resolves the runtime type by reading that call and cannot follow an identifier"
      },
@@ -1521,8 +1521,8 @@
       "symbol": "init",
       "kind": "func",
       "file": "api/prometheus/ai_admission_metrics.go",
-      "def_line": 359,
-      "call_line": 360,
+      "def_line": 382,
+      "call_line": 383,
       "calls": "admissionCollector",
       "entry_point": "registry-collector",
       "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
@@ -1533,7 +1533,7 @@
       "symbol": "refreshAdmissionStore",
       "kind": "func",
       "file": "api/prometheus/ai_admission_metrics.go",
-      "def_line": 475,
+      "def_line": 498,
       "writes": "admissionStore"
      },
      {
@@ -1565,7 +1565,7 @@
       "kind": "method",
       "receiver": "admissionCollector",
       "file": "api/prometheus/ai_admission_metrics.go",
-      "def_line": 314,
+      "def_line": 337,
       "writes": "admissionAdaptMovesDesc",
       "note": "read from the Go-side store the 10s collection cycle refreshes from proxy_get_fc_stats; each Desc is named at its own MustNewConstMetric call because the extractor resolves the runtime type by reading that call and cannot follow an identifier"
      },
@@ -1573,8 +1573,8 @@
       "symbol": "init",
       "kind": "func",
       "file": "api/prometheus/ai_admission_metrics.go",
-      "def_line": 359,
-      "call_line": 360,
+      "def_line": 382,
+      "call_line": 383,
       "calls": "admissionCollector",
       "entry_point": "registry-collector",
       "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
@@ -1585,7 +1585,7 @@
       "symbol": "refreshAdmissionStore",
       "kind": "func",
       "file": "api/prometheus/ai_admission_metrics.go",
-      "def_line": 475,
+      "def_line": 498,
       "writes": "admissionStore"
      },
      {
@@ -1617,7 +1617,7 @@
       "kind": "method",
       "receiver": "admissionCollector",
       "file": "api/prometheus/ai_admission_metrics.go",
-      "def_line": 314,
+      "def_line": 337,
       "writes": "admissionWarmingDesc",
       "note": "read from the Go-side store the 10s collection cycle refreshes from proxy_get_fc_stats; each Desc is named at its own MustNewConstMetric call because the extractor resolves the runtime type by reading that call and cannot follow an identifier"
      },
@@ -1625,8 +1625,8 @@
       "symbol": "init",
       "kind": "func",
       "file": "api/prometheus/ai_admission_metrics.go",
-      "def_line": 359,
-      "call_line": 360,
+      "def_line": 382,
+      "call_line": 383,
       "calls": "admissionCollector",
       "entry_point": "registry-collector",
       "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
@@ -1637,7 +1637,7 @@
       "symbol": "refreshAdmissionStore",
       "kind": "func",
       "file": "api/prometheus/ai_admission_metrics.go",
-      "def_line": 475,
+      "def_line": 498,
       "writes": "admissionStore"
      },
      {
@@ -1669,7 +1669,7 @@
       "kind": "method",
       "receiver": "admissionCollector",
       "file": "api/prometheus/ai_admission_metrics.go",
-      "def_line": 314,
+      "def_line": 337,
       "writes": "admissionTenantsDesc",
       "note": "read from the Go-side store the 10s collection cycle refreshes from proxy_get_fc_stats; each Desc is named at its own MustNewConstMetric call because the extractor resolves the runtime type by reading that call and cannot follow an identifier"
      },
@@ -1677,8 +1677,8 @@
       "symbol": "init",
       "kind": "func",
       "file": "api/prometheus/ai_admission_metrics.go",
-      "def_line": 359,
-      "call_line": 360,
+      "def_line": 382,
+      "call_line": 383,
       "calls": "admissionCollector",
       "entry_point": "registry-collector",
       "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
@@ -1689,7 +1689,7 @@
       "symbol": "refreshAdmissionStore",
       "kind": "func",
       "file": "api/prometheus/ai_admission_metrics.go",
-      "def_line": 475,
+      "def_line": 498,
       "writes": "admissionStore"
      },
      {
@@ -1721,7 +1721,7 @@
       "kind": "method",
       "receiver": "admissionCollector",
       "file": "api/prometheus/ai_admission_metrics.go",
-      "def_line": 314,
+      "def_line": 337,
       "writes": "admissionTenantSlotsDesc",
       "note": "read from the Go-side store the 10s collection cycle refreshes from proxy_get_fc_stats; each Desc is named at its own MustNewConstMetric call because the extractor resolves the runtime type by reading that call and cannot follow an identifier"
      },
@@ -1729,8 +1729,8 @@
       "symbol": "init",
       "kind": "func",
       "file": "api/prometheus/ai_admission_metrics.go",
-      "def_line": 359,
-      "call_line": 360,
+      "def_line": 382,
+      "call_line": 383,
       "calls": "admissionCollector",
       "entry_point": "registry-collector",
       "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
@@ -1741,7 +1741,7 @@
       "symbol": "refreshAdmissionStore",
       "kind": "func",
       "file": "api/prometheus/ai_admission_metrics.go",
-      "def_line": 475,
+      "def_line": 498,
       "writes": "admissionStore"
      },
      {
@@ -1768,8 +1768,8 @@
     "status": "verified-static",
     "activation_precondition": "an AI-gateway service (ai_gw_mode) with at least one model pool; emitted for every pool at zero, so an absent queue and an idle queue are distinguishable. The values move only when the pool has a queue depth (fc_max_queue_depth on the rule or LLB_FC_MAX_QUEUE_DEPTH) and the gate is enforcing.",
     "writer_sources": [
-     { "symbol": "Collect", "kind": "method", "receiver": "admissionCollector", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 314, "writes": "admissionQueuedDesc", "note": "read from the Go-side store the 10s collection cycle refreshes from proxy_get_fc_stats; each Desc is named at its own MustNewConstMetric call because the extractor resolves the runtime type by reading that call and cannot follow an identifier" },
-     { "symbol": "init", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 359, "call_line": 360, "calls": "admissionCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
+     { "symbol": "Collect", "kind": "method", "receiver": "admissionCollector", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 337, "writes": "admissionQueuedDesc", "note": "read from the Go-side store the 10s collection cycle refreshes from proxy_get_fc_stats; each Desc is named at its own MustNewConstMetric call because the extractor resolves the runtime type by reading that call and cannot follow an identifier" },
+     { "symbol": "init", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 382, "call_line": 383, "calls": "admissionCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
     ],
     "data_sources": [
      { "symbol": "refreshAdmissionStore", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 475, "writes": "admissionStore" },
@@ -1782,8 +1782,8 @@
     "status": "verified-static",
     "activation_precondition": "an AI-gateway service (ai_gw_mode) with at least one model pool; emitted for every pool at zero, so an absent queue and an idle queue are distinguishable. The values move only when the pool has a queue depth (fc_max_queue_depth on the rule or LLB_FC_MAX_QUEUE_DEPTH) and the gate is enforcing.",
     "writer_sources": [
-     { "symbol": "Collect", "kind": "method", "receiver": "admissionCollector", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 314, "writes": "admissionQueueWaitDesc", "note": "read from the Go-side store the 10s collection cycle refreshes from proxy_get_fc_stats; the C side keeps one count per bucket (fc_qwait_bounds_ms) and Collect converts them to the cumulative form at its MustNewConstHistogram call, which is where the extractor resolves the histogram type" },
-     { "symbol": "init", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 359, "call_line": 360, "calls": "admissionCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
+     { "symbol": "Collect", "kind": "method", "receiver": "admissionCollector", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 337, "writes": "admissionQueueWaitDesc", "note": "read from the Go-side store the 10s collection cycle refreshes from proxy_get_fc_stats; the C side keeps one count per bucket (fc_qwait_bounds_ms) and Collect converts them to the cumulative form at its MustNewConstHistogram call, which is where the extractor resolves the histogram type" },
+     { "symbol": "init", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 382, "call_line": 383, "calls": "admissionCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
     ],
     "data_sources": [
      { "symbol": "refreshAdmissionStore", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 475, "writes": "admissionStore" },
@@ -3659,7 +3659,7 @@
     "writer_sources": [
      { "symbol": "SetKvEpInfo", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1503, "writes": "pdEpInfo", "note": "ClearKvEpInfo (:1215) deletes the child on teardown, so a departed endpoint leaves no stale identity series" },
      { "symbol": "KvSubscriberStartRank", "kind": "func", "file": "pkg/loxinet/ai_kv_subscriber.go", "def_line": 1236, "call_line": 1279, "calls": "SetKvEpInfo" },
-     { "symbol": "AddLbRule", "kind": "method", "file": "pkg/loxinet/rules.go", "def_line": 4072, "call_line": 5577, "calls": "KvSubscriberStartRank", "receiver": "RuleH" },
+     { "symbol": "AddLbRule", "kind": "method", "file": "pkg/loxinet/rules.go", "def_line": 4076, "call_line": 5585, "calls": "KvSubscriberStartRank", "receiver": "RuleH" },
      { "symbol": "NetLbRuleAdd", "kind": "method", "receiver": "NetAPIStruct", "file": "pkg/loxinet/apiclient.go", "def_line": 374, "call_line": 381, "calls": "AddLbRule", "entry_point": "http-handler", "note": "the API-hooks implementation behind the LB-rule REST call; the same path replays saved rules at boot from api/loxinlp/nlp.go" }
     ],
     "evidence": "source re-verification 2026-09-10 (plan Part E, WP-0 burn-down): pkg/loxinet/ai_kv_subscriber.go:1273. Scenario M08 owns the runtime proof."
@@ -3783,7 +3783,7 @@
     "writer_sources": [
      { "symbol": "SetAiEngineInfo", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1509, "writes": "aiEngineInfo" },
      { "symbol": "LlamacppAdmissionProbe", "kind": "func", "file": "pkg/loxinet/ai_llamacpp_probe.go", "def_line": 161, "call_line": 163, "calls": "SetAiEngineInfo", "note": "publishes engine=\"llamacpp\"; other engines are identified on their own probe paths" },
-     { "symbol": "AddLbRule", "kind": "method", "file": "pkg/loxinet/rules.go", "def_line": 4072, "call_line": 5620, "calls": "LlamacppAdmissionProbe", "receiver": "RuleH" },
+     { "symbol": "AddLbRule", "kind": "method", "file": "pkg/loxinet/rules.go", "def_line": 4076, "call_line": 5628, "calls": "LlamacppAdmissionProbe", "receiver": "RuleH" },
      { "symbol": "NetLbRuleAdd", "kind": "method", "receiver": "NetAPIStruct", "file": "pkg/loxinet/apiclient.go", "def_line": 374, "call_line": 381, "calls": "AddLbRule", "entry_point": "http-handler", "note": "the API-hooks implementation behind the LB-rule REST call; the same path replays saved rules at boot from api/loxinlp/nlp.go" }
     ],
     "evidence": "source re-verification 2026-09-10 (plan Part E, WP-0 burn-down): pkg/loxinet/ai_llamacpp_probe.go:163. Scenario M16 owns the per-engine proof."
@@ -3794,7 +3794,7 @@
     "writer_sources": [
      { "symbol": "IncLlamacppProbeWarning", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1515, "writes": "llamacppProbeWarnTotal" },
      { "symbol": "LlamacppAdmissionProbe", "kind": "func", "file": "pkg/loxinet/ai_llamacpp_probe.go", "def_line": 161, "call_line": 198, "calls": "IncLlamacppProbeWarning", "note": "one increment per warning kind returned by the probe" },
-     { "symbol": "AddLbRule", "kind": "method", "file": "pkg/loxinet/rules.go", "def_line": 4072, "call_line": 5620, "calls": "LlamacppAdmissionProbe", "receiver": "RuleH" },
+     { "symbol": "AddLbRule", "kind": "method", "file": "pkg/loxinet/rules.go", "def_line": 4076, "call_line": 5628, "calls": "LlamacppAdmissionProbe", "receiver": "RuleH" },
      { "symbol": "NetLbRuleAdd", "kind": "method", "receiver": "NetAPIStruct", "file": "pkg/loxinet/apiclient.go", "def_line": 374, "call_line": 381, "calls": "AddLbRule", "entry_point": "http-handler", "note": "the API-hooks implementation behind the LB-rule REST call; the same path replays saved rules at boot from api/loxinlp/nlp.go" }
     ],
     "evidence": "source re-verification 2026-09-10 (plan Part E, WP-0 burn-down): pkg/loxinet/ai_llamacpp_probe.go:198. WP-5 owns the known-mismatch arm."

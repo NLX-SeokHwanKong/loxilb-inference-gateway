@@ -1864,6 +1864,19 @@ func DpLBRuleMod(w *LBDpWorkQ) int {
 	dat.fc_ttft_target_ms = C.uint32_t(w.FcTtftTargetMs)
 	dat.fc_tenant_share_pct = C.uint8_t(w.FcTenantSharePct)
 	dat.fc_expose_headers = C.uint8_t(w.FcExposeHeaders)
+	// The priority bands, as declared: the switches at 0 inherit the
+	// environment, the triples are indexed by band (FC_BAND_*).
+	dat.fc_wake_policy = C.uint8_t(w.FcWakePolicy)
+	dat.fc_shed_queue = C.uint8_t(w.FcShedQueue)
+	dat.fc_tenant_wake = C.uint8_t(w.FcTenantWake)
+	dat.fc_llmd_headers = C.uint8_t(w.FcLlmdHeaders)
+	dat.fc_critical_reserve_pct = C.uint8_t(w.FcCriticalReservePct)
+	for b := 0; b < 3; b++ {
+		dat.fc_band_weight[b] = C.uint8_t(w.FcBandWeight[b])
+		dat.fc_band_min_share_pct[b] = C.uint8_t(w.FcBandMinSharePct[b])
+		dat.fc_band_queue_pct[b] = C.uint8_t(w.FcBandQueuePct[b])
+		dat.fc_band_wait_ms[b] = C.uint32_t(w.FcBandWaitMs[b])
+	}
 	dat.half_close_mode = C.uint8_t(w.HalfCloseMode)
 	dat.ai_default_tokens = C.uint32_t(w.AIDefaultTokens)
 	if w.AIObjectiveStrict {

@@ -88,7 +88,7 @@ func (e *DpEbpfH) DpFcStateGet(svcIP net.IP, svcPort uint16, proto uint8,
 	if int(st.mode) < len(fcModeNames) {
 		mode = fcModeNames[st.mode]
 	}
-	return cmn.FcEffectiveArg{
+	eff := cmn.FcEffectiveArg{
 		Mode:                    mode,
 		MaxOutstanding:          uint32(st.max_outstanding),
 		EpMaxInflight:           uint32(st.ep_cap[0]),
@@ -111,6 +111,15 @@ func (e *DpEbpfH) DpFcStateGet(svcIP net.IP, svcPort uint16, proto uint8,
 		TenantsActive:           uint32(st.tenants_active),
 		TenantSlots:             uint32(st.tenant_slots),
 		ExposeHeaders:           fcOnOff(st.expose_headers),
+		WakePolicy:              fcNameOf(fcWakePolicyNames, uint8(st.wake_policy_cfg)),
+		WakePolicyEffective:     fcNameOf(fcWakePolicyNames, uint8(st.wake_policy)),
+		ShedQueue:               fcOnOff(st.shed_queue_cfg),
+		ShedQueueEffective:      fcOnOff(st.shed_queue),
+		TenantWake:              fcNameOf(fcTenantWakeNames, uint8(st.tenant_wake_cfg)),
+		TenantWakeEffective:     fcNameOf(fcTenantWakeNames, uint8(st.tenant_wake)),
+		BandFallbackReason:      fcNameOf(fcBandFallbackNames, uint8(st.band_fallback)),
+		LlmdHeaders:             fcOnOff(st.llmd_headers),
+		BandsConfigured:         st.bands != 0,
 		Source: cmn.FcEffectiveSource{
 			Mode:               fcSourceName(st.src[0]),
 			MaxOutstanding:     fcSourceName(st.src[1]),
@@ -125,15 +134,42 @@ func (e *DpEbpfH) DpFcStateGet(svcIP net.IP, svcPort uint16, proto uint8,
 			TtftTargetMs:       fcSourceName(st.src_adapt[2]),
 			TenantMaxSharePct:  fcSourceName(st.src_tenant),
 			ExposeHeaders:      fcSourceName(st.src_expose),
+			WakePolicy:         fcSourceName(st.src_band[0]),
+			BandWeights:        fcSourceName(st.src_band[1]),
+			BandMinSharePct:    fcSourceName(st.src_band[2]),
+			CriticalReservePct: fcSourceName(st.src_band[3]),
+			BandWaitMs:         fcSourceName(st.src_band[4]),
+			BandQueuePct:       fcSourceName(st.src_band[5]),
+			ShedQueue:          fcSourceName(st.src_band[6]),
+			TenantWake:         fcSourceName(st.src_band[7]),
+			LlmdHeaders:        fcSourceName(st.src_band[8]),
 		},
-	}, true
+	}
+	// The band triples are indexed by band, as cmn.FcBand* is.
+	var bands fcBandStat
+	for b := 0; b < cmn.FcBands; b++ {
+		bands.inflight[b] = uint32(st.band_inflight[b])
+		bands.queued[b] = uint32(st.band_queued[b])
+		bands.waitMs[b] = uint32(st.band_wait_ms[b])
+		bands.queuePct[b] = uint32(st.band_queue_pct[b])
+		bands.minSharePct[b] = uint32(st.band_min_share_pct[b])
+		bands.weight[b] = uint32(st.band_weight[b])
+	}
+	eff.Bands = bands.effective(eff.EffectiveMaxOutstanding)
+	eff.WeightsInUse = st.wake_policy == 1 && bands.weight != [cmn.FcBands]uint32{}
+	return eff, true
 }
 
 // The data plane's enum fc_adapt_state and enum fc_adapt_reason, spelled
-// as sockproxy_fc.c spells them.
+// as sockproxy_fc.c spells them, and enum fc_wake_policy and enum
+// fc_tenant_wake as the rule arguments spell them.
 var (
 	fcAdaptStateNames  = []string{"off", "open", "tightened", "frozen"}
 	fcAdaptReasonNames = []string{"none", "queued", "ttft", "clear", "stale"}
+	fcWakePolicyNames  = []string{"strict", "weighted"}
+	fcTenantWakeNames  = []string{"fifo", "rr"}
+	// enum fc_band_fallback, as fc_band_fallback_name spells it.
+	fcBandFallbackNames = []string{"none", "sockmap_request", "zero_weight", "no_queue"}
 )
 
 func fcNameOf(names []string, v uint8) string {
