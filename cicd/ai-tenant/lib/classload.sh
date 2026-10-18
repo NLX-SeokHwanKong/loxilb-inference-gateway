@@ -15,6 +15,7 @@ PORT_SCHED=8083       # keyed: ceiling 8, queue 16, wait 30 s
 PORT_IDLE=8086        # keyless: ceiling 1, queue 4, wait 5 s, idle 2 s
 PORT_KNOB=8091        # keyless: ceiling 4, queue 8, the knob cases
 PORT_SOCKMAP=8092     # plain L7, sockMapMode request (B7 creates and deletes it)
+PORT_H2=8087          # keyed, h2c backends: ceiling 2 (streams never queue)
 SCHED_MAX=8
 SCHED_DEPTH=16
 SCHED_WAIT_MS=30000
@@ -87,20 +88,30 @@ SCHED_JSON=", \"api_key_auth\": \"required\", \"fc_max_outstanding\": $SCHED_MAX
 IDLE_JSON=", \"fc_max_outstanding\": 1, \"fc_max_queue_depth\": 4, \"fc_max_queue_wait_ms\": 5000"
 KNOB_JSON=", \"fc_max_outstanding\": 4, \"fc_max_queue_depth\": 8, \"fc_max_queue_wait_ms\": 5000"
 
+H2_JSON=", \"api_key_auth\": \"required\", \"backend_protocol\": \"http2\", \"fc_max_outstanding\": 2"
+
 tq_add_rules() {
   tq_rule $PORT_SCHED "$SCHED_JSON" 8080 8081 || return 1
+  tq_rule $PORT_H2 "$H2_JSON" 9090 9091 || return 1
   # The idle bound is the case: the rule's own inactiveTimeOut, 2 s.
   tq_rule $PORT_IDLE "$IDLE_JSON, \"inactiveTimeOut\": 2" 8080 || return 1
   tq_rule $PORT_KNOB "$KNOB_JSON" 8080 8081 || return 1
 }
 
 # Tenants with their class, one key each; keys.env holds KEY_<tenant>.
+# priority_class is a cap, not a class (docs/load-balancing/19): a request
+# with no hint runs at its tenant's default objective, standard when it has
+# none. A critical tenant therefore gets the objective tq-critical
+# (priority 1) as its default; a sheddable cap lowers by itself.
 tq_add_tenants() {
-  local t name cls r key
+  local t name cls r key def
   : > keys.env
+  r=$(tq_api POST /config/ai/objective '{"name":"tq-critical","priority":1}')
+  case "$r" in 20*) ;; *) echo "FATAL: objective tq-critical: $r"; return 1 ;; esac
   for t in $TENANTS; do
     name=${t%%:*}; cls=${t##*:}
-    r=$(tq_api POST /config/ai/tenant/ratelimit "{\"tenant_id\":\"$name\",\"priority_class\":\"$cls\"}")
+    def=""; [ "$cls" == critical ] && def=',"default_objective":"tq-critical"'
+    r=$(tq_api POST /config/ai/tenant/ratelimit "{\"tenant_id\":\"$name\",\"priority_class\":\"$cls\"$def}")
     case "$r" in 20*) ;; *) echo "FATAL: tenant $name: $r"; return 1 ;; esac
     r=$(tq_api POST /config/ai/apikey "{\"tenant_id\":\"$name\",\"name\":\"$name-band\",\"allowed_models\":[\"$MODEL\"],\"rate_limit_rps\":10000,\"burst_size\":10000,\"enabled\":true}")
     key=$(echo "$r" | sed 's/^[0-9]* //' | jq -r '.raw_key // empty' 2>/dev/null)
@@ -137,6 +148,119 @@ cl_fire() {
 }
 cl_release() { local p; for p in 8080 8081; do $hexec tqep1 curl -s -m 3 "http://127.0.0.1:$p/__release/$1" >/dev/null; done; }
 cl_release_all() { local p; for p in 8080 8081; do $hexec tqep1 curl -s -m 3 "http://127.0.0.1:$p/__release_all" >/dev/null; done; }
-cl_receipts() { local p n=0 c; for p in 8080 8081; do c=$($hexec tqep1 curl -s -m 3 "http://127.0.0.1:$p/__receipts/$1" | jq -r '.count // 0'); n=$((n + c)); done; echo $n; }
+# One mock_backend.py process serves both ports and keeps one receipt count
+# per nonce across them: ask one port.
+cl_receipts() { $hexec tqep1 curl -s -m 3 "http://127.0.0.1:8080/__receipts/$1" | jq -r '.count // 0'; }
 # cl_codes <outdir> <nonce> -> the sorted status codes
 cl_codes() { cat "$1/$2"-*.code 2>/dev/null | awk '{print $1}' | sort | tr '\n' ' '; }
+
+# ---- the scheduling pool, re-shaped per case -----------------------------------
+# sched_cfg <max> <depth> <wait-ms> [<extra-json>]: a gate-only replace of the
+# keyed pool (applied in place). Band knobs not named keep their value, so a
+# case that sets one resets it explicitly. An identical replace is answered
+# 409 lbrule-exists: the pool already runs that shape.
+sched_cfg() {
+  local r
+  r=$(tq_api POST /config/loadbalancer "$(tq_rule_json $PORT_SCHED ", \"api_key_auth\": \"required\", \"fc_max_outstanding\": $1, \"fc_max_queue_depth\": $2, \"fc_max_queue_wait_ms\": $3${4:-}" 8080 8081)")
+  case "$r" in 200*) return 0 ;; 409*lbrule-exists*|409*exists*) return 0 ;; esac
+  echo "  sched_cfg $*: $(echo "$r" | cut -c1-200)"; return 1
+}
+SCHED_RESET=', "fc_shed_queue": "inherit", "fc_wake_policy": "inherit", "fc_tenant_max_share_pct": 0'
+
+# cl_one <port> <tenant> <nonce> <outdir> [<curl args>...]: one held request,
+# its own nonce, so a case can release requests one at a time.
+cl_one() { local port=$1 tenant=$2 nonce=$3 out=$4; shift 4; cl_fire "$port" "$tenant" 1 "$nonce" "$out" "$@"; }
+# cl_errs <outdir> <nonce-glob> -> "<status>:<error>" per response, sorted
+cl_errs() {
+  local f c e
+  for f in "$1"/$2-*.code; do
+    [ -f "$f" ] || continue
+    c=$(awk '{print $1}' "$f"); e=$(jq -r '.error // empty' "${f%.code}.body" 2>/dev/null)
+    echo "$c${e:+:$e}"
+  done | sort | tr '\n' ' ' | sed 's/ $//'
+}
+# wait_receipts <nonce> <n> [<secs>]: poll the backends' receipt count
+wait_receipts() {
+  local i got
+  for i in $(seq 1 $((${3:-5} * 4))); do
+    got=$(cl_receipts "$1"); [ "$got" -ge "$2" ] 2>/dev/null && { echo "$got"; return; }
+    sleep 0.25
+  done
+  echo "$got"
+}
+# wait_done <outdir> <nonce-glob> <n> [<secs>]: wait for n responses
+wait_done() {
+  local i n
+  for i in $(seq 1 $((${4:-10} * 4))); do
+    n=$(cat "$1"/$2-*.code 2>/dev/null | grep -c '^[0-9]')
+    [ "$n" -ge "$3" ] && return 0
+    sleep 0.25
+  done
+  return 1
+}
+
+# ---- the band counter -----------------------------------------------------------
+metrics_raw() { $hexec tqh1 curl -s --max-time 8 "$API/metrics" 2>/dev/null; }
+# bt_snap <port>: one line of "key=value" for the service: series=<n of
+# loxilb_ai_fc_band_total series>, <band>.<outcome>=<v> for each, qw=<resumed
+# waits>, and d.<reason>=<v> for the gate decisions summed over its pools.
+bt_snap() {
+  metrics_raw | awk -v svc="service=\"$VIP:$1\"" '
+    index($0, svc) == 0 { next }
+    /^loxilb_ai_fc_band_total\{/ {
+      match($0, /band="[a-z]+"/); b = substr($0, RSTART + 6, RLENGTH - 7)
+      match($0, /outcome="[a-z]+"/); o = substr($0, RSTART + 9, RLENGTH - 10)
+      v[b "." o] += $NF; n++; next }
+    /^loxilb_ai_admission_queue_wait_seconds_count\{/ { qw += $NF; next }
+    /^loxilb_ai_admission_decisions_total\{/ {
+      match($0, /reason="[a-z_]+"/); d["d." substr($0, RSTART + 8, RLENGTH - 9)] += $NF; next }
+    END { printf "series=%d qw=%d", n, qw
+          for (k in v) printf " %s=%d", k, v[k]
+          for (k in d) printf " %s=%d", k, d[k]
+          print "" }'
+}
+declare -A BT0 BT1 BD
+bt_parse() { # bt_parse <array-name> <snapshot>
+  local -n a=$1; local kv
+  a=()
+  for kv in $2; do a[${kv%%=*}]=${kv#*=}; done
+}
+# The collector republishes every 10 s: a reading taken 11 s after the last
+# request of a case has seen all of it.
+bt_settle() { sleep 11; }
+bt_begin() { bt_parse BT0 "$(bt_snap "$1")"; BT_PORT=$1; }
+bt_end() {
+  local k
+  bt_settle
+  bt_parse BT1 "$(bt_snap "$BT_PORT")"
+  BD=()
+  for k in "${!BT1[@]}"; do BD[$k]=$(( ${BT1[$k]:-0} - ${BT0[$k]:-0} )); done
+}
+bd() { echo "${BD[$1]:-0}"; }
+# bt_check <case> <c:s:b requests that ended in a band outcome> <evicted>
+# [<parked requests that ended admitted>]: the identities, read from the
+# counter's deltas over the case.
+#   per band: admitted + shed + expired + cancelled = the band's requests
+#   queued (all bands) = queue-wait samples: the histogram takes one sample
+#                        when a park ends (admitted, expired, evicted or
+#                        cancelled), the queued count is taken at the park:
+#                        two writers, every park ended once
+#   queued (all bands) = the parks that ended: admitted after a park +
+#                        expired + evicted + cancelled, when the case knows
+#                        how many of its parked requests were admitted
+bt_check() {
+  local id=$1 want=$2 ev=$3 b i=0 tq=0 te=0 tc=0 got rs=${4:-}
+  local -a w=(${want//:/ })
+  chk "$id" "fifteen band series for the service" 15 "${BT1[series]:-0}"
+  for b in critical standard sheddable; do
+    got=$(( $(bd $b.admitted) + $(bd $b.shed) + $(bd $b.expired) + $(bd $b.cancelled) ))
+    chk "$id" "$b: admitted + shed + expired + cancelled = its requests" "${w[$i]}" "$got"
+    tq=$((tq + $(bd $b.queued))); te=$((te + $(bd $b.expired))); tc=$((tc + $(bd $b.cancelled)))
+    i=$((i + 1))
+  done
+  chk "$id" "queued = queue-wait samples (one per park, at its end)" "$tq" "$(bd qw)"
+  [ -n "$rs" ] && chk "$id" "queued = admitted after a park + expired + evicted + cancelled" "$tq" "$(( rs + te + ev + tc ))"
+  return 0
+}
+# bt_row <band>: "admitted queued shed expired cancelled" deltas
+bt_row() { echo "$(bd $1.admitted) $(bd $1.queued) $(bd $1.shed) $(bd $1.expired) $(bd $1.cancelled)"; }

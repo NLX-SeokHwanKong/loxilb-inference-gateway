@@ -319,6 +319,7 @@ Errors: `400` malformed PEM / bad certId / rotation failure · `404` unknown cer
 | `201` | Created (`POST /config/cert`, `POST /config/ai/apikey`) |
 | `204` | Deleted |
 | `400` | Validation error / immutable field / malformed body |
+| `422` | A value outside a field's enum (for example `fc_mode`, `fc_expose_headers` or `fc_tenant_wake` set to a word it does not list), refused by the generated model before any rule is judged (`... should be one of ...`); a rule across fields (such as `fc_wake_policy` `weighted` without `fc_band_weights`) is a `400` that names the field |
 | `401` | Auth (production) |
 | `404` | Resource not found |
 | `503` | Backend/CGO operation failed — **or** the boot-config gate (below) |

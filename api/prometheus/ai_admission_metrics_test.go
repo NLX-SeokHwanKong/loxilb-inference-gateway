@@ -58,7 +58,7 @@ func TestSortAndDedupeAdmissionSamples(t *testing.T) {
 	}
 }
 
-func withAdmissionStore(t *testing.T, samples []admissionSample, anomalies [3]float64) {
+func withAdmissionStore(t *testing.T, samples []admissionSample, anomalies [4]float64) {
 	t.Helper()
 	admissionStoreMutex.Lock()
 	savedStore, savedAnomalies := admissionStore, admissionAnomalies
@@ -72,16 +72,17 @@ func withAdmissionStore(t *testing.T, samples []admissionSample, anomalies [3]fl
 }
 
 func TestAdmissionCollectorEmptyStore(t *testing.T) {
-	withAdmissionStore(t, nil, [3]float64{})
+	withAdmissionStore(t, nil, [4]float64{})
 
 	// No pool: only the process-wide anomaly counters, at zero, so "never
 	// anomalous" and "not exported" are distinguishable.
-	if n := testutil.CollectAndCount(admissionCollector{}); n != 3 {
-		t.Errorf("empty store emitted %d metrics, want 3 (the anomaly counters)", n)
+	if n := testutil.CollectAndCount(admissionCollector{}); n != 4 {
+		t.Errorf("empty store emitted %d metrics, want 4 (the anomaly counters)", n)
 	}
 	want := `
-# HELP loxilb_ai_admission_anomalies_total Accounting anomalies in the capacity gate, process-wide: underflow (a release found its counter at zero), unknown_permit (an executing permit with no pool) and tenant_table_full (a request whose tenant found the pool's tenant table full and shared the last slot with the other tenants past it). underflow and unknown_permit are defects; tenant_table_full means more tenants than the table holds are active on one pool.
+# HELP loxilb_ai_admission_anomalies_total Accounting anomalies in the capacity gate, process-wide: underflow (a release found its counter at zero), unknown_permit (an executing permit with no pool), tenant_table_full (a request whose tenant found the pool's tenant table full and shared the last slot with the other tenants past it) and h2_deny_headers (an HTTP/2 refusal had more headers than its frame holds; the stream was reset instead). underflow, unknown_permit and h2_deny_headers are defects; tenant_table_full means more tenants than the table holds are active on one pool.
 # TYPE loxilb_ai_admission_anomalies_total counter
+loxilb_ai_admission_anomalies_total{kind="h2_deny_headers"} 0
 loxilb_ai_admission_anomalies_total{kind="tenant_table_full"} 0
 loxilb_ai_admission_anomalies_total{kind="underflow"} 0
 loxilb_ai_admission_anomalies_total{kind="unknown_permit"} 0
@@ -101,7 +102,7 @@ func TestAdmissionCollectorEmitsLabelledSeries(t *testing.T) {
 		inflight:       5,
 		epCap:          [3]float64{8, 4, 0},
 		epInflight:     [3]float64{5, 0, 0},
-		decisions:      [13]float64{100, 7, 1, 0, 12, 30, 2, 3, 4, 5, 0, 6, 9},
+		decisions:      [14]float64{100, 7, 1, 0, 12, 30, 2, 3, 4, 5, 0, 6, 9, 11},
 		queued:         3,
 		queueDepth:     16,
 		qwaitBuckets:   [8]uint64{10, 5, 0, 0, 2, 0, 0, 1},
@@ -114,7 +115,7 @@ func TestAdmissionCollectorEmitsLabelledSeries(t *testing.T) {
 		warmingEps:     1,
 		tenantsActive:  2,
 		tenantSlots:    256,
-	}}, [3]float64{0, 1, 0})
+	}}, [4]float64{0, 1, 0, 0})
 
 	want := `
 # HELP loxilb_ai_admission_inflight Capacity units held right now. role="service" is the pool-wide count, one per executing inference request; the other roles sum the endpoint units held across the pool's endpoints for that role. Zero with the gate off.
@@ -156,7 +157,7 @@ loxilb_ai_admission_queued{pool="llm",service="192.168.1.10:8080"} 3
 	// The C side counts each wait once, in its bucket; the exposition is
 	// cumulative, with the sum in seconds.
 	want = `
-# HELP loxilb_ai_admission_queue_wait_seconds Time a request waited in the pool's queue before it was resumed and dispatched; requests that timed out, were cancelled or were drained are counted under their decision reason instead.
+# HELP loxilb_ai_admission_queue_wait_seconds Time a request waited in the pool's queue: one sample per park, taken when the park ends (admitted, expired, shed by eviction or cancelled) and measured from its first park, so a woken request that goes back to its place is one wait, not two. A request drained from the queue is not sampled.
 # TYPE loxilb_ai_admission_queue_wait_seconds histogram
 loxilb_ai_admission_queue_wait_seconds_bucket{pool="llm",service="192.168.1.10:8080",le="0.01"} 10
 loxilb_ai_admission_queue_wait_seconds_bucket{pool="llm",service="192.168.1.10:8080",le="0.05"} 15
@@ -176,7 +177,7 @@ loxilb_ai_admission_queue_wait_seconds_count{pool="llm",service="192.168.1.10:80
 	}
 
 	want = `
-# HELP loxilb_ai_admission_decisions_total Gate decisions per pool and reason: admitted, capacity_shed (429), no_healthy_capacity (503), observe_would_shed (admitted in observe mode where enforce would have refused, counted at each ceiling that would have refused it), bypass_non_inference (not an inference request, no unit taken), queued (parked to wait for a unit), queue_full (429, the queue at its depth), queue_timeout (504, waited the whole window), cancelled (the client left while waiting), drained (the pool or the process stopped taking work while it waited), observe_would_queue (admitted in observe mode where enforce would have parked it), draining (503, the process is draining for maintenance), tenant_share (429, the tenant holds its share of the ceiling or of the queue).
+# HELP loxilb_ai_admission_decisions_total Gate decisions per pool and reason: admitted, capacity_shed (429), no_healthy_capacity (503), observe_would_shed (admitted in observe mode where enforce would have refused, counted at each ceiling that would have refused it), bypass_non_inference (not an inference request, no unit taken), queued (parked to wait for a unit, once per park: a woken request that goes back to its place is the same park), queue_full (429, the queue at its depth), queue_timeout (504, waited the whole window), cancelled (the client left while waiting), drained (the pool or the process stopped taking work while it waited), observe_would_queue (admitted in observe mode where enforce would have parked it), draining (503, the process is draining for maintenance), tenant_share (429, the tenant holds its share of the ceiling or of the queue), shed (429 admission_shed, a sheddable request refused at a ceiling or evicted from the queue by band policy).
 # TYPE loxilb_ai_admission_decisions_total counter
 loxilb_ai_admission_decisions_total{pool="llm",reason="admitted",service="192.168.1.10:8080"} 100
 loxilb_ai_admission_decisions_total{pool="llm",reason="bypass_non_inference",service="192.168.1.10:8080"} 12
@@ -190,6 +191,7 @@ loxilb_ai_admission_decisions_total{pool="llm",reason="observe_would_shed",servi
 loxilb_ai_admission_decisions_total{pool="llm",reason="queue_full",service="192.168.1.10:8080"} 2
 loxilb_ai_admission_decisions_total{pool="llm",reason="queue_timeout",service="192.168.1.10:8080"} 3
 loxilb_ai_admission_decisions_total{pool="llm",reason="queued",service="192.168.1.10:8080"} 30
+loxilb_ai_admission_decisions_total{pool="llm",reason="shed",service="192.168.1.10:8080"} 11
 loxilb_ai_admission_decisions_total{pool="llm",reason="tenant_share",service="192.168.1.10:8080"} 9
 `
 	if err := testutil.CollectAndCompare(admissionCollector{}, strings.NewReader(want),
@@ -284,11 +286,11 @@ loxilb_ai_fc_tenant_slots{kind="used",service="192.168.1.10:8080"} 2
 	}
 
 	// Per pool: 1 mode + 4 inflight + 5 limit + 1 queued + 1 wait histogram
-	// + 13 decisions + 1 effective limit + 4 adapt states + 5 adapt reasons
-	// + 2 adapt moves + 1 warming + 1 tenants = 39, plus the 2 tenant-table
-	// series of its service and the 3 process-wide anomaly counters.
-	if n := testutil.CollectAndCount(admissionCollector{}); n != 44 {
-		t.Errorf("collected %d metrics for one pool, want 44", n)
+	// + 14 decisions + 1 effective limit + 4 adapt states + 5 adapt reasons
+	// + 2 adapt moves + 1 warming + 1 tenants = 40, plus the 2 tenant-table
+	// series of its service and the 4 process-wide anomaly counters.
+	if n := testutil.CollectAndCount(admissionCollector{}); n != 46 {
+		t.Errorf("collected %d metrics for one pool, want 46", n)
 	}
 }
 
@@ -303,7 +305,7 @@ func TestAdmissionTenantSlotsArePerService(t *testing.T) {
 		{service: "10.0.0.1:2020", pool: "*", tenantsActive: 0, tenantSlots: 256},
 		{service: "10.0.0.2:2021", pool: "llama", tenantsActive: 65, tenantSlots: 64},
 		{service: "10.0.0.3:2022", pool: "llama", tenantsActive: 0, tenantSlots: 4096},
-	}, [3]float64{})
+	}, [4]float64{})
 
 	want := `
 # HELP loxilb_ai_fc_tenant_slots The tenant table of the capacity gate, per service: kind="max" is how many tenants a model pool tracks by name at once (LLB_FC_TENANT_SLOTS, fixed when the pool is created), kind="used" is how many hold a unit or wait right now on the service's fullest pool. used above max means tenants past the table are sharing one budget. used is zero while no pool of the service holds tenants to a share.

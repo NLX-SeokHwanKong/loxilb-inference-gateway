@@ -265,6 +265,12 @@ binary behaves exactly like upstream loxilb.
   HTTP/1.1 answers, and the TTFB histogram samples backend replies only.
   `deploy/monitoring/README.md` lists the families that count the same
   requests from another angle and must not be summed with the request total.
+- `loxilb_ai_admission_decisions_total{reason="queued"}` now counts each park once;
+  a re-park after a lost wake no longer counts twice.
+- `loxilb_ai_admission_queue_wait_seconds` takes one sample per park, when the
+  park ends (admitted, expired, shed by eviction or cancelled), measured from the
+  first park; it used to sample every resume, splitting one wait into shorter
+  ones, and did not sample expired or cancelled waits.
 - **On an AI-gateway pool, requests matched by an L7 FORWARD route now pass
   the pool's capacity gate (ceiling and queue) like every other request;** the
   route's private pool copy used to bypass it. Selection inside the route is

@@ -328,6 +328,10 @@ granted `critical`, and then only if no key, profile or binding lowers it. The o
 tenant's cap, then the key's or the JWT profile's, then the binding's, then the hint; each
 can only lower what the one before it allows.
 
+**`priority_class` is a cap, not a default.** To run a tenant's un-hinted requests above
+`standard`, set its `default_objective` to an objective with a positive priority;
+`priority_class` only bounds what its requests may be raised to.
+
 **How a request asks.** Two channels, under the same rule:
 
 - The header `x-llm-d-inference-objective: <name>` (the older `x-gateway-inference-objective`

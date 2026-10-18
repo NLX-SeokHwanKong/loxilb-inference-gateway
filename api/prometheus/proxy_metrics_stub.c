@@ -229,13 +229,14 @@ int proxy_get_qos_stats(proxy_qos_svc_stat_t *out, int max) {
  * second) and must be updated in the same commit as the other two.
  */
 #define PROXY_FC_ROLES 3
-#define PROXY_FC_REASONS 13
+#define PROXY_FC_REASONS 14
 #define PROXY_FC_POOL_LEN 64
 #define PROXY_FC_QWAIT_BUCKETS 8
 #define PROXY_FC_LIMITS 8
 #define PROXY_FC_ADAPT_LIMITS 3
 #define PROXY_FC_BAND_LIMITS 9
 #define PROXY_FC_BANDS 3
+#define PROXY_FC_BAND_OUTCOMES 5
 
 typedef struct proxy_fc_svc_stat {
     uint32_t xip;
@@ -291,26 +292,28 @@ typedef struct proxy_fc_svc_stat {
     uint8_t  shed_queue_cfg;
     uint8_t  tenant_wake_cfg;
     uint8_t  band_pad[5];
+    uint64_t band_outcome[PROXY_FC_BANDS][PROXY_FC_BAND_OUTCOMES];
 } proxy_fc_svc_stat_t;
 /* Pinned to the layout in sockproxy_metrics.h. */
-_Static_assert(sizeof(proxy_fc_svc_stat_t) == 440, "proxy_fc_svc_stat_t size");
+_Static_assert(sizeof(proxy_fc_svc_stat_t) == 568, "proxy_fc_svc_stat_t size");
 _Static_assert(offsetof(proxy_fc_svc_stat_t, decisions) == 40, "decisions offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, pool) == 144, "pool offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, queued) == 208, "queued offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, qwait_bucket) == 224, "qwait_bucket offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, qwait_count) == 296, "qwait_count offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, telemetry_stale_ms) == 304, "telemetry_stale_ms offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, src) == 308, "src offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, effective_max_outstanding) == 320, "effective_max_outstanding offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, adaptive) == 332, "adaptive offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, warming_eps) == 338, "warming_eps offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, adapt_down) == 344, "adapt_down offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, tenants_active) == 360, "tenants_active offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, tenant_slots) == 368, "tenant_slots offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, band_inflight) == 372, "band_inflight offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, wake_policy) == 408, "wake_policy offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, src_band) == 422, "src_band offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, band_fallback) == 431, "band_fallback offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, pool) == 152, "pool offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, queued) == 216, "queued offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, qwait_bucket) == 232, "qwait_bucket offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, qwait_count) == 304, "qwait_count offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, telemetry_stale_ms) == 312, "telemetry_stale_ms offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, src) == 316, "src offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, effective_max_outstanding) == 328, "effective_max_outstanding offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, adaptive) == 340, "adaptive offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, warming_eps) == 346, "warming_eps offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, adapt_down) == 352, "adapt_down offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, tenants_active) == 368, "tenants_active offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, tenant_slots) == 376, "tenant_slots offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, band_inflight) == 380, "band_inflight offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, wake_policy) == 416, "wake_policy offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, src_band) == 430, "src_band offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, band_fallback) == 439, "band_fallback offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, band_outcome) == 448, "band_outcome offset");
 
 __attribute__((weak))
 int proxy_get_fc_stats(proxy_fc_svc_stat_t *out, int max) {

@@ -350,8 +350,8 @@ pool key) and are emitted for every AI-gateway pool in every mode.
 | `loxilb_ai_admission_inflight{role}` | gauge | units held: `service` pool-wide, `normal`/`prefill`/`decode` summed over the endpoints |
 | `loxilb_ai_admission_limit{role}` | gauge | the ceiling in force per role; `role="queue"` is the depth |
 | `loxilb_ai_admission_queued` | gauge | requests waiting right now |
-| `loxilb_ai_admission_queue_wait_seconds` | histogram | how long resumed requests waited (buckets 10 ms to 5 s) |
-| `loxilb_ai_admission_decisions_total{reason}` | counter | `admitted`, `capacity_shed`, `no_healthy_capacity`, `observe_would_shed`, `bypass_non_inference`, `queued`, `queue_full`, `queue_timeout`, `cancelled`, `drained`, `observe_would_queue`, `draining`, `tenant_share` |
+| `loxilb_ai_admission_queue_wait_seconds` | histogram | how long requests waited in the queue (buckets 10 ms to 5 s): one sample per park, when it ends (admitted, expired, shed by eviction, cancelled), measured from the first park; a woken request that goes back to its place is one wait |
+| `loxilb_ai_admission_decisions_total{reason}` | counter | `admitted`, `capacity_shed`, `no_healthy_capacity`, `observe_would_shed`, `bypass_non_inference`, `queued` (once per park), `queue_full`, `queue_timeout`, `cancelled`, `drained`, `observe_would_queue`, `draining`, `tenant_share`, `shed` |
 | `loxilb_ai_admission_effective_limit` | gauge | the service ceiling in force now: the adaptive one while the pool adapts, else the configured one |
 | `loxilb_ai_admission_adapt_state{state}` | gauge | state set, `1` for the current one: `off`, `open`, `tightened`, `frozen` |
 | `loxilb_ai_admission_adapt_reason{reason}` | gauge | state set: `none`, `queued`, `ttft`, `clear`, `stale` |
@@ -359,7 +359,37 @@ pool key) and are emitted for every AI-gateway pool in every mode.
 | `loxilb_ai_admission_warming_endpoints` | gauge | endpoints inside their warm-up window |
 | `loxilb_ai_admission_tenants_active` | gauge | tenants holding a unit or waiting, while the pool has a tenant share |
 | `loxilb_ai_fc_tenant_slots{service, kind}` | gauge | the tenant table, per service: `kind="max"` is the table size (`LLB_FC_TENANT_SLOTS`), `kind="used"` the tenants on the service's fullest pool right now. `used` above `max` means tenants past the table share one budget; alert before that, for example on `used / max > 0.8` |
-| `loxilb_ai_admission_anomalies_total{kind}` | counter | process-wide: `underflow` and `unknown_permit` are bookkeeping faults (any increase is a defect, not load); `tenant_table_full` counts requests whose tenant shared the overflow slot |
+| `loxilb_ai_admission_anomalies_total{kind}` | counter | process-wide: `underflow` and `unknown_permit` are bookkeeping faults and `h2_deny_headers` an HTTP/2 refusal whose headers did not fit its frame (the stream is reset instead): any increase of these three is a defect, not load; `tenant_table_full` counts requests whose tenant shared the overflow slot |
+| `loxilb_ai_fc_band_total{service, band, outcome}` | counter | per service (its pools summed), by priority band (`critical`, `standard`, `sheddable`: the request's class) and outcome; fifteen series per service, zero included. The per-band split of five decisions above, counted where they are counted |
+
+A request's band is its class ([AI gateway controls](19-ai-gateway-controls.md)). `priority_class` is a cap, not a default: to run a tenant's un-hinted requests above `standard`, set its `default_objective` to an objective with a positive priority; `priority_class` only bounds what its requests may be raised to.
+
+The five outcomes of `loxilb_ai_fc_band_total`:
+
+- `admitted`: the request took a capacity unit (terminal).
+- `shed`: `429 admission_shed`, a sheddable request refused at a ceiling or evicted from the queue for a higher band (terminal). With `fc_shed_queue` on, a sheddable request may wait, and when the queue is full an arriving request of any higher band, `standard` as well as `critical`, takes the place of the youngest sheddable waiter; the evicted waiter is answered `429 admission_shed` on its own connection, with `queued_ms` in the body. That is what sheddable means. The connection stays open for the client's next request, as after a queue-full `429`: a `429` asks the client to retry, and closing on it would make every shed client reconnect while the gateway is shedding. The answer normally goes out at the eviction; it is never later than the second pass of the 1 Hz health check. Only an answer that pass writes (the waiter's wake was lost) ends the connection, and it says so with `Connection: close`. HTTP/2 streams never wait in the queue, so an eviction never touches an HTTP/2 connection. At most 16 evicted waiters per pool may be awaiting their answer at once: while 16 are, an arriving request evicts nobody and is refused as a full queue.
+- `expired`: `504 admission_queue_timeout`, its wait window ended while it waited (terminal).
+- `cancelled`: its client left while it waited; nothing is written to it (terminal).
+- `queued`: it parked to wait; counted once per park, not an end (a woken request that goes back to its place is the same park).
+
+Each request lands in exactly one terminal outcome, so per band
+`admitted + shed + expired + cancelled` is the requests of that band, and
+`queued` equals the parked requests that ended admitted, expired, evicted or
+cancelled, unless a parked request was ended another way (a drain of its
+pool). A request refused for any other reason (a full queue, its tenant's
+share, no healthy capacity, a drain) is counted in
+`loxilb_ai_admission_decisions_total` only.
+
+How the `standard` row is counted: a request with no class is `standard`, and
+counting it would add an atomic write on the busiest path (keyless and MCP
+traffic). The gateway therefore counts only `critical` and `sheddable` in
+their own rows, and reads `standard` for each outcome as
+`decisions_total{reason=R} − critical − sheddable`, where R is `admitted`,
+`queued`, `shed`, `queue_timeout` (outcome `expired`) or `cancelled`. Every
+increment of those five reasons is made together with its band's row, at the
+same point, so the difference is exact. A read that falls between the two
+writes of one request can come out one low; the next read is exact again,
+and the published value never goes down, so the series is a true counter.
 
 The process accept valve (`LLB_PD_MAX_TOTAL_INFLIGHT`) bounds connection
 contexts, not requests, before any pool sees them:

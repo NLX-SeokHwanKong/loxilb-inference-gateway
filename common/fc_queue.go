@@ -17,7 +17,6 @@
 package common
 
 import (
-	"fmt"
 	"strconv"
 	"strings"
 )
@@ -163,9 +162,23 @@ const (
 	FcBands
 )
 
-// fcBandWireOrder maps a triple's positions, critical:standard:sheddable,
-// onto the band index.
+// fcBandWireOrder maps a triple's positions, critical:standard:sheddable
+// (highest band first), onto the band index. It is the one mapping between
+// the two orders: FcBandTripleParse and FcBandTripleFormat both go through
+// it, and every other path carries the band-indexed array as it is.
 var fcBandWireOrder = [FcBands]int{FcBandCritical, FcBandStandard, FcBandSheddable}
+
+// FcBandName names a band index as the API, the read-back and the metrics
+// spell it: the request class the band carries.
+func FcBandName(b int) string {
+	switch b {
+	case FcBandCritical:
+		return AIClassCritical
+	case FcBandSheddable:
+		return AIClassSheddable
+	}
+	return AIClassStandard
+}
 
 // Bounds of a rule's band knobs: a weight is at most 62 (0 only in a
 // 0:0:0 triple, judged in the rule layer) and a round, the sum of
@@ -213,7 +226,11 @@ func FcBandTripleFormat(t [FcBands]uint32) string {
 	if t == ([FcBands]uint32{}) {
 		return ""
 	}
-	return fmt.Sprintf("%d:%d:%d", t[FcBandCritical], t[FcBandStandard], t[FcBandSheddable])
+	parts := make([]string, FcBands)
+	for i, b := range fcBandWireOrder {
+		parts[i] = strconv.FormatUint(uint64(t[b]), 10)
+	}
+	return strings.Join(parts, ":")
 }
 
 // The data plane's encoding of a rule's wake policy (enum fc_rule_wake),

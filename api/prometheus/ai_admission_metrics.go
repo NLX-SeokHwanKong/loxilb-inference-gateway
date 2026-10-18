@@ -22,13 +22,14 @@ package prometheus
 // PROXY_FC_STAT_MAX in sockproxy_metrics.h.
 #define PROXY_FC_STAT_MAX 256
 #define PROXY_FC_ROLES 3
-#define PROXY_FC_REASONS 13
+#define PROXY_FC_REASONS 14
 #define PROXY_FC_POOL_LEN 64
 #define PROXY_FC_QWAIT_BUCKETS 8
 #define PROXY_FC_LIMITS 8
 #define PROXY_FC_ADAPT_LIMITS 3
 #define PROXY_FC_BAND_LIMITS 9
 #define PROXY_FC_BANDS 3
+#define PROXY_FC_BAND_OUTCOMES 5
 
 typedef struct proxy_fc_svc_stat {
     uint32_t xip;
@@ -84,26 +85,28 @@ typedef struct proxy_fc_svc_stat {
     uint8_t  shed_queue_cfg;
     uint8_t  tenant_wake_cfg;
     uint8_t  band_pad[5];
+    uint64_t band_outcome[PROXY_FC_BANDS][PROXY_FC_BAND_OUTCOMES];
 } proxy_fc_svc_stat_t;
 // Pinned to the layout in sockproxy_metrics.h.
-_Static_assert(sizeof(proxy_fc_svc_stat_t) == 440, "proxy_fc_svc_stat_t size");
+_Static_assert(sizeof(proxy_fc_svc_stat_t) == 568, "proxy_fc_svc_stat_t size");
 _Static_assert(offsetof(proxy_fc_svc_stat_t, decisions) == 40, "decisions offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, pool) == 144, "pool offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, queued) == 208, "queued offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, qwait_bucket) == 224, "qwait_bucket offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, qwait_count) == 296, "qwait_count offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, telemetry_stale_ms) == 304, "telemetry_stale_ms offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, src) == 308, "src offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, effective_max_outstanding) == 320, "effective_max_outstanding offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, adaptive) == 332, "adaptive offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, warming_eps) == 338, "warming_eps offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, adapt_down) == 344, "adapt_down offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, tenants_active) == 360, "tenants_active offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, tenant_slots) == 368, "tenant_slots offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, band_inflight) == 372, "band_inflight offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, wake_policy) == 408, "wake_policy offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, src_band) == 422, "src_band offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, band_fallback) == 431, "band_fallback offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, pool) == 152, "pool offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, queued) == 216, "queued offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, qwait_bucket) == 232, "qwait_bucket offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, qwait_count) == 304, "qwait_count offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, telemetry_stale_ms) == 312, "telemetry_stale_ms offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, src) == 316, "src offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, effective_max_outstanding) == 328, "effective_max_outstanding offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, adaptive) == 340, "adaptive offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, warming_eps) == 346, "warming_eps offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, adapt_down) == 352, "adapt_down offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, tenants_active) == 368, "tenants_active offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, tenant_slots) == 376, "tenant_slots offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, band_inflight) == 380, "band_inflight offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, wake_policy) == 416, "wake_policy offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, src_band) == 430, "src_band offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, band_fallback) == 439, "band_fallback offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, band_outcome) == 448, "band_outcome offset");
 
 extern int proxy_get_fc_stats(proxy_fc_svc_stat_t *out, int max);
 extern uint64_t proxy_get_fc_anomaly(int kind);
@@ -158,7 +161,7 @@ const (
 
 // Decision reasons, indexed as the gate's enum fc_reason. The wire vocabulary
 // is closed: a reason the gate does not have cannot appear here.
-var admissionReasonLabels = [13]string{
+var admissionReasonLabels = [14]string{
 	"admitted",
 	"capacity_shed",
 	"no_healthy_capacity",
@@ -172,6 +175,7 @@ var admissionReasonLabels = [13]string{
 	"observe_would_queue",
 	"draining",
 	"tenant_share",
+	"shed",
 }
 
 // Queue wait histogram upper bounds in seconds, one per C bucket
@@ -186,7 +190,7 @@ var admissionAdaptStateLabels = [4]string{"off", "open", "tightened", "frozen"}
 var admissionAdaptReasonLabels = [5]string{"none", "queued", "ttft", "clear", "stale"}
 
 // Anomaly kinds, indexed as the gate's enum fc_anomaly.
-var admissionAnomalyLabels = [3]string{"underflow", "unknown_permit", "tenant_table_full"}
+var admissionAnomalyLabels = [4]string{"underflow", "unknown_permit", "tenant_table_full", "h2_deny_headers"}
 
 // admissionSample is one pool's gate state, converted to Go types and label
 // strings.
@@ -199,7 +203,7 @@ type admissionSample struct {
 	inflight       float64
 	epCap          [3]float64
 	epInflight     [3]float64
-	decisions      [13]float64
+	decisions      [14]float64
 
 	queued       float64
 	queueDepth   float64
@@ -215,6 +219,10 @@ type admissionSample struct {
 
 	tenantsActive float64
 	tenantSlots   float64
+
+	// Per band index (cmn.FcBand*) and outcome, as the gate's enum
+	// fc_band_outcome; the series are in ai_fc_band_metrics.go.
+	bandOutcome [3][5]float64
 }
 
 // admissionStore is the state shared between the collection loop (writer)
@@ -225,7 +233,7 @@ type admissionSample struct {
 var (
 	admissionStoreMutex sync.Mutex
 	admissionStore      []admissionSample
-	admissionAnomalies  [3]float64
+	admissionAnomalies  [4]float64
 )
 
 var admissionPoolLabels = []string{"service", "pool"}
@@ -260,12 +268,12 @@ var (
 	)
 	admissionQueueWaitDesc = prometheus.NewDesc(
 		"loxilb_ai_admission_queue_wait_seconds",
-		"Time a request waited in the pool's queue before it was resumed and dispatched; requests that timed out, were cancelled or were drained are counted under their decision reason instead.",
+		"Time a request waited in the pool's queue: one sample per park, taken when the park ends (admitted, expired, shed by eviction or cancelled) and measured from its first park, so a woken request that goes back to its place is one wait, not two. A request drained from the queue is not sampled.",
 		admissionPoolLabels, nil,
 	)
 	admissionDecisionsDesc = prometheus.NewDesc(
 		"loxilb_ai_admission_decisions_total",
-		"Gate decisions per pool and reason: admitted, capacity_shed (429), no_healthy_capacity (503), observe_would_shed (admitted in observe mode where enforce would have refused, counted at each ceiling that would have refused it), bypass_non_inference (not an inference request, no unit taken), queued (parked to wait for a unit), queue_full (429, the queue at its depth), queue_timeout (504, waited the whole window), cancelled (the client left while waiting), drained (the pool or the process stopped taking work while it waited), observe_would_queue (admitted in observe mode where enforce would have parked it), draining (503, the process is draining for maintenance), tenant_share (429, the tenant holds its share of the ceiling or of the queue).",
+		"Gate decisions per pool and reason: admitted, capacity_shed (429), no_healthy_capacity (503), observe_would_shed (admitted in observe mode where enforce would have refused, counted at each ceiling that would have refused it), bypass_non_inference (not an inference request, no unit taken), queued (parked to wait for a unit, once per park: a woken request that goes back to its place is the same park), queue_full (429, the queue at its depth), queue_timeout (504, waited the whole window), cancelled (the client left while waiting), drained (the pool or the process stopped taking work while it waited), observe_would_queue (admitted in observe mode where enforce would have parked it), draining (503, the process is draining for maintenance), tenant_share (429, the tenant holds its share of the ceiling or of the queue), shed (429 admission_shed, a sheddable request refused at a ceiling or evicted from the queue by band policy).",
 		admissionReasonLabelNames, nil,
 	)
 	admissionEffectiveLimitDesc = prometheus.NewDesc(
@@ -305,7 +313,7 @@ var (
 	)
 	admissionAnomaliesDesc = prometheus.NewDesc(
 		"loxilb_ai_admission_anomalies_total",
-		"Accounting anomalies in the capacity gate, process-wide: underflow (a release found its counter at zero), unknown_permit (an executing permit with no pool) and tenant_table_full (a request whose tenant found the pool's tenant table full and shared the last slot with the other tenants past it). underflow and unknown_permit are defects; tenant_table_full means more tenants than the table holds are active on one pool.",
+		"Accounting anomalies in the capacity gate, process-wide: underflow (a release found its counter at zero), unknown_permit (an executing permit with no pool), tenant_table_full (a request whose tenant found the pool's tenant table full and shared the last slot with the other tenants past it) and h2_deny_headers (an HTTP/2 refusal had more headers than its frame holds; the stream was reset instead). underflow, unknown_permit and h2_deny_headers are defects; tenant_table_full means more tenants than the table holds are active on one pool.",
 		admissionAnomalyLabelNames, nil,
 	)
 )
@@ -538,12 +546,17 @@ func refreshAdmissionStore() {
 		s.warmingEps = float64(st.warming_eps)
 		s.tenantsActive = float64(st.tenants_active)
 		s.tenantSlots = float64(st.tenant_slots)
+		for b := 0; b < len(s.bandOutcome); b++ {
+			for o := 0; o < len(s.bandOutcome[b]); o++ {
+				s.bandOutcome[b][o] = float64(st.band_outcome[b][o])
+			}
+		}
 		samples = append(samples, s)
 	}
 	sortAdmissionSamples(samples)
 	samples = dedupeAdmissionSamples(samples)
 
-	var anomalies [3]float64
+	var anomalies [4]float64
 	for k := range admissionAnomalyLabels {
 		anomalies[k] = float64(C.proxy_get_fc_anomaly(C.int(k)))
 	}

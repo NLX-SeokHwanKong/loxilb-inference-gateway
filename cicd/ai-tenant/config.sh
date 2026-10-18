@@ -57,6 +57,21 @@ for p in 8080 8081; do
     echo "FATAL: mock backend :$p did not become ready"; exit 1; }
 done
 
+# h2c backends for the HTTP/2 pool: an HTTP/1.1 server cannot answer the
+# frames the gateway forwards upstream for a stream.
+for p in 9090 9091; do
+  $hexec tqep1 python3 "$(pwd)/../ai-admission/h2c_backend.py" tq-h2-$p $p > /tmp/ai-tenant-h2-$p.log 2>&1 &
+  track_helper
+done
+for p in 9090 9091; do
+  for i in $(seq 1 20); do
+    $hexec tqep1 curl -sf --max-time 1 --http2-prior-knowledge "http://127.0.0.1:$p/__receipts/probe" >/dev/null 2>&1 && break
+    sleep 1
+  done
+  $hexec tqep1 curl -sf --max-time 1 --http2-prior-knowledge "http://127.0.0.1:$p/__receipts/probe" >/dev/null 2>&1 || {
+    echo "FATAL: h2c backend :$p did not become ready"; exit 1; }
+done
+
 echo "#########################################"
 echo "Gateway, tenants, keys, rules"
 echo "#########################################"
@@ -64,4 +79,7 @@ tq_wait_api || exit 1
 tq_wait_boot || exit 1
 tq_add_tenants || exit 1
 tq_add_rules || exit 1
+source ./lib/topo-b.sh
+tqb_pki && tqb_backends_up || exit 1
+tqb_rules_add || exit 1
 echo "config.sh done"

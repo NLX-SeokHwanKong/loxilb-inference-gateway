@@ -813,6 +813,21 @@
    }
   },
   {
+   "name": "loxilb_ai_fc_band_total",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "counter",
+    "labels": [
+     "band",
+     "outcome",
+     "service"
+    ]
+   }
+  },
+  {
    "name": "loxilb_ai_fc_tenant_slots",
    "owner": "loxilb",
    "class": "default",

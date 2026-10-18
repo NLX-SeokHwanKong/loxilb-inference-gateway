@@ -806,7 +806,7 @@ type LoadbalanceEntryServiceArguments struct {
 	// Minimum: 0
 	FcPrefillMaxInflight int32 `json:"fc_prefill_max_inflight,omitempty"`
 
-	// off refuses a sheddable request at the ceiling at once with 429 admission_shed; on lets it wait in its band. on is refused (400) while the queue depth in force (fc_max_queue_depth, else LLB_FC_MAX_QUEUE_DEPTH) is 0. inherit, or omitted on create, runs on the process default (LLB_FC_SHED_QUEUE, else off). Replace and null semantics as fc_mode.
+	// off refuses a sheddable request at the ceiling at once with 429 admission_shed; on lets it wait in its band, and when the queue is full an arriving request of any higher band (standard or critical) evicts the youngest sheddable waiter, which is answered 429 admission_shed. on is refused (400) while the queue depth in force (fc_max_queue_depth, else LLB_FC_MAX_QUEUE_DEPTH) is 0. inherit, or omitted on create, runs on the process default (LLB_FC_SHED_QUEUE, else off). Replace and null semantics as fc_mode.
 	// Enum: [on off inherit]
 	FcShedQueue string `json:"fc_shed_queue,omitempty"`
 
