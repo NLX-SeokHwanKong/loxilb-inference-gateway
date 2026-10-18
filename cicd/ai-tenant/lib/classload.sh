@@ -83,6 +83,15 @@ tq_rule() {
   case "$r" in 200*) return 0 ;; *) return 1 ;; esac
 }
 tq_rule_del() { tq_api DELETE "/config/loadbalancer/externalipaddress/$VIP/port/$1/protocol/tcp" >/dev/null; }
+# tq_rule_del_model <port>: delete a rule made by tq_rule_json. It names a host and a
+# model, its path prefix and match mode, which are part of the rule key: the plain
+# address path would answer 404.
+# Prints the answer ("200 ..." when the rule was deleted).
+tq_rule_del_model() {
+  local enc
+  enc=$(python3 -c "import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1],safe=''))" "$MODEL")
+  tq_api DELETE "/config/loadbalancer/hosturl/$VIP/externalipaddress/$VIP/port/$1/protocol/tcp?model_name=$enc&path_prefix=%2F&path_match_mode=prefix"
+}
 
 SCHED_JSON=", \"api_key_auth\": \"required\", \"fc_max_outstanding\": $SCHED_MAX, \"fc_max_queue_depth\": $SCHED_DEPTH, \"fc_max_queue_wait_ms\": $SCHED_WAIT_MS"
 IDLE_JSON=", \"fc_max_outstanding\": 1, \"fc_max_queue_depth\": 4, \"fc_max_queue_wait_ms\": 5000"
@@ -165,11 +174,38 @@ sched_cfg() {
   case "$r" in 200*) return 0 ;; 409*lbrule-exists*|409*exists*) return 0 ;; esac
   echo "  sched_cfg $*: $(echo "$r" | cut -c1-200)"; return 1
 }
+# pool_cfg <port> <max> <depth> <wait-ms> [<extra-json>]: sched_cfg for any keyed pool.
+pool_cfg() {
+  local port=$1 r; shift
+  r=$(tq_api POST /config/loadbalancer "$(tq_rule_json $port ", \"api_key_auth\": \"required\", \"fc_max_outstanding\": $1, \"fc_max_queue_depth\": $2, \"fc_max_queue_wait_ms\": $3${4:-}" 8080 8081)")
+  case "$r" in 200*) return 0 ;; 409*lbrule-exists*|409*exists*) return 0 ;; esac
+  echo "  pool_cfg $port $*: $(echo "$r" | cut -c1-200)"; return 1
+}
 SCHED_RESET=', "fc_shed_queue": "inherit", "fc_wake_policy": "inherit", "fc_tenant_max_share_pct": 0'
 
 # cl_one <port> <tenant> <nonce> <outdir> [<curl args>...]: one held request,
 # its own nonce, so a case can release requests one at a time.
 cl_one() { local port=$1 tenant=$2 nonce=$3 out=$4; shift 4; cl_fire "$port" "$tenant" 1 "$nonce" "$out" "$@"; }
+# cl_fast <port> <tenant> <nonce> <outdir> <delay-ms> [<curl args>...]: one request
+# the backend answers after <delay-ms> (not held). The time it ended is written
+# beside the answer (<nonce>-1.end, epoch seconds), so the order in which a pool
+# served its waiters, one at a time, can be read back (cl_order).
+cl_fast() {
+  local port=$1 tenant=$2 nonce=$3 out=$4 delay=$5 key=""; shift 5
+  [ "$tenant" != - ] && { source ./keys.env; eval key=\$KEY_${tenant//-/_}; }
+  mkdir -p "$out"
+  ( $hexec tqh1 curl -s -m "${CL_TIMEOUT:-60}" -D "$out/$nonce-1.hdr" -o "$out/$nonce-1.body" \
+      -w '%{http_code} %{time_total}\n' -H 'Content-Type: application/json' \
+      ${key:+-H "X-Api-Key: $key"} -H "X-Test-Nonce: $nonce" -H "X-Test-Delay-Ms: $delay" "$@" \
+      -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"$nonce\"}],\"max_tokens\":4}" \
+      "http://$VIP:$port/v1/chat/completions" > "$out/$nonce-1.code" 2>&1
+    date +%s.%N > "$out/$nonce-1.end" ) &
+}
+# cl_order <outdir> <nonce-glob>: the nonces, in the order their answers ended
+cl_order() {
+  local f
+  for f in "$1"/$2-1.end; do [ -f "$f" ] && echo "$(cat "$f") $(basename "$f" -1.end)"; done | sort -n | awk '{print $2}'
+}
 # cl_errs <outdir> <nonce-glob> -> "<status>:<error>" per response, sorted
 cl_errs() {
   local f c e

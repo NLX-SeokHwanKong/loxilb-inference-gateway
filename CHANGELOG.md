@@ -20,6 +20,13 @@ binary behaves exactly like upstream loxilb.
 
 ### Added
 
+- **Weighted wake and tenant rotation for the priority bands:**
+  `fc_wake_policy: weighted` serves the bands as a deficit round robin by
+  `fc_band_weights` (with `8:3:1`, every 12 wakes are 8 critical, 3 standard and
+  1 sheddable, while all three bands wait), and `fc_tenant_wake: rr` rotates
+  across the tenants waiting inside a band. Floors still come first; a change
+  of policy or weights loses no waiter. Both are off by default (`strict`,
+  `fifo`). See `docs/load-balancing/23-ai-admission-flow-control.md`.
 - **Wait windows and queue shares per band, and the llm-d headers:**
   `fc_band_wait_ms` gives a band its own wait window, a cap inside the rule's
   `fc_max_queue_wait_ms`, and `fc_band_queue_pct` bounds a band's own occupancy

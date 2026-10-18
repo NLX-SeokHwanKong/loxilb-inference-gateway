@@ -58,13 +58,13 @@ X1 implemented a band's window ends while queued (all three bands): 504, everyth
 X1t implemented fc_llmd_headers on: x-llm-d-inference-ttl shortens a wait (429 admission_ttl_expired), never extends it; the refusals carry the dropped-reason; the backend is sent the resolved objective and fairness identity
 X1o implemented fc_llmd_headers off: the TTL header is ignored (504 at the window), no llm-d header on any refusal, the client's headers reach the backend as sent
 X1h implemented over h2c, both arms of fc_llmd_headers: on forwards the resolved objective and fairness identity and puts the dropped-reason on a stream's refusal; off forwards and answers as before
-S2 pending:weighted weighted 8:3:1: admissions per band within 10 percent of 8:3:1
-S5 pending:weighted in-band order fifo against rr
-S9 pending:weighted policy changes with 12 waiters, then the ceiling tightens under a floor
-S10 pending:weighted all knobs set below the ceiling: nothing queued, p99 within tolerance
-S11 pending:weighted two VIPs with independent policies
-X9 pending:weighted replace with waiters continues; delete with waiters 503 admission_drained
-H4 pending:weighted S10 over h2c
+S2 implemented weighted 8:3:1: the wakes of a backlog split 8:3:1 round by round, critical first inside a round, the oldest first inside a band
+S5 implemented in-band order fifo against rr: fifo is arrival order, rr rotates across the tenants that wait in the band
+S9 implemented the policy changes four times with 12 waiters and the ceiling tightens under a floor: nothing waiting is lost, nothing in flight is cut, every request is answered
+S10 implemented every knob set while the load stays below the ceiling: nothing queues, every request is admitted, p99 within tolerance of the same load on defaults
+S11 implemented two VIPs with independent policies: strict on one, weighted on the other, each served in its own order
+X9 implemented a replace with waiters continues them; deleting the rule with waiters answers them 503 admission_drained
+H4 implemented S10 over h2c: every stream admitted, nothing refused or queued, with the knobs set
 EOF
 )
 
@@ -898,6 +898,168 @@ has X1h "the pool back to the process default" 200 "$(h2cfg inherit)"
 
 echo "=== step 5: the pool back to its shape"
 sched_cfg 8 16 30000 "$(fl5_json 0:0:0 0:0:0 inherit inherit)" || fail X1 "reset"
+
+
+# ---- step 6: the weighted wake and the tenant rotation ---------------------------
+S6=$OUT/step6; mkdir -p "$S6"
+# fl6_json <weights c:s:b> <wake policy> <tenant wake> <floors c:s:b> <shed queue>: every
+# knob of this step and the ones before it named, so the case before leaves nothing behind.
+fl6_json() { echo ", \"fc_shed_queue\": \"$5\", \"fc_wake_policy\": \"$2\", \"fc_tenant_max_share_pct\": 0, \"fc_band_min_share_pct\": \"$4\", \"fc_critical_reserve_pct\": 0, \"fc_adaptive\": \"inherit\", \"fc_band_weights\": \"$1\", \"fc_tenant_wake\": \"$3\", \"fc_band_wait_ms\": \"0:0:0\", \"fc_band_queue_pct\": \"0:0:0\", \"fc_llmd_headers\": \"inherit\""; }
+# letters <outdir> <glob> <nonce-prefix-length>: the order a pool served its waiters, one
+# letter each (the character after the prefix), the runner (nonce ending h0) left out
+served() { cl_order "$1" "$2" | grep -v 'h0$' | sed "s/^$3\(.\).*/\1/" | tr -d '\n'; }
+count_of() { echo -n "$1" | tr -cd "$2" | wc -c; }
+# wait_queued <port> <n> [<secs>]: poll the number waiting
+wait_queued() { local i got; for i in $(seq 1 $((${3:-10} * 4))); do got=$(tq_fce $1 .queued); [ "$got" == "$2" ] && { echo "$got"; return; }; sleep 0.25; done; echo "$got"; }
+
+echo "=== S2: weighted 8:3:1, a backlog of 24 behind one running request, a pool of one"
+sched_cfg 1 40 60000 "$(fl6_json 8:3:1 weighted fifo 0:0:0 on)" || fail S2 "pool shape"
+chk S2 "policy in force and the weights as read back" "weighted 8 3 1" "$(fce .wake_policy_effective) $(fce .bands.critical.weight) $(fce .bands.standard.weight) $(fce .bands.sheddable.weight)"
+chk S2 "each weight's share of the round, in percent" "67 25 8" "$(fce .bands.critical.weight_pct) $(fce .bands.standard.weight_pct) $(fce .bands.sheddable.weight_pct)"
+bt_begin $PORT_SCHED
+cl_fast $PORT_SCHED t-a s2-h0 "$S6" 7000; sleep 0.5
+# worst arrival for the old order: the lowest band first, the highest last
+for i in 1 2; do cl_fast $PORT_SCHED t-shed s2-b0$i "$S6" 150; sleep 0.1; done
+for i in 1 2 3 4 5 6; do cl_fast $PORT_SCHED t-a s2-s0$i "$S6" 150; sleep 0.1; done
+for i in 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16; do cl_fast $PORT_SCHED t-crit s2-c$i "$S6" 150; sleep 0.1; done
+chk S2 "all 24 are waiting behind the runner" 24 "$(wait_queued $PORT_SCHED 24 6)"
+wait_done "$S6" 's2-*' 25 40
+SEQ=$(served "$S6" 's2-*' 's2-')
+chk S2 "the first round of twelve: critical eight, standard three, sheddable one" "cccccccc sss b" "$(echo "${SEQ:0:8} ${SEQ:8:3} ${SEQ:11:1}")"
+chk S2 "the second round the same" "cccccccc sss b" "$(echo "${SEQ:12:8} ${SEQ:20:3} ${SEQ:23:1}")"
+chk S2 "all 24 answered 200" 24 "$(cl_errs "$S6" 's2-[bsc]*' | tr ' ' '\n' | grep -c '^200$')"
+bt_end
+bt_check S2 16:7:2 0 24
+
+echo "=== S5: in-band order: fifo against rr, one band, three tenants, a pool of one"
+for arm in fifo rr; do
+  sched_cfg 1 40 60000 "$(fl6_json 0:0:0 strict $arm 0:0:0 inherit)" || fail S5 "pool shape ($arm)"
+  chk S5 "$arm: the tenant order as read back" "$arm" "$(fce .tenant_wake_effective)"
+  cl_fast $PORT_SCHED t-c s5$arm-h0 "$S6" 5000; sleep 0.5
+  n=0
+  for t in a a a a b b c c; do
+    n=$((n + 1)); cl_fast $PORT_SCHED t-$t s5$arm-$t$n "$S6" 150; sleep 0.12
+  done
+  wait_queued $PORT_SCHED 8 5 >/dev/null
+  wait_done "$S6" "s5$arm-*" 9 30
+  SEQ=$(served "$S6" "s5$arm-*" "s5$arm-")
+  if [ "$arm" == fifo ]; then
+    chk S5 "fifo: the arrival order" "aaaabbcc" "$SEQ"
+  else
+    # The rotation starts wherever the pool's tenant slots put it, so the order
+    # is read as a property: three different tenants a turn while all three
+    # wait, the oldest of a tenant first, nobody served twice in a row before
+    # the others had a turn.
+    chk S5 "rr: the first three turns go to three different tenants" 3 "$(echo -n "${SEQ:0:3}" | fold -w1 | sort -u | wc -l)"
+    chk S5 "rr: so do the next three" 3 "$(echo -n "${SEQ:3:3}" | fold -w1 | sort -u | wc -l)"
+    chk S5 "rr: then the tenant with waiters left (a: two)" "aa" "${SEQ:6:2}"
+    A_ORDER=$(cl_order "$S6" "s5rr-a*" | tr '\n' ' ' | sed 's/s5rr-//g; s/ $//')
+    chk S5 "rr: inside one tenant the oldest first" "a1 a2 a3 a4" "$A_ORDER"
+  fi
+  chk S5 "$arm: all nine answered 200" 9 "$(cl_errs "$S6" "s5$arm-*" | tr ' ' '\n' | grep -c '^200$')"
+done
+
+echo "=== S9: the policy changes four times with 12 waiters, then the ceiling tightens under a floor"
+sched_cfg 4 40 60000 "$(fl6_json 0:0:0 strict fifo 0:0:0 on)" || fail S9 "pool shape"
+bt_settle    # the collector must have published the case before, or its last requests are counted here
+bt_begin $PORT_SCHED
+for i in 1 2 3 4; do cl_one $PORT_SCHED t-crit s9r$i "$S6"; done
+for i in 1 2 3 4; do wait_receipts s9r$i 1 >/dev/null; done
+for i in 1 2 3 4; do cl_one $PORT_SCHED t-crit s9c$i "$S6"; sleep 0.15; cl_one $PORT_SCHED t-a s9s$i "$S6"; sleep 0.15; cl_one $PORT_SCHED t-shed s9b$i "$S6"; sleep 0.15; done
+chk S9 "twelve wait, four run" "12 4" "$(wait_queued $PORT_SCHED 12 6) $(fce .inflight)"
+chk S9 "waiting per band" "4 4 4" "$(bq critical) $(bq standard) $(bq sheddable)"
+for step in "8:3:1 weighted fifo" "8:3:1 weighted rr" "0:0:0 strict rr" "0:0:0 strict fifo"; do
+  set -- $step
+  sched_cfg 4 40 60000 "$(fl6_json $1 $2 $3 0:0:0 on)" || fail S9 "replace $step"
+  sleep 0.3
+  chk S9 "after the replace to $2/$3: nobody lost, nobody cut" "12 4 4 4 4" "$(fce .queued) $(fce .inflight) $(bq critical) $(bq standard) $(bq sheddable)"
+done
+sched_cfg 2 40 60000 "$(fl6_json 0:0:0 strict fifo 0:0:25 on)" || fail S9 "tighten"
+sleep 0.5
+chk S9 "ceiling 2 with a sheddable floor of 25 %: the floor is one unit, nothing in flight is cut, nobody left" "1 4 12" "$(fce .bands.sheddable.floor_units) $(fce .inflight) $(fce .queued)"
+drain_all; wait_done "$S6" 's9*' 16 40
+chk S9 "all sixteen answered 200" 16 "$(cl_errs "$S6" 's9*' | tr ' ' '\n' | grep -c '^200$')"
+bt_end
+bt_check S9 8:4:4 0 12
+
+echo "=== S10: every knob set while the load stays below the ceiling"
+p99() { sort -n | awk '{a[NR]=$1} END {i=int(NR*0.99); if (i<NR*0.99) i++; print a[i]}'; }
+s10_load() { # s10_load <tag>: 80 requests, ten at a time, the backend answering after 40 ms
+  local w i
+  for w in 1 2 3 4 5 6 7 8; do
+    for i in 1 2 3 4 5 6 7 8 9 10; do cl_fast $PORT_SCHED t-a s10$1-$w-$i "$S6" 40; done
+    wait_done "$S6" "s10$1-$w-*" 10 10
+  done
+}
+sched_cfg 64 16 30000 "$(fl6_json 0:0:0 strict fifo 0:0:0 inherit)" || fail S10 "pool shape (defaults)"
+s10_load base
+BASE99=$(cat "$S6"/s10base-*-1.code | awk '{print $2}' | p99)
+sched_cfg 64 16 30000 "$(fl6_json 8:3:1 weighted rr 0:20:10 on | sed 's/"fc_band_wait_ms": "0:0:0"/"fc_band_wait_ms": "1000:2000:500"/; s/"fc_band_queue_pct": "0:0:0"/"fc_band_queue_pct": "25:50:25"/; s/"fc_llmd_headers": "inherit"/"fc_llmd_headers": "on"/; s/"fc_critical_reserve_pct": 0/"fc_critical_reserve_pct": 10/')" || fail S10 "pool shape (knobs)"
+chk S10 "every knob in force" "weighted rr 20 10 10 on" "$(fce .wake_policy_effective) $(fce .tenant_wake_effective) $(fce .bands.standard.min_share_pct) $(fce .bands.sheddable.min_share_pct) $(fce .bands.critical_reserve_pct) $(fce .llmd_headers)"
+bt_settle
+bt_begin $PORT_SCHED
+s10_load knob
+KNOB99=$(cat "$S6"/s10knob-*-1.code | awk '{print $2}' | p99)
+chk S10 "all 80 answered 200" 80 "$(cl_errs "$S6" 's10knob-*' | tr ' ' '\n' | grep -c '^200$')"
+chk S10 "nothing waited" 0 "$(fce .queued)"
+bt_end
+bt_check S10 0:80:0 0 0
+chk S10 "no request was parked" 0 "$(( $(bd critical.queued) + $(bd standard.queued) + $(bd sheddable.queued) ))"
+chk S10 "p99 within tolerance of the defaults (knobs ${KNOB99}s, defaults ${BASE99}s: at most 1.5 times and 100 ms)" yes "$(awk -v k="$KNOB99" -v b="$BASE99" 'BEGIN {print (k <= b * 1.5 + 0.1) ? "yes" : "no"}')"
+
+echo "=== S11: two VIPs with independent policies, a pool of one each"
+PORT_S11=8111
+sched_cfg 1 40 60000 "$(fl6_json 0:0:0 strict fifo 0:0:0 on)" || fail S11 "pool shape (strict)"
+pool_cfg $PORT_S11 1 40 60000 "$(fl6_json 1:1:1 weighted fifo 0:0:0 on)" || fail S11 "pool shape (weighted)"
+for pr in "$PORT_SCHED sa" "$PORT_S11 sb"; do
+  set -- $pr
+  cl_fast $1 t-a s11$2-h0 "$S6" 5000
+done
+sleep 0.6
+for pr in "$PORT_SCHED sa" "$PORT_S11 sb"; do
+  set -- $pr
+  cl_fast $1 t-a s11$2-s1 "$S6" 150; sleep 0.1
+  cl_fast $1 t-b s11$2-s2 "$S6" 150; sleep 0.1
+  cl_fast $1 t-shed s11$2-b1 "$S6" 150; sleep 0.1
+  cl_fast $1 t-crit s11$2-c1 "$S6" 150; sleep 0.1
+done
+wait_done "$S6" 's11s?-*' 10 30
+chk S11 "strict (:$PORT_SCHED): critical, standard, standard, sheddable" "csb" "$(cl_order "$S6" 's11sa-*' | grep -v 'h0$' | sed 's/^s11sa-\(.\).*/\1/' | uniq | tr -d '\n')"
+chk S11 "weighted 1:1:1 (:$PORT_S11): critical, standard, sheddable, then standard again" "csbs" "$(cl_order "$S6" 's11sb-*' | grep -v 'h0$' | sed 's/^s11sb-\(.\).*/\1/' | tr -d '\n')"
+chk S11 "each read back its own policy" "strict weighted" "$(fce .wake_policy_effective) $(tq_fce $PORT_S11 .wake_policy_effective)"
+has S11 "the second VIP's rule deleted" 200 "$(tq_rule_del_model $PORT_S11)"
+
+echo "=== X9: a replace with waiters continues them; deleting the rule answers them 503 admission_drained"
+PORT_X9=8110
+pool_cfg $PORT_X9 1 8 30000 "$(fl6_json 0:0:0 strict fifo 0:0:0 on)" || fail X9 "pool shape"
+cl_one $PORT_X9 t-a x9r "$S6"; wait_receipts x9r 1 >/dev/null
+cl_one $PORT_X9 t-crit x9c "$S6"; sleep 0.2; cl_one $PORT_X9 t-a x9s "$S6"; sleep 0.2; cl_one $PORT_X9 t-shed x9b "$S6"; sleep 0.4
+chk X9 "three wait, one runs" "3 1" "$(tq_fce $PORT_X9 .queued) $(tq_fce $PORT_X9 .inflight)"
+pool_cfg $PORT_X9 1 8 30000 "$(fl6_json 8:3:1 weighted rr 0:0:0 on)" || fail X9 "replace"
+sleep 0.4
+chk X9 "after a replace to weighted/rr: the same three wait, the same one runs" "3 1 weighted" "$(tq_fce $PORT_X9 .queued) $(tq_fce $PORT_X9 .inflight) $(tq_fce $PORT_X9 .wake_policy_effective)"
+has X9 "the rule deleted" 200 "$(tq_rule_del_model $PORT_X9)"
+wait_done "$S6" 'x9[csb]' 3 10
+chk X9 "the three waiters were answered 503 admission_drained" "503:admission_drained 503:admission_drained 503:admission_drained" "$(cl_errs "$S6" 'x9[csb]')"
+chk X9 "none of them reached a backend" "0 0 0" "$(cl_receipts x9c) $(cl_receipts x9s) $(cl_receipts x9b)"
+cl_release_all; sleep 1
+chk X9 "the backends hold nothing" 0 "$($hexec tqep1 curl -s -m 3 http://127.0.0.1:8080/__inflight | jq -r .inflight)"
+chk X9 "the rule is gone: a second delete finds nothing" 404 "$(tq_rule_del_model $PORT_X9 | cut -c1-3)"
+
+echo "=== H4: S10 over h2c, every knob but the reserve set"
+h2knobs() { tq_api POST /config/loadbalancer "$(tq_rule_json $PORT_H2 ", \"api_key_auth\": \"required\", \"backend_protocol\": \"http2\", \"fc_max_outstanding\": 2, $1" 9090 9091)"; }
+has H4 "the knobs applied" 200 "$(h2knobs '"fc_wake_policy": "weighted", "fc_band_weights": "8:3:1", "fc_band_min_share_pct": "0:20:10", "fc_critical_reserve_pct": 0, "fc_band_wait_ms": "1000:2000:500", "fc_band_queue_pct": "25:50:25", "fc_shed_queue": "inherit", "fc_tenant_wake": "rr", "fc_llmd_headers": "on"')"
+bt_begin $PORT_H2
+for i in 1 2 3 4 5 6 7 8; do
+  chk H4 "round $i: two streams, both admitted" '{"200":2}' "$(h2run t-a --streams 2 --delay-ms 50 --nonce-prefix h4-$i | jq -c 'select(.summary) | .summary')"
+done
+chk H4 "nothing waited" 0 "$(tq_fce $PORT_H2 .queued)"
+bt_end
+bt_check H4 0:16:0 0 0
+has H4 "the pool back to the process default" 200 "$(h2knobs '"fc_wake_policy": "inherit", "fc_band_weights": "0:0:0", "fc_band_min_share_pct": "0:0:0", "fc_critical_reserve_pct": 0, "fc_band_wait_ms": "0:0:0", "fc_band_queue_pct": "0:0:0", "fc_shed_queue": "inherit", "fc_tenant_wake": "inherit", "fc_llmd_headers": "inherit"')"
+
+echo "=== step 6: the pool back to its shape"
+sched_cfg 8 16 30000 "$(fl6_json 0:0:0 inherit inherit 0:0:0 inherit)" || fail S2 "reset"
 
 # ---- step 3, group B: P/D, stateless MCP, CHWBL, backend failures ---------------
 # B15 last: it persists the configuration and restarts the gateway twice.

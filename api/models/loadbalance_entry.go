@@ -753,7 +753,7 @@ type LoadbalanceEntryServiceArguments struct {
 	// Each band's wait window, critical:standard:sheddable, in milliseconds, each 0 to 3600000. A band's window is a cap inside the rule's window (fc_max_queue_wait_ms), never above it: a larger value runs at the rule's window, and 0 is the rule's window. A waiter whose window ends is answered 504 admission_queue_timeout. 0:0:0 (the default) resets every band to the queue's window. Replace and null semantics as fc_band_weights.
 	FcBandWaitMs string `json:"fc_band_wait_ms,omitempty"`
 
-	// The weighted wake's weights, written critical:standard:sheddable (for example 8:3:1): three whole numbers, each 1 to 62, at most 64 together, or 0:0:0 for none (a zero weight beside non-zero ones is refused, 400). Declared under strict they are kept and reported unused in fc_effective, so a later switch to weighted finds them. Not three whole numbers separated by ':' is refused (400). 0:0:0 resets to none; omitted on a replace keeps the stored value; explicit JSON null is rejected.
+	// The weighted wake's weights, written critical:standard:sheddable (for example 8:3:1): three whole numbers, each 1 to 62, at most 64 together, or 0:0:0 for none (a zero weight beside non-zero ones is refused, 400). Each is the band's credits per round. Declared under strict they are stored and reported as not in use in fc_effective, so a later switch to weighted finds them. A change of weights starts a new round. Not three whole numbers separated by ':' is refused (400). 0:0:0 resets to none; omitted on a replace keeps the stored value; explicit JSON null is rejected.
 	FcBandWeights string `json:"fc_band_weights,omitempty"`
 
 	// The only true reservation: the percent of the ceiling in force (rounded up to whole units) that no other band may take, even when critical is idle. It holds on HTTP/2 and role legs as well, which never wait. Together with the standard and sheddable entries of fc_band_min_share_pct at most 100 (400 naming fc_critical_reserve_pct); the critical entry of fc_band_min_share_pct is a separate floor, and critical holds the larger of the two. 0 or omitted on create is none. Replace and null semantics as fc_max_outstanding.
@@ -820,7 +820,7 @@ type LoadbalanceEntryServiceArguments struct {
 	// Minimum: 0
 	FcTenantMaxSharePct int32 `json:"fc_tenant_max_share_pct,omitempty"`
 
-	// The order inside one band. fifo wakes the oldest runnable waiter; rr rotates across the tenants with a runnable waiter in the band, oldest first inside one tenant. inherit, or omitted on create, runs on the process default (LLB_FC_TENANT_WAKE, else fifo). Replace and null semantics as fc_mode.
+	// The order inside one band. fifo wakes the oldest runnable waiter and does not tell tenants apart; rr rotates across the tenants with a runnable waiter in the band, oldest first inside one tenant, each band keeping its own place in the rotation. rr needs no fc_tenant_max_share_pct. inherit, or omitted on create, runs on the process default (LLB_FC_TENANT_WAKE, else fifo). Replace and null semantics as fc_mode.
 	// Enum: [fifo rr inherit]
 	FcTenantWake string `json:"fc_tenant_wake,omitempty"`
 
@@ -829,7 +829,7 @@ type LoadbalanceEntryServiceArguments struct {
 	// Minimum: 0
 	FcTtftTargetMs int32 `json:"fc_ttft_target_ms,omitempty"`
 
-	// Which priority band a freed service unit wakes when requests of several bands wait (critical, standard, sheddable: the class the request's objective resolved to). Bands act only with fc_mode enforce, below the ceiling every band is admitted at once, and HTTP/2 streams and P/D role legs never queue (for them the band decides the refusal only). strict wakes the highest band with a runnable waiter: while higher-band demand keeps the ceiling full, a lower band is admitted zero requests, and each waiter is refused when its band's wait window ends. weighted gives each band with waiters its fc_band_weights share of the wake-ups, counted over every c+s+b consecutive wake-ups; a band with waiters is passed over at most c+s+b minus its own weight times in a row; the share is of admissions, not of tokens or latency. weighted needs every weight at least 1 (400 otherwise). inherit, or omitted on create, runs on the process default (LLB_FC_WAKE_POLICY, else strict). Refused (400) beside sockMapMode both or request on a rule that is not an AI-gateway service, as is every band knob other than its default. Such a rule that INHERITS weighted (or another band setting it would be refused for declaring) runs every band knob at its default instead, logs one warning at apply time and reads back fc_effective.wake_policy_effective with band_fallback_reason; so does weighted without a weight for every band. In this release the band knobs are accepted, stored and read back. Replace and null semantics as fc_mode.
+	// Which priority band a freed service unit wakes when requests of several bands wait (critical, standard, sheddable: the class the request's objective resolved to). Bands act only with fc_mode enforce, below the ceiling every band is admitted at once, and HTTP/2 streams and P/D role legs never queue (for them the band decides the refusal only). strict wakes the highest band with a runnable waiter: while higher-band demand keeps the ceiling full, a lower band is admitted zero requests, and each waiter is refused when its band's wait window ends. weighted is a deficit round robin by fc_band_weights: each band with a runnable waiter gets its weight in credits per round, the highest band with credit left is served first, one wake costs one credit, and a band with no runnable waiter forfeits its turn; over whole rounds the wake-ups split exactly as the weights do (8:3:1 is 8 critical, 3 standard, 1 sheddable in every 12). The share is of admissions, not of tokens or latency, and a floor is served before the round. weighted needs every weight at least 1 (400 otherwise). inherit, or omitted on create, runs on the process default (LLB_FC_WAKE_POLICY, else strict). Refused (400) beside sockMapMode both or request on a rule that is not an AI-gateway service, as is every band knob other than its default. Such a rule that INHERITS weighted (or another band setting it would be refused for declaring) runs every band knob at its default instead, logs one warning at apply time and reads back fc_effective.wake_policy_effective with band_fallback_reason; so does weighted without a weight for every band. A change of policy starts a new round and loses no waiter. Replace and null semantics as fc_mode.
 	// Enum: [strict weighted inherit]
 	FcWakePolicy string `json:"fc_wake_policy,omitempty"`
 
@@ -3260,11 +3260,11 @@ type LoadbalanceEntryServiceArgumentsFcEffective struct {
 	// Tenants the pool tracks by name at once for the tenant share; tenants past it share one budget. Fixed when the pool is created (LLB_FC_TENANT_SLOTS).
 	TenantSlots int32 `json:"tenant_slots"`
 
-	// The order inside one band, as configured.
+	// The order inside one band, as configured (fifo, or rr across tenants).
 	// Enum: [fifo rr]
 	TenantWake string `json:"tenant_wake,omitempty"`
 
-	// The order inside one band the gate runs.
+	// The order inside one band the gate runs (fifo, or rr across tenants).
 	// Enum: [fifo rr]
 	TenantWakeEffective string `json:"tenant_wake_effective,omitempty"`
 
@@ -3274,7 +3274,7 @@ type LoadbalanceEntryServiceArgumentsFcEffective struct {
 	// ttft target ms
 	TtftTargetMs int32 `json:"ttft_target_ms"`
 
-	// The wake policy as configured, by the rule or inherited (source.wake_policy); wake_policy_effective is the one the gate runs. strict - while higher-band demand keeps the ceiling full, a lower band is admitted zero requests; each waiter is refused when its band's wait window ends. weighted - while several bands have waiters, each receives its weight's share of wake-ups, counted over every c+s+b consecutive wake-ups; the share is of admissions, not of tokens, GPU time or latency. No band is promoted because it has waited long.
+	// The wake policy as configured, by the rule or inherited (source.wake_policy); wake_policy_effective is the one the gate runs. strict - while higher-band demand keeps the ceiling full, a lower band is admitted zero requests; each waiter is refused when its band's wait window ends. weighted - a deficit round robin: while several bands have waiters, each receives its weight's share of wake-ups, exactly over whole rounds (8:3:1 is 8, 3, 1 in every 12); the share is of admissions, not of tokens, GPU time or latency. No band is promoted because it has waited long.
 	// Enum: [strict weighted]
 	WakePolicy string `json:"wake_policy,omitempty"`
 
@@ -3288,7 +3288,7 @@ type LoadbalanceEntryServiceArgumentsFcEffective struct {
 	// warmup ms
 	WarmupMs int32 `json:"warmup_ms"`
 
-	// false unless wake_policy_effective is weighted; declared weights are kept but unused.
+	// true when wake_policy_effective is weighted and the weights decide the wake; declared weights are stored but not in use otherwise.
 	WeightsInUse bool `json:"weights_in_use"`
 }
 

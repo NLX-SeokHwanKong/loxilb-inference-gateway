@@ -2305,7 +2305,7 @@ func init() {
           "x-omitempty": false
         },
         "weight": {
-          "description": "The band's weighted-wake weight; 0 is not set.",
+          "description": "The band's credits per round under the weighted wake; 0 is not set.",
           "format": "int32",
           "type": "integer",
           "x-omitempty": false
@@ -5107,7 +5107,7 @@ func init() {
               "x-nullable": false
             },
             "fc_band_weights": {
-              "description": "The weighted wake's weights, written critical:standard:sheddable (for example 8:3:1): three whole numbers, each 1 to 62, at most 64 together, or 0:0:0 for none (a zero weight beside non-zero ones is refused, 400). Declared under strict they are kept and reported unused in fc_effective, so a later switch to weighted finds them. Not three whole numbers separated by ':' is refused (400). 0:0:0 resets to none; omitted on a replace keeps the stored value; explicit JSON null is rejected.",
+              "description": "The weighted wake's weights, written critical:standard:sheddable (for example 8:3:1): three whole numbers, each 1 to 62, at most 64 together, or 0:0:0 for none (a zero weight beside non-zero ones is refused, 400). Each is the band's credits per round. Declared under strict they are stored and reported as not in use in fc_effective, so a later switch to weighted finds them. A change of weights starts a new round. Not three whole numbers separated by ':' is refused (400). 0:0:0 resets to none; omitted on a replace keeps the stored value; explicit JSON null is rejected.",
               "type": "string",
               "x-nullable": false
             },
@@ -5609,7 +5609,7 @@ func init() {
                   "x-omitempty": false
                 },
                 "tenant_wake": {
-                  "description": "The order inside one band, as configured.",
+                  "description": "The order inside one band, as configured (fifo, or rr across tenants).",
                   "enum": [
                     "fifo",
                     "rr"
@@ -5617,7 +5617,7 @@ func init() {
                   "type": "string"
                 },
                 "tenant_wake_effective": {
-                  "description": "The order inside one band the gate runs.",
+                  "description": "The order inside one band the gate runs (fifo, or rr across tenants).",
                   "enum": [
                     "fifo",
                     "rr"
@@ -5636,7 +5636,7 @@ func init() {
                   "x-omitempty": false
                 },
                 "wake_policy": {
-                  "description": "The wake policy as configured, by the rule or inherited (source.wake_policy); wake_policy_effective is the one the gate runs. strict - while higher-band demand keeps the ceiling full, a lower band is admitted zero requests; each waiter is refused when its band's wait window ends. weighted - while several bands have waiters, each receives its weight's share of wake-ups, counted over every c+s+b consecutive wake-ups; the share is of admissions, not of tokens, GPU time or latency. No band is promoted because it has waited long.",
+                  "description": "The wake policy as configured, by the rule or inherited (source.wake_policy); wake_policy_effective is the one the gate runs. strict - while higher-band demand keeps the ceiling full, a lower band is admitted zero requests; each waiter is refused when its band's wait window ends. weighted - a deficit round robin: while several bands have waiters, each receives its weight's share of wake-ups, exactly over whole rounds (8:3:1 is 8, 3, 1 in every 12); the share is of admissions, not of tokens, GPU time or latency. No band is promoted because it has waited long.",
                   "enum": [
                     "strict",
                     "weighted"
@@ -5663,7 +5663,7 @@ func init() {
                   "x-omitempty": false
                 },
                 "weights_in_use": {
-                  "description": "false unless wake_policy_effective is weighted; declared weights are kept but unused.",
+                  "description": "true when wake_policy_effective is weighted and the weights decide the wake; declared weights are stored but not in use otherwise.",
                   "type": "boolean",
                   "x-omitempty": false
                 }
@@ -5776,7 +5776,7 @@ func init() {
               "x-nullable": false
             },
             "fc_tenant_wake": {
-              "description": "The order inside one band. fifo wakes the oldest runnable waiter; rr rotates across the tenants with a runnable waiter in the band, oldest first inside one tenant. inherit, or omitted on create, runs on the process default (LLB_FC_TENANT_WAKE, else fifo). Replace and null semantics as fc_mode.",
+              "description": "The order inside one band. fifo wakes the oldest runnable waiter and does not tell tenants apart; rr rotates across the tenants with a runnable waiter in the band, oldest first inside one tenant, each band keeping its own place in the rotation. rr needs no fc_tenant_max_share_pct. inherit, or omitted on create, runs on the process default (LLB_FC_TENANT_WAKE, else fifo). Replace and null semantics as fc_mode.",
               "enum": [
                 "fifo",
                 "rr",
@@ -5795,7 +5795,7 @@ func init() {
               "x-nullable": false
             },
             "fc_wake_policy": {
-              "description": "Which priority band a freed service unit wakes when requests of several bands wait (critical, standard, sheddable: the class the request's objective resolved to). Bands act only with fc_mode enforce, below the ceiling every band is admitted at once, and HTTP/2 streams and P/D role legs never queue (for them the band decides the refusal only). strict wakes the highest band with a runnable waiter: while higher-band demand keeps the ceiling full, a lower band is admitted zero requests, and each waiter is refused when its band's wait window ends. weighted gives each band with waiters its fc_band_weights share of the wake-ups, counted over every c+s+b consecutive wake-ups; a band with waiters is passed over at most c+s+b minus its own weight times in a row; the share is of admissions, not of tokens or latency. weighted needs every weight at least 1 (400 otherwise). inherit, or omitted on create, runs on the process default (LLB_FC_WAKE_POLICY, else strict). Refused (400) beside sockMapMode both or request on a rule that is not an AI-gateway service, as is every band knob other than its default. Such a rule that INHERITS weighted (or another band setting it would be refused for declaring) runs every band knob at its default instead, logs one warning at apply time and reads back fc_effective.wake_policy_effective with band_fallback_reason; so does weighted without a weight for every band. In this release the band knobs are accepted, stored and read back. Replace and null semantics as fc_mode.",
+              "description": "Which priority band a freed service unit wakes when requests of several bands wait (critical, standard, sheddable: the class the request's objective resolved to). Bands act only with fc_mode enforce, below the ceiling every band is admitted at once, and HTTP/2 streams and P/D role legs never queue (for them the band decides the refusal only). strict wakes the highest band with a runnable waiter: while higher-band demand keeps the ceiling full, a lower band is admitted zero requests, and each waiter is refused when its band's wait window ends. weighted is a deficit round robin by fc_band_weights: each band with a runnable waiter gets its weight in credits per round, the highest band with credit left is served first, one wake costs one credit, and a band with no runnable waiter forfeits its turn; over whole rounds the wake-ups split exactly as the weights do (8:3:1 is 8 critical, 3 standard, 1 sheddable in every 12). The share is of admissions, not of tokens or latency, and a floor is served before the round. weighted needs every weight at least 1 (400 otherwise). inherit, or omitted on create, runs on the process default (LLB_FC_WAKE_POLICY, else strict). Refused (400) beside sockMapMode both or request on a rule that is not an AI-gateway service, as is every band knob other than its default. Such a rule that INHERITS weighted (or another band setting it would be refused for declaring) runs every band knob at its default instead, logs one warning at apply time and reads back fc_effective.wake_policy_effective with band_fallback_reason; so does weighted without a weight for every band. A change of policy starts a new round and loses no waiter. Replace and null semantics as fc_mode.",
               "enum": [
                 "strict",
                 "weighted",
@@ -38811,7 +38811,7 @@ func init() {
           "x-omitempty": false
         },
         "weight": {
-          "description": "The band's weighted-wake weight; 0 is not set.",
+          "description": "The band's credits per round under the weighted wake; 0 is not set.",
           "type": "integer",
           "format": "int32",
           "x-omitempty": false
@@ -41603,7 +41603,7 @@ func init() {
               "x-nullable": false
             },
             "fc_band_weights": {
-              "description": "The weighted wake's weights, written critical:standard:sheddable (for example 8:3:1): three whole numbers, each 1 to 62, at most 64 together, or 0:0:0 for none (a zero weight beside non-zero ones is refused, 400). Declared under strict they are kept and reported unused in fc_effective, so a later switch to weighted finds them. Not three whole numbers separated by ':' is refused (400). 0:0:0 resets to none; omitted on a replace keeps the stored value; explicit JSON null is rejected.",
+              "description": "The weighted wake's weights, written critical:standard:sheddable (for example 8:3:1): three whole numbers, each 1 to 62, at most 64 together, or 0:0:0 for none (a zero weight beside non-zero ones is refused, 400). Each is the band's credits per round. Declared under strict they are stored and reported as not in use in fc_effective, so a later switch to weighted finds them. A change of weights starts a new round. Not three whole numbers separated by ':' is refused (400). 0:0:0 resets to none; omitted on a replace keeps the stored value; explicit JSON null is rejected.",
               "type": "string",
               "x-nullable": false
             },
@@ -42080,7 +42080,7 @@ func init() {
                   "format": "int32"
                 },
                 "tenant_wake": {
-                  "description": "The order inside one band, as configured.",
+                  "description": "The order inside one band, as configured (fifo, or rr across tenants).",
                   "type": "string",
                   "enum": [
                     "fifo",
@@ -42088,7 +42088,7 @@ func init() {
                   ]
                 },
                 "tenant_wake_effective": {
-                  "description": "The order inside one band the gate runs.",
+                  "description": "The order inside one band the gate runs (fifo, or rr across tenants).",
                   "type": "string",
                   "enum": [
                     "fifo",
@@ -42106,7 +42106,7 @@ func init() {
                   "format": "int32"
                 },
                 "wake_policy": {
-                  "description": "The wake policy as configured, by the rule or inherited (source.wake_policy); wake_policy_effective is the one the gate runs. strict - while higher-band demand keeps the ceiling full, a lower band is admitted zero requests; each waiter is refused when its band's wait window ends. weighted - while several bands have waiters, each receives its weight's share of wake-ups, counted over every c+s+b consecutive wake-ups; the share is of admissions, not of tokens, GPU time or latency. No band is promoted because it has waited long.",
+                  "description": "The wake policy as configured, by the rule or inherited (source.wake_policy); wake_policy_effective is the one the gate runs. strict - while higher-band demand keeps the ceiling full, a lower band is admitted zero requests; each waiter is refused when its band's wait window ends. weighted - a deficit round robin: while several bands have waiters, each receives its weight's share of wake-ups, exactly over whole rounds (8:3:1 is 8, 3, 1 in every 12); the share is of admissions, not of tokens, GPU time or latency. No band is promoted because it has waited long.",
                   "type": "string",
                   "enum": [
                     "strict",
@@ -42132,7 +42132,7 @@ func init() {
                   "format": "int32"
                 },
                 "weights_in_use": {
-                  "description": "false unless wake_policy_effective is weighted; declared weights are kept but unused.",
+                  "description": "true when wake_policy_effective is weighted and the weights decide the wake; declared weights are stored but not in use otherwise.",
                   "type": "boolean"
                 }
               },
@@ -42243,7 +42243,7 @@ func init() {
               "x-nullable": false
             },
             "fc_tenant_wake": {
-              "description": "The order inside one band. fifo wakes the oldest runnable waiter; rr rotates across the tenants with a runnable waiter in the band, oldest first inside one tenant. inherit, or omitted on create, runs on the process default (LLB_FC_TENANT_WAKE, else fifo). Replace and null semantics as fc_mode.",
+              "description": "The order inside one band. fifo wakes the oldest runnable waiter and does not tell tenants apart; rr rotates across the tenants with a runnable waiter in the band, oldest first inside one tenant, each band keeping its own place in the rotation. rr needs no fc_tenant_max_share_pct. inherit, or omitted on create, runs on the process default (LLB_FC_TENANT_WAKE, else fifo). Replace and null semantics as fc_mode.",
               "type": "string",
               "enum": [
                 "fifo",
@@ -42262,7 +42262,7 @@ func init() {
               "x-nullable": false
             },
             "fc_wake_policy": {
-              "description": "Which priority band a freed service unit wakes when requests of several bands wait (critical, standard, sheddable: the class the request's objective resolved to). Bands act only with fc_mode enforce, below the ceiling every band is admitted at once, and HTTP/2 streams and P/D role legs never queue (for them the band decides the refusal only). strict wakes the highest band with a runnable waiter: while higher-band demand keeps the ceiling full, a lower band is admitted zero requests, and each waiter is refused when its band's wait window ends. weighted gives each band with waiters its fc_band_weights share of the wake-ups, counted over every c+s+b consecutive wake-ups; a band with waiters is passed over at most c+s+b minus its own weight times in a row; the share is of admissions, not of tokens or latency. weighted needs every weight at least 1 (400 otherwise). inherit, or omitted on create, runs on the process default (LLB_FC_WAKE_POLICY, else strict). Refused (400) beside sockMapMode both or request on a rule that is not an AI-gateway service, as is every band knob other than its default. Such a rule that INHERITS weighted (or another band setting it would be refused for declaring) runs every band knob at its default instead, logs one warning at apply time and reads back fc_effective.wake_policy_effective with band_fallback_reason; so does weighted without a weight for every band. In this release the band knobs are accepted, stored and read back. Replace and null semantics as fc_mode.",
+              "description": "Which priority band a freed service unit wakes when requests of several bands wait (critical, standard, sheddable: the class the request's objective resolved to). Bands act only with fc_mode enforce, below the ceiling every band is admitted at once, and HTTP/2 streams and P/D role legs never queue (for them the band decides the refusal only). strict wakes the highest band with a runnable waiter: while higher-band demand keeps the ceiling full, a lower band is admitted zero requests, and each waiter is refused when its band's wait window ends. weighted is a deficit round robin by fc_band_weights: each band with a runnable waiter gets its weight in credits per round, the highest band with credit left is served first, one wake costs one credit, and a band with no runnable waiter forfeits its turn; over whole rounds the wake-ups split exactly as the weights do (8:3:1 is 8 critical, 3 standard, 1 sheddable in every 12). The share is of admissions, not of tokens or latency, and a floor is served before the round. weighted needs every weight at least 1 (400 otherwise). inherit, or omitted on create, runs on the process default (LLB_FC_WAKE_POLICY, else strict). Refused (400) beside sockMapMode both or request on a rule that is not an AI-gateway service, as is every band knob other than its default. Such a rule that INHERITS weighted (or another band setting it would be refused for declaring) runs every band knob at its default instead, logs one warning at apply time and reads back fc_effective.wake_policy_effective with band_fallback_reason; so does weighted without a weight for every band. A change of policy starts a new round and loses no waiter. Replace and null semantics as fc_mode.",
               "type": "string",
               "enum": [
                 "strict",
@@ -43125,7 +43125,7 @@ func init() {
           "x-nullable": false
         },
         "fc_band_weights": {
-          "description": "The weighted wake's weights, written critical:standard:sheddable (for example 8:3:1): three whole numbers, each 1 to 62, at most 64 together, or 0:0:0 for none (a zero weight beside non-zero ones is refused, 400). Declared under strict they are kept and reported unused in fc_effective, so a later switch to weighted finds them. Not three whole numbers separated by ':' is refused (400). 0:0:0 resets to none; omitted on a replace keeps the stored value; explicit JSON null is rejected.",
+          "description": "The weighted wake's weights, written critical:standard:sheddable (for example 8:3:1): three whole numbers, each 1 to 62, at most 64 together, or 0:0:0 for none (a zero weight beside non-zero ones is refused, 400). Each is the band's credits per round. Declared under strict they are stored and reported as not in use in fc_effective, so a later switch to weighted finds them. A change of weights starts a new round. Not three whole numbers separated by ':' is refused (400). 0:0:0 resets to none; omitted on a replace keeps the stored value; explicit JSON null is rejected.",
           "type": "string",
           "x-nullable": false
         },
@@ -43602,7 +43602,7 @@ func init() {
               "format": "int32"
             },
             "tenant_wake": {
-              "description": "The order inside one band, as configured.",
+              "description": "The order inside one band, as configured (fifo, or rr across tenants).",
               "type": "string",
               "enum": [
                 "fifo",
@@ -43610,7 +43610,7 @@ func init() {
               ]
             },
             "tenant_wake_effective": {
-              "description": "The order inside one band the gate runs.",
+              "description": "The order inside one band the gate runs (fifo, or rr across tenants).",
               "type": "string",
               "enum": [
                 "fifo",
@@ -43628,7 +43628,7 @@ func init() {
               "format": "int32"
             },
             "wake_policy": {
-              "description": "The wake policy as configured, by the rule or inherited (source.wake_policy); wake_policy_effective is the one the gate runs. strict - while higher-band demand keeps the ceiling full, a lower band is admitted zero requests; each waiter is refused when its band's wait window ends. weighted - while several bands have waiters, each receives its weight's share of wake-ups, counted over every c+s+b consecutive wake-ups; the share is of admissions, not of tokens, GPU time or latency. No band is promoted because it has waited long.",
+              "description": "The wake policy as configured, by the rule or inherited (source.wake_policy); wake_policy_effective is the one the gate runs. strict - while higher-band demand keeps the ceiling full, a lower band is admitted zero requests; each waiter is refused when its band's wait window ends. weighted - a deficit round robin: while several bands have waiters, each receives its weight's share of wake-ups, exactly over whole rounds (8:3:1 is 8, 3, 1 in every 12); the share is of admissions, not of tokens, GPU time or latency. No band is promoted because it has waited long.",
               "type": "string",
               "enum": [
                 "strict",
@@ -43654,7 +43654,7 @@ func init() {
               "format": "int32"
             },
             "weights_in_use": {
-              "description": "false unless wake_policy_effective is weighted; declared weights are kept but unused.",
+              "description": "true when wake_policy_effective is weighted and the weights decide the wake; declared weights are stored but not in use otherwise.",
               "type": "boolean"
             }
           },
@@ -43765,7 +43765,7 @@ func init() {
           "x-nullable": false
         },
         "fc_tenant_wake": {
-          "description": "The order inside one band. fifo wakes the oldest runnable waiter; rr rotates across the tenants with a runnable waiter in the band, oldest first inside one tenant. inherit, or omitted on create, runs on the process default (LLB_FC_TENANT_WAKE, else fifo). Replace and null semantics as fc_mode.",
+          "description": "The order inside one band. fifo wakes the oldest runnable waiter and does not tell tenants apart; rr rotates across the tenants with a runnable waiter in the band, oldest first inside one tenant, each band keeping its own place in the rotation. rr needs no fc_tenant_max_share_pct. inherit, or omitted on create, runs on the process default (LLB_FC_TENANT_WAKE, else fifo). Replace and null semantics as fc_mode.",
           "type": "string",
           "enum": [
             "fifo",
@@ -43784,7 +43784,7 @@ func init() {
           "x-nullable": false
         },
         "fc_wake_policy": {
-          "description": "Which priority band a freed service unit wakes when requests of several bands wait (critical, standard, sheddable: the class the request's objective resolved to). Bands act only with fc_mode enforce, below the ceiling every band is admitted at once, and HTTP/2 streams and P/D role legs never queue (for them the band decides the refusal only). strict wakes the highest band with a runnable waiter: while higher-band demand keeps the ceiling full, a lower band is admitted zero requests, and each waiter is refused when its band's wait window ends. weighted gives each band with waiters its fc_band_weights share of the wake-ups, counted over every c+s+b consecutive wake-ups; a band with waiters is passed over at most c+s+b minus its own weight times in a row; the share is of admissions, not of tokens or latency. weighted needs every weight at least 1 (400 otherwise). inherit, or omitted on create, runs on the process default (LLB_FC_WAKE_POLICY, else strict). Refused (400) beside sockMapMode both or request on a rule that is not an AI-gateway service, as is every band knob other than its default. Such a rule that INHERITS weighted (or another band setting it would be refused for declaring) runs every band knob at its default instead, logs one warning at apply time and reads back fc_effective.wake_policy_effective with band_fallback_reason; so does weighted without a weight for every band. In this release the band knobs are accepted, stored and read back. Replace and null semantics as fc_mode.",
+          "description": "Which priority band a freed service unit wakes when requests of several bands wait (critical, standard, sheddable: the class the request's objective resolved to). Bands act only with fc_mode enforce, below the ceiling every band is admitted at once, and HTTP/2 streams and P/D role legs never queue (for them the band decides the refusal only). strict wakes the highest band with a runnable waiter: while higher-band demand keeps the ceiling full, a lower band is admitted zero requests, and each waiter is refused when its band's wait window ends. weighted is a deficit round robin by fc_band_weights: each band with a runnable waiter gets its weight in credits per round, the highest band with credit left is served first, one wake costs one credit, and a band with no runnable waiter forfeits its turn; over whole rounds the wake-ups split exactly as the weights do (8:3:1 is 8 critical, 3 standard, 1 sheddable in every 12). The share is of admissions, not of tokens or latency, and a floor is served before the round. weighted needs every weight at least 1 (400 otherwise). inherit, or omitted on create, runs on the process default (LLB_FC_WAKE_POLICY, else strict). Refused (400) beside sockMapMode both or request on a rule that is not an AI-gateway service, as is every band knob other than its default. Such a rule that INHERITS weighted (or another band setting it would be refused for declaring) runs every band knob at its default instead, logs one warning at apply time and reads back fc_effective.wake_policy_effective with band_fallback_reason; so does weighted without a weight for every band. A change of policy starts a new round and loses no waiter. Replace and null semantics as fc_mode.",
           "type": "string",
           "enum": [
             "strict",
@@ -44787,7 +44787,7 @@ func init() {
           "format": "int32"
         },
         "tenant_wake": {
-          "description": "The order inside one band, as configured.",
+          "description": "The order inside one band, as configured (fifo, or rr across tenants).",
           "type": "string",
           "enum": [
             "fifo",
@@ -44795,7 +44795,7 @@ func init() {
           ]
         },
         "tenant_wake_effective": {
-          "description": "The order inside one band the gate runs.",
+          "description": "The order inside one band the gate runs (fifo, or rr across tenants).",
           "type": "string",
           "enum": [
             "fifo",
@@ -44812,7 +44812,7 @@ func init() {
           "format": "int32"
         },
         "wake_policy": {
-          "description": "The wake policy as configured, by the rule or inherited (source.wake_policy); wake_policy_effective is the one the gate runs. strict - while higher-band demand keeps the ceiling full, a lower band is admitted zero requests; each waiter is refused when its band's wait window ends. weighted - while several bands have waiters, each receives its weight's share of wake-ups, counted over every c+s+b consecutive wake-ups; the share is of admissions, not of tokens, GPU time or latency. No band is promoted because it has waited long.",
+          "description": "The wake policy as configured, by the rule or inherited (source.wake_policy); wake_policy_effective is the one the gate runs. strict - while higher-band demand keeps the ceiling full, a lower band is admitted zero requests; each waiter is refused when its band's wait window ends. weighted - a deficit round robin: while several bands have waiters, each receives its weight's share of wake-ups, exactly over whole rounds (8:3:1 is 8, 3, 1 in every 12); the share is of admissions, not of tokens, GPU time or latency. No band is promoted because it has waited long.",
           "type": "string",
           "enum": [
             "strict",
@@ -44837,7 +44837,7 @@ func init() {
           "format": "int32"
         },
         "weights_in_use": {
-          "description": "false unless wake_policy_effective is weighted; declared weights are kept but unused.",
+          "description": "true when wake_policy_effective is weighted and the weights decide the wake; declared weights are stored but not in use otherwise.",
           "type": "boolean"
         }
       },

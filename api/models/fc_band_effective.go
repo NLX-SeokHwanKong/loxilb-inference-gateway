@@ -36,7 +36,7 @@ type FcBandEffective struct {
 	// The band's configured wait window in milliseconds; 0 is the queue's (queue_wait_ms). A window above queue_wait_ms runs at queue_wait_ms.
 	WaitMs int32 `json:"wait_ms"`
 
-	// The band's weighted-wake weight; 0 is not set.
+	// The band's credits per round under the weighted wake; 0 is not set.
 	Weight int32 `json:"weight"`
 
 	// The weight's share of the round (the sum of the three weights) in percent, rounded to the nearest; 0 when no weight is set.

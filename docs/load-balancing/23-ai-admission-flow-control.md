@@ -196,8 +196,57 @@ enforced.
 Declaring them is refused with `400` when the three floors sum to more than
 100 (`fc_band_min_share_pct`), when `fc_critical_reserve_pct` is above 100, or
 when the reserve plus the standard and sheddable floors is above 100
-(`fc_critical_reserve_pct`). A floor is independent of the weights: a band with
-a zero weight under the weighted wake may have one.
+(`fc_critical_reserve_pct`). A floor is independent of the wake policy and of the
+weights.
+
+## Which waiter a freed unit wakes
+
+Two knobs decide the order of the queue, one across the priority bands and one
+inside a band. Both act only with `fc_mode` enforce, and only on HTTP/1.1
+requests: streams and P/D role legs never queue.
+
+**Across the bands** (`fc_wake_policy`):
+
+- `strict` (the default) wakes the highest band that has a waiter able to take
+  the unit. While higher-band demand keeps the ceiling full, a lower band is
+  admitted nothing, and its waiters are refused when their wait window ends. A
+  newcomer waits only behind a waiter of its own band or a higher one.
+- `weighted` is a deficit round robin with unit cost over the bands, with the
+  weights of `fc_band_weights` (`critical:standard:sheddable`, each 1 to 62, at
+  most 64 together). A round gives each band that has a waiter able to take the
+  unit its weight in credits. The highest band with credit left is served
+  first, and one wake costs one credit. A band with no such waiter forfeits its
+  turn in the round, and a band whose first waiter arrives in the middle of a
+  round waits for the next one. Over whole rounds the wakes split exactly as
+  the weights do: with `8:3:1`, every 12 wakes are 8 critical, 3 standard and 1
+  sheddable, in that order inside a round, whenever all three bands keep a
+  waiter. The share is of admissions, not of tokens, GPU time or latency, and no
+  band is promoted because it has waited long. A newcomer waits behind any
+  waiter that could run, in any band, so a steady stream of critical newcomers
+  cannot get past the weights. Weighted needs every weight at least 1 (a weight
+  of 0 would be strict under another name, so it is refused with `400`).
+
+With every waiter standard, both policies are the plain first come, first
+served queue. A floor comes first under either policy: a band below its floor
+that has a waiter takes the freed unit before the round is consulted (see
+[Priority floors and the reserve](#priority-floors-and-the-reserve)).
+
+**Inside a band** (`fc_tenant_wake`):
+
+- `fifo` (the default) wakes the oldest waiter that can run. Tenants are not
+  told apart.
+- `rr` rotates across the tenants that have a waiter able to take the unit,
+  oldest first inside one tenant. Each band keeps its own place in the
+  rotation, and a tenant with no waiter left is skipped. It needs no tenant
+  share (`fc_tenant_max_share_pct`) and holds with one.
+
+A wake that cannot be delivered (its connection is being closed) puts the
+request back at the head of the queue and gives the credit and the rotation
+turn back. Changing the policy, the weights or the tenant order while requests
+wait starts a new round and loses nobody: waiters keep their place and their
+band. `fc_effective` reports `wake_policy_effective`, `tenant_wake_effective`,
+and, when the weighted wake is in force, each band's `weight` and `weight_pct`
+(its share of the round).
 
 ## Wait windows and queue shares per band
 
@@ -537,5 +586,5 @@ holding connections back, and any anomaly.
 - A `429` keeps the connection only when the request body was fully
   buffered before the decision; a streamed body closes it.
 - The queue is first come, first served within the tenant share; without a
-  share it is strictly FIFO. There are no priorities between tenants beyond
-  the share.
+  share it is FIFO inside a band unless `fc_tenant_wake` is `rr`. There are no
+  priorities between tenants beyond the share.
