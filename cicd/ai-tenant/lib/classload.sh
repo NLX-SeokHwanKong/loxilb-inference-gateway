@@ -25,7 +25,7 @@ PG_OWNER_PW=oampass
 PG_DB=loxilb
 DP_PW=dp-secret-1
 MGMT_PW=mgmt-secret-1
-TENANTS="t-crit:critical t-a:standard t-b:standard t-c:standard t-shed:sheddable"
+TENANTS="t-crit:critical t-crit2:critical t-crit3:critical t-a:standard t-b:standard t-c:standard t-shed:sheddable"
 
 tq_env() { echo "LLB_FC_MODE=enforce${GW_EXTRA_ENV:+ $GW_EXTRA_ENV}"; }
 

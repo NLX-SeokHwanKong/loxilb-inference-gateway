@@ -18,13 +18,13 @@ import (
 // swagger:model FcBandEffective
 type FcBandEffective struct {
 
-	// The floor in service units against effective_max_outstanding, rounded up; 0 without a ceiling.
+	// The floor in service units against effective_max_outstanding, as the gate enforces it: rounded up in the band's favour but never to the whole ceiling for a share under 100, and clamped so the floors and the reserve never exceed the ceiling; 0 without a ceiling.
 	FloorUnits int32 `json:"floor_units"`
 
 	// Service units the band holds right now.
 	Inflight int32 `json:"inflight"`
 
-	// The band's hard floor in percent of the ceiling in force.
+	// The band's floor in percent of the ceiling in force: a guarantee under contention, not a reservation; it binds only while that band has a waiter.
 	MinSharePct int32 `json:"min_share_pct"`
 
 	// The most of the queue depth the band may hold, in percent; 0 is the shared depth.

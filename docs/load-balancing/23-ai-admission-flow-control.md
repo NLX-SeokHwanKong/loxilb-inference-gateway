@@ -158,6 +158,47 @@ connection). Size the depth from the memory you can spend, and read
 | HTTP/2 stream | refused on its own stream with `429`; streams never wait |
 | the prefill or decode leg of a P/D request | refused; role legs never wait, the request is answered once |
 
+## Priority floors and the reserve
+
+Two knobs protect a priority band's share of the service ceiling, and they are
+different mechanisms. Both are a percentage of the ceiling in force, so they
+follow the adaptive ceiling, in whole units.
+
+- **A floor** (`fc_band_min_share_pct`, `critical:standard:sheddable`) is a
+  guarantee under contention, not a reservation. It binds only while that band
+  has a waiter. With a 20 % sheddable floor and no sheddable demand, standard
+  takes 100 % of the units.
+- **The reserve** (`fc_critical_reserve_pct`) is the only true reservation:
+  units no other band may take, even when critical is idle.
+
+The rule the gate implements: when a unit frees, the highest-ranked band that
+is below its floor and has a runnable waiter takes it; when no band is below
+its floor, the wake policy chooses. On the admission side, a request of a band
+at or above its own floor takes a unit only if the units left after it still
+cover what every other band with a waiter is short of its floor, and what
+critical is short of its reserve. A band below its floor does not wait behind
+the other bands' waiters, only behind its own band's. Nothing already running is
+cut when a ceiling tightens.
+
+HTTP/2 streams and P/D role legs never wait. On a service that carries only
+HTTP/2, a floor therefore never binds, and only the reserve protects a band. A
+floor does bind against an HTTP/2 stream while HTTP/1.1 waiters of the floored
+band exist.
+
+A percentage becomes whole units rounded up, in the band's favour, but a share
+under 100 never rounds to the whole ceiling (a ceiling of 1 gives no floor). The
+claims never exceed the ceiling: where rounding would, they are clamped in rank
+order, critical, standard, then sheddable. Critical holds the larger of its
+floor and the reserve. `fc_effective.bands` reports each band's `floor_units`
+and, beside the bands, `critical_reserve_pct` and `critical_reserve_units`, as
+enforced.
+
+Declaring them is refused with `400` when the three floors sum to more than
+100 (`fc_band_min_share_pct`), when `fc_critical_reserve_pct` is above 100, or
+when the reserve plus the standard and sheddable floors is above 100
+(`fc_critical_reserve_pct`). A floor is independent of the weights: a band with
+a zero weight under the weighted wake may have one.
+
 ## Scraped queue depth: how long it is trusted
 
 The P/D scorers weigh each endpoint by its scraped queue depth. A depth that

@@ -20,6 +20,13 @@ binary behaves exactly like upstream loxilb.
 
 ### Added
 
+- **Priority floors and a critical reserve for the capacity gate:**
+  `fc_band_min_share_pct` guarantees a priority band a share of the service
+  ceiling while it has a waiter (a guarantee under contention, not a
+  reservation), and `fc_critical_reserve_pct` holds units back from every other
+  band even when critical is idle. Both read back in `fc_effective.bands`
+  (`floor_units`, `critical_reserve_pct`, `critical_reserve_units`). See
+  `docs/load-balancing/23-ai-admission-flow-control.md`.
 - **Every HTTP/2 client connection logs one line when it ends, naming why**
   (client closed, header deadline, idle timeout, a backend connection ending,
   listener delete, endpoint teardown, the P/D reaper, an error), the backend

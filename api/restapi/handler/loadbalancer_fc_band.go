@@ -26,9 +26,11 @@ import (
 // can tell an idle band from one that was not reported.
 func fcBandsModel(b cmn.FcBandsArg) *models.LoadbalanceEntryServiceArgumentsFcEffectiveBands {
 	return &models.LoadbalanceEntryServiceArgumentsFcEffectiveBands{
-		Critical:  fcBandModel(b.Critical),
-		Standard:  fcBandModel(b.Standard),
-		Sheddable: fcBandModel(b.Sheddable),
+		CriticalReservePct:   int32(b.CriticalReservePct),
+		CriticalReserveUnits: int32(b.CriticalReserveUnits),
+		Critical:             fcBandModel(b.Critical),
+		Standard:             fcBandModel(b.Standard),
+		Sheddable:            fcBandModel(b.Sheddable),
 	}
 }
 

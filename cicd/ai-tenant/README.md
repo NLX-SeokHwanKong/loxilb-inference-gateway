@@ -35,8 +35,22 @@ expired + cancelled equals the band's requests; and the parks (`queued`, all
 bands) equal the parks that ended: resumed (the queue-wait histogram's
 count) + expired + evicted + cancelled.
 
-Tenants (PostgreSQL store, `tenantq-pg-ai-tenant`): `t-crit` critical,
-`t-a` / `t-b` / `t-c` standard, `t-shed` sheddable; one key each.
+Floors and the reserve (P4, S3, S12, S13, P8, X8, H2): a floor
+(`fc_band_min_share_pct`) is a guarantee under contention, not a
+reservation: it binds only while its band has a waiter, so with no demand in
+the band the others take every unit. The one true reservation is
+`fc_critical_reserve_pct`: units no other band may take even while critical is
+idle. When a unit frees, the highest-ranked band that is below its floor and
+has a runnable waiter takes it; when no band is below its floor, the wake
+policy chooses. S13 is the starvation case (strict, saturating critical
+demand, a 10 % sheddable floor holds sheddable inflight at one unit through
+ten rounds; the same run with the floor at 0 serves it nothing). P8 and X8
+move the ceiling with the engines' scraped queue depth (`/__waiting/<n>`
+on the mock), so each takes a minute or two.
+
+Tenants (PostgreSQL store, `tenantq-pg-ai-tenant`): `t-crit`, `t-crit2`,
+`t-crit3` critical, `t-a` / `t-b` / `t-c` standard, `t-shed` sheddable; one
+key each.
 
 Run (from this directory, on the Linux bed, `LOXILB_DOCKER_IMAGE` set to a
 `tenantq-` tag):

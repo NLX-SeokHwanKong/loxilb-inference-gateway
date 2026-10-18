@@ -1239,15 +1239,16 @@ type LbServiceArg struct {
 	FcBandWeights string `json:"fc_band_weights,omitempty"`
 	// FcBandWeightsPresent is the presence bit for replace semantics.
 	FcBandWeightsPresent bool `json:"-"`
-	// FcBandMinSharePct - each band's hard floor, "c:s:b", in percent of the
-	// service ceiling in force, at most 100 together. Empty or "0:0:0" is
-	// no floor.
+	// FcBandMinSharePct - each band's floor, "c:s:b", in percent of the
+	// service ceiling in force, at most 100 together. A floor is a guarantee
+	// under contention, not a reservation: it binds only while that band has
+	// a waiter. Empty or "0:0:0" is no floor.
 	FcBandMinSharePct string `json:"fc_band_min_share_pct,omitempty"`
 	// FcBandMinSharePctPresent is the presence bit for replace semantics.
 	FcBandMinSharePctPresent bool `json:"-"`
-	// FcCriticalReservePct - the critical band's floor under its own name,
-	// in percent; refused beside a non-zero critical FcBandMinSharePct. 0
-	// is none.
+	// FcCriticalReservePct - the only true reservation: the percent of the
+	// ceiling in force that no other band may take, even when critical is
+	// idle. With the standard and sheddable floors, at most 100. 0 is none.
 	FcCriticalReservePct uint32 `json:"fc_critical_reserve_pct,omitempty"`
 	// FcCriticalReservePctPresent is the presence bit for replace semantics.
 	FcCriticalReservePctPresent bool `json:"-"`
@@ -1917,7 +1918,8 @@ type FcResvHeldArg struct {
 // the service units it executes and the requests it has waiting right now,
 // its wait window (0: the queue's), its share of the queue depth (0: the
 // shared depth), its floor in percent of the ceiling in force and in units
-// against that ceiling, and its wake weight with the weight's share of the
+// against that ceiling (a guarantee under contention, binding while the band
+// has a waiter; the units are clamped so the claims fit the ceiling), and its wake weight with the weight's share of the
 // round in percent (0 when no weight is set).
 type FcBandArg struct {
 	Inflight    uint32 `json:"inflight"`
@@ -1932,9 +1934,14 @@ type FcBandArg struct {
 
 // FcBandsArg - the three priority bands of a pool, by name.
 type FcBandsArg struct {
-	Critical  FcBandArg `json:"critical"`
-	Standard  FcBandArg `json:"standard"`
-	Sheddable FcBandArg `json:"sheddable"`
+	// CriticalReservePct and CriticalReserveUnits - the reserve in percent of
+	// the ceiling in force and in units against it: units no other band may
+	// take, even when critical is idle.
+	CriticalReservePct   uint32    `json:"critical_reserve_pct"`
+	CriticalReserveUnits uint32    `json:"critical_reserve_units"`
+	Critical             FcBandArg `json:"critical"`
+	Standard             FcBandArg `json:"standard"`
+	Sheddable            FcBandArg `json:"sheddable"`
 }
 
 // FcEffectiveSource - the origin of each value in FcEffectiveArg.

@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 
 	cmn "github.com/loxilb-io/loxilb/common"
@@ -509,12 +510,14 @@ func TestFcRuleBandRefusals(t *testing.T) {
 		{"weights reset under weighted", fcBandStored(),
 			cmn.LbServiceArg{FcBandWeights: "0:0:0", FcBandWeightsPresent: true}, "fc_band_weights"},
 		{"floors above 100", nil, cmn.LbServiceArg{FcBandMinSharePct: "50:40:20"}, "fc_band_min_share_pct"},
-		{"the reserve stands in for the critical floor in the sum", nil,
-			cmn.LbServiceArg{FcCriticalReservePct: 60, FcBandMinSharePct: "0:30:20"}, "fc_band_min_share_pct"},
-		{"a reserve beside a critical floor", nil,
-			cmn.LbServiceArg{FcCriticalReservePct: 10, FcBandMinSharePct: "10:0:0"}, "fc_critical_reserve_pct"},
-		{"a critical floor by replace beside the stored reserve", fcBandStored(),
-			cmn.LbServiceArg{FcBandMinSharePct: "5:20:0", FcBandMinSharePctPresent: true}, "fc_critical_reserve_pct"},
+		{"the reserve and the other two floors above 100", nil,
+			cmn.LbServiceArg{FcCriticalReservePct: 60, FcBandMinSharePct: "0:30:20"}, "fc_critical_reserve_pct"},
+		{"the reserve and the other two floors above 100, the critical floor not counted", nil,
+			cmn.LbServiceArg{FcCriticalReservePct: 51, FcBandMinSharePct: "0:30:20"}, "fc_critical_reserve_pct"},
+		{"the floors above 100 beside a reserve", nil,
+			cmn.LbServiceArg{FcCriticalReservePct: 10, FcBandMinSharePct: "40:40:30"}, "fc_band_min_share_pct"},
+		{"the stored reserve above 100 with new floors by replace", fcBandStored(),
+			cmn.LbServiceArg{FcBandMinSharePct: "5:50:45", FcBandMinSharePctPresent: true}, "fc_critical_reserve_pct"},
 		{"queue shares above 100, all three set", nil,
 			cmn.LbServiceArg{FcBandQueuePct: "50:40:20"}, "fc_band_queue_pct"},
 		{"shed queue on without a queue", nil, cmn.LbServiceArg{FcShedQueue: "on"}, "fc_shed_queue"},
@@ -540,6 +543,11 @@ func TestFcRuleBandRefusals(t *testing.T) {
 		{"weighted on a full round", "", cmn.LbServiceArg{FcWakePolicy: "weighted", FcBandWeights: "62:1:1"}},
 		{"floors at 100", "", cmn.LbServiceArg{FcBandMinSharePct: "50:30:20"}},
 		{"the reserve and the other floors at 100", "", cmn.LbServiceArg{FcCriticalReservePct: 50, FcBandMinSharePct: "0:30:20"}},
+		{"a reserve of 100 alone", "", cmn.LbServiceArg{FcCriticalReservePct: 100}},
+		{"a reserve beside a critical floor", "", cmn.LbServiceArg{FcCriticalReservePct: 10, FcBandMinSharePct: "10:0:0"}},
+		{"a critical floor above the reserve, the floors at 100", "", cmn.LbServiceArg{FcCriticalReservePct: 20, FcBandMinSharePct: "50:30:20"}},
+		{"a floor on a band with a zero weight under weighted", "", cmn.LbServiceArg{FcWakePolicy: "weighted",
+			FcBandWeights: "8:3:1", FcBandMinSharePct: "0:0:10"}},
 		{"queue shares above 100 with one band shared", "", cmn.LbServiceArg{FcBandQueuePct: "60:60:0"}},
 		{"queue shares at 100", "", cmn.LbServiceArg{FcBandQueuePct: "50:30:20"}},
 		{"shed queue on with the rule's depth", "", cmn.LbServiceArg{FcShedQueue: "on", FcMaxQueueDepth: 4}},
@@ -610,8 +618,9 @@ func TestFcBandSockMapErr(t *testing.T) {
 func TestFcBandEffective(t *testing.T) {
 	for _, c := range []struct{ ceiling, pct, want uint32 }{
 		{10, 15, 2}, {10, 10, 1}, {7, 100, 7}, {3, 1, 1}, {0, 50, 0}, {10, 0, 0},
+		{4, 25, 1}, {1, 50, 0}, {2, 99, 1}, {10, 100, 10},
 	} {
-		if got := fcBandFloorUnits(c.ceiling, c.pct); got != c.want {
+		if got := fcFloorUnits(c.ceiling, c.pct); got != c.want {
 			t.Fatalf("floor of %d%% of %d = %d, want %d", c.pct, c.ceiling, got, c.want)
 		}
 	}
@@ -686,5 +695,45 @@ func TestFcRuleBandAbsentIsDefault(t *testing.T) {
 	}
 	if kept != stored.fcCfg {
 		t.Fatalf("a document without band knobs changed the declared bands to %+v", kept)
+	}
+}
+
+// The claims the read-back reports are the ones the data plane enforces:
+// the same vectors as the C test of fc_floor_claims (test_fc_band_floor).
+func TestFcFloorClaims(t *testing.T) {
+	for _, c := range []struct {
+		name       string
+		ceiling    uint32
+		pct        [cmn.FcBands]uint32 // indexed by band: standard, critical, sheddable
+		reservePct uint32
+		floor      [cmn.FcBands]uint32
+		reserve    uint32
+	}{
+		{"rounding is clamped in rank order", 4, [cmn.FcBands]uint32{33, 34, 33}, 0, [cmn.FcBands]uint32{2, 2, 0}, 0},
+		{"a reserve alone", 4, [cmn.FcBands]uint32{}, 25, [cmn.FcBands]uint32{}, 1},
+		{"critical holds the larger of floor and reserve", 10, [cmn.FcBands]uint32{0, 10, 0}, 30, [cmn.FcBands]uint32{0, 1, 0}, 3},
+		{"no ceiling", 0, [cmn.FcBands]uint32{10, 10, 10}, 10, [cmn.FcBands]uint32{}, 0},
+		{"a reserve of the whole ceiling", 6, [cmn.FcBands]uint32{20, 0, 20}, 100, [cmn.FcBands]uint32{}, 6},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			floor, reserve := fcFloorClaims(c.ceiling, c.pct, c.reservePct)
+			if floor != c.floor || reserve != c.reserve {
+				t.Fatalf("floor %v reserve %d, want %v %d", floor, reserve, c.floor, c.reserve)
+			}
+		})
+	}
+	// The read-back carries the reserve beside the bands.
+	b := fcBandStat{reservePct: 25}.effective(4)
+	if b.CriticalReservePct != 25 || b.CriticalReserveUnits != 1 {
+		t.Fatalf("reserve %d%% = %d units", b.CriticalReservePct, b.CriticalReserveUnits)
+	}
+}
+
+// A reserve above 100 is refused for being above 100 (its own rule), not only
+// as the sum with the other floors.
+func TestFcBandReserveAbove100NamesItsOwnRule(t *testing.T) {
+	_, err := fcRuleResolve(nil, &cmn.LbServiceArg{FcCriticalReservePct: 101})
+	if err == nil || !strings.Contains(err.Error(), "within 0..") {
+		t.Fatalf("err=%v, want the reserve's own bound named", err)
 	}
 }

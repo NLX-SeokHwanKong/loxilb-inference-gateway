@@ -405,7 +405,7 @@ type LBDpWorkQ struct {
 	FcTenantWake                uint8                   // order inside a band, enum fc_rule_tenant_wake (0 = process default)
 	FcLlmdHeaders               uint8                   // llm-d headers, enum fc_rule_switch (0 = process default)
 	FcBandWeight                [3]uint8                // weighted wake weights, by band (0 = none)
-	FcBandMinSharePct           [3]uint8                // hard floors in percent of the ceiling, by band (0 = none)
+	FcBandMinSharePct           [3]uint8                // floors in percent of the ceiling, by band (0 = none)
 	FcCriticalReservePct        uint8                   // the critical floor under its own name (0 = none)
 	FcBandQueuePct              [3]uint8                // share of the queue depth, by band (0 = the shared depth)
 	FcBandWaitMs                [3]uint32               // wait window, by band (0 = the queue's)

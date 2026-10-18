@@ -2269,7 +2269,7 @@ func init() {
       "description": "One priority band of a model pool as the capacity gate holds it, read back in fc_effective.bands.",
       "properties": {
         "floor_units": {
-          "description": "The floor in service units against effective_max_outstanding, rounded up; 0 without a ceiling.",
+          "description": "The floor in service units against effective_max_outstanding, as the gate enforces it: rounded up in the band's favour but never to the whole ceiling for a share under 100, and clamped so the floors and the reserve never exceed the ceiling; 0 without a ceiling.",
           "format": "int32",
           "type": "integer",
           "x-omitempty": false
@@ -2281,7 +2281,7 @@ func init() {
           "x-omitempty": false
         },
         "min_share_pct": {
-          "description": "The band's hard floor in percent of the ceiling in force.",
+          "description": "The band's floor in percent of the ceiling in force: a guarantee under contention, not a reservation; it binds only while that band has a waiter.",
           "format": "int32",
           "type": "integer",
           "x-omitempty": false
@@ -5092,7 +5092,7 @@ func init() {
               "x-nullable": false
             },
             "fc_band_min_share_pct": {
-              "description": "Each band's hard floor, critical:standard:sheddable, in percent of the service ceiling in force (rounded up to whole units, and following the adaptive ceiling): a band can always reach its floor in flight whoever floods, and units below a floor stay idle while that band has no demand, so a floor costs capacity. Each 0 to 100, at most 100 together with fc_critical_reserve_pct. 0:0:0 (the default) is no floor. Replace and null semantics as fc_band_weights.",
+              "description": "Each band's floor, critical:standard:sheddable, in percent of the service ceiling in force (rounded up to whole units, and following the adaptive ceiling). A floor is a guarantee under contention, not a reservation: it binds only while that band has a waiter, so with no demand in the band the other bands take every unit. When a unit frees, the highest-ranked band that is below its floor and has a runnable waiter takes it; when no band is below its floor, the wake policy chooses. HTTP/2 streams and role legs never wait, so on a service that carries only HTTP/2 a floor never binds. Each 0 to 100, at most 100 together (400 naming fc_band_min_share_pct). 0:0:0 (the default) is no floor. A floor is independent of the weights: a band with a zero weight under weighted may have one. Replace and null semantics as fc_band_weights.",
               "type": "string",
               "x-nullable": false
             },
@@ -5113,7 +5113,7 @@ func init() {
             },
             "fc_critical_reserve_pct": {
               "default": 0,
-              "description": "The critical band's floor under its own name, in percent of the ceiling in force. Refused (400) together with a non-zero critical entry of fc_band_min_share_pct: one floor, one field. 0 or omitted on create is none. Replace and null semantics as fc_max_outstanding.",
+              "description": "The only true reservation: the percent of the ceiling in force (rounded up to whole units) that no other band may take, even when critical is idle. It holds on HTTP/2 and role legs as well, which never wait. Together with the standard and sheddable entries of fc_band_min_share_pct at most 100 (400 naming fc_critical_reserve_pct); the critical entry of fc_band_min_share_pct is a separate floor, and critical holds the larger of the two. 0 or omitted on create is none. Replace and null semantics as fc_max_outstanding.",
               "format": "int32",
               "maximum": 100,
               "minimum": 0,
@@ -5171,10 +5171,22 @@ func init() {
                   "type": "string"
                 },
                 "bands": {
-                  "description": "Each priority band's live counts and the knobs in force (after any fallback). min_share_pct of critical includes the critical reserve.",
+                  "description": "Each priority band's live counts and the knobs in force (after any fallback). min_share_pct and floor_units are the floor alone; the critical reserve is reported beside the bands.",
                   "properties": {
                     "critical": {
                       "$ref": "#/definitions/FcBandEffective"
+                    },
+                    "critical_reserve_pct": {
+                      "description": "The critical reserve in percent of the ceiling in force - units no other band may take, even when critical is idle.",
+                      "format": "int32",
+                      "type": "integer",
+                      "x-omitempty": false
+                    },
+                    "critical_reserve_units": {
+                      "description": "The reserve in service units against effective_max_outstanding, as the gate enforces it; 0 without a ceiling.",
+                      "format": "int32",
+                      "type": "integer",
+                      "x-omitempty": false
                     },
                     "sheddable": {
                       "$ref": "#/definitions/FcBandEffective"
@@ -33404,7 +33416,7 @@ func init() {
             "BearerAuth": []
           }
         ],
-        "description": "Removes the catalog \u2192 parser mapping, causing the system to fall back to:\n1. URL path-based routing (e.g., /v1/chat/completions \u2192 openai)\n2. Default mock parser\n\nRemoval is runtime-only and succeeds with 204 even when no mapping exists. Registry unavailability can produce 500. This does not edit YAML or guarantee that later catalog synchronization will preserve the removal.\n",
+        "description": "Removes the catalog → parser mapping, causing the system to fall back to:\n1. URL path-based routing (e.g., /v1/chat/completions → openai)\n2. Default mock parser\n\nRemoval is runtime-only and succeeds with 204 even when no mapping exists. Registry unavailability can produce 500. This does not edit YAML or guarantee that later catalog synchronization will preserve the removal.\n",
         "tags": [
           "Tracing"
         ],
@@ -37804,7 +37816,7 @@ func init() {
       }
     },
     "BfdEntry": {
-      "description": "BFD session input for an existing cluster instance. New sessions require interval >= 100000 microseconds and retryCount > 0. Interval narrows from uint64 to uint32 without an upper-bound check. On an existing session, zero interval/retryCount preserves the current value, source-IP changes are not applied, and an unchanged request conflicts. Initial setup can return success before asynchronous creation fails.",
+      "description": "BFD session input for an existing cluster instance. New sessions require interval \u003e= 100000 microseconds and retryCount \u003e 0. Interval narrows from uint64 to uint32 without an upper-bound check. On an existing session, zero interval/retryCount preserves the current value, source-IP changes are not applied, and an unchanged request conflicts. Initial setup can return success before asynchronous creation fails.",
       "type": "object",
       "properties": {
         "instance": {
@@ -38763,7 +38775,7 @@ func init() {
       "type": "object",
       "properties": {
         "floor_units": {
-          "description": "The floor in service units against effective_max_outstanding, rounded up; 0 without a ceiling.",
+          "description": "The floor in service units against effective_max_outstanding, as the gate enforces it: rounded up in the band's favour but never to the whole ceiling for a share under 100, and clamped so the floors and the reserve never exceed the ceiling; 0 without a ceiling.",
           "type": "integer",
           "format": "int32",
           "x-omitempty": false
@@ -38775,7 +38787,7 @@ func init() {
           "x-omitempty": false
         },
         "min_share_pct": {
-          "description": "The band's hard floor in percent of the ceiling in force.",
+          "description": "The band's floor in percent of the ceiling in force: a guarantee under contention, not a reservation; it binds only while that band has a waiter.",
           "type": "integer",
           "format": "int32",
           "x-omitempty": false
@@ -41417,7 +41429,7 @@ func init() {
               }
             },
             "api_key_auth": {
-              "description": "Data-plane credential enforcement declaration for this service. Omission is a state of its own. OMITTED declares nothing: the service is not marked AI-facing, proxying stays byte-identical, and a backend-owned X-Api-Key header passes through untouched. An explicit \"disabled\" declares the service AI-facing without enforcement: no key is validated, but X-Api-Key is the gateway's credential namespace and the header is stripped before dispatch. \"required\" makes the data plane validate the X-Api-Key header against the API-key store before the request reaches a backend, fails closed when the policy cannot be evaluated, and likewise strips the header. \"jwt\" validates an Authorization Bearer JWT against the service's jwt_auth_profile instead; X-Api-Key is not consulted. \"apikey-or-jwt\" accepts either credential with a fixed precedence: a present X-Api-Key decides alone (its rejection is final, with no JWT fallback), otherwise a Bearer token decides, and a request carrying neither is refused. Both JWT modes require jwt_auth_profile to name a configured profile. Reading a service back preserves the declaration exactly: an omitted policy reads back with this field absent, never resolved to a value. On a replace of an existing service, omitting this field leaves the declared policy unchanged \u2014 it never silently turns enforcement off; to clear a declared policy, send \"disabled\" explicitly. Independent of sse_mode and pd_disagg_mode, and independent of the management-plane authentication mode.",
+              "description": "Data-plane credential enforcement declaration for this service. Omission is a state of its own. OMITTED declares nothing: the service is not marked AI-facing, proxying stays byte-identical, and a backend-owned X-Api-Key header passes through untouched. An explicit \"disabled\" declares the service AI-facing without enforcement: no key is validated, but X-Api-Key is the gateway's credential namespace and the header is stripped before dispatch. \"required\" makes the data plane validate the X-Api-Key header against the API-key store before the request reaches a backend, fails closed when the policy cannot be evaluated, and likewise strips the header. \"jwt\" validates an Authorization Bearer JWT against the service's jwt_auth_profile instead; X-Api-Key is not consulted. \"apikey-or-jwt\" accepts either credential with a fixed precedence: a present X-Api-Key decides alone (its rejection is final, with no JWT fallback), otherwise a Bearer token decides, and a request carrying neither is refused. Both JWT modes require jwt_auth_profile to name a configured profile. Reading a service back preserves the declaration exactly: an omitted policy reads back with this field absent, never resolved to a value. On a replace of an existing service, omitting this field leaves the declared policy unchanged — it never silently turns enforcement off; to clear a declared policy, send \"disabled\" explicitly. Independent of sse_mode and pd_disagg_mode, and independent of the management-plane authentication mode.",
               "type": "string",
               "enum": [
                 "disabled",
@@ -41576,7 +41588,7 @@ func init() {
               "x-nullable": false
             },
             "fc_band_min_share_pct": {
-              "description": "Each band's hard floor, critical:standard:sheddable, in percent of the service ceiling in force (rounded up to whole units, and following the adaptive ceiling): a band can always reach its floor in flight whoever floods, and units below a floor stay idle while that band has no demand, so a floor costs capacity. Each 0 to 100, at most 100 together with fc_critical_reserve_pct. 0:0:0 (the default) is no floor. Replace and null semantics as fc_band_weights.",
+              "description": "Each band's floor, critical:standard:sheddable, in percent of the service ceiling in force (rounded up to whole units, and following the adaptive ceiling). A floor is a guarantee under contention, not a reservation: it binds only while that band has a waiter, so with no demand in the band the other bands take every unit. When a unit frees, the highest-ranked band that is below its floor and has a runnable waiter takes it; when no band is below its floor, the wake policy chooses. HTTP/2 streams and role legs never wait, so on a service that carries only HTTP/2 a floor never binds. Each 0 to 100, at most 100 together (400 naming fc_band_min_share_pct). 0:0:0 (the default) is no floor. A floor is independent of the weights: a band with a zero weight under weighted may have one. Replace and null semantics as fc_band_weights.",
               "type": "string",
               "x-nullable": false
             },
@@ -41596,7 +41608,7 @@ func init() {
               "x-nullable": false
             },
             "fc_critical_reserve_pct": {
-              "description": "The critical band's floor under its own name, in percent of the ceiling in force. Refused (400) together with a non-zero critical entry of fc_band_min_share_pct: one floor, one field. 0 or omitted on create is none. Replace and null semantics as fc_max_outstanding.",
+              "description": "The only true reservation: the percent of the ceiling in force (rounded up to whole units) that no other band may take, even when critical is idle. It holds on HTTP/2 and role legs as well, which never wait. Together with the standard and sheddable entries of fc_band_min_share_pct at most 100 (400 naming fc_critical_reserve_pct); the critical entry of fc_band_min_share_pct is a separate floor, and critical holds the larger of the two. 0 or omitted on create is none. Replace and null semantics as fc_max_outstanding.",
               "type": "integer",
               "format": "int32",
               "default": 0,
@@ -41656,11 +41668,23 @@ func init() {
                   ]
                 },
                 "bands": {
-                  "description": "Each priority band's live counts and the knobs in force (after any fallback). min_share_pct of critical includes the critical reserve.",
+                  "description": "Each priority band's live counts and the knobs in force (after any fallback). min_share_pct and floor_units are the floor alone; the critical reserve is reported beside the bands.",
                   "type": "object",
                   "properties": {
                     "critical": {
                       "$ref": "#/definitions/FcBandEffective"
+                    },
+                    "critical_reserve_pct": {
+                      "description": "The critical reserve in percent of the ceiling in force - units no other band may take, even when critical is idle.",
+                      "type": "integer",
+                      "format": "int32",
+                      "x-omitempty": false
+                    },
+                    "critical_reserve_units": {
+                      "description": "The reserve in service units against effective_max_outstanding, as the gate enforces it; 0 without a ceiling.",
+                      "type": "integer",
+                      "format": "int32",
+                      "x-omitempty": false
                     },
                     "sheddable": {
                       "$ref": "#/definitions/FcBandEffective"
@@ -42365,7 +42389,7 @@ func init() {
               "x-nullable": false
             },
             "kvExactMode": {
-              "description": "KV-cache exact (Tier 1.5) routing mode. Selects the ENDPOINT TOPOLOGY only \u2014 the serving framework is chosen independently by kvEngineType, and engine support for each mode is bounded by the per-engine capability matrix in the kvEngineType description (NOT every mode works with every engine). 0 = off. 1 = exact routing over a P/D role-partitioned pool: requires pd_disagg_mode=true (rejected otherwise) and endpoints tagged ep_role 1/2; only ep_role=1 (prefill) endpoints are subscribed and scored, and Tier 1.5 sits between Tier 1 (trie) and Tier 2 (min-load) in the P/D ladder. 2 = reserved and rejected; no NATS implementation is available. 3 = single-pool exact routing: requires mode=4 (fullproxy) and pd_disagg_mode=false (both rejected otherwise); ALL endpoints are subscribed and scored. Mode 3 does NOT reproduce the P/D ladder \u2014 there is no Tier-0 P/D session-affinity stage, no Tier-1 P/D trie and no P/D backpressure admission stage on this path; management admission and strict binding enforcement still apply. A Tier-1.5 miss falls back to the rule's own sel selector. vllm/sglang consume ZMQ events; trtllm consumes HTTP-polled events. All enabled exact modes require model_name and a loadable tokenizer. vLLM Exact additionally requires the Gateway process to have been launched with a non-empty LLB_KV_NONE_HASH_SEED of at most 23 bytes, matching the engine's PYTHONHASHSEED: it is a property of the Gateway's deployment, not of this request, so on a Gateway launched without it EVERY vLLM Exact rule is refused and no request body can succeed. Query the Gateway's readiness rather than discovering this by submitting. See kvHashAlgo for what the seed governs. Profile/API-surface constraints apply independently; see kvModelProfile and kvExactApiMode.",
+              "description": "KV-cache exact (Tier 1.5) routing mode. Selects the ENDPOINT TOPOLOGY only — the serving framework is chosen independently by kvEngineType, and engine support for each mode is bounded by the per-engine capability matrix in the kvEngineType description (NOT every mode works with every engine). 0 = off. 1 = exact routing over a P/D role-partitioned pool: requires pd_disagg_mode=true (rejected otherwise) and endpoints tagged ep_role 1/2; only ep_role=1 (prefill) endpoints are subscribed and scored, and Tier 1.5 sits between Tier 1 (trie) and Tier 2 (min-load) in the P/D ladder. 2 = reserved and rejected; no NATS implementation is available. 3 = single-pool exact routing: requires mode=4 (fullproxy) and pd_disagg_mode=false (both rejected otherwise); ALL endpoints are subscribed and scored. Mode 3 does NOT reproduce the P/D ladder — there is no Tier-0 P/D session-affinity stage, no Tier-1 P/D trie and no P/D backpressure admission stage on this path; management admission and strict binding enforcement still apply. A Tier-1.5 miss falls back to the rule's own sel selector. vllm/sglang consume ZMQ events; trtllm consumes HTTP-polled events. All enabled exact modes require model_name and a loadable tokenizer. vLLM Exact additionally requires the Gateway process to have been launched with a non-empty LLB_KV_NONE_HASH_SEED of at most 23 bytes, matching the engine's PYTHONHASHSEED: it is a property of the Gateway's deployment, not of this request, so on a Gateway launched without it EVERY vLLM Exact rule is refused and no request body can succeed. Query the Gateway's readiness rather than discovering this by submitting. See kvHashAlgo for what the seed governs. Profile/API-surface constraints apply independently; see kvModelProfile and kvExactApiMode.",
               "type": "integer",
               "format": "int64",
               "default": 0,
@@ -42385,7 +42409,7 @@ func init() {
               "x-nullable": false
             },
             "kvModelProfile": {
-              "description": "ID of the ModelPromptProfile this rule binds to. Naming a profile makes the rule STRICT: the profile must be published in the gateway's profile registry, its alias policy must admit the rule's model_name, its pinned tokenizer artifacts must load and digest-match, and a composed KV-exact binding (model-profile@generation + engine-contract@generation) is allocated at create time \u2014 admission fails closed while no engine-contract registry is available. Absent = legacy profile-less rule (no binding; documented migration behavior). Immutable after create (delete+recreate to change), with ONE sanctioned exception: the migration attach. A replace-POST that names a profile on a live profile-less rule is admitted and re-runs the full strict bring-up (admission checks run BEFORE any mutation, so a refused attach leaves the rule, binding, and data plane untouched; enforcement reports pending until the data-plane contract installs and is acknowledged). The reverse transitions \u2014 dropping the profile or changing it to another \u2014 stay refused, as does any kvExactApiMode change during the attach (raw-string equality; an undeclared apiMode must stay undeclared in the attach POST). CAVEAT operators must be shown: attaching changes the rule's EFFECTIVE surface from the legacy both-surfaces default to the profile's declared supportedApis \u2014 attaching a completions-only profile to a rule that was serving chat traffic narrows the served surface. Scalar by schema \u2014 exactly one profile per rule; arrays are rejected representations. Requires kvExactMode=1 or 3; a profile declaration with Exact disabled is rejected. Snapshot restore has a separate recovery contract: it may preserve an unresolved profile declaration while fencing Exact routing; consult kvexactstatus rather than treating restored storage as a successful fresh admission.",
+              "description": "ID of the ModelPromptProfile this rule binds to. Naming a profile makes the rule STRICT: the profile must be published in the gateway's profile registry, its alias policy must admit the rule's model_name, its pinned tokenizer artifacts must load and digest-match, and a composed KV-exact binding (model-profile@generation + engine-contract@generation) is allocated at create time — admission fails closed while no engine-contract registry is available. Absent = legacy profile-less rule (no binding; documented migration behavior). Immutable after create (delete+recreate to change), with ONE sanctioned exception: the migration attach. A replace-POST that names a profile on a live profile-less rule is admitted and re-runs the full strict bring-up (admission checks run BEFORE any mutation, so a refused attach leaves the rule, binding, and data plane untouched; enforcement reports pending until the data-plane contract installs and is acknowledged). The reverse transitions — dropping the profile or changing it to another — stay refused, as does any kvExactApiMode change during the attach (raw-string equality; an undeclared apiMode must stay undeclared in the attach POST). CAVEAT operators must be shown: attaching changes the rule's EFFECTIVE surface from the legacy both-surfaces default to the profile's declared supportedApis — attaching a completions-only profile to a rule that was serving chat traffic narrows the served surface. Scalar by schema — exactly one profile per rule; arrays are rejected representations. Requires kvExactMode=1 or 3; a profile declaration with Exact disabled is rejected. Snapshot restore has a separate recovery contract: it may preserve an unresolved profile declaration while fencing Exact routing; consult kvexactstatus rather than treating restored storage as a successful fresh admission.",
               "type": "string",
               "x-nullable": false
             },
@@ -42417,6 +42441,15 @@ func init() {
               "format": "int32",
               "default": 0,
               "minimum": 0,
+              "x-nullable": false
+            },
+            "mcp_protocol_version": {
+              "description": "Explicit stateless MCP transport mode. Omitted or empty on create preserves legacy behavior. Omitted replace preserves the existing value; changing it requires delete and recreate. Requires TCP FullProxy (mode=4), round-robin (sel=0) or weighted round-robin (sel=2), and sockMapMode=off. Session affinity, model routing, P/D disaggregation and KV routing are rejected. Configuration readback does not prove request validation or backend delivery.",
+              "type": "string",
+              "enum": [
+                "",
+                "2026-07-28"
+              ],
               "x-nullable": false
             },
             "mode": {
@@ -42688,7 +42721,6 @@ func init() {
                 10
               ]
             },
-            "mcp_protocol_version": {"type": "string", "x-nullable": false, "enum": ["", "2026-07-28"], "description": "Explicit stateless MCP transport mode. Omitted create is legacy; omitted replace preserves. Immutable after create: delete and recreate to change. Requires TCP FullProxy mode=4, sel=0 or 2, sockMapMode=off. No session affinity, model, P/D or KV routing."},
             "session_header_name": {
               "description": "Session-key extraction setting for proxy affinity. Use a header name such as X-Session-ID, cookie:NAME for one cookie, query:NAME for one query parameter, or basic-auth for the Basic Authorization username. RR (sel=0) and persistence (sel=3) paths contain handling; a missing usable key follows their RR or IP-based fallback respectively. This setting is not authentication. GET includes it only for those selectors. The server accepts at most 127 UTF-8 bytes and rejects embedded NUL or invalid UTF-8 before changing rule state. This byte limit reserves the terminator in the 128-byte data-plane field; UI validation must count encoded bytes rather than characters. Cross-mode interaction with L7 HTTP_COOKIE remains unresolved.",
               "type": "string",
@@ -42919,7 +42951,7 @@ func init() {
           }
         },
         "api_key_auth": {
-          "description": "Data-plane credential enforcement declaration for this service. Omission is a state of its own. OMITTED declares nothing: the service is not marked AI-facing, proxying stays byte-identical, and a backend-owned X-Api-Key header passes through untouched. An explicit \"disabled\" declares the service AI-facing without enforcement: no key is validated, but X-Api-Key is the gateway's credential namespace and the header is stripped before dispatch. \"required\" makes the data plane validate the X-Api-Key header against the API-key store before the request reaches a backend, fails closed when the policy cannot be evaluated, and likewise strips the header. \"jwt\" validates an Authorization Bearer JWT against the service's jwt_auth_profile instead; X-Api-Key is not consulted. \"apikey-or-jwt\" accepts either credential with a fixed precedence: a present X-Api-Key decides alone (its rejection is final, with no JWT fallback), otherwise a Bearer token decides, and a request carrying neither is refused. Both JWT modes require jwt_auth_profile to name a configured profile. Reading a service back preserves the declaration exactly: an omitted policy reads back with this field absent, never resolved to a value. On a replace of an existing service, omitting this field leaves the declared policy unchanged \u2014 it never silently turns enforcement off; to clear a declared policy, send \"disabled\" explicitly. Independent of sse_mode and pd_disagg_mode, and independent of the management-plane authentication mode.",
+          "description": "Data-plane credential enforcement declaration for this service. Omission is a state of its own. OMITTED declares nothing: the service is not marked AI-facing, proxying stays byte-identical, and a backend-owned X-Api-Key header passes through untouched. An explicit \"disabled\" declares the service AI-facing without enforcement: no key is validated, but X-Api-Key is the gateway's credential namespace and the header is stripped before dispatch. \"required\" makes the data plane validate the X-Api-Key header against the API-key store before the request reaches a backend, fails closed when the policy cannot be evaluated, and likewise strips the header. \"jwt\" validates an Authorization Bearer JWT against the service's jwt_auth_profile instead; X-Api-Key is not consulted. \"apikey-or-jwt\" accepts either credential with a fixed precedence: a present X-Api-Key decides alone (its rejection is final, with no JWT fallback), otherwise a Bearer token decides, and a request carrying neither is refused. Both JWT modes require jwt_auth_profile to name a configured profile. Reading a service back preserves the declaration exactly: an omitted policy reads back with this field absent, never resolved to a value. On a replace of an existing service, omitting this field leaves the declared policy unchanged — it never silently turns enforcement off; to clear a declared policy, send \"disabled\" explicitly. Independent of sse_mode and pd_disagg_mode, and independent of the management-plane authentication mode.",
           "type": "string",
           "enum": [
             "disabled",
@@ -43078,7 +43110,7 @@ func init() {
           "x-nullable": false
         },
         "fc_band_min_share_pct": {
-          "description": "Each band's hard floor, critical:standard:sheddable, in percent of the service ceiling in force (rounded up to whole units, and following the adaptive ceiling): a band can always reach its floor in flight whoever floods, and units below a floor stay idle while that band has no demand, so a floor costs capacity. Each 0 to 100, at most 100 together with fc_critical_reserve_pct. 0:0:0 (the default) is no floor. Replace and null semantics as fc_band_weights.",
+          "description": "Each band's floor, critical:standard:sheddable, in percent of the service ceiling in force (rounded up to whole units, and following the adaptive ceiling). A floor is a guarantee under contention, not a reservation: it binds only while that band has a waiter, so with no demand in the band the other bands take every unit. When a unit frees, the highest-ranked band that is below its floor and has a runnable waiter takes it; when no band is below its floor, the wake policy chooses. HTTP/2 streams and role legs never wait, so on a service that carries only HTTP/2 a floor never binds. Each 0 to 100, at most 100 together (400 naming fc_band_min_share_pct). 0:0:0 (the default) is no floor. A floor is independent of the weights: a band with a zero weight under weighted may have one. Replace and null semantics as fc_band_weights.",
           "type": "string",
           "x-nullable": false
         },
@@ -43098,7 +43130,7 @@ func init() {
           "x-nullable": false
         },
         "fc_critical_reserve_pct": {
-          "description": "The critical band's floor under its own name, in percent of the ceiling in force. Refused (400) together with a non-zero critical entry of fc_band_min_share_pct: one floor, one field. 0 or omitted on create is none. Replace and null semantics as fc_max_outstanding.",
+          "description": "The only true reservation: the percent of the ceiling in force (rounded up to whole units) that no other band may take, even when critical is idle. It holds on HTTP/2 and role legs as well, which never wait. Together with the standard and sheddable entries of fc_band_min_share_pct at most 100 (400 naming fc_critical_reserve_pct); the critical entry of fc_band_min_share_pct is a separate floor, and critical holds the larger of the two. 0 or omitted on create is none. Replace and null semantics as fc_max_outstanding.",
           "type": "integer",
           "format": "int32",
           "default": 0,
@@ -43158,11 +43190,23 @@ func init() {
               ]
             },
             "bands": {
-              "description": "Each priority band's live counts and the knobs in force (after any fallback). min_share_pct of critical includes the critical reserve.",
+              "description": "Each priority band's live counts and the knobs in force (after any fallback). min_share_pct and floor_units are the floor alone; the critical reserve is reported beside the bands.",
               "type": "object",
               "properties": {
                 "critical": {
                   "$ref": "#/definitions/FcBandEffective"
+                },
+                "critical_reserve_pct": {
+                  "description": "The critical reserve in percent of the ceiling in force - units no other band may take, even when critical is idle.",
+                  "type": "integer",
+                  "format": "int32",
+                  "x-omitempty": false
+                },
+                "critical_reserve_units": {
+                  "description": "The reserve in service units against effective_max_outstanding, as the gate enforces it; 0 without a ceiling.",
+                  "type": "integer",
+                  "format": "int32",
+                  "x-omitempty": false
                 },
                 "sheddable": {
                   "$ref": "#/definitions/FcBandEffective"
@@ -43867,7 +43911,7 @@ func init() {
           "x-nullable": false
         },
         "kvExactMode": {
-          "description": "KV-cache exact (Tier 1.5) routing mode. Selects the ENDPOINT TOPOLOGY only \u2014 the serving framework is chosen independently by kvEngineType, and engine support for each mode is bounded by the per-engine capability matrix in the kvEngineType description (NOT every mode works with every engine). 0 = off. 1 = exact routing over a P/D role-partitioned pool: requires pd_disagg_mode=true (rejected otherwise) and endpoints tagged ep_role 1/2; only ep_role=1 (prefill) endpoints are subscribed and scored, and Tier 1.5 sits between Tier 1 (trie) and Tier 2 (min-load) in the P/D ladder. 2 = reserved and rejected; no NATS implementation is available. 3 = single-pool exact routing: requires mode=4 (fullproxy) and pd_disagg_mode=false (both rejected otherwise); ALL endpoints are subscribed and scored. Mode 3 does NOT reproduce the P/D ladder \u2014 there is no Tier-0 P/D session-affinity stage, no Tier-1 P/D trie and no P/D backpressure admission stage on this path; management admission and strict binding enforcement still apply. A Tier-1.5 miss falls back to the rule's own sel selector. vllm/sglang consume ZMQ events; trtllm consumes HTTP-polled events. All enabled exact modes require model_name and a loadable tokenizer. vLLM Exact additionally requires the Gateway process to have been launched with a non-empty LLB_KV_NONE_HASH_SEED of at most 23 bytes, matching the engine's PYTHONHASHSEED: it is a property of the Gateway's deployment, not of this request, so on a Gateway launched without it EVERY vLLM Exact rule is refused and no request body can succeed. Query the Gateway's readiness rather than discovering this by submitting. See kvHashAlgo for what the seed governs. Profile/API-surface constraints apply independently; see kvModelProfile and kvExactApiMode.",
+          "description": "KV-cache exact (Tier 1.5) routing mode. Selects the ENDPOINT TOPOLOGY only — the serving framework is chosen independently by kvEngineType, and engine support for each mode is bounded by the per-engine capability matrix in the kvEngineType description (NOT every mode works with every engine). 0 = off. 1 = exact routing over a P/D role-partitioned pool: requires pd_disagg_mode=true (rejected otherwise) and endpoints tagged ep_role 1/2; only ep_role=1 (prefill) endpoints are subscribed and scored, and Tier 1.5 sits between Tier 1 (trie) and Tier 2 (min-load) in the P/D ladder. 2 = reserved and rejected; no NATS implementation is available. 3 = single-pool exact routing: requires mode=4 (fullproxy) and pd_disagg_mode=false (both rejected otherwise); ALL endpoints are subscribed and scored. Mode 3 does NOT reproduce the P/D ladder — there is no Tier-0 P/D session-affinity stage, no Tier-1 P/D trie and no P/D backpressure admission stage on this path; management admission and strict binding enforcement still apply. A Tier-1.5 miss falls back to the rule's own sel selector. vllm/sglang consume ZMQ events; trtllm consumes HTTP-polled events. All enabled exact modes require model_name and a loadable tokenizer. vLLM Exact additionally requires the Gateway process to have been launched with a non-empty LLB_KV_NONE_HASH_SEED of at most 23 bytes, matching the engine's PYTHONHASHSEED: it is a property of the Gateway's deployment, not of this request, so on a Gateway launched without it EVERY vLLM Exact rule is refused and no request body can succeed. Query the Gateway's readiness rather than discovering this by submitting. See kvHashAlgo for what the seed governs. Profile/API-surface constraints apply independently; see kvModelProfile and kvExactApiMode.",
           "type": "integer",
           "format": "int64",
           "default": 0,
@@ -43887,7 +43931,7 @@ func init() {
           "x-nullable": false
         },
         "kvModelProfile": {
-          "description": "ID of the ModelPromptProfile this rule binds to. Naming a profile makes the rule STRICT: the profile must be published in the gateway's profile registry, its alias policy must admit the rule's model_name, its pinned tokenizer artifacts must load and digest-match, and a composed KV-exact binding (model-profile@generation + engine-contract@generation) is allocated at create time \u2014 admission fails closed while no engine-contract registry is available. Absent = legacy profile-less rule (no binding; documented migration behavior). Immutable after create (delete+recreate to change), with ONE sanctioned exception: the migration attach. A replace-POST that names a profile on a live profile-less rule is admitted and re-runs the full strict bring-up (admission checks run BEFORE any mutation, so a refused attach leaves the rule, binding, and data plane untouched; enforcement reports pending until the data-plane contract installs and is acknowledged). The reverse transitions \u2014 dropping the profile or changing it to another \u2014 stay refused, as does any kvExactApiMode change during the attach (raw-string equality; an undeclared apiMode must stay undeclared in the attach POST). CAVEAT operators must be shown: attaching changes the rule's EFFECTIVE surface from the legacy both-surfaces default to the profile's declared supportedApis \u2014 attaching a completions-only profile to a rule that was serving chat traffic narrows the served surface. Scalar by schema \u2014 exactly one profile per rule; arrays are rejected representations. Requires kvExactMode=1 or 3; a profile declaration with Exact disabled is rejected. Snapshot restore has a separate recovery contract: it may preserve an unresolved profile declaration while fencing Exact routing; consult kvexactstatus rather than treating restored storage as a successful fresh admission.",
+          "description": "ID of the ModelPromptProfile this rule binds to. Naming a profile makes the rule STRICT: the profile must be published in the gateway's profile registry, its alias policy must admit the rule's model_name, its pinned tokenizer artifacts must load and digest-match, and a composed KV-exact binding (model-profile@generation + engine-contract@generation) is allocated at create time — admission fails closed while no engine-contract registry is available. Absent = legacy profile-less rule (no binding; documented migration behavior). Immutable after create (delete+recreate to change), with ONE sanctioned exception: the migration attach. A replace-POST that names a profile on a live profile-less rule is admitted and re-runs the full strict bring-up (admission checks run BEFORE any mutation, so a refused attach leaves the rule, binding, and data plane untouched; enforcement reports pending until the data-plane contract installs and is acknowledged). The reverse transitions — dropping the profile or changing it to another — stay refused, as does any kvExactApiMode change during the attach (raw-string equality; an undeclared apiMode must stay undeclared in the attach POST). CAVEAT operators must be shown: attaching changes the rule's EFFECTIVE surface from the legacy both-surfaces default to the profile's declared supportedApis — attaching a completions-only profile to a rule that was serving chat traffic narrows the served surface. Scalar by schema — exactly one profile per rule; arrays are rejected representations. Requires kvExactMode=1 or 3; a profile declaration with Exact disabled is rejected. Snapshot restore has a separate recovery contract: it may preserve an unresolved profile declaration while fencing Exact routing; consult kvexactstatus rather than treating restored storage as a successful fresh admission.",
           "type": "string",
           "x-nullable": false
         },
@@ -43919,6 +43963,15 @@ func init() {
           "format": "int32",
           "default": 0,
           "minimum": 0,
+          "x-nullable": false
+        },
+        "mcp_protocol_version": {
+          "description": "Explicit stateless MCP transport mode. Omitted or empty on create preserves legacy behavior. Omitted replace preserves the existing value; changing it requires delete and recreate. Requires TCP FullProxy (mode=4), round-robin (sel=0) or weighted round-robin (sel=2), and sockMapMode=off. Session affinity, model routing, P/D disaggregation and KV routing are rejected. Configuration readback does not prove request validation or backend delivery.",
+          "type": "string",
+          "enum": [
+            "",
+            "2026-07-28"
+          ],
           "x-nullable": false
         },
         "mode": {
@@ -44190,7 +44243,6 @@ func init() {
             10
           ]
         },
-        "mcp_protocol_version": {"type": "string", "x-nullable": false, "enum": ["", "2026-07-28"], "description": "Explicit stateless MCP transport mode. Omitted create is legacy; omitted replace preserves. Immutable after create: delete and recreate to change. Requires TCP FullProxy mode=4, sel=0 or 2, sockMapMode=off. No session affinity, model, P/D or KV routing."},
         "session_header_name": {
           "description": "Session-key extraction setting for proxy affinity. Use a header name such as X-Session-ID, cookie:NAME for one cookie, query:NAME for one query parameter, or basic-auth for the Basic Authorization username. RR (sel=0) and persistence (sel=3) paths contain handling; a missing usable key follows their RR or IP-based fallback respectively. This setting is not authentication. GET includes it only for those selectors. The server accepts at most 127 UTF-8 bytes and rejects embedded NUL or invalid UTF-8 before changing rule state. This byte limit reserves the terminator in the 128-byte data-plane field; UI validation must count encoded bytes rather than characters. Cross-mode interaction with L7 HTTP_COOKIE remains unresolved.",
           "type": "string",
@@ -44340,11 +44392,23 @@ func init() {
           ]
         },
         "bands": {
-          "description": "Each priority band's live counts and the knobs in force (after any fallback). min_share_pct of critical includes the critical reserve.",
+          "description": "Each priority band's live counts and the knobs in force (after any fallback). min_share_pct and floor_units are the floor alone; the critical reserve is reported beside the bands.",
           "type": "object",
           "properties": {
             "critical": {
               "$ref": "#/definitions/FcBandEffective"
+            },
+            "critical_reserve_pct": {
+              "description": "The critical reserve in percent of the ceiling in force - units no other band may take, even when critical is idle.",
+              "type": "integer",
+              "format": "int32",
+              "x-omitempty": false
+            },
+            "critical_reserve_units": {
+              "description": "The reserve in service units against effective_max_outstanding, as the gate enforces it; 0 without a ceiling.",
+              "type": "integer",
+              "format": "int32",
+              "x-omitempty": false
             },
             "sheddable": {
               "$ref": "#/definitions/FcBandEffective"
@@ -44780,11 +44844,23 @@ func init() {
       "readOnly": true
     },
     "LoadbalanceEntryServiceArgumentsFcEffectiveBands": {
-      "description": "Each priority band's live counts and the knobs in force (after any fallback). min_share_pct of critical includes the critical reserve.",
+      "description": "Each priority band's live counts and the knobs in force (after any fallback). min_share_pct and floor_units are the floor alone; the critical reserve is reported beside the bands.",
       "type": "object",
       "properties": {
         "critical": {
           "$ref": "#/definitions/FcBandEffective"
+        },
+        "critical_reserve_pct": {
+          "description": "The critical reserve in percent of the ceiling in force - units no other band may take, even when critical is idle.",
+          "type": "integer",
+          "format": "int32",
+          "x-omitempty": false
+        },
+        "critical_reserve_units": {
+          "description": "The reserve in service units against effective_max_outstanding, as the gate enforces it; 0 without a ceiling.",
+          "type": "integer",
+          "format": "int32",
+          "x-omitempty": false
         },
         "sheddable": {
           "$ref": "#/definitions/FcBandEffective"
@@ -46057,7 +46133,7 @@ func init() {
       }
     },
     "PIIConfigEntry": {
-      "description": "Stored settings, not scanner-readiness evidence. Requires piidetection and an initialized manager. Omission generally preserves values; empty strings do not clear them. Known gaps are documented on the affected fields below. Numeric int64 settings are narrowed to uint32 without upper bounds, and min_body_size <= max_body_size is not validated. Configuration success does not establish encryption, complete-body inspection, or protection.",
+      "description": "Stored settings, not scanner-readiness evidence. Requires piidetection and an initialized manager. Omission generally preserves values; empty strings do not clear them. Known gaps are documented on the affected fields below. Numeric int64 settings are narrowed to uint32 without upper bounds, and min_body_size \u003c= max_body_size is not validated. Configuration success does not establish encryption, complete-body inspection, or protection.",
       "type": "object",
       "properties": {
         "analyzer_url": {

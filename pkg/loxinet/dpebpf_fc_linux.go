@@ -155,6 +155,7 @@ func (e *DpEbpfH) DpFcStateGet(svcIP net.IP, svcPort uint16, proto uint8,
 		bands.minSharePct[b] = uint32(st.band_min_share_pct[b])
 		bands.weight[b] = uint32(st.band_weight[b])
 	}
+	bands.reservePct = uint32(st.critical_reserve_pct)
 	eff.Bands = bands.effective(eff.EffectiveMaxOutstanding)
 	eff.WeightsInUse = st.wake_policy == 1 && bands.weight != [cmn.FcBands]uint32{}
 	return eff, true

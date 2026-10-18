@@ -45,12 +45,13 @@ B4 elsewhere:vllm-kvcache-routing-cpu KV-exact: a woken critical request routes 
 B5 implemented CHWBL bounded load: 16 parks and resumes return every unit
 B6 implemented P/D under the weighted policy: one service unit
 B15 implemented a request parked on the legacy P/D queue holds its service unit and takes none on resume; the critical waiter gets the freed unit
-P4 pending:floors fc_critical_reserve_pct 25 at ceiling 4: standard capped at 3
-P8 pending:floors the adaptive ceiling tightens: new sheddable refused first, nothing cut
-S3 pending:floors min share 0:20:0 under strict: standard never below its floor
-S12 pending:floors three critical tenants fill the ceiling; with a floor standard keeps it
-X8 pending:floors the adaptive ceiling tightens with 10 waiters: nothing leaks
-H2 pending:floors S3 and S12 over h2c: the floor decides refusals
+P4 implemented fc_critical_reserve_pct 25 at ceiling 4: standard capped at 3 with critical idle; a reserved unit wakes nobody
+P8 implemented the adaptive ceiling tightens: new sheddable refused first, nothing cut, the floor in units follows the ceiling
+S3 implemented min share 0:20:0 under strict: no standard demand, critical holds the whole ceiling; with standard waiting it keeps its unit
+S12 implemented three critical tenants fill the ceiling; with a floor, standard keeps it
+S13 implemented strict, saturating critical demand, a 10 percent sheddable floor: sheddable never below its floor over the run; with the floor at 0 it is starved
+X8 implemented the adaptive ceiling tightens with 10 waiters under a floor: nothing leaks
+H2 implemented over h2c a floor never binds (no stream waits); the reserve decides refusals
 S6 pending:ttl per-band wait windows 0:5000:500: sheddable first, standard at 5 s
 S7 pending:ttl per-band queue share 25:50:25: the fifth sheddable waiter is refused queue_full
 X1 pending:ttl a band's window ends while queued (all three bands): 504, everything returned
@@ -123,8 +124,8 @@ s8 "weights summing past 64" ', "fc_wake_policy": "weighted", "fc_band_weights":
 s8 "a weight past 62" ', "fc_band_weights": "63:1:0"' fc_band_weights
 s8 "a zero weight under strict" ', "fc_wake_policy": "strict", "fc_band_weights": "8:0:1"' fc_band_weights
 s8 "floors summing past 100" ', "fc_band_min_share_pct": "50:40:20"' fc_band_min_share_pct
-s8 "reserve with a critical floor" ', "fc_critical_reserve_pct": 10, "fc_band_min_share_pct": "10:0:0"' fc_critical_reserve_pct
-s8 "reserve and floors past 100" ', "fc_critical_reserve_pct": 60, "fc_band_min_share_pct": "0:50:0"' fc_band_min_share_pct
+s8 "the reserve and the other two floors past 100" ', "fc_critical_reserve_pct": 60, "fc_band_min_share_pct": "0:50:0"' fc_critical_reserve_pct
+s8 "the reserve and the other two floors past 100 (sheddable)" ', "fc_critical_reserve_pct": 50, "fc_band_min_share_pct": "0:30:30"' fc_critical_reserve_pct
 s8 "queue shares past 100" ', "fc_band_queue_pct": "50:40:20"' fc_band_queue_pct
 s8 "a malformed triple" ', "fc_band_wait_ms": "100:200"' fc_band_wait_ms
 s8 "a wait past an hour" ', "fc_band_wait_ms": "0:3600001:0"' fc_band_wait_ms
@@ -137,9 +138,14 @@ has S8 "weights under strict are accepted" "200" "$(knob ', "fc_wake_policy": "s
 chk S8 "and reported unused" "strict strict false" "$(tq_fce $PORT_KNOB .wake_policy) $(tq_fce $PORT_KNOB .wake_policy_effective) $(tq_fce $PORT_KNOB .weights_in_use)"
 has S8 "two queue shares with the third zero may exceed 100" "200" "$(knob ', "fc_band_queue_pct": "60:60:0"')"
 has S8 "the reserve alone" "200" "$(knob ', "fc_band_weights": "0:0:0", "fc_band_queue_pct": "0:0:0", "fc_critical_reserve_pct": 25')"
-chk S8 "is the critical floor" "25 rule" "$(tq_fce $PORT_KNOB .bands.critical.min_share_pct) $(tq_fce $PORT_KNOB .source.critical_reserve_pct)"
+chk S8 "is a reserve, not a floor" "25 0 rule" "$(tq_fce $PORT_KNOB .bands.critical_reserve_pct) $(tq_fce $PORT_KNOB .bands.critical.min_share_pct) $(tq_fce $PORT_KNOB .source.critical_reserve_pct)"
+chk S8 "in units of the ceiling in force (25 % of 4)" 1 "$(tq_fce $PORT_KNOB .bands.critical_reserve_units)"
+has S8 "a critical floor beside the reserve is accepted" "200" "$(knob ', "fc_critical_reserve_pct": 40, "fc_band_min_share_pct": "40:20:0"')"
+chk S8 "both read back, apart" "40 40 rule rule" "$(tq_fce $PORT_KNOB .bands.critical_reserve_pct) $(tq_fce $PORT_KNOB .bands.critical.min_share_pct) $(tq_fce $PORT_KNOB .source.critical_reserve_pct) $(tq_fce $PORT_KNOB .source.band_min_share_pct)"
+has S8 "floors beside weighted weights: independent of them" "200" "$(knob ', "fc_wake_policy": "weighted", "fc_band_weights": "8:3:1", "fc_critical_reserve_pct": 0, "fc_band_min_share_pct": "10:20:30"')"
+has S8 "floors alone, with no weights and the policy at its default" "200" "$(knob ', "fc_wake_policy": "inherit", "fc_band_weights": "0:0:0", "fc_band_min_share_pct": "0:20:0"')"
 has S8 "band knobs with the gate off are accepted" "200" "$(knob ', "fc_mode": "off", "fc_shed_queue": "on"')"
-has S8 "reset" "200" "$(knob ', "fc_mode": "inherit", "fc_critical_reserve_pct": 0, "fc_shed_queue": "inherit"')"
+has S8 "reset" "200" "$(knob ', "fc_mode": "inherit", "fc_critical_reserve_pct": 0, "fc_band_min_share_pct": "0:0:0", "fc_shed_queue": "inherit"')"
 
 echo "=== B7: sockmap"
 SM() { echo "{\"serviceArguments\": {\"externalIP\": \"$VIP\", \"port\": $PORT_SOCKMAP, \"protocol\": \"tcp\", \"sel\": 0, \"mode\": 4, \"sockMapMode\": \"request\"$1}, \"endpoints\": [{\"endpointIP\": \"$EP\", \"targetPort\": 8080, \"weight\": 1}]}"; }
@@ -502,6 +508,212 @@ done
 chk P11 "exactly the three bands and five outcomes" "critical.admitted critical.cancelled critical.expired critical.queued critical.shed sheddable.admitted sheddable.cancelled sheddable.expired sheddable.queued sheddable.shed standard.admitted standard.cancelled standard.expired standard.queued standard.shed" \
   "$(bt_snap $PORT_SCHED | tr ' ' '\n' | grep -E '^(critical|standard|sheddable)\.' | cut -d= -f1 | sort | tr '\n' ' ' | sed 's/ $//')"
 chk P11 "only sheddable is ever shed by band policy" "0 0" "$(bt_snap $PORT_SCHED | tr ' ' '\n' | sed -n 's/^critical\.shed=//p') $(bt_snap $PORT_SCHED | tr ' ' '\n' | sed -n 's/^standard\.shed=//p')"
+
+# ---- step 4: floors and the reserve ----------------------------------------------
+# A floor is a guarantee under contention, not a reservation: it binds only
+# while its band has a waiter. The reserve is the one true reservation. The
+# rule the gate runs: when a unit frees, the highest-ranked band that is below
+# its floor and has a runnable waiter takes it; when no band is below its
+# floor, the wake policy chooses.
+S4=$OUT/step4; mkdir -p "$S4"
+# fl_json <floors c:s:b> [<shed queue on|inherit>] [<tenant share>] [<reserve>] [<adaptive>]:
+# a gate-only replace of the keyed pool's band knobs, every one named so that
+# the case before it leaves nothing behind (an omitted knob keeps its value,
+# and a key given twice would be one the parser silently resolves).
+fl_json() { echo ", \"fc_shed_queue\": \"${2:-inherit}\", \"fc_wake_policy\": \"inherit\", \"fc_tenant_max_share_pct\": ${3:-0}, \"fc_band_min_share_pct\": \"$1\", \"fc_critical_reserve_pct\": ${4:-0}, \"fc_adaptive\": \"${5:-inherit}\""; }
+# drain_all: let every held request answer, again and again, until the pool is
+# empty (a request admitted off the queue holds the backend until released).
+drain_all() { local i; for i in $(seq 1 60); do cl_release_all; sleep 0.5; [ "$(fce .inflight) $(fce .queued)" == "0 0" ] && return 0; done; return 1; }
+# be_waiting <n>: the backends report n requests waiting (the adaptive
+# ceiling's signal); one process serves both ports.
+be_waiting() { $hexec tqep1 curl -s -m 3 "http://127.0.0.1:8080/__waiting/$1" >/dev/null; }
+# wait_cap <port> <want> [<secs>]: poll the ceiling in force
+wait_cap() { local i got; for i in $(seq 1 $((${3:-60} * 2))); do got=$(tq_fce $1 .effective_max_outstanding); [ "$got" == "$2" ] && { echo "$got"; return; }; sleep 0.5; done; echo "$got"; }
+# wait_full <want>: poll until the pool holds `want` units
+wait_inflight() { local i got; for i in $(seq 1 $((${2:-4} * 4))); do got=$(fce .inflight); [ "$got" == "$1" ] && { echo "$got"; return; }; sleep 0.25; done; echo "$got"; }
+
+echo "=== P4: the reserve: fc_critical_reserve_pct 25 at ceiling 4, standard capped at 3 with critical idle"
+sched_cfg 4 8 30000 "$(fl_json 0:0:0 inherit 0 25)" || fail P4 "pool shape"
+bt_begin $PORT_SCHED
+cl_one $PORT_SCHED t-a p4s1 "$S4"; cl_one $PORT_SCHED t-b p4s2 "$S4"; cl_one $PORT_SCHED t-c p4s3 "$S4"
+for n in p4s1 p4s2 p4s3; do wait_receipts $n 1 >/dev/null; done
+cl_one $PORT_SCHED t-a p4s4 "$S4"; sleep 0.8
+chk P4 "the reserve in force: 25 %, one unit of four" "25 1" "$(fce .bands.critical_reserve_pct) $(fce .bands.critical_reserve_units)"
+chk P4 "three standard run, the fourth waits: the fourth unit is the reserve, critical idle" "3 1 0" "$(bi standard) $(bq standard) $(cl_receipts p4s4)"
+cl_one $PORT_SCHED t-shed p4b "$S4"; wait_done "$S4" p4b 1 3
+chk P4 "a sheddable request is refused at once while a unit is free" "429:admission_shed" "$(cl_errs "$S4" p4b)"
+cl_one $PORT_SCHED t-crit p4c "$S4"
+chk P4 "critical takes the reserve" 1 "$(wait_receipts p4c 1)"
+chk P4 "all four units in flight, the standard waiter still waiting" "4 1" "$(fce .inflight) $(bq standard)"
+cl_release p4c; sleep 1.5
+chk P4 "the reserve is back: nobody is woken for it" "3 0 1" "$(fce .inflight) $(cl_receipts p4s4) $(bq standard)"
+cl_release p4s1
+chk P4 "a unit that is not the reserve wakes the waiter" 1 "$(wait_receipts p4s4 1)"
+drain_all; wait_done "$S4" 'p4*' 6 10
+chk P4 "answers" "200 200 200 200 200 429:admission_shed" "$(cl_errs "$S4" 'p4*')"
+bt_end
+bt_check P4 1:4:1 0 1
+chk P4 "critical: admitted 1; sheddable: shed 1" "1 0 0 0 0 | 0 0 1 0 0" "$(bt_row critical) | $(bt_row sheddable)"
+
+echo "=== S3: strict, a standard floor of 20 % of 5: no standard demand leaves critical the whole ceiling; with standard waiting it keeps its unit"
+sched_cfg 5 12 30000 "$(fl_json 0:20:0)" || fail S3 "pool shape"
+bt_begin $PORT_SCHED
+for i in 1 2 3 4 5; do cl_one $PORT_SCHED t-crit s3c$i "$S4"; done
+for i in 1 2 3 4 5; do wait_receipts s3c$i 1 >/dev/null; done
+chk S3 "the floor in units (20 % of 5)" 1 "$(fce .bands.standard.floor_units)"
+chk S3 "no standard demand: critical holds all five (a floor is not a reservation)" "5 0" "$(bi critical) $(bi standard)"
+cl_one $PORT_SCHED t-a s3s1 "$S4"; sleep 0.2; cl_one $PORT_SCHED t-b s3s2 "$S4"; sleep 0.2
+for i in 6 7 8; do cl_one $PORT_SCHED t-crit s3c$i "$S4"; sleep 0.2; done
+sleep 0.5
+chk S3 "five critical run; two standard then three critical wait" "5 2 3" "$(bi critical) $(bq standard) $(bq critical)"
+cl_release s3c1
+chk S3 "the freed unit goes to standard, below its floor, not to an older higher-ranked waiter" "1 0" "$(wait_receipts s3s1 1) $(cl_receipts s3c6)"
+chk S3 "standard holds its floor" "1 5" "$(bi standard) $(fce .inflight)"
+cl_release s3c2
+chk S3 "at its floor, the policy decides: a critical waiter" "1 0" "$(wait_receipts s3c6 1) $(cl_receipts s3s2)"
+chk S3 "standard holds exactly its floor; its second waiter waits" "1 1" "$(bi standard) $(bq standard)"
+drain_all; wait_done "$S4" 's3*' 10 10
+chk S3 "answers" "200 200 200 200 200 200 200 200 200 200" "$(cl_errs "$S4" 's3*')"
+bt_end
+bt_check S3 8:2:0 0 5
+
+echo "=== S12: three critical tenants fill the ceiling; with a floor standard keeps it"
+sched_cfg 6 12 30000 "$(fl_json 0:30:0 inherit 34)" || fail S12 "pool shape"
+bt_begin $PORT_SCHED
+for t in "t-crit a" "t-crit2 b" "t-crit3 c"; do
+  set -- $t; cl_one $PORT_SCHED $1 s12${2}1 "$S4"; cl_one $PORT_SCHED $1 s12${2}2 "$S4"
+done
+for x in a b c; do wait_receipts s12${x}1 1 >/dev/null; wait_receipts s12${x}2 1 >/dev/null; done
+chk S12 "the floor in units (30 % of 6, rounded up)" 2 "$(fce .bands.standard.floor_units)"
+chk S12 "three critical tenants fill the ceiling" "6 0" "$(bi critical) $(bi standard)"
+cl_one $PORT_SCHED t-a s12s1 "$S4"; sleep 0.2; cl_one $PORT_SCHED t-b s12s2 "$S4"; sleep 0.2
+for x in "t-crit a" "t-crit2 b" "t-crit3 c"; do set -- $x; cl_one $PORT_SCHED $1 s12${2}3 "$S4"; sleep 0.2; done
+sleep 0.5
+chk S12 "two standard and three critical wait" "2 3" "$(bq standard) $(bq critical)"
+cl_release s12a1
+chk S12 "a freed unit to standard, below its floor of two" 1 "$(wait_receipts s12s1 1)"
+cl_release s12b1
+chk S12 "the next to the second standard waiter" 1 "$(wait_receipts s12s2 1)"
+chk S12 "standard keeps its floor while critical waits" "2 3" "$(bi standard) $(bq critical)"
+cl_release s12c1; sleep 1
+chk S12 "at its floor, one critical waiter takes the next unit" "1 2" "$(( $(cl_receipts s12a3) + $(cl_receipts s12b3) + $(cl_receipts s12c3) )) $(bq critical)"
+chk S12 "and standard still holds exactly its floor" 2 "$(bi standard)"
+drain_all; wait_done "$S4" 's12*' 11 10
+chk S12 "answers" "$(for i in $(seq 11); do echo -n '200 '; done | sed 's/ $//')" "$(cl_errs "$S4" 's12*')"
+bt_end
+bt_check S12 9:2:0 0 5
+
+echo "=== S13: strict, saturating critical demand, a sheddable floor of 10 %: never below it; with the floor at 0 it is starved"
+# Ten critical requests fill the ceiling of ten; twenty more critical and four
+# sheddable wait. Each round frees one critical unit; every third round the
+# sheddable request in flight finishes too. After each round the pool is full
+# again and the sheddable inflight is read.
+starve_arm() { # starve_arm <floors> <tag> -> STARVE_R="<min sheddable inflight> <sheddable served by round 10> <critical inflight at the end>"
+  local floors=$1 tag=$2 i r min=99 got
+  sched_cfg 10 40 90000 "$(fl_json "$floors" on)" || { fail S13 "pool shape ($tag)"; return; }
+  for i in $(seq 1 10); do cl_one $PORT_SCHED t-crit ${tag}c$i "$S4"; done
+  for i in $(seq 1 10); do wait_receipts ${tag}c$i 1 >/dev/null; done
+  for i in $(seq 11 30); do cl_one $PORT_SCHED t-crit ${tag}c$i "$S4"; done
+  # One nonce per sheddable request: a release is sticky per nonce, so a shared
+  # nonce would let every later sheddable request answer at once. They arrive
+  # in order, so b1 is the first admitted, b2 the next.
+  for i in 1 2 3 4; do cl_one $PORT_SCHED t-shed ${tag}b$i "$S4"; sleep 0.2; done
+  sleep 1.5
+  for r in $(seq 1 10); do
+    cl_release ${tag}c$r
+    [ $((r % 3)) -eq 0 ] && cl_release ${tag}b$((r / 3))
+    sleep 0.7
+    wait_inflight 10 4 >/dev/null
+    got=$(bi sheddable); [ "$got" -lt "$min" ] && min=$got
+  done
+  STARVE_R="$min $(( $(cl_receipts ${tag}b1) + $(cl_receipts ${tag}b2) + $(cl_receipts ${tag}b3) + $(cl_receipts ${tag}b4) )) $(bi critical)"
+}
+bt_begin $PORT_SCHED
+starve_arm 0:0:10 st1
+chk S13 "floor 10 %: sheddable inflight never below one unit, and four served by round ten" "1 4 9" "$STARVE_R"
+drain_all; wait_done "$S4" 'st1*' 34 10
+starve_arm 0:0:0 st0
+chk S13 "the mirror, floor 0: sheddable starved, nothing served in ten rounds" "0 0" "$(echo "$STARVE_R" | cut -d' ' -f1-2)"
+chk S13 "critical took every freed unit" "10" "$(echo "$STARVE_R" | cut -d' ' -f3)"
+drain_all; wait_done "$S4" 'st0*' 34 10
+chk S13 "both arms answered in full (after the drain the starved sheddable are served)" "$(for i in $(seq 68); do echo -n '200 '; done | sed 's/ $//')" "$(cl_errs "$S4" 'st*')"
+bt_end
+bt_check S13 60:0:8 0 48
+
+echo "=== P8: the adaptive ceiling tightens under a floor: new sheddable refused first, nothing cut, the floor in units follows it"
+sched_cfg 8 8 90000 "$(fl_json 0:0:25 inherit 0 0 on), \"fc_telemetry_stale_ms\": 15000" || fail P8 "pool shape"
+be_waiting 0
+chk P8 "open at the configured ceiling; the floor is 2 units (25 % of 8)" "8 2" "$(wait_cap $PORT_SCHED 8 40) $(fce .bands.sheddable.floor_units)"
+bt_begin $PORT_SCHED
+for i in 1 2 3 4 5 6; do cl_one $PORT_SCHED t-crit p8c$i "$S4"; done
+for i in 1 2 3 4 5 6; do wait_receipts p8c$i 1 >/dev/null; done
+be_waiting 5
+chk P8 "fresh waiting requests tighten it to a quarter" 2 "$(wait_cap $PORT_SCHED 2 90)"
+chk P8 "the floor in units follows the ceiling in force (25 % of 2, never the whole ceiling)" 1 "$(fce .bands.sheddable.floor_units)"
+chk P8 "nothing cut: the six running requests hold their units under a ceiling of two" "6 0" "$(fce .inflight) $(cl_receipts p8c7)"
+cl_one $PORT_SCHED t-shed p8b "$S4"; wait_done "$S4" p8b 1 3
+chk P8 "a new sheddable request is refused first, at once" "429:admission_shed" "$(cl_errs "$S4" p8b)"
+cl_one $PORT_SCHED t-a p8s "$S4"; cl_one $PORT_SCHED t-crit p8c7 "$S4"; sleep 0.8
+chk P8 "while standard and critical newcomers wait" "1 1 6" "$(bq standard) $(bq critical) $(fce .inflight)"
+be_waiting 0
+drain_all; wait_done "$S4" 'p8*' 9 20
+chk P8 "answers" "200 200 200 200 200 200 200 200 429:admission_shed" "$(cl_errs "$S4" 'p8*')"
+chk P8 "the ceiling is given back" 8 "$(wait_cap $PORT_SCHED 8 60)"
+bt_end
+bt_check P8 7:1:1 0 2
+
+echo "=== X8: the adaptive ceiling tightens with ten waiters under a floor: nothing leaks"
+sched_cfg 8 16 90000 "$(fl_json 0:20:0 on 0 0 on), \"fc_telemetry_stale_ms\": 15000" || fail X8 "pool shape"
+be_waiting 0
+wait_cap $PORT_SCHED 8 40 >/dev/null
+bt_begin $PORT_SCHED
+for i in 1 2 3 4 5 6 7 8; do cl_one $PORT_SCHED t-crit x8c$i "$S4"; done
+for i in 1 2 3 4 5 6 7 8; do wait_receipts x8c$i 1 >/dev/null; done
+for i in 1 2 3 4; do cl_one $PORT_SCHED t-a x8s$i "$S4"; sleep 0.1; done
+for i in 9 10 11 12; do cl_one $PORT_SCHED t-crit x8c$i "$S4"; sleep 0.1; done
+for i in 1 2; do cl_one $PORT_SCHED t-shed x8b$i "$S4"; sleep 0.1; done
+sleep 0.5
+chk X8 "eight run; ten wait (four standard, four critical, two sheddable)" "8 10" "$(fce .inflight) $(fce .queued)"
+be_waiting 5
+chk X8 "the ceiling tightens to two" 2 "$(wait_cap $PORT_SCHED 2 90)"
+chk X8 "no waiter was dropped, nothing running was cut" "8 10" "$(fce .inflight) $(fce .queued)"
+be_waiting 0
+drain_all; wait_done "$S4" 'x8*' 18 20
+chk X8 "everything answered 200" "$(for i in $(seq 18); do echo -n '200 '; done | sed 's/ $//')" "$(cl_errs "$S4" 'x8*')"
+chk X8 "nothing leaks: no unit, no waiter, in any band" "0 0 0 0 0 0 0 0" "$(for b in critical standard sheddable; do echo -n "$(bi $b) $(bq $b) "; done | xargs) $(fce .inflight) $(fce .queued)"
+chk X8 "the ceiling is given back" 8 "$(wait_cap $PORT_SCHED 8 60)"
+bt_end
+bt_check X8 12:4:2 0 10
+
+echo "=== H2: over h2c nothing waits, so a floor never binds; the reserve decides refusals"
+H2F=", \"api_key_auth\": \"required\", \"backend_protocol\": \"http2\", \"fc_max_outstanding\": 2"
+h2cfg() { tq_api POST /config/loadbalancer "$(tq_rule_json $PORT_H2 "$H2F, \"fc_band_min_share_pct\": \"$1\", \"fc_critical_reserve_pct\": $2" 9090 9091)" | cut -c1-3; }
+has H2 "a sheddable floor of 50 % on the h2c pool" "200" "$(h2cfg 0:0:50 0)"
+bt_begin $PORT_H2
+h2run t-a --streams 2 --delay-ms 3000 --nonce-prefix h2a > "$S4/h2a.out" 2>&1 &
+H2BG=$!
+sleep 1
+chk H2 "two standard streams run: no sheddable stream waits, so the floor holds nothing back" 2 "$(tq_fce $PORT_H2 .inflight)"
+wait $H2BG
+chk H2 "both answered" '{"200":2}' "$(jq -c 'select(.summary) | .summary' "$S4/h2a.out")"
+has H2 "the floor replaced by a reserve of 50 % (one unit of two)" "200" "$(h2cfg 0:0:0 50)"
+h2run t-a --streams 1 --delay-ms 4000 --nonce-prefix h2b > "$S4/h2b.out" 2>&1 &
+H2BG=$!
+sleep 1
+chk H2 "one stream runs, one unit is free and it is the reserve" "1 1" "$(tq_fce $PORT_H2 .inflight) $(tq_fce $PORT_H2 .bands.critical_reserve_units)"
+H2S=$(h2run t-b --streams 1 --nonce-prefix h2s | jq -r 'select(.summary) | .summary | keys[0]')
+H2B=$(h2run t-shed --streams 1 --nonce-prefix h2x | jq -r 'select(.summary) | .summary | keys[0]')
+H2C=$(h2run t-crit --streams 1 --delay-ms 500 --nonce-prefix h2c | jq -c 'select(.summary) | .summary')
+chk H2 "standard refused for capacity, sheddable shed, critical admitted" "429:admission_capacity 429:admission_shed" "$H2S $H2B"
+chk H2 "critical takes the reserve" '{"200":1}' "$H2C"
+chk H2 "nothing waited" 0 "$(tq_fce $PORT_H2 .queued)"
+wait $H2BG
+has H2 "the h2c pool back to its shape" "200" "$(h2cfg 0:0:0 0)"
+bt_end
+bt_check H2 1:3:1 0
+
+echo "=== step 4: the pool back to its shape"
+sched_cfg 8 16 30000 "$(fl_json 0:0:0 inherit 0 0 inherit)" || fail S13 "reset"
 
 # ---- step 3, group B: P/D, stateless MCP, CHWBL, backend failures ---------------
 # B15 last: it persists the configuration and restarts the gateway twice.

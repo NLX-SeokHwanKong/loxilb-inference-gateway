@@ -262,17 +262,20 @@ func (c fcRuleCfg) bandErr(queueDepth uint32) error {
 				"fc_band_weights must be at least 1 for every band, or 0:0:0 for none")
 		}
 	}
-	if c.criticalReservePct != 0 && c.bandMinSharePct[cmn.FcBandCritical] != 0 {
-		return cmn.NewValidationError("fc_critical_reserve_pct",
-			"fc_critical_reserve_pct and a non-zero critical fc_band_min_share_pct are the same floor: declare one")
-	}
-	floors := c.criticalReservePct
+	// Floors and the reserve are two mechanisms: a floor is a guarantee
+	// under contention, the reserve a reservation. The three floors fit the
+	// ceiling, and so do the reserve and the floors of the other two bands.
+	var floors uint32
 	for _, p := range c.bandMinSharePct {
 		floors += p
 	}
 	if floors > cmn.FcBandPctMax {
 		return cmn.NewValidationError("fc_band_min_share_pct",
-			"fc_band_min_share_pct (with fc_critical_reserve_pct for critical) must sum to at most %d", cmn.FcBandPctMax)
+			"fc_band_min_share_pct must sum to at most %d", cmn.FcBandPctMax)
+	}
+	if c.criticalReservePct+c.bandMinSharePct[cmn.FcBandStandard]+c.bandMinSharePct[cmn.FcBandSheddable] > cmn.FcBandPctMax {
+		return cmn.NewValidationError("fc_critical_reserve_pct",
+			"fc_critical_reserve_pct plus the standard and sheddable fc_band_min_share_pct must be at most %d", cmn.FcBandPctMax)
 	}
 	q := c.bandQueuePct
 	if q[0] != 0 && q[1] != 0 && q[2] != 0 && q[0]+q[1]+q[2] > cmn.FcBandPctMax {
@@ -395,25 +398,63 @@ type fcBandStat struct {
 	queuePct    [cmn.FcBands]uint32
 	minSharePct [cmn.FcBands]uint32
 	weight      [cmn.FcBands]uint32
+	reservePct  uint32
 }
 
-// fcBandFloorUnits is a floor in service units against the ceiling in
-// force, rounded up as the data plane rounds it; 0 without a ceiling.
-func fcBandFloorUnits(ceiling, pct uint32) uint32 {
+// fcFloorUnits is a share of the ceiling in force in whole service units, as
+// the data plane's fc_floor_units rounds it: up, in the band's favour, but a
+// share under 100 never reaches the whole ceiling; 0 without a ceiling or a
+// share.
+func fcFloorUnits(ceiling, pct uint32) uint32 {
 	if ceiling == 0 || pct == 0 {
 		return 0
 	}
-	return uint32((uint64(ceiling)*uint64(pct) + 99) / 100)
+	if pct >= cmn.FcBandPctMax {
+		return ceiling
+	}
+	u := uint32((uint64(ceiling)*uint64(pct) + 99) / 100)
+	if u >= ceiling {
+		u = ceiling - 1
+	}
+	return u
+}
+
+// fcFloorClaims is what the data plane enforces against a ceiling
+// (fc_floor_claims): the floors by band and the reserve in units. The three
+// claims never exceed the ceiling: they are clamped in rank order, critical
+// first, which holds the larger of its floor and its reserve, then standard,
+// then sheddable.
+func fcFloorClaims(ceiling uint32, minSharePct [cmn.FcBands]uint32, reservePct uint32) (floor [cmn.FcBands]uint32, reserve uint32) {
+	left := ceiling
+	res := fcFloorUnits(ceiling, reservePct)
+	crit := fcFloorUnits(ceiling, minSharePct[cmn.FcBandCritical])
+	claim := res
+	if crit > claim {
+		claim = crit
+	}
+	// Each share is at most the ceiling, so critical's claim always fits.
+	floor[cmn.FcBandCritical] = crit
+	left -= claim
+	for _, b := range []int{cmn.FcBandStandard, cmn.FcBandSheddable} {
+		u := fcFloorUnits(ceiling, minSharePct[b])
+		if u > left {
+			u = left
+		}
+		floor[b] = u
+		left -= u
+	}
+	return floor, res
 }
 
 // effective builds the per-band read-back against the ceiling in force:
-// the floors in units and each weight's share of the round in percent,
+// the floors and the reserve in units, as the gate enforces them, and each weight's share of the round in percent,
 // rounded to the nearest (0 when no weight is set).
 func (st fcBandStat) effective(ceiling uint32) cmn.FcBandsArg {
 	var round uint32
 	for _, w := range st.weight {
 		round += w
 	}
+	floors, reserve := fcFloorClaims(ceiling, st.minSharePct, st.reservePct)
 	band := func(b int) cmn.FcBandArg {
 		out := cmn.FcBandArg{
 			Inflight:    st.inflight[b],
@@ -421,7 +462,7 @@ func (st fcBandStat) effective(ceiling uint32) cmn.FcBandsArg {
 			WaitMs:      st.waitMs[b],
 			QueuePct:    st.queuePct[b],
 			MinSharePct: st.minSharePct[b],
-			FloorUnits:  fcBandFloorUnits(ceiling, st.minSharePct[b]),
+			FloorUnits:  floors[b],
 			Weight:      st.weight[b],
 		}
 		if round != 0 {
@@ -430,9 +471,11 @@ func (st fcBandStat) effective(ceiling uint32) cmn.FcBandsArg {
 		return out
 	}
 	return cmn.FcBandsArg{
-		Critical:  band(cmn.FcBandCritical),
-		Standard:  band(cmn.FcBandStandard),
-		Sheddable: band(cmn.FcBandSheddable),
+		CriticalReservePct:   st.reservePct,
+		CriticalReserveUnits: reserve,
+		Critical:             band(cmn.FcBandCritical),
+		Standard:             band(cmn.FcBandStandard),
+		Sheddable:            band(cmn.FcBandSheddable),
 	}
 }
 

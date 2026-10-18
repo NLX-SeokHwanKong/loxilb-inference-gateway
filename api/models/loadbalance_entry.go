@@ -744,7 +744,7 @@ type LoadbalanceEntryServiceArguments struct {
 	// Enum: [on off inherit]
 	FcAdaptive string `json:"fc_adaptive,omitempty"`
 
-	// Each band's hard floor, critical:standard:sheddable, in percent of the service ceiling in force (rounded up to whole units, and following the adaptive ceiling): a band can always reach its floor in flight whoever floods, and units below a floor stay idle while that band has no demand, so a floor costs capacity. Each 0 to 100, at most 100 together with fc_critical_reserve_pct. 0:0:0 (the default) is no floor. Replace and null semantics as fc_band_weights.
+	// Each band's floor, critical:standard:sheddable, in percent of the service ceiling in force (rounded up to whole units, and following the adaptive ceiling). A floor is a guarantee under contention, not a reservation: it binds only while that band has a waiter, so with no demand in the band the other bands take every unit. When a unit frees, the highest-ranked band that is below its floor and has a runnable waiter takes it; when no band is below its floor, the wake policy chooses. HTTP/2 streams and role legs never wait, so on a service that carries only HTTP/2 a floor never binds. Each 0 to 100, at most 100 together (400 naming fc_band_min_share_pct). 0:0:0 (the default) is no floor. A floor is independent of the weights: a band with a zero weight under weighted may have one. Replace and null semantics as fc_band_weights.
 	FcBandMinSharePct string `json:"fc_band_min_share_pct,omitempty"`
 
 	// The most of the queue depth each band may hold, critical:standard:sheddable, in percent; 0 is the shared depth. A band at its share is refused with 429 admission_capacity (reason queue_full). At most 100 together when all three are non-zero. 0:0:0 (the default) is no share. Replace and null semantics as fc_band_weights.
@@ -756,7 +756,7 @@ type LoadbalanceEntryServiceArguments struct {
 	// The weighted wake's weights, written critical:standard:sheddable (for example 8:3:1): three whole numbers, each 1 to 62, at most 64 together, or 0:0:0 for none (a zero weight beside non-zero ones is refused, 400). Declared under strict they are kept and reported unused in fc_effective, so a later switch to weighted finds them. Not three whole numbers separated by ':' is refused (400). 0:0:0 resets to none; omitted on a replace keeps the stored value; explicit JSON null is rejected.
 	FcBandWeights string `json:"fc_band_weights,omitempty"`
 
-	// The critical band's floor under its own name, in percent of the ceiling in force. Refused (400) together with a non-zero critical entry of fc_band_min_share_pct: one floor, one field. 0 or omitted on create is none. Replace and null semantics as fc_max_outstanding.
+	// The only true reservation: the percent of the ceiling in force (rounded up to whole units) that no other band may take, even when critical is idle. It holds on HTTP/2 and role legs as well, which never wait. Together with the standard and sheddable entries of fc_band_min_share_pct at most 100 (400 naming fc_critical_reserve_pct); the critical entry of fc_band_min_share_pct is a separate floor, and critical holds the larger of the two. 0 or omitted on create is none. Replace and null semantics as fc_max_outstanding.
 	// Maximum: 100
 	// Minimum: 0
 	FcCriticalReservePct int32 `json:"fc_critical_reserve_pct,omitempty"`
@@ -4154,13 +4154,19 @@ func (m *LoadbalanceEntryServiceArgumentsFcEffective) UnmarshalBinary(b []byte) 
 	return nil
 }
 
-// LoadbalanceEntryServiceArgumentsFcEffectiveBands Each priority band's live counts and the knobs in force (after any fallback). min_share_pct of critical includes the critical reserve.
+// LoadbalanceEntryServiceArgumentsFcEffectiveBands Each priority band's live counts and the knobs in force (after any fallback). min_share_pct and floor_units are the floor alone; the critical reserve is reported beside the bands.
 //
 // swagger:model LoadbalanceEntryServiceArgumentsFcEffectiveBands
 type LoadbalanceEntryServiceArgumentsFcEffectiveBands struct {
 
 	// critical
 	Critical *FcBandEffective `json:"critical,omitempty"`
+
+	// The critical reserve in percent of the ceiling in force - units no other band may take, even when critical is idle.
+	CriticalReservePct int32 `json:"critical_reserve_pct"`
+
+	// The reserve in service units against effective_max_outstanding, as the gate enforces it; 0 without a ceiling.
+	CriticalReserveUnits int32 `json:"critical_reserve_units"`
 
 	// sheddable
 	Sheddable *FcBandEffective `json:"sheddable,omitempty"`

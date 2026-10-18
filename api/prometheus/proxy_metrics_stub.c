@@ -291,7 +291,8 @@ typedef struct proxy_fc_svc_stat {
     uint8_t  wake_policy_cfg;
     uint8_t  shed_queue_cfg;
     uint8_t  tenant_wake_cfg;
-    uint8_t  band_pad[5];
+    uint8_t  critical_reserve_pct;          /* units no other band may take, % of the ceiling in force */
+    uint8_t  band_pad[4];
     uint64_t band_outcome[PROXY_FC_BANDS][PROXY_FC_BAND_OUTCOMES];
 } proxy_fc_svc_stat_t;
 /* Pinned to the layout in sockproxy_metrics.h. */
