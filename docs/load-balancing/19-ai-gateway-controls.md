@@ -291,6 +291,10 @@ A request has a priority, an integer, and a class that is its sign: `critical` (
 (negative). Three things decide it, all stored in the AI key store, so every gateway that
 shares the store applies a change within one refresh interval
 (`LLB_AI_OBJECTIVE_REFRESH_SEC`, default 10 s) and the one that took the write at once.
+The class is the request's priority band at the capacity gate: it decides the wake order,
+the floors and the shed there ([AI admission flow control](23-ai-admission-flow-control.md#which-waiter-a-freed-unit-wakes)).
+With a rule's `fc_llmd_headers` on, the objective forwarded to the backend is that class,
+not the client's header.
 
 **Objectives** are named priorities:
 

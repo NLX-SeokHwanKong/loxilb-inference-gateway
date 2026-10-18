@@ -54,7 +54,7 @@ applies the new values to the live pool without touching executing
 requests: an omitted field keeps its stored value, an explicit `0` (or
 `inherit`) returns it to the environment or default, and JSON `null` is
 refused. When a change lets waiting requests through (a higher ceiling, or
-a mode that no longer enforces), they are woken at once, oldest first, one
+a mode that no longer enforces), they are woken at once, in wake order, one
 per free unit, or all of them when the pool no longer enforces, instead of
 one per second. PATCH does not reach FullProxy rules; on an AI service the
 runtime change is a replace `POST`.
@@ -84,7 +84,10 @@ When the pool is over a ceiling and has a queue depth, an HTTP/1.1 request
 whose body has arrived is parked instead of refused: its connection stays
 open with reads paused, and it holds no capacity unit and no backend
 connection. Each release of an executing unit on the pool wakes exactly one
-waiter, oldest first; a newcomer never jumps a non-empty queue. A woken
+waiter, the one the wake order chooses (see [Which waiter a freed unit
+wakes](#which-waiter-a-freed-unit-wakes); with every waiter in one band and
+`fifo`, the oldest); a newcomer never jumps a waiter of its own band that
+could take the unit. A woken
 request that loses the race for the unit goes back to the head, even when
 newcomers filled the queue to its depth meanwhile; one that fails an
 endpoint ceiling goes back without waking anyone, since the next waiter
@@ -215,7 +218,9 @@ requests: streams and P/D role legs never queue.
   weights of `fc_band_weights` (`critical:standard:sheddable`, each 1 to 62, at
   most 64 together). A round gives each band that has a waiter able to take the
   unit its weight in credits. The highest band with credit left is served
-  first, and one wake costs one credit. A band with no such waiter forfeits its
+  first, and one wake costs one credit: within a round bands are served
+  highest first, and the credit decides how many each band gets per round
+  (not the order in which the waiters arrived). A band with no such waiter forfeits its
   turn in the round, and a band whose first waiter arrives in the middle of a
   round waits for the next one. Over whole rounds the wakes split exactly as
   the weights do: with `8:3:1`, every 12 wakes are 8 critical, 3 standard and 1
@@ -300,8 +305,10 @@ forwarded as sent. With it on:
   `x-llm-d-inference-fairness-id` set to the authenticated tenant (none for a
   request without a tenant). A client's copy of either, and of the deprecated
   `x-gateway-inference-objective` and `x-gateway-inference-fairness-id`, is
-  removed first. On a chunked request the client's copies are removed and
-  nothing is written. HTTP/2 requests are forwarded as before.
+  removed first. On a chunked HTTP/1.1 request the client's copies are removed
+  and nothing is written. An HTTP/2 stream is forwarded with the same two
+  values in place of the client's, and its refusals carry the dropped reason
+  too.
 
 ## Scraped queue depth: how long it is trusted
 
@@ -439,6 +446,7 @@ and the ceiling that refused. The body is JSON.
 |---|---|---|---|
 | `429` | `admission_capacity` | over a ceiling with no queue, or the queue at its depth (`X-Loxilb-Admission-Queued` then equals the depth); body carries `retry_after` and `jitter_hint_ms` | kept open when the request body was fully buffered, else closed |
 | `429` | `admission_tenant_share` | the request's tenant holds its share of the ceiling (and may not wait) or of the queue; the admission headers carry the pool's counts, not the tenant's | as `admission_capacity` |
+| `429` | `admission_shed` | a sheddable request at a ceiling that may not wait (`fc_shed_queue` off), or a sheddable waiter evicted for a request of a higher band at a full queue; an evicted waiter's body carries `queued_ms` | as `admission_capacity`; an evicted waiter keeps its connection, unless the 1 Hz pass writes its answer (`Connection: close`) |
 | `503` | `admission_no_capacity` | no healthy endpoint of the pool has capacity | closed |
 | `503` | `gateway_draining` | the gateway is in maintenance (see below) | closed |
 | `504` | `admission_queue_timeout` | the request waited the whole `fc_max_queue_wait_ms`, or its band's wait window when that is shorter; body carries `queued_ms`, the wait it spent | closed |
@@ -514,7 +522,7 @@ The five outcomes of `loxilb_ai_fc_band_total`:
 
 - `admitted`: the request took a capacity unit (terminal).
 - `shed`: `429 admission_shed`, a sheddable request refused at a ceiling or evicted from the queue for a higher band (terminal). With `fc_shed_queue` on, a sheddable request may wait, and when the queue is full an arriving request of any higher band, `standard` as well as `critical`, takes the place of the youngest sheddable waiter; the evicted waiter is answered `429 admission_shed` on its own connection, with `queued_ms` in the body. That is what sheddable means. The connection stays open for the client's next request, as after a queue-full `429`: a `429` asks the client to retry, and closing on it would make every shed client reconnect while the gateway is shedding. The answer normally goes out at the eviction; it is never later than the second pass of the 1 Hz health check. Only an answer that pass writes (the waiter's wake was lost) ends the connection, and it says so with `Connection: close`. HTTP/2 streams never wait in the queue, so an eviction never touches an HTTP/2 connection. At most 16 evicted waiters per pool may be awaiting their answer at once: while 16 are, an arriving request evicts nobody and is refused as a full queue.
-- `expired`: `504 admission_queue_timeout`, its wait window ended while it waited (terminal).
+- `expired`: `504 admission_queue_timeout`, its wait window ended while it waited, or, with `fc_llmd_headers` on, `429 admission_ttl_expired`, the client's own TTL ended it (terminal; both are `decisions_total{reason="queue_timeout"}`).
 - `cancelled`: its client left while it waited; nothing is written to it (terminal).
 - `queued`: it parked to wait; counted once per park, not an end (a woken request that goes back to its place is the same park).
 
@@ -524,7 +532,11 @@ Each request lands in exactly one terminal outcome, so per band
 cancelled, unless a parked request was ended another way (a drain of its
 pool). A request refused for any other reason (a full queue, its tenant's
 share, no healthy capacity, a drain) is counted in
-`loxilb_ai_admission_decisions_total` only.
+`loxilb_ai_admission_decisions_total` only. The queue-wait histogram takes
+its sample when the same parks end, so over a window in which every park
+ended and none was drained, `queued` summed over the three bands equals the
+growth of `loxilb_ai_admission_queue_wait_seconds_count` for the service: the
+two are written at different points (the park and its end) and must agree.
 
 How the `standard` row is counted: a request with no class is `standard`, and
 counting it would add an atomic write on the busiest path (keyless and MCP

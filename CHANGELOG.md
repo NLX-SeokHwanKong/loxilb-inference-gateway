@@ -20,6 +20,22 @@ binary behaves exactly like upstream loxilb.
 
 ### Added
 
+- **Priority bands in the capacity gate's queue:** a request's class
+  (`critical`, `standard`, `sheddable`) is its band at the gate. Under
+  `fc_wake_policy: strict` (the default) a freed unit goes to the highest band
+  with a waiter able to run, and a newcomer waits only behind its own band or a
+  higher one; a sheddable request at the ceiling is refused `429
+  admission_shed`, or, with `fc_shed_queue: on`, waits and gives its place to a
+  higher band's arrival at a full queue. Nine rule knobs configure the bands —
+  `fc_wake_policy`, `fc_band_weights`, `fc_band_min_share_pct`,
+  `fc_critical_reserve_pct`, `fc_band_wait_ms`, `fc_band_queue_pct`,
+  `fc_shed_queue`, `fc_tenant_wake`, `fc_llmd_headers` — read back in
+  `fc_effective` with their sources. New counter
+  `loxilb_ai_fc_band_total{service,band,outcome}` (outcomes `admitted`,
+  `queued`, `shed`, `expired`, `cancelled`; fifteen series per service) and the
+  reason `shed` in `loxilb_ai_admission_decisions_total`. A pool whose requests
+  are all `standard` admits and wakes as before. See
+  `docs/load-balancing/23-ai-admission-flow-control.md`.
 - **Weighted wake and tenant rotation for the priority bands:**
   `fc_wake_policy: weighted` serves the bands as a deficit round robin by
   `fc_band_weights` (with `8:3:1`, every 12 wakes are 8 critical, 3 standard and
@@ -296,6 +312,13 @@ binary behaves exactly like upstream loxilb.
   park ends (admitted, expired, shed by eviction or cancelled), measured from the
   first park; it used to sample every resume, splitting one wait into shorter
   ones, and did not sample expired or cancelled waits.
+- Every answer that ends a wait in the capacity queue (`504
+  admission_queue_timeout`, `503 admission_drained`, `429 admission_shed` to an
+  evicted waiter) now carries `Content-Length`; for the `504` and the `503` that
+  is one header added, nothing removed.
+- `fc_wake_policy: weighted` serves the bands highest first within a round, the
+  credit deciding how many each band gets per round; it used to keep arrival
+  order across bands.
 - **On an AI-gateway pool, requests matched by an L7 FORWARD route now pass
   the pool's capacity gate (ceiling and queue) like every other request;** the
   route's private pool copy used to bypass it. Selection inside the route is
@@ -455,6 +478,13 @@ binary behaves exactly like upstream loxilb.
   `--blacklist` / `--whitelist` filter is now set up without netlink, so
   `--nonlp` reconciles interfaces under the same filter as a netlink start.
 
+- **A request waiting in the capacity queue was reset instead of answered
+  when its wait was longer than the rule's idle bound** — the idle pass
+  (`inactiveTimeout`, and the L7 member-data deadline on the same pass) saw a
+  parked connection send nothing and shut it, so the client got a reset in
+  place of the queue's `504` and the request counted as cancelled — a waiting
+  request is now bounded only by its queue window; a client that leaves while
+  it waits still frees its place at once.
 - **HTTP/2 requests on a busy, healthy client connection occasionally failed
   together with no response (the connection was closed)** — the
   header-completion (slowloris) deadline charged the connection with a header
