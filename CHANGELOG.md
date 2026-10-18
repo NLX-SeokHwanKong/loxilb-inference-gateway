@@ -477,6 +477,9 @@ binary behaves exactly like upstream loxilb.
   reconciliation** (a nil netlink handle behind the interface filter). The
   `--blacklist` / `--whitelist` filter is now set up without netlink, so
   `--nonlp` reconciles interfaces under the same filter as a netlink start.
+- An evicted capacity-queue request could be served after it was counted as shed, or receive a 429 after forwarding began — the eviction sweep removed its entry before publishing the refusal while its owner resumed independently — resume now serializes its decision with the sweep and drain, and answers or dispatches only after releasing that lock.
+- An overflowing client inference TTL could become a short queue deadline — multiplication by the duration unit could wrap — durations above Go's signed nanosecond limit are now ignored; valid long durations retain the one-day cap.
+- A queued request refused after its shed policy changed could miss its queue-wait sample — the woken refusal did not end the original park — that refusal now records the wait once.
 
 - **A request waiting in the capacity queue was reset instead of answered
   when its wait was longer than the rule's idle bound** — the idle pass
