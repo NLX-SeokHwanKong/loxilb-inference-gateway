@@ -52,10 +52,12 @@ S12 implemented three critical tenants fill the ceiling; with a floor, standard 
 S13 implemented strict, saturating critical demand, a 10 percent sheddable floor: sheddable never below its floor over the run; with the floor at 0 it is starved
 X8 implemented the adaptive ceiling tightens with 10 waiters under a floor: nothing leaks
 H2 implemented over h2c a floor never binds (no stream waits); the reserve decides refusals
-S6 pending:ttl per-band wait windows 0:5000:500: sheddable first, standard at 5 s
-S7 pending:ttl per-band queue share 25:50:25: the fifth sheddable waiter is refused queue_full
-X1 pending:ttl a band's window ends while queued (all three bands): 504, everything returned
-X1t pending:ttl x-llm-d-inference-ttl shortens a wait, never extends it
+S6 implemented per-band wait windows 0:5000:500 inside a 30 s queue window: sheddable first, standard at 5 s, critical keeps waiting
+S7 implemented per-band queue share 25:50:25: each band stops at its share (the third sheddable waiter is refused queue_full), and a share another band does not use is open to the rest
+X1 implemented a band's window ends while queued (all three bands): 504, everything returned
+X1t implemented fc_llmd_headers on: x-llm-d-inference-ttl shortens a wait (429 admission_ttl_expired), never extends it; the refusals carry the dropped-reason; the backend is sent the resolved objective and fairness identity
+X1o implemented fc_llmd_headers off: the TTL header is ignored (504 at the window), no llm-d header on any refusal, the client's headers reach the backend as sent
+X1h implemented over h2c, both arms of fc_llmd_headers: on forwards the resolved objective and fairness identity and puts the dropped-reason on a stream's refusal; off forwards and answers as before
 S2 pending:weighted weighted 8:3:1: admissions per band within 10 percent of 8:3:1
 S5 pending:weighted in-band order fifo against rr
 S9 pending:weighted policy changes with 12 waiters, then the ceiling tightens under a floor
@@ -714,6 +716,188 @@ bt_check H2 1:3:1 0
 
 echo "=== step 4: the pool back to its shape"
 sched_cfg 8 16 30000 "$(fl_json 0:0:0 inherit 0 0 inherit)" || fail S13 "reset"
+
+
+# ---- step 5: wait windows, queue shares, the client's TTL ------------------------
+S5=$OUT/step5; mkdir -p "$S5"
+# fl5_json <wait c:s:b> <queue pct c:s:b> <llm-d headers> <shed queue>: every knob of
+# the step named, so that the case before leaves nothing behind.
+fl5_json() { echo ", \"fc_shed_queue\": \"$4\", \"fc_wake_policy\": \"inherit\", \"fc_tenant_max_share_pct\": 0, \"fc_band_min_share_pct\": \"0:0:0\", \"fc_critical_reserve_pct\": 0, \"fc_adaptive\": \"inherit\", \"fc_band_wait_ms\": \"$1\", \"fc_band_queue_pct\": \"$2\", \"fc_llmd_headers\": \"$3\""; }
+# cl_secs <outdir> <nonce>: the time curl measured for that request
+cl_secs() { awk '{print $2}' "$1/$2"-1.code 2>/dev/null; }
+within() { awk -v t="$1" -v lo="$2" -v hi="$3" 'BEGIN {print (t >= lo && t <= hi) ? "yes" : "no"}'; }
+# cl_hdr <outdir> <nonce> <name>: the value of a response header ("" when absent)
+cl_hdr() { tr -d '\r' < "$1/$2-1.hdr" 2>/dev/null | awk -F': ' -v n="$(echo "$3" | tr A-Z a-z)" 'tolower($1) == n {print $2; exit}'; }
+# cl_seen <nonce>: the llm-d headers the backend received, compact JSON
+cl_seen() { $hexec tqep1 curl -s -m 3 "http://127.0.0.1:8080/__headers/$1" | jq -cS '.headers'; }
+
+echo "=== S6: per-band wait windows 0:5000:500 under a 30 s queue window"
+sched_cfg 2 8 30000 "$(fl5_json 0:5000:500 0:0:0 inherit on)" || fail S6 "pool shape"
+chk S6 "the windows as read back" "0 5000 500" "$(fce .bands.critical.wait_ms) $(fce .bands.standard.wait_ms) $(fce .bands.sheddable.wait_ms)"
+bt_begin $PORT_SCHED
+cl_one $PORT_SCHED t-crit s6r1 "$S5"; cl_one $PORT_SCHED t-crit s6r2 "$S5"
+wait_receipts s6r1 1 >/dev/null; wait_receipts s6r2 1 >/dev/null
+cl_one $PORT_SCHED t-shed s6b "$S5"; sleep 0.2; cl_one $PORT_SCHED t-a s6s "$S5"; sleep 0.2
+cl_one $PORT_SCHED t-crit s6c "$S5"; sleep 0.4
+chk S6 "one waiter per band" "1 1 1" "$(bq critical) $(bq standard) $(bq sheddable)"
+wait_done "$S5" s6b 1 5
+chk S6 "the sheddable waiter ended first: 504 at its window" "504:admission_queue_timeout" "$(cl_errs "$S5" s6b)"
+chk S6 "at 500 ms (to the next 1 Hz pass)" yes "$(within "$(cl_secs "$S5" s6b)" 0.4 2.6)"
+chk S6 "its window on the answer" "500" "$(cl_hdr "$S5" s6b X-Loxilb-Admission-Band-Wait-Ms)"
+chk S6 "the standard and the critical waiter are still waiting" "1 1 0" "$(bq critical) $(bq standard) $(bq sheddable)"
+wait_done "$S5" s6s 1 9
+chk S6 "the standard waiter ended at its window: 504" "504:admission_queue_timeout" "$(cl_errs "$S5" s6s)"
+chk S6 "at 5 s, not at the queue's 30 s" yes "$(within "$(cl_secs "$S5" s6s)" 4.5 7.5)"
+chk S6 "the critical waiter is still waiting (its window is the queue's)" "1" "$(bq critical)"
+cl_release s6r1
+chk S6 "the freed unit went to it" 1 "$(wait_receipts s6c 1)"
+drain_all; wait_done "$S5" 's6*' 5 10
+chk S6 "answers" "200 200 200 504:admission_queue_timeout 504:admission_queue_timeout" "$(cl_errs "$S5" 's6*' | sed 's/ /\n/g' | sort | tr '\n' ' ' | sed 's/ $//')"
+bt_end
+bt_check S6 3:1:1 0 1
+
+echo "=== S7: per-band queue share 25:50:25 of a depth of 8"
+sched_cfg 2 8 30000 "$(fl5_json 0:0:0 25:50:25 inherit on)" || fail S7 "pool shape"
+chk S7 "the shares as read back" "25 50 25" "$(fce .bands.critical.queue_pct) $(fce .bands.standard.queue_pct) $(fce .bands.sheddable.queue_pct)"
+bt_begin $PORT_SCHED
+cl_one $PORT_SCHED t-crit s7r1 "$S5"; cl_one $PORT_SCHED t-crit s7r2 "$S5"
+wait_receipts s7r1 1 >/dev/null; wait_receipts s7r2 1 >/dev/null
+for i in 1 2 3 4 5; do cl_one $PORT_SCHED t-shed s7b$i "$S5"; sleep 0.2; done
+sleep 0.5
+chk S7 "the sheddable band stops at 2 of 8" 2 "$(bq sheddable)"
+chk S7 "the others were refused as a full queue at once" "429:admission_capacity 429:admission_capacity 429:admission_capacity" "$(cl_errs "$S5" 's7b[345]')"
+for i in 1 2 3 4 5; do cl_one $PORT_SCHED t-a s7s$i "$S5"; sleep 0.2; done
+sleep 0.5
+chk S7 "the standard band stops at 4 of 8" 4 "$(bq standard)"
+chk S7 "the fifth standard request was refused" "429:admission_capacity" "$(cl_errs "$S5" 's7s5')"
+for i in 1 2 3; do cl_one $PORT_SCHED t-crit s7c$i "$S5"; sleep 0.2; done
+sleep 0.5
+chk S7 "the critical band stops at 2 of 8" 2 "$(bq critical)"
+chk S7 "the third critical request was refused" "429:admission_capacity" "$(cl_errs "$S5" 's7c3')"
+chk S7 "the queue holds its depth, no more" 8 "$(fce .queued)"
+drain_all; wait_done "$S5" 's7*' 15 20
+chk S7 "everyone queued was served: the two running, two critical, four standard, two sheddable" 10 "$(cl_errs "$S5" 's7*' | tr ' ' '\n' | grep -c '^200$')"
+bt_end
+chk S7 "five queue_full refusals in all (three sheddable, one standard, one critical)" 5 "$(bd d.queue_full)"
+bt_check S7 4:4:2 0 8
+echo "  (S7, part two: a share another band does not use is open to the rest)"
+sched_cfg 2 4 30000 "$(fl5_json 0:0:0 25:0:0 inherit on)" || fail S7 "pool shape (part two)"
+bt_begin $PORT_SCHED
+cl_one $PORT_SCHED t-crit s7q1 "$S5"; cl_one $PORT_SCHED t-crit s7q2 "$S5"
+wait_receipts s7q1 1 >/dev/null; wait_receipts s7q2 1 >/dev/null
+for i in 1 2 3 4 5; do cl_one $PORT_SCHED t-a s7t$i "$S5"; sleep 0.2; done
+sleep 0.5
+chk S7 "standard holds all four places although critical's share is one of them" 4 "$(bq standard)"
+chk S7 "the fifth was refused by the depth" "429:admission_capacity" "$(cl_errs "$S5" 's7t5')"
+drain_all; wait_done "$S5" 's7[qt]*' 7 10
+bt_end
+bt_check S7 2:4:0 0 4
+
+echo "=== X1: a band's window ends while queued, in all three bands"
+sched_cfg 2 8 30000 "$(fl5_json 1000:2000:500 0:0:0 inherit on)" || fail X1 "pool shape"
+bt_begin $PORT_SCHED
+cl_one $PORT_SCHED t-crit x1r1 "$S5"; cl_one $PORT_SCHED t-crit x1r2 "$S5"
+wait_receipts x1r1 1 >/dev/null; wait_receipts x1r2 1 >/dev/null
+cl_one $PORT_SCHED t-crit x1c "$S5"; sleep 0.2; cl_one $PORT_SCHED t-a x1s "$S5"; sleep 0.2; cl_one $PORT_SCHED t-shed x1b "$S5"; sleep 0.3
+chk X1 "one waiter per band" "1 1 1" "$(bq critical) $(bq standard) $(bq sheddable)"
+wait_done "$S5" 'x1[csb]' 3 8
+chk X1 "all three ended 504 admission_queue_timeout" "504:admission_queue_timeout 504:admission_queue_timeout 504:admission_queue_timeout" "$(cl_errs "$S5" 'x1[csb]')"
+chk X1 "critical at 1 s" yes "$(within "$(cl_secs "$S5" x1c)" 0.8 3.2)"
+chk X1 "standard at 2 s" yes "$(within "$(cl_secs "$S5" x1s)" 1.8 4.2)"
+chk X1 "sheddable at 500 ms" yes "$(within "$(cl_secs "$S5" x1b)" 0.4 2.6)"
+chk X1 "each answer carries its band's window" "1000 2000 500" "$(cl_hdr "$S5" x1c X-Loxilb-Admission-Band-Wait-Ms) $(cl_hdr "$S5" x1s X-Loxilb-Admission-Band-Wait-Ms) $(cl_hdr "$S5" x1b X-Loxilb-Admission-Band-Wait-Ms)"
+chk X1 "no backend receipt for any of the three" "0 0 0" "$(cl_receipts x1c) $(cl_receipts x1s) $(cl_receipts x1b)"
+chk X1 "the two running requests are untouched, nothing waits" "2 0" "$(fce .inflight) $(fce .queued)"
+drain_all; wait_done "$S5" 'x1*' 5 10
+chk X1 "everything returned" "0 0" "$(fce .inflight) $(fce .queued)"
+bt_end
+bt_check X1 3:1:1 0 0
+
+# X1t and X1o: one case per arm of fc_llmd_headers. Same pool, same requests: a
+# 1.5 s client TTL under a 5 s queue window, a TTL longer than the window, one
+# that is not a duration, no TTL, a sheddable request that is shed; the first
+# request through carries the client's own copies of the objective and the
+# fairness identity.
+llmd_arm() { # llmd_arm <case> <on|off>
+  local id=$1 arm=$2 d=$S5/$1
+  mkdir -p "$d"
+  sched_cfg 1 6 5000 "$(fl5_json 0:0:0 0:0:0 $arm off)" || fail $id "pool shape"
+  chk $id "the switch as read back" "$arm" "$(fce .llmd_headers)"
+  bt_begin $PORT_SCHED
+  cl_one $PORT_SCHED t-crit ${id}f "$d" -H 'x-llm-d-inference-objective: spoof' -H 'x-llm-d-inference-fairness-id: spoof' \
+    -H 'x-gateway-inference-objective: spoof-old' -H 'x-gateway-inference-fairness-id: spoof-old' -H 'x-llm-d-inference-ttl: 1h'
+  wait_receipts ${id}f 1 >/dev/null
+  SEEN=$(cl_seen ${id}f)
+  cl_release ${id}f; wait_done "$d" ${id}f 1 5
+  cl_one $PORT_SCHED t-crit ${id}h "$d"; wait_receipts ${id}h 1 >/dev/null
+  cl_one $PORT_SCHED t-a ${id}a "$d" -H 'x-llm-d-inference-ttl: 1500ms'; sleep 0.2
+  cl_one $PORT_SCHED t-b ${id}b "$d" -H 'x-llm-d-inference-ttl: 1h'; sleep 0.2
+  cl_one $PORT_SCHED t-c ${id}c "$d" -H 'x-llm-d-inference-ttl: soon'; sleep 0.2
+  cl_one $PORT_SCHED t-a ${id}d "$d"; sleep 0.2
+  cl_one $PORT_SCHED t-shed ${id}e "$d"; sleep 0.3
+  chk $id "four standard requests wait, the sheddable one is refused" "4 429:admission_shed" "$(bq standard) $(cl_errs "$d" ${id}e)"
+  wait_done "$d" ${id}e 1 3
+  REASON_SHED=$(cl_hdr "$d" ${id}e x-llm-d-request-dropped-reason)
+  wait_done "$d" ${id}a 1 9
+  A_ERR=$(cl_errs "$d" ${id}a); A_SECS=$(cl_secs "$d" ${id}a); A_REASON=$(cl_hdr "$d" ${id}a x-llm-d-request-dropped-reason)
+  wait_done "$d" "${id}[bcd]" 3 12
+  B_ERR=$(cl_errs "$d" "${id}[bcd]"); B_SECS=$(cl_secs "$d" ${id}b)
+  B_REASON="$(cl_hdr "$d" ${id}b x-llm-d-request-dropped-reason)/$(cl_hdr "$d" ${id}c x-llm-d-request-dropped-reason)/$(cl_hdr "$d" ${id}d x-llm-d-request-dropped-reason)"
+  drain_all; wait_done "$d" "${id}*" 7 10
+  bt_end
+}
+echo "=== X1t: fc_llmd_headers on"
+llmd_arm X1t on
+chk X1t "the backend was sent the resolved objective and fairness identity, one copy each, none of the client's" \
+  '{"x-llm-d-inference-fairness-id":["t-crit"],"x-llm-d-inference-objective":["critical"],"x-llm-d-inference-ttl":["1h"]}' "$SEEN"
+chk X1t "a TTL shorter than the window ended the wait: 429 admission_ttl_expired" "429:admission_ttl_expired" "$A_ERR"
+chk X1t "at about 1.5 s, not at the window" yes "$(within "$A_SECS" 1.2 3.6)"
+chk X1t "with the dropped-reason for an expired TTL" rejected-ttl-expired "$A_REASON"
+chk X1t "a longer TTL, one that is no duration and none: the window stands, 504" "504:admission_queue_timeout 504:admission_queue_timeout 504:admission_queue_timeout" "$B_ERR"
+chk X1t "at the window of 5 s" yes "$(within "$B_SECS" 4.5 7.5)"
+chk X1t "the window's 504 carries the dropped-reason too" "rejected-ttl-expired/rejected-ttl-expired/rejected-ttl-expired" "$B_REASON"
+chk X1t "the shed refusal carries the saturated reason" rejected-saturated "$REASON_SHED"
+bt_check X1t 2:4:1 0 0
+
+echo "=== X1o: fc_llmd_headers off"
+llmd_arm X1o off
+chk X1o "the backend was sent the client's headers as they came" \
+  '{"x-gateway-inference-fairness-id":["spoof-old"],"x-gateway-inference-objective":["spoof-old"],"x-llm-d-inference-fairness-id":["spoof"],"x-llm-d-inference-objective":["spoof"],"x-llm-d-inference-ttl":["1h"]}' "$SEEN"
+chk X1o "the TTL header is ignored: every waiter ends at the window, 504" "504:admission_queue_timeout" "$A_ERR"
+chk X1o "at 5 s, not at 1.5 s" yes "$(within "$A_SECS" 4.5 7.5)"
+chk X1o "no dropped-reason on the 504" "" "$A_REASON"
+chk X1o "the others end the same way" "504:admission_queue_timeout 504:admission_queue_timeout 504:admission_queue_timeout" "$B_ERR"
+chk X1o "no dropped-reason on any" "//" "$B_REASON"
+chk X1o "none on the shed refusal" "" "$REASON_SHED"
+bt_check X1o 2:4:1 0 0
+
+echo "=== X1h: over h2c, both arms of fc_llmd_headers"
+h2cfg() { tq_api POST /config/loadbalancer "$(tq_rule_json $PORT_H2 ", \"api_key_auth\": \"required\", \"backend_protocol\": \"http2\", \"fc_max_outstanding\": 2, \"fc_shed_queue\": \"inherit\", \"fc_llmd_headers\": \"$1\"" 9090 9091)"; }
+# h2seen <nonce>: the llm-d headers whichever h2c backend received for that nonce
+h2seen() { local p; for p in 9090 9091; do $hexec tqep1 curl --http2-prior-knowledge -s -m 3 "http://127.0.0.1:$p/__headers/$1" | jq -cS '.headers | select(length > 0)'; done | head -1; }
+x1h_arm() { # x1h_arm <on|off> <seen-want>
+  local arm=$1 want=$2 o=$S5/x1h-$1
+  has X1h "the $arm arm applied" 200 "$(h2cfg $arm)"
+  h2run t-crit --streams 1 --nonce-prefix x1h-$arm --hdr 'x-llm-d-inference-objective: spoof' --hdr 'x-llm-d-inference-fairness-id: spoof' \
+    --hdr 'x-gateway-inference-objective: spoof-old' --hdr 'x-gateway-inference-fairness-id: spoof-old' --hdr 'x-llm-d-inference-ttl: 1h' > "$o.out" 2>&1
+  chk X1h "$arm: the stream was answered" '{"200":1}' "$(jq -c 'select(.summary) | .summary' "$o.out")"
+  chk X1h "$arm: what the h2c backend received" "$want" "$(h2seen x1h-$arm-0)"
+  h2run t-a --streams 2 --delay-ms 4000 --nonce-prefix x1h-run-$arm > "$o-run.out" 2>&1 &
+  local bg=$!
+  sleep 1
+  h2run t-shed --streams 1 --nonce-prefix x1h-b-$arm > "$o-b.out" 2>&1
+  chk X1h "$arm: a stream over the ceiling is shed" "429:admission_shed" "$(jq -r 'select(.summary) | .summary | keys[0]' "$o-b.out")"
+  X1H_REASON=$(jq -r 'select(.stream) | .headers["x-llm-d-request-dropped-reason"] // ""' "$o-b.out")
+  wait $bg
+}
+x1h_arm on '{"x-llm-d-inference-fairness-id":["t-crit"],"x-llm-d-inference-objective":["critical"],"x-llm-d-inference-ttl":["1h"]}'
+chk X1h "on: the shed stream carries the saturated reason" rejected-saturated "$X1H_REASON"
+x1h_arm off '{"x-gateway-inference-fairness-id":["spoof-old"],"x-gateway-inference-objective":["spoof-old"],"x-llm-d-inference-fairness-id":["spoof"],"x-llm-d-inference-objective":["spoof"],"x-llm-d-inference-ttl":["1h"]}'
+chk X1h "off: no dropped-reason on the shed stream" "" "$X1H_REASON"
+has X1h "the pool back to the process default" 200 "$(h2cfg inherit)"
+
+echo "=== step 5: the pool back to its shape"
+sched_cfg 8 16 30000 "$(fl5_json 0:0:0 0:0:0 inherit inherit)" || fail X1 "reset"
 
 # ---- step 3, group B: P/D, stateless MCP, CHWBL, backend failures ---------------
 # B15 last: it persists the configuration and restarts the gateway twice.

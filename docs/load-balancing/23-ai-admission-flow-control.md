@@ -199,6 +199,61 @@ when the reserve plus the standard and sheddable floors is above 100
 (`fc_critical_reserve_pct`). A floor is independent of the weights: a band with
 a zero weight under the weighted wake may have one.
 
+## Wait windows and queue shares per band
+
+Two knobs shape how long and how many a band may queue. Both are written as
+`critical:standard:sheddable`, and a band that is not named keeps the rule's
+own values.
+
+- **A wait window** (`fc_band_wait_ms`, milliseconds, 0 to 3600000). A band's
+  wait window is a cap inside the rule's window (`max_queue_wait_ms`), never
+  above it; 0 = the rule's window. A value above `fc_max_queue_wait_ms` runs at
+  `fc_max_queue_wait_ms`. A waiter whose window ends is answered
+  `504 admission_queue_timeout`. `fc_effective.bands.<band>.wait_ms` reads back
+  the configured value (0 is the rule's window); `queue_wait_ms` is the rule's.
+- **A queue share** (`fc_band_queue_pct`, percent). A band's queue share bounds
+  that band's own occupancy of `max_queue_depth`, a ceiling and not a
+  reservation: what a band does not use stays open to every other band, and the
+  queue as a whole never holds more than `max_queue_depth`; 0 = the shared
+  depth. The share is rounded up to whole waiters, at least one. A band at its
+  share is refused with `429 admission_capacity` (the `queue_full` reason) even
+  while the queue has room, and nobody is evicted to make room for it. When
+  all three are non-zero they sum to at most 100.
+
+## The llm-d headers
+
+`fc_llmd_headers` (`on`, `off`, `inherit`; default off, process default
+`LLB_FC_LLMD_HEADERS`) lets the gateway speak the llm-d request headers. With it
+off, none of the following happens: the TTL header is ignored and every header is
+forwarded as sent. With it on:
+
+- **Refusals name their reason.** Every refusal of the gate carries
+  `x-llm-d-request-dropped-reason`:
+
+  | Refusal | `x-llm-d-request-dropped-reason` |
+  |---|---|
+  | `admission_capacity`, `admission_shed`, `admission_tenant_share` | `rejected-saturated` |
+  | `admission_queue_timeout`, `admission_ttl_expired` | `rejected-ttl-expired` |
+  | `admission_no_capacity` | `rejected-no-endpoints` |
+  | `gateway_draining`, `admission_drained` | `rejected-shutting-down` |
+
+- **The client's TTL can shorten a wait.** `x-llm-d-inference-ttl` is a
+  positive duration in Go syntax (`500ms`, `2s`, `1m30s`; held at one day). A
+  TTL shorter than the window that applies to the request's band shortens that
+  request's wait; a longer one never extends it. A wait the client's TTL ended is
+  answered `429 admission_ttl_expired`; a wait a window of the rule ended stays
+  `504 admission_queue_timeout`. A value that is not a duration is ignored. The
+  deadline is checked about once a second, so a TTL is honoured to about a
+  second. The TTL applies to HTTP/1.1 requests; HTTP/2 streams never wait.
+- **The forwarded identity is the gateway's.** The request the backend receives
+  carries `x-llm-d-inference-objective` set to the class the request was
+  admitted as (`critical`, `standard` or `sheddable`) and
+  `x-llm-d-inference-fairness-id` set to the authenticated tenant (none for a
+  request without a tenant). A client's copy of either, and of the deprecated
+  `x-gateway-inference-objective` and `x-gateway-inference-fairness-id`, is
+  removed first. On a chunked request the client's copies are removed and
+  nothing is written. HTTP/2 requests are forwarded as before.
+
 ## Scraped queue depth: how long it is trusted
 
 The P/D scorers weigh each endpoint by its scraped queue depth. A depth that
@@ -337,7 +392,8 @@ and the ceiling that refused. The body is JSON.
 | `429` | `admission_tenant_share` | the request's tenant holds its share of the ceiling (and may not wait) or of the queue; the admission headers carry the pool's counts, not the tenant's | as `admission_capacity` |
 | `503` | `admission_no_capacity` | no healthy endpoint of the pool has capacity | closed |
 | `503` | `gateway_draining` | the gateway is in maintenance (see below) | closed |
-| `504` | `admission_queue_timeout` | the request waited the whole `fc_max_queue_wait_ms`; body carries `queued_ms`, the wait it spent | closed |
+| `504` | `admission_queue_timeout` | the request waited the whole `fc_max_queue_wait_ms`, or its band's wait window when that is shorter; body carries `queued_ms`, the wait it spent | closed |
+| `429` | `admission_ttl_expired` | with `fc_llmd_headers` on, the request's own `x-llm-d-inference-ttl` ended its wait; body carries `queued_ms` | closed |
 | `503` | `admission_drained` | the request was waiting when its pool was deleted or the gateway entered maintenance | closed |
 
 A client that keeps a `429` connection open may send its next request on the

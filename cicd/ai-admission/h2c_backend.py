@@ -13,6 +13,8 @@ Behaviour mirrors hdr_echo.py where it matters to the legs:
                        and a usage object (feeds the H2 settle path);
                        an x-test-nonce header is counted as a receipt.
   GET /__receipts/N -> the count for nonce N, as a decimal body.
+  GET /__headers/N  -> {"headers": {name: [value, ...]}}: the llm-d request headers
+                       of the last request that carried nonce N, as received.
 
 A third argument of "no-usage" suppresses the usage object, mirroring
 hdr_echo.py's mode of the same name. usage is optional in the response shape,
@@ -56,6 +58,7 @@ if ERROR_STATUS:
     EMIT_USAGE = False
 
 receipts = {}
+seen_hdrs = {}
 receipts_lock = threading.Lock()
 
 
@@ -118,10 +121,24 @@ def handle_request(peer, stream_id, headers, body):
         respond(peer, stream_id, 200, str(count).encode())
         return
 
+    if method == "GET" and path.startswith("/__headers/"):
+        nonce = path[len("/__headers/"):]
+        with receipts_lock:
+            seen = seen_hdrs.get(nonce, {})
+        respond(peer, stream_id, 200, json.dumps({"nonce": nonce, "headers": seen}).encode())
+        return
+
     nonce = hdr.get("x-test-nonce", "")
     if nonce:
         with receipts_lock:
             receipts[nonce] = receipts.get(nonce, 0) + 1
+            seen = {}
+            for name, value in headers:
+                name = (name.decode("utf8", "replace") if isinstance(name, bytes) else name).lower()
+                if name.startswith(("x-llm-d-", "x-gateway-inference-")):
+                    value = value.decode("utf8", "replace") if isinstance(value, bytes) else value
+                    seen.setdefault(name, []).append(value)
+            seen_hdrs[nonce] = seen
 
     # After the receipt, before the answer — see the module docstring.
     delay_ms = hdr.get("x-test-delay-ms")

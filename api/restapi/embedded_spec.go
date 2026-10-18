@@ -2287,7 +2287,7 @@ func init() {
           "x-omitempty": false
         },
         "queue_pct": {
-          "description": "The most of the queue depth the band may hold, in percent; 0 is the shared depth.",
+          "description": "The most of the queue depth the band may hold, in percent; 0 is the shared depth. A ceiling on the band's own occupancy, not a reservation.",
           "format": "int32",
           "type": "integer",
           "x-omitempty": false
@@ -2299,7 +2299,7 @@ func init() {
           "x-omitempty": false
         },
         "wait_ms": {
-          "description": "The band's wait window in milliseconds; 0 is the queue's (queue_wait_ms).",
+          "description": "The band's configured wait window in milliseconds; 0 is the queue's (queue_wait_ms). A window above queue_wait_ms runs at queue_wait_ms.",
           "format": "int32",
           "type": "integer",
           "x-omitempty": false
@@ -5097,12 +5097,12 @@ func init() {
               "x-nullable": false
             },
             "fc_band_queue_pct": {
-              "description": "The most of the queue depth each band may hold, critical:standard:sheddable, in percent; 0 is the shared depth. A band at its share is refused with 429 admission_capacity (reason queue_full). At most 100 together when all three are non-zero. 0:0:0 (the default) is no share. Replace and null semantics as fc_band_weights.",
+              "description": "The most of the queue depth each band may hold, critical:standard:sheddable, in percent, rounded up to whole waiters and at least one; 0 is the shared depth. It bounds that band's own occupancy of fc_max_queue_depth and is a ceiling, not a reservation: what a band does not use stays open to every other band, and the queue as a whole never holds more than fc_max_queue_depth. A band at its share is refused with 429 admission_capacity (reason queue_full); nobody is evicted to make room for it. At most 100 together when all three are non-zero. 0:0:0 (the default) is no share. Replace and null semantics as fc_band_weights.",
               "type": "string",
               "x-nullable": false
             },
             "fc_band_wait_ms": {
-              "description": "Each band's wait window, critical:standard:sheddable, in milliseconds, each 0 to 3600000; 0 is fc_max_queue_wait_ms. A waiter whose window ends is answered 504 admission_queue_timeout. 0:0:0 (the default) resets every band to the queue's window. Replace and null semantics as fc_band_weights.",
+              "description": "Each band's wait window, critical:standard:sheddable, in milliseconds, each 0 to 3600000. A band's window is a cap inside the rule's window (fc_max_queue_wait_ms), never above it: a larger value runs at the rule's window, and 0 is the rule's window. A waiter whose window ends is answered 504 admission_queue_timeout. 0:0:0 (the default) resets every band to the queue's window. Replace and null semantics as fc_band_weights.",
               "type": "string",
               "x-nullable": false
             },
@@ -5691,7 +5691,7 @@ func init() {
               "x-nullable": false
             },
             "fc_llmd_headers": {
-              "description": "on adds x-llm-d-request-dropped-reason to the admission refusals and lets a valid x-llm-d-inference-ttl shorten, never extend, a request's wait window; the 504 of a queue timeout stays 504. off leaves both out. inherit, or omitted on create, runs on the process default (LLB_FC_LLMD_HEADERS, else off). Replace and null semantics as fc_mode.",
+              "description": "on, for HTTP/1.1 requests (HTTP/2 streams never wait and forward as before): adds x-llm-d-request-dropped-reason to the admission refusals; lets a valid x-llm-d-inference-ttl (Go duration syntax, positive, held at one day) shorter than the window that applies shorten that request's wait, never extend it, where a wait the client's TTL ended is answered 429 admission_ttl_expired and a wait a window of the rule ended stays 504 admission_queue_timeout; and forwards the gateway's resolved values in x-llm-d-inference-objective (the class the request was admitted as) and x-llm-d-inference-fairness-id (the authenticated tenant, none for a request without one), removing the client's copy of either name and of the deprecated x-gateway-inference-* names (on a chunked request the copies are removed and nothing is written). off leaves all of it out: the TTL header is ignored and every header is forwarded as sent. inherit, or omitted on create, runs on the process default (LLB_FC_LLMD_HEADERS, else off). Replace and null semantics as fc_mode.",
               "enum": [
                 "on",
                 "off",
@@ -38793,7 +38793,7 @@ func init() {
           "x-omitempty": false
         },
         "queue_pct": {
-          "description": "The most of the queue depth the band may hold, in percent; 0 is the shared depth.",
+          "description": "The most of the queue depth the band may hold, in percent; 0 is the shared depth. A ceiling on the band's own occupancy, not a reservation.",
           "type": "integer",
           "format": "int32",
           "x-omitempty": false
@@ -38805,7 +38805,7 @@ func init() {
           "x-omitempty": false
         },
         "wait_ms": {
-          "description": "The band's wait window in milliseconds; 0 is the queue's (queue_wait_ms).",
+          "description": "The band's configured wait window in milliseconds; 0 is the queue's (queue_wait_ms). A window above queue_wait_ms runs at queue_wait_ms.",
           "type": "integer",
           "format": "int32",
           "x-omitempty": false
@@ -41593,12 +41593,12 @@ func init() {
               "x-nullable": false
             },
             "fc_band_queue_pct": {
-              "description": "The most of the queue depth each band may hold, critical:standard:sheddable, in percent; 0 is the shared depth. A band at its share is refused with 429 admission_capacity (reason queue_full). At most 100 together when all three are non-zero. 0:0:0 (the default) is no share. Replace and null semantics as fc_band_weights.",
+              "description": "The most of the queue depth each band may hold, critical:standard:sheddable, in percent, rounded up to whole waiters and at least one; 0 is the shared depth. It bounds that band's own occupancy of fc_max_queue_depth and is a ceiling, not a reservation: what a band does not use stays open to every other band, and the queue as a whole never holds more than fc_max_queue_depth. A band at its share is refused with 429 admission_capacity (reason queue_full); nobody is evicted to make room for it. At most 100 together when all three are non-zero. 0:0:0 (the default) is no share. Replace and null semantics as fc_band_weights.",
               "type": "string",
               "x-nullable": false
             },
             "fc_band_wait_ms": {
-              "description": "Each band's wait window, critical:standard:sheddable, in milliseconds, each 0 to 3600000; 0 is fc_max_queue_wait_ms. A waiter whose window ends is answered 504 admission_queue_timeout. 0:0:0 (the default) resets every band to the queue's window. Replace and null semantics as fc_band_weights.",
+              "description": "Each band's wait window, critical:standard:sheddable, in milliseconds, each 0 to 3600000. A band's window is a cap inside the rule's window (fc_max_queue_wait_ms), never above it: a larger value runs at the rule's window, and 0 is the rule's window. A waiter whose window ends is answered 504 admission_queue_timeout. 0:0:0 (the default) resets every band to the queue's window. Replace and null semantics as fc_band_weights.",
               "type": "string",
               "x-nullable": false
             },
@@ -42158,7 +42158,7 @@ func init() {
               "x-nullable": false
             },
             "fc_llmd_headers": {
-              "description": "on adds x-llm-d-request-dropped-reason to the admission refusals and lets a valid x-llm-d-inference-ttl shorten, never extend, a request's wait window; the 504 of a queue timeout stays 504. off leaves both out. inherit, or omitted on create, runs on the process default (LLB_FC_LLMD_HEADERS, else off). Replace and null semantics as fc_mode.",
+              "description": "on, for HTTP/1.1 requests (HTTP/2 streams never wait and forward as before): adds x-llm-d-request-dropped-reason to the admission refusals; lets a valid x-llm-d-inference-ttl (Go duration syntax, positive, held at one day) shorter than the window that applies shorten that request's wait, never extend it, where a wait the client's TTL ended is answered 429 admission_ttl_expired and a wait a window of the rule ended stays 504 admission_queue_timeout; and forwards the gateway's resolved values in x-llm-d-inference-objective (the class the request was admitted as) and x-llm-d-inference-fairness-id (the authenticated tenant, none for a request without one), removing the client's copy of either name and of the deprecated x-gateway-inference-* names (on a chunked request the copies are removed and nothing is written). off leaves all of it out: the TTL header is ignored and every header is forwarded as sent. inherit, or omitted on create, runs on the process default (LLB_FC_LLMD_HEADERS, else off). Replace and null semantics as fc_mode.",
               "type": "string",
               "enum": [
                 "on",
@@ -43115,12 +43115,12 @@ func init() {
           "x-nullable": false
         },
         "fc_band_queue_pct": {
-          "description": "The most of the queue depth each band may hold, critical:standard:sheddable, in percent; 0 is the shared depth. A band at its share is refused with 429 admission_capacity (reason queue_full). At most 100 together when all three are non-zero. 0:0:0 (the default) is no share. Replace and null semantics as fc_band_weights.",
+          "description": "The most of the queue depth each band may hold, critical:standard:sheddable, in percent, rounded up to whole waiters and at least one; 0 is the shared depth. It bounds that band's own occupancy of fc_max_queue_depth and is a ceiling, not a reservation: what a band does not use stays open to every other band, and the queue as a whole never holds more than fc_max_queue_depth. A band at its share is refused with 429 admission_capacity (reason queue_full); nobody is evicted to make room for it. At most 100 together when all three are non-zero. 0:0:0 (the default) is no share. Replace and null semantics as fc_band_weights.",
           "type": "string",
           "x-nullable": false
         },
         "fc_band_wait_ms": {
-          "description": "Each band's wait window, critical:standard:sheddable, in milliseconds, each 0 to 3600000; 0 is fc_max_queue_wait_ms. A waiter whose window ends is answered 504 admission_queue_timeout. 0:0:0 (the default) resets every band to the queue's window. Replace and null semantics as fc_band_weights.",
+          "description": "Each band's wait window, critical:standard:sheddable, in milliseconds, each 0 to 3600000. A band's window is a cap inside the rule's window (fc_max_queue_wait_ms), never above it: a larger value runs at the rule's window, and 0 is the rule's window. A waiter whose window ends is answered 504 admission_queue_timeout. 0:0:0 (the default) resets every band to the queue's window. Replace and null semantics as fc_band_weights.",
           "type": "string",
           "x-nullable": false
         },
@@ -43680,7 +43680,7 @@ func init() {
           "x-nullable": false
         },
         "fc_llmd_headers": {
-          "description": "on adds x-llm-d-request-dropped-reason to the admission refusals and lets a valid x-llm-d-inference-ttl shorten, never extend, a request's wait window; the 504 of a queue timeout stays 504. off leaves both out. inherit, or omitted on create, runs on the process default (LLB_FC_LLMD_HEADERS, else off). Replace and null semantics as fc_mode.",
+          "description": "on, for HTTP/1.1 requests (HTTP/2 streams never wait and forward as before): adds x-llm-d-request-dropped-reason to the admission refusals; lets a valid x-llm-d-inference-ttl (Go duration syntax, positive, held at one day) shorter than the window that applies shorten that request's wait, never extend it, where a wait the client's TTL ended is answered 429 admission_ttl_expired and a wait a window of the rule ended stays 504 admission_queue_timeout; and forwards the gateway's resolved values in x-llm-d-inference-objective (the class the request was admitted as) and x-llm-d-inference-fairness-id (the authenticated tenant, none for a request without one), removing the client's copy of either name and of the deprecated x-gateway-inference-* names (on a chunked request the copies are removed and nothing is written). off leaves all of it out: the TTL header is ignored and every header is forwarded as sent. inherit, or omitted on create, runs on the process default (LLB_FC_LLMD_HEADERS, else off). Replace and null semantics as fc_mode.",
           "type": "string",
           "enum": [
             "on",

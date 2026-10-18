@@ -27,13 +27,13 @@ type FcBandEffective struct {
 	// The band's floor in percent of the ceiling in force: a guarantee under contention, not a reservation; it binds only while that band has a waiter.
 	MinSharePct int32 `json:"min_share_pct"`
 
-	// The most of the queue depth the band may hold, in percent; 0 is the shared depth.
+	// The most of the queue depth the band may hold, in percent; 0 is the shared depth. A ceiling on the band's own occupancy, not a reservation.
 	QueuePct int32 `json:"queue_pct"`
 
 	// Requests of the band waiting right now.
 	Queued int32 `json:"queued"`
 
-	// The band's wait window in milliseconds; 0 is the queue's (queue_wait_ms).
+	// The band's configured wait window in milliseconds; 0 is the queue's (queue_wait_ms). A window above queue_wait_ms runs at queue_wait_ms.
 	WaitMs int32 `json:"wait_ms"`
 
 	// The band's weighted-wake weight; 0 is not set.

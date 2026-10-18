@@ -14,6 +14,8 @@ Endpoints:
   GET  /v1/models             a non-inference request on the same service
   GET  /health                readiness
   GET  /__receipts/<nonce>    requests that arrived carrying that X-Test-Nonce
+  GET  /__headers/<nonce>     the llm-d request headers of the last request carrying that
+                              nonce, as the backend received them ({"name": ["value", ...]})
   GET  /__peak/<nonce>        the most requests with that nonce executing at
                               once, across every port, plus the per-port peaks
   GET  /__inflight            requests executing right now
@@ -69,6 +71,7 @@ INFLIGHT_PORT = {}   # port -> executing right now
 PEAK = {}            # nonce -> most executing at once, every port
 PEAK_PORT = {}       # nonce -> {port: most executing at once on that port}
 ORDER = {}           # nonce -> request ids in arrival order
+SEEN_HDRS = {}       # nonce -> the llm-d headers of its last request
 RELEASED = set()     # nonces whose holds were released
 RELEASE_ALL = 0      # generation: bumped by /__release_all
 COND = threading.Condition(LOCK)
@@ -120,6 +123,11 @@ class Handler(BaseHTTPRequestHandler):
                 RECEIPTS[nonce] = RECEIPTS.get(nonce, 0) + 1
                 ORDER.setdefault(nonce, []).append(
                     self.headers.get("X-Request-Id", ""))
+                SEEN_HDRS[nonce] = {}
+                for k in self.headers.keys():
+                    if k.lower().startswith(("x-llm-d-", "x-gateway-inference-")):
+                        SEEN_HDRS[nonce].setdefault(k.lower(), []).extend(
+                            self.headers.get_all(k))
             INFLIGHT += 1
             INFLIGHT_PORT[self.port] = INFLIGHT_PORT.get(self.port, 0) + 1
             if nonce:
@@ -207,6 +215,11 @@ class Handler(BaseHTTPRequestHandler):
             n = path[len("/__receipts/"):]
             with LOCK:
                 self._send_json({"nonce": n, "count": RECEIPTS.get(n, 0)})
+            return
+        if path.startswith("/__headers/"):
+            n = path[len("/__headers/"):]
+            with LOCK:
+                self._send_json({"nonce": n, "headers": SEEN_HDRS.get(n, {})})
             return
         if path.startswith("/__peak/"):
             n = path[len("/__peak/"):]

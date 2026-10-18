@@ -20,6 +20,17 @@ binary behaves exactly like upstream loxilb.
 
 ### Added
 
+- **Wait windows and queue shares per band, and the llm-d headers:**
+  `fc_band_wait_ms` gives a band its own wait window, a cap inside the rule's
+  `fc_max_queue_wait_ms`, and `fc_band_queue_pct` bounds a band's own occupancy
+  of the queue depth (a ceiling, not a reservation). With `fc_llmd_headers` on,
+  refusals carry `x-llm-d-request-dropped-reason`, a shorter
+  `x-llm-d-inference-ttl` shortens a request's wait (answered `429
+  admission_ttl_expired` when the client's TTL ended it; a window of the rule
+  still ends in `504`), and the objective and fairness identity forwarded to the
+  backend are the gateway's resolved values. Off by default; a rule that sets
+  none of them is unchanged. See
+  `docs/load-balancing/23-ai-admission-flow-control.md`.
 - **Priority floors and a critical reserve for the capacity gate:**
   `fc_band_min_share_pct` guarantees a priority band a share of the service
   ceiling while it has a waiter (a guarantee under contention, not a

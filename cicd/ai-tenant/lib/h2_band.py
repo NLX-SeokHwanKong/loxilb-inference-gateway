@@ -10,6 +10,7 @@ RST_STREAM(CANCEL) while the connection stays up.
 
 Usage: h2_band.py <host> <port> --api-key K --streams N [--delay-ms D]
                   [--nonce-prefix P] [--model M] [--rst N --rst-after-s S]
+                  [--hdr "name: value" ...]
 """
 import argparse
 import json
@@ -34,6 +35,7 @@ def main():
     ap.add_argument("--model", default="band-model")
     ap.add_argument("--rst", type=int, default=0)
     ap.add_argument("--rst-after-s", type=float, default=0)
+    ap.add_argument("--hdr", action="append", default=[], help="name: value, sent on every stream")
     args = ap.parse_args()
 
     timeout = args.delay_ms / 1000.0 + 15.0
@@ -58,6 +60,9 @@ def main():
         ]
         if args.api_key:
             headers.append(("x-api-key", args.api_key))
+        for h in args.hdr:
+            hname, _, hvalue = h.partition(":")
+            headers.append((hname.strip().lower(), hvalue.strip()))
         if args.delay_ms:
             headers.append(("x-test-delay-ms", str(args.delay_ms)))
         conn.send_headers(sid, headers)
@@ -102,7 +107,7 @@ def main():
                     value = value.decode() if isinstance(value, bytes) else value
                     if name == ":status":
                         st["status"] = value
-                    elif name.startswith("x-loxilb-admission-") or name == "retry-after":
+                    elif name.startswith(("x-loxilb-admission-", "x-llm-d-")) or name == "retry-after":
                         st["headers"][name] = value
             elif isinstance(event, h2.events.DataReceived) and st is not None:
                 st["body"] += event.data
