@@ -136,7 +136,7 @@ groups:
         labels: { severity: critical }
         annotations:
           summary: "AI request backend non-2xx ratio above 5%"
-          description: "Backend-answered requests only (outcome=completed); status carries the real backend HTTP status. Gate denials are excluded on purpose — they are tracked by LoxilbAIRateLimitSpike and by outcome=denied."
+          description: "Backend-answered requests only (outcome=completed); status carries the real backend HTTP status. Gateway refusals are excluded on purpose — they are tracked by LoxilbAIRateLimitSpike and by outcome=denied; the gateway's own outage answers are completions and count."
           dashboard: "LoxiLB / AI Gateway"
           panel: "AI requests/s by status"
 

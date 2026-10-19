@@ -112,8 +112,8 @@ its `outcome` label, because the three readings answer different questions:
 | Selector | Population | Use it for |
 |---|---|---|
 | `loxilb_ai_requests_total` | offered load | total request rate; capacity |
-| `{outcome="completed"}` | answered by a backend | anything describing backend behaviour — error ratios, latency correlation |
-| `{outcome="denied"}` | refused by the policy gate | denial rate, without consulting a second family |
+| `{outcome="completed"}` | answered: by a backend, or by the gateway when no backend could take the request (outage, P/D timeout or leg failure, connect failure) or by a configured redirect | anything describing backend behaviour — error ratios, latency correlation |
+| `{outcome="denied"}` | refused by the gateway before any backend was chosen: policy gate, capacity, routing, framing, L7-policy reject, content-security block | denial rate, without consulting a second family |
 
 The two outcomes are mutually exclusive per request, so `sum by (outcome)`
 reproduces the unfiltered total.
@@ -128,11 +128,19 @@ both filter; `deploy/monitoring/ci/lint-monitoring.py` fails any expression
 that filters some selectors of this family and not others.
 
 Completed responses are recorded at SSE stream completion when streamed and at
-the response headers when not, sharing one per-request dedup guard. Denials are
-recorded where the gate decides them, labelled with the status the client
-received — note this is not derivable from the reason: the rate-limit stage
-answers **503**, not 429, when it finds a keyed identity with no policy store
-behind it.
+the response headers when not, sharing one per-request dedup guard. An answer
+the gateway writes when no backend can take the request is recorded as a
+completion with the status it wrote, so an outage shows in the error ratio as a
+backend's own 5xx would. Refusals are recorded once each, by the deny record
+the data plane takes whatever stage refused, labelled with the status the
+client received — note this is not derivable from the reason: the rate-limit
+stage answers **503**, not 429, when it finds a keyed identity with no policy
+store behind it.
+
+The model label of a routing or framing refusal is never a new label: the
+model it names may be one nobody serves, so it reads its own name only when a
+label for that model already exists, else `other`. A routing refusal of a
+request that named no model (no route matched, no rules) reads `model="none"`.
 
 `tenant=""` on a denied series means the request was refused before a
 credential resolved (missing or unknown key, or a store that could not answer),
@@ -146,11 +154,22 @@ request trips one gate but several reason counters exist, so the relation is
 `rate_limit_hits_total <= requests_total{outcome="denied",status="429"}`, not
 equality.
 
-**Not counted here.** Two gateway-generated refusals are answered entirely in
-the data plane and reach neither recording site: a LlamaFirewall block (403)
-and a P/D pool failure (502/503). The P/D failures are visible in the P/D
-lifecycle metrics; the LlamaFirewall blocks are visible only in
-`loxilb_llamafw_*`. Offered load therefore still excludes those two classes.
+**Do not sum these with `loxilb_ai_requests_total`.** Each counts some of the
+same requests from another angle, so adding it to the request total (or to its
+`denied` series) counts a request twice:
+
+| Family | What it counts | Overlap |
+|---|---|---|
+| `loxilb_proxy_http_responses_by_status_total` | every HTTP/1.1 response the client received, by class: backend replies and the gateway's own answers alike (HTTP/2 not included) | every HTTP/1.1 request in `requests_total`, either outcome |
+| `loxilb_ai_netid_requests_total{outcome="denied"}` | refusals of a source with a network-identity binding | part of `{outcome="denied"}` |
+| `loxilb_ai_admission_decisions_total` (capacity_shed, queue_full, queue_timeout, drained, draining, no_healthy_capacity, tenant_share) | capacity-gate decisions | the capacity refusals in `{outcome="denied"}` |
+| `loxilb_pd_admission_shed_total`, `loxilb_pd_admission_overflow_shed_total` | the P/D in-flight 429 (`pd_overloaded`) | part of `{outcome="denied",status="429"}` |
+| `loxilb_ai_rate_limit_hits_total`, `loxilb_ai_token_quota_denied_total` | rate-limit and quota refusals, by reason | part of `{outcome="denied"}` (see the inequality above) |
+| `loxilb_ai_pd_requests_total` | every P/D request's lifecycle, failures included | the P/D requests in `requests_total` |
+
+The TTFB histogram (`loxilb_proxy_http_ttfb_seconds`) samples backend replies
+only: a gateway's own answer reaches its first byte in microseconds and is not
+sampled.
 
 ## Metric parity with upstream OSS loxilb
 

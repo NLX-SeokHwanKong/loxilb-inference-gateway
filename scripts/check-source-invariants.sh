@@ -183,43 +183,26 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 5. Every deny decision has the HTTP status the gate actually sends.
+# 5. The refusal stages are lockstep between C and Go.
 #
-# Denied requests are counted in loxilb_ai_requests_total under
-# outcome="denied", labelled with the status the client received. That status
-# is NOT derivable from which stage denied: the rate-limit stage returns
-# deny_503 when it finds a keyed identity with no policy store behind it, so
-# "came from the limiter, therefore 429" files a store outage as throttling.
-#
-# gateDenialStatuses is the one place that mapping lives. A new decision value
-# added to the ladder without an entry there would be counted as 500 -- the
-# metric stays honest, but the arm is unlabelled and nothing else complains.
-# This check makes that a build failure at the moment the constant is added,
-# which is the moment somebody knows what status it sends.
+# Every refusal reaches loxilb_ai_requests_total{outcome="denied"} through
+# one record, llb_ai_record_deny, which carries the refusing stage as a
+# number (ai_gw_admit_stage_t). Go names it for the audit record and picks
+# the model-label rule by it (a routing refusal never registers the model it
+# names). The two lists match by position: a stage inserted on one side
+# renames every stage after it on the other, with nothing failing to build.
+# The status label is the one the data plane wrote, carried on the record.
 # ---------------------------------------------------------------------------
-POLICY_FILE="pkg/loxinet/ai_gateway_policy.go"
-if [ ! -f "$POLICY_FILE" ]; then
-  fail "$POLICY_FILE not found - did the decision constants move?"
+C_STAGES="$(sed -n '/^typedef enum {/,/} ai_gw_admit_stage_t;/p' loxilb-ebpf/common/sockproxy_ai_admit.h \
+  | grep -oE '^[[:space:]]*AI_GW_STAGE_[A-Z]+' | sed 's/^[[:space:]]*AI_GW_STAGE_//' | tr 'A-Z' 'a-z' | tr '\n' ' ')"
+GO_STAGES="$(sed -n '/^\taiStageNone = iota/,/^)/p' pkg/loxinet/ai_gateway_audit.go \
+  | grep -oE '^[[:space:]]*aiStage[A-Za-z]+' | sed 's/^[[:space:]]*aiStage//' | tr 'A-Z' 'a-z' | tr '\n' ' ')"
+if [ -z "$C_STAGES" ] || [ -z "$GO_STAGES" ]; then
+  fail "refusal stage lists not found (C: '$C_STAGES' Go: '$GO_STAGES') - did ai_gw_admit_stage_t or aiStageNone move?"
+elif [ "$C_STAGES" = "$GO_STAGES" ]; then
+  pass "refusal stages lockstep between C and Go ($C_STAGES)"
 else
-  # Derive the expected set from the constant NAMES, which carry the status.
-  consts="$(grep -oE 'aiDecisionDeny[0-9]{3}' "$POLICY_FILE" | sort -u)"
-  table="$(sed -n '/^var gateDenialStatuses = map\[int\]int{/,/^}/p' "$POLICY_FILE")"
-  n_consts="$(printf '%s' "$consts" | grep -c . || true)"
-  n_entries="$(printf '%s\n' "$table" | grep -cE 'aiDecisionDeny[0-9]{3}:' || true)"
-  missing=""
-  for c in $consts; do
-    want="${c#aiDecisionDeny}"
-    printf '%s\n' "$table" | grep -qE "$c:[[:space:]]*$want," || missing="$missing $c(want $want)"
-  done
-  if [ "$n_consts" -lt 3 ]; then
-    fail "expected at least 3 deny constants in $POLICY_FILE, found $n_consts - did they move or get renamed?"
-  elif [ -n "$missing" ]; then
-    fail "gateDenialStatuses is missing or disagrees with the decision constants:$missing"
-  elif [ "$n_entries" -ne "$n_consts" ]; then
-    fail "gateDenialStatuses has $n_entries entries for $n_consts deny constants - an entry names a decision that no longer exists"
-  else
-    pass "every deny decision maps to the status it sends ($n_consts arms)"
-  fi
+  fail "refusal stages differ between C and Go: C=[$C_STAGES] Go=[$GO_STAGES]"
 fi
 
 # ---------------------------------------------------------------------------

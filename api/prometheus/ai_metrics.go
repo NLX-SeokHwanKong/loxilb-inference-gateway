@@ -61,6 +61,10 @@ func sanitizeLabel(s string) string {
 const (
 	maxModelLabels  = 64
 	modelLabelOther = "other"
+	// ModelLabelNone is the model label of a refusal for a request that named
+	// no model and matched no route: distinct from "other" (a model past the
+	// label bound) and from "" (a refusal before any model was read).
+	ModelLabelNone = "none"
 )
 
 var (
@@ -97,14 +101,34 @@ func boundModelLabel(modelName string) string {
 	return model
 }
 
+// knownModelLabel is boundModelLabel for a name that may be one nobody
+// serves: the sanitised name when the registry already holds it, else
+// "other". It never registers a name, so a stream of requests for models
+// that do not exist cannot fill the 64 slots and push real models to
+// "other". "" stays "".
+func knownModelLabel(modelName string) string {
+	model := sanitizeLabel(modelName)
+	if model == "" {
+		return model
+	}
+	modelLabelMu.RLock()
+	_, known := modelLabels[model]
+	modelLabelMu.RUnlock()
+	if known {
+		return model
+	}
+	return modelLabelOther
+}
+
 // Values of the outcome label on loxilb_ai_requests_total. Exported because a
 // consumer of this package should select on the same constant the recorder
 // writes, not on a string literal that can drift from it.
 const (
 	// AIOutcomeCompleted marks a request a backend answered.
 	AIOutcomeCompleted = "completed"
-	// AIOutcomeDenied marks a request the gateway policy gate refused, so no
-	// backend was ever asked.
+	// AIOutcomeDenied marks a request the gateway refused before any backend
+	// was chosen (policy gate, capacity, routing, framing), so no backend was
+	// ever asked.
 	AIOutcomeDenied = "denied"
 )
 
@@ -125,11 +149,15 @@ var (
 	// Both sites share one per-request dedup guard, so a request is counted
 	// exactly once whichever way it completed.
 	//
-	// A third site records the requests the policy gate refuses itself. Those
-	// never reach a backend, so neither response-completion site can see them,
-	// and without them this family counted served traffic rather than offered
-	// load — no combination of the exported families yielded a total request
-	// denominator.
+	// A third site records the requests the gateway refuses itself: the
+	// deny record (llb_ai_record_deny), once per refusal whatever stage made
+	// it (policy gate, capacity, routing, framing). Those never reach a
+	// backend, so neither response-completion site can see them, and without
+	// them this family counted served traffic rather than offered load — no
+	// combination of the exported families yielded a total request
+	// denominator. An answer the gateway writes when no backend can take the
+	// request (an outage, a P/D timeout) is a completion with the status it
+	// wrote, so the error ratio sees it.
 	//
 	// The outcome label is what makes that safe to add rather than a silent
 	// re-definition. status alone cannot carry it: a backend may answer 429 or
@@ -153,7 +181,7 @@ var (
 	aiRequestsTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "loxilb_ai_requests_total",
-			Help: "Total AI Gateway requests by model, tenant, HTTP status code, and outcome (completed = answered by a backend, recorded at SSE stream completion or at response headers; denied = refused by the gateway policy gate).",
+			Help: "Total AI Gateway requests by model, tenant, HTTP status code, and outcome (completed = answered, by a backend or by the gateway's own outage, timeout or redirect answer, with the status the client got; denied = refused by the gateway before any backend was chosen: policy gate, capacity, routing, framing).",
 		},
 		[]string{"model", "tenant", "status", "outcome"},
 	)
@@ -922,6 +950,9 @@ func RegisterTokenQuotaSource(fn func() []TokenQuotaState) {
 //	                    3 = decode   / timeout   (decode leg produced no byte)
 //	                    4 = prefill  / error     (prefill leg failed or died)
 //	                    5 = prefill  / rejected  (origin refused; relayed verbatim)
+//	                    6 = decode   / rejected  (origin refused; relayed verbatim)
+//	                    7 = decode   / unknown   (decode completed; its status
+//	                                              line was never read)
 func RecordPDRequest(modelName string, prefillLatencyMs, decodeLatencyMs int64, kvParamsFound, errorPhase int) {
 	model := boundModelLabel(modelName)
 
@@ -945,6 +976,12 @@ func RecordPDRequest(modelName string, prefillLatencyMs, decodeLatencyMs int64, 
 	case 5:
 		phase = "prefill"
 		status = "rejected"
+	case 6:
+		phase = "decode"
+		status = "rejected"
+	case 7:
+		phase = "decode"
+		status = "unknown"
 	default:
 		phase = "unknown"
 		status = "error"
@@ -974,14 +1011,14 @@ func RecordPDRequest(modelName string, prefillLatencyMs, decodeLatencyMs int64, 
 // errorPhase got far enough to parse a prefill response, and therefore whether
 // the absence of kv_transfer_params in it is a real observation.
 //
-// Phases 0, 2 and 3 all completed prefill: the request either finished, or
-// failed on the decode leg afterwards. Phases 1, 4 and 5 did not — a prefill
+// Phases 0, 2, 3, 6 and 7 all completed prefill: the request either finished,
+// or ended on the decode leg afterwards. Phases 1, 4 and 5 did not — a prefill
 // timeout, a prefill-side death and an origin reject each leave nothing whose
 // kv_transfer_params could have been read, so counting them as "missing" would
 // report a measurement that was never taken.
 func pdPrefillResponseInspected(errorPhase int) bool {
 	switch errorPhase {
-	case 0, 2, 3:
+	case 0, 2, 3, 6, 7:
 		return true
 	default:
 		return false
@@ -1121,8 +1158,10 @@ func RecordAIRequest(tenantID, modelName string, statusCode int, latencyMs int64
 	}
 }
 
-// RecordAIRequestDenied counts a request the AI Gateway policy gate refused
-// before any backend was asked, under outcome="denied".
+// RecordAIRequestDenied counts a request the AI Gateway refused before any
+// backend was asked, under outcome="denied". Its one caller is the deny
+// record (pkg/loxinet recordAIDeny), reached once per refusal from the data
+// plane whatever stage refused.
 //
 // The gate answers the client from inside the data plane's request-complete
 // callback and tears the connection down, so no backend response ever reaches
@@ -1132,7 +1171,7 @@ func RecordAIRequest(tenantID, modelName string, statusCode int, latencyMs int64
 // statusCode must be the status the client actually received, which is not
 // derivable from the denial reason alone: the rate-limit stage answers 503, not
 // 429, when it finds a keyed identity with no policy store behind it. Callers
-// map the gate's decision code, not its error string.
+// pass the status the data plane wrote, not one derived from the stage.
 //
 // Deliberately does NOT observe the duration histogram. That histogram measures
 // SSE activation to stream completion; a denial has no such interval, and
@@ -1145,6 +1184,23 @@ func RecordAIRequest(tenantID, modelName string, statusCode int, latencyMs int64
 // tenant="" reads as "denied before the tenant was known".
 func RecordAIRequestDenied(tenantID, modelName string, statusCode int) {
 	model := boundModelLabel(modelName)
+	tenant := sanitizeLabel(tenantID)
+	status := strconv.Itoa(statusCode)
+
+	aiRequestsTotal.WithLabelValues(model, tenant, status, AIOutcomeDenied).Inc()
+}
+
+// RecordAIRequestDeniedUnserved counts a refusal of a request no pool may
+// serve (a routing or framing refusal), under outcome="denied". The model it
+// names may be one nobody serves, so the label is the model only when the
+// registry already holds it, else "other" (knownModelLabel): an unknown-model
+// storm cannot take the 64 slots from real models. A request that named no
+// model reads noModelLabel (ModelLabelNone for a request no route matched).
+func RecordAIRequestDeniedUnserved(tenantID, modelName, noModelLabel string, statusCode int) {
+	model := knownModelLabel(modelName)
+	if model == "" {
+		model = noModelLabel
+	}
 	tenant := sanitizeLabel(tenantID)
 	status := strconv.Itoa(statusCode)
 

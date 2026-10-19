@@ -478,27 +478,6 @@ func validateAPIKeyInternal(svc apiKeyValidator, rawKey, modelName string) (deci
 	return 0, entry.TenantID, entry.KeyID, modelName, ""
 }
 
-// recordGateDenial counts a request the AI Gateway policy gate refused. It is
-// called from the deferred tail of every gate export, after that export's
-// recover() has settled the final return value.
-//
-// It reads the export's own outputs rather than being told what happened: ret
-// is what the C gate branches on and result.decision is the arm it takes, so
-// this records exactly what the client is about to receive. A non-zero ret
-// means the gate writes the response itself and tears the connection down —
-// no backend is dialled, so no response-completion recorder can ever see the
-// request, and this is its only chance to enter loxilb_ai_requests_total.
-//
-// result is nil only when the export could not fill a decision in at all. C
-// dereferences that same pointer for the status it sends, so there is no
-// client-visible outcome to attribute and nothing to count.
-func recordGateDenial(ret C.int, result *C.ai_gw_decision_t, tenantID, modelName string) {
-	if ret == 0 || result == nil {
-		return
-	}
-	prom.RecordAIRequestDenied(tenantID, modelName, gateDenialStatus(int(result.decision)))
-}
-
 // cgoRecover logs and absorbs a panic at a CGO export boundary. A Go panic
 // unwinding into the C sockproxy thread aborts the whole process, so every
 // //export below defers either this or a fail-closed variant of it.
@@ -539,11 +518,9 @@ func cCopyStr(dst *C.char, src string, maxLen int) {
 //
 //export llb_ai_validate_key
 func llb_ai_validate_key(rawKey *C.char, modelName *C.char, result *C.ai_gw_decision_t) (ret C.int) {
-	// Label values for the denial recorder below, kept out here so the deferred
-	// function can read whatever was resolved before an early return or a panic.
-	var metricTenant, metricModel string
-
 	// Fail closed on panic: deny with 401 rather than crashing the datapath.
+	// A refusal is counted once, by the deny record the C gate takes at its
+	// verdict (llb_ai_record_deny), not here.
 	defer func() {
 		if r := recover(); r != nil {
 			tk.LogIt(tk.LogCritical, "[AIGateway] llb_ai_validate_key: recovered panic: %v\n", r)
@@ -553,20 +530,11 @@ func llb_ai_validate_key(rawKey *C.char, modelName *C.char, result *C.ai_gw_deci
 			}
 			ret = -1
 		}
-		// Count the denial here rather than at each deny arm. A non-zero return
-		// means the C gate writes the response itself and drops the connection,
-		// so no backend response will ever reach llb_ai_record_request; this is
-		// the only place the request can enter the total. Doing it in the
-		// deferred function makes that structural: every arm, including the
-		// panic arm above, passes through exactly once, so a new deny arm cannot
-		// be added without being counted and no arm can be counted twice.
-		recordGateDenial(ret, result, metricTenant, metricModel)
 	}()
 	if result == nil {
 		tk.LogIt(tk.LogError, "[AIGateway] llb_ai_validate_key: nil result pointer\n")
 		return -1
 	}
-	metricModel = C.GoString(modelName)
 
 	// Zero out the result struct before writing.
 	*result = C.ai_gw_decision_t{}
@@ -587,13 +555,10 @@ func llb_ai_validate_key(rawKey *C.char, modelName *C.char, result *C.ai_gw_deci
 	}
 
 	rawKeyStr := C.GoString(rawKey)
-	modelNameStr := metricModel
+	modelNameStr := C.GoString(modelName)
 
 	decision, tenantID, keyID, modelOut, errorCode := validateAPIKeyInternal(us, rawKeyStr, modelNameStr)
 
-	// Known only on the 403 arm; empty elsewhere, which is the documented
-	// "denied before the tenant resolved" label value.
-	metricTenant = tenantID
 	result.decision = C.int(decision)
 
 	// Whatever identity this verdict resolved goes back to C, allow or deny.
@@ -650,6 +615,7 @@ func llb_ai_validate_bearer(bearer *C.char, modelName *C.char, profileName *C.ch
 	metricJWTReason := "internal_error"
 
 	// Fail closed on panic: deny with 401 rather than crashing the datapath.
+	// A refusal is counted once, by the C gate's deny record, not here.
 	defer func() {
 		if r := recover(); r != nil {
 			tk.LogIt(tk.LogCritical, "[AIGateway] llb_ai_validate_bearer: recovered panic: %v\n", r)
@@ -660,11 +626,6 @@ func llb_ai_validate_bearer(bearer *C.char, modelName *C.char, profileName *C.ch
 			ret = -1
 			metricJWTReason = "internal_error"
 		}
-		// Structural denial accounting, same shape as llb_ai_validate_key:
-		// a non-zero return means the C gate answers and tears the
-		// connection down, so this is the request's only entry into
-		// loxilb_ai_requests_total.
-		recordGateDenial(ret, result, metricTenant, metricModel)
 		// The bearer arm's own verdict counter. Here rather than at each
 		// return so that adding an arm cannot forget to count it, and so a
 		// panic is counted as the internal error it is instead of vanishing.
@@ -694,8 +655,8 @@ func llb_ai_validate_bearer(bearer *C.char, modelName *C.char, profileName *C.ch
 		h.Manager(), h.ProfileUpstreamPolicy,
 		C.GoString(bearer), metricModel, C.GoString(profileName), int(bearerFlags))
 
-	// Known on the 403 arm; empty elsewhere ("denied before the tenant
-	// resolved"), mirroring the API-key arm's label discipline.
+	// The tenant on the bearer arm's own verdict counter: known on the 403
+	// arm, empty elsewhere ("denied before the tenant resolved").
 	metricTenant = tenantID
 	result.decision = C.int(decision)
 
@@ -934,12 +895,9 @@ func scopedTokenQuotaState(u rl.TokenQuotaUsage) (prom.TokenQuotaState, bool) {
 //
 //export llb_ai_ratelimit_check
 func llb_ai_ratelimit_check(keyID *C.char, tenantID *C.char, userID *C.char, svcIdent *C.char, model *C.char, result *C.ai_gw_decision_t) (ret C.int) {
-	// See llb_ai_validate_key for why the denial is recorded in the deferred
-	// function rather than at each deny arm.
-	var metricTenant, metricModel string
-
 	// Fail closed on panic: deny with a short retry rather than crashing the
-	// datapath or silently disabling the limiter.
+	// datapath or silently disabling the limiter. A refusal is counted once,
+	// by the C gate's deny record, not here.
 	defer func() {
 		if r := recover(); r != nil {
 			tk.LogIt(tk.LogCritical, "[AIGateway] llb_ai_ratelimit_check: recovered panic: %v\n", r)
@@ -950,7 +908,6 @@ func llb_ai_ratelimit_check(keyID *C.char, tenantID *C.char, userID *C.char, svc
 			}
 			ret = -1
 		}
-		recordGateDenial(ret, result, metricTenant, metricModel)
 	}()
 	if result == nil {
 		tk.LogIt(tk.LogError, "[AIGateway] llb_ai_ratelimit_check: nil result pointer\n")
@@ -960,7 +917,6 @@ func llb_ai_ratelimit_check(keyID *C.char, tenantID *C.char, userID *C.char, svc
 	keyIDStr := C.GoString(keyID)
 	tenantIDStr := C.GoString(tenantID)
 	modelStr := C.GoString(model)
-	metricTenant, metricModel = tenantIDStr, modelStr
 
 	var svc rateLimitService
 	if us := mh.AIKeyService; us != nil {
@@ -1293,12 +1249,9 @@ func tokenQuotaConsumeInternal(svc rateLimitService, store *rl.RateLimiterStore,
 //
 //export llb_ai_token_quota_reserve
 func llb_ai_token_quota_reserve(tenantID *C.char, modelName *C.char, userID *C.char, keyID *C.char, svcIdent *C.char, promptEst C.int, maxTokens C.int, defaultTokens C.int, resEpoch *C.longlong, granted *C.int, result *C.ai_gw_decision_t) (ret C.int) {
-	// See llb_ai_validate_key for why the denial is recorded in the deferred
-	// function rather than at each deny arm.
-	var metricTenant, metricModel string
-
 	// Fail closed on panic, matching the other gate decisions: deny with a
 	// short retry rather than crashing the datapath or silently admitting.
+	// A refusal is counted once, by the C gate's deny record, not here.
 	defer func() {
 		if r := recover(); r != nil {
 			tk.LogIt(tk.LogCritical, "[AIGateway] llb_ai_token_quota_reserve: recovered panic: %v\n", r)
@@ -1309,7 +1262,6 @@ func llb_ai_token_quota_reserve(tenantID *C.char, modelName *C.char, userID *C.c
 			}
 			ret = -1
 		}
-		recordGateDenial(ret, result, metricTenant, metricModel)
 	}()
 
 	if resEpoch != nil {
@@ -1320,7 +1272,6 @@ func llb_ai_token_quota_reserve(tenantID *C.char, modelName *C.char, userID *C.c
 	}
 
 	tenant := C.GoString(tenantID)
-	metricTenant, metricModel = tenant, C.GoString(modelName)
 	want := 0
 	if promptEst > 0 {
 		want += int(promptEst)
@@ -1611,10 +1562,11 @@ func llb_ai_stream_end(tenantID *C.char, modelName *C.char) C.int {
 // Prometheus request counter and latency histogram, and the audit trail's
 // data.ai.complete record.
 //
-// C sockproxy calls this once on response completion. Denials never reach
-// this export at all — the gate answers them itself, counts them under
-// outcome="denied" through recordGateDenial, and records them through
-// llb_ai_record_deny.
+// C sockproxy calls this once on response completion, and once for an
+// answer it wrote itself when no backend could take the request (an outage,
+// a P/D timeout, a redirect), with the status it wrote. Refusals never reach
+// this export: the data plane reports each through llb_ai_record_deny,
+// which counts it under outcome="denied".
 //
 // The two consumers read different halves of the call. The metrics take
 // only the tenant, model, status and latency: the token series are fed
@@ -1708,14 +1660,16 @@ func netIDCompleteOutcome(authSrc int) string {
 	return prom.NetIDOutcomeMatched
 }
 
-// llb_ai_record_deny records one request the admission gate refused.
+// llb_ai_record_deny records one request the gateway refused before any
+// backend was chosen.
 //
-// The C gate calls this once per refusal from its single verdict frame, so
-// an arm added to the decision cannot refuse a request unrecorded. There
-// is no request metric here: the deny counters are already raised on the
-// export that produced the decision; counting it twice would double every
-// denial rate. The one counter raised is the binding's own, when the
-// refused request's source matched one. The attribution triple carries the meanings llb_ai_record_request
+// The data plane calls this once per refusal: from the gate's single verdict
+// frame, so an arm added to the decision cannot refuse a request unrecorded,
+// and from ai_gw_record_local_deny for a refusal made outside it (capacity,
+// route, framing). It is therefore where a refusal is counted, under
+// loxilb_ai_requests_total{outcome="denied"} with the status the client got
+// (recordAIDeny); the gate exports do not count their own refusals. The
+// attribution triple carries the meanings llb_ai_record_request
 // documents; note the gate runs BEFORE the header splice, so on a refused
 // request originIP is normally "" -- nothing derived -- while clientIP is
 // always known. priority, classInfo and objective are the request's class
@@ -1726,16 +1680,9 @@ func netIDCompleteOutcome(authSrc int) string {
 //export llb_ai_record_deny
 func llb_ai_record_deny(requestID *C.char, producerID C.int, svcIdent *C.char, modelName *C.char, tenantID *C.char, keyID *C.char, userID *C.char, stage C.int, httpStatus C.int, errorCode *C.char, clientIP *C.char, originIP *C.char, trustedHops C.int, authSrc C.int, netIdentity *C.char, priority C.int, classInfo C.int, objective *C.char) {
 	defer cgoRecover("llb_ai_record_deny")
-	tenantIDStr := C.GoString(tenantID)
-	netIdentityStr := C.GoString(netIdentity)
-
-	if netIdentityStr != "" {
-		prom.RecordNetIDRequest(netIdentityStr, tenantIDStr, prom.NetIDOutcomeDenied)
-	}
-
-	emitAIDeny(aiDenyRecord{
+	recordAIDeny(aiDenyRecord{
 		RequestID:  C.GoString(requestID),
-		TenantID:   tenantIDStr,
+		TenantID:   C.GoString(tenantID),
 		UserID:     C.GoString(userID),
 		KeyID:      C.GoString(keyID),
 		SvcIdent:   C.GoString(svcIdent),
@@ -1750,12 +1697,65 @@ func llb_ai_record_deny(requestID *C.char, producerID C.int, svcIdent *C.char, m
 		TrustedHops: int(trustedHops),
 
 		AuthSrc:     int(authSrc),
-		NetIdentity: netIdentityStr,
+		NetIdentity: C.GoString(netIdentity),
 
 		Priority:  int(priority),
 		ClassInfo: int(classInfo),
 		Objective: C.GoString(objective),
 	})
+}
+
+// recordAIDeny takes a refusal's records: the request counter
+// (loxilb_ai_requests_total{outcome="denied"}), the network-identity counter
+// for a bound source, and the data.ai.deny record. It is the only writer of
+// outcome="denied": the data plane reports every refusal once, whatever
+// stage made it, through llb_ai_record_deny, so the four gate exports do not
+// count their own refusals as well.
+//
+// The model label of a routing or framing refusal is never registered: the
+// model it names may be one nobody serves. A routing refusal of a request
+// that named no model reads "none".
+func recordAIDeny(d aiDenyRecord) {
+	switch d.Stage {
+	case aiStageRoute:
+		prom.RecordAIRequestDeniedUnserved(d.TenantID, d.ModelName, prom.ModelLabelNone, d.HTTPStatus)
+	case aiStageFraming:
+		prom.RecordAIRequestDeniedUnserved(d.TenantID, d.ModelName, "", d.HTTPStatus)
+	default:
+		prom.RecordAIRequestDenied(d.TenantID, d.ModelName, d.HTTPStatus)
+	}
+	if d.NetIdentity != "" {
+		prom.RecordNetIDRequest(d.NetIdentity, d.TenantID, prom.NetIDOutcomeDenied)
+	}
+	emitAIDeny(d)
+}
+
+// aiValidateKeyC and aiRecordDenyC call llb_ai_validate_key and
+// llb_ai_record_deny with C arguments, the way the admission gate does: the
+// first for the verdict, the second for the record it takes at its verdict
+// frame when the verdict refuses. The package's tests reach the exports
+// through them: a test file cannot hold C types.
+func aiValidateKeyC(rawKey, model string) (ret, decision int, errorCode string) {
+	ck, cm := C.CString(rawKey), C.CString(model)
+	defer C.free(unsafe.Pointer(ck))
+	defer C.free(unsafe.Pointer(cm))
+	var out C.ai_gw_decision_t
+	ret = int(llb_ai_validate_key(ck, cm, &out))
+	return ret, int(out.decision), C.GoString((*C.char)(unsafe.Pointer(&out.error_code[0])))
+}
+
+func aiRecordDenyC(d aiDenyRecord) {
+	args := []*C.char{C.CString(d.RequestID), C.CString(d.SvcIdent), C.CString(d.ModelName),
+		C.CString(d.TenantID), C.CString(d.KeyID), C.CString(d.UserID), C.CString(d.ErrorCode),
+		C.CString(d.ClientIP), C.CString(d.OriginIP), C.CString(d.NetIdentity), C.CString(d.Objective)}
+	defer func() {
+		for _, a := range args {
+			C.free(unsafe.Pointer(a))
+		}
+	}()
+	llb_ai_record_deny(args[0], C.int(d.WorkerID), args[1], args[2], args[3], args[4], args[5],
+		C.int(d.Stage), C.int(d.HTTPStatus), args[6], args[7], args[8], C.int(d.TrustedHops),
+		C.int(d.AuthSrc), args[9], C.int(d.Priority), C.int(d.ClassInfo), args[10])
 }
 
 // llb_ai_pd_record records a P/D disaggregation lifecycle event for Prometheus metrics.
@@ -1771,7 +1771,8 @@ func llb_ai_record_deny(requestID *C.char, producerID C.int, svcIdent *C.char, m
 //	kvParamsFound:    1 when kv_transfer_params was found, 0 otherwise
 //	errorPhase:       lifecycle outcome; names the leg that failed and how.
 //	                  0=complete/success, 1=prefill/timeout, 2=decode/error,
-//	                  3=decode/timeout, 4=prefill/error, 5=prefill/rejected.
+//	                  3=decode/timeout, 4=prefill/error, 5=prefill/rejected,
+//	                  6=decode/rejected, 7=decode/unknown.
 //	                  See prom.RecordPDRequest for the full contract.
 //
 //export llb_ai_pd_record

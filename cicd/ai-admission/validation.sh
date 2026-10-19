@@ -69,6 +69,32 @@ svc() { echo "service=\"$VIP:$1\""; }
 inflight() { msum loxilb_ai_admission_inflight "$(svc "$1")" 'role="service"'; }
 queued() { msum loxilb_ai_admission_queued "$(svc "$1")"; }
 decisions() { msum loxilb_ai_admission_decisions_total "$(svc "$1")" "reason=\"$2\""; }
+# Every refusal is also one request in loxilb_ai_requests_total{outcome="denied"},
+# with the status the client got, and one response in the class counter (pulled
+# every 10 s, so read by polling). Neither family is per service: a block reads
+# them around its own requests only.
+denied() { msum loxilb_ai_requests_total 'outcome="denied"' "status=\"$1\""; }
+klass() { msum loxilb_proxy_http_responses_by_status_total "status_class=\"$1\""; }
+denied_delta() { # denied_delta <status> <before> <n>
+  echo $(( $(wait_metric loxilb_ai_requests_total $(($2+$3)) 25 'outcome="denied"' "status=\"$1\"") - $2 ))
+}
+# A refusal is never also a completion: no outcome="completed" with its status.
+completed() { msum loxilb_ai_requests_total 'outcome="completed"' "status=\"$1\""; }
+# A baseline read just after an earlier block's answers can miss the ones the
+# next pull has yet to carry: it is taken once the counter has held still for
+# a whole pull period.
+klass_settled() { # klass_settled <class>
+  local a b i
+  b=$(klass "$1")
+  for i in 1 2 3; do
+    a="$b"; sleep 11; b=$(klass "$1")
+    [ "$a" == "$b" ] && break
+  done
+  echo "$b"
+}
+klass_delta() { # klass_delta <class> <before> <n>
+  echo $(( $(wait_metric loxilb_proxy_http_responses_by_status_total $(($2+$3)) 25 "status_class=\"$1\"") - $2 ))
+}
 # The gateway log lives at /var/log/loxilb<hostname>.log inside the container:
 # always read it through the glob, and let the caller check it is non-empty.
 gw_log() { docker exec llb1 sh -c 'cat /var/log/loxilb*.log 2>/dev/null'; }
@@ -229,6 +255,7 @@ chk A4 "gauge back to zero"                    0 "$(wait_metric loxilb_ai_admiss
 echo ""
 echo "B: 12 held requests against a ceiling of $FC_MAX_OUT"
 shed0=$(decisions $PORT_H1 capacity_shed); adm0=$(decisions $PORT_H1 admitted)
+den0=$(denied 429); cmp0=$(completed 429); k4=$(klass_settled 4xx); k2=$(klass_settled 2xx)
 DB=$(mktemp -d)
 hold_burst "$DB" 12 capB "$H1_URL"
 chk B1 "exactly $FC_MAX_OUT reached the backend"      "$FC_MAX_OUT" "$(wait_receipts capB $FC_MAX_OUT 15)"
@@ -248,6 +275,10 @@ chk B11 "the eight held requests completed 200"      "$FC_MAX_OUT" "$(count_code
 chk B12 "gauge back to zero"                         0 "$(wait_metric loxilb_ai_admission_inflight 0 25 "$(svc $PORT_H1)" 'role="service"')"
 chk B13 "capacity_shed decisions moved by four"      4 "$(( $(wait_metric loxilb_ai_admission_decisions_total $((shed0+4)) 25 "$(svc $PORT_H1)" 'reason="capacity_shed"') - shed0 ))"
 chk B14 "admitted decisions moved by eight"          "$FC_MAX_OUT" "$(( $(decisions $PORT_H1 admitted) - adm0 ))"
+chk B15 "requests_total{denied,429} moved by four"   4 "$(denied_delta 429 "$den0" 4)"
+chk B16 "the 4xx class moved by four"                4 "$(klass_delta 4xx "$k4" 4)"
+chk B16a "and none of the four counted as completed"  0 "$(( $(completed 429) - cmp0 ))"
+chk B17 "the 2xx class moved by the eight served"    "$FC_MAX_OUT" "$(klass_delta 2xx "$k2" "$FC_MAX_OUT")"
 
 # ── N: the endpoint ceiling ─────────────────────────────────────────────────
 echo ""
@@ -401,6 +432,7 @@ echo ""
 echo "Q: 8 held on the queue pool, 4 wait in order, 2 more are refused"
 q0=$(decisions $PORT_Q queued); qf0=$(decisions $PORT_Q queue_full); adm0=$(decisions $PORT_Q admitted)
 wc0=$(msum loxilb_ai_admission_queue_wait_seconds_count "$(svc $PORT_Q)")
+den0=$(denied 429); cmp0=$(completed 429); k4=$(klass_settled 4xx)
 DQ=$(mktemp -d)
 hold_each "$DQ" $FC_MAX_OUT capQh "$Q_URL"
 chk Q1 "the pool filled to the ceiling"                "$FC_MAX_OUT" "$(wait_sum_receipts capQh $FC_MAX_OUT $FC_MAX_OUT 15)"
@@ -420,6 +452,8 @@ chk Q8 "and the ceiling"                               "$FC_MAX_OUT" "$(hdr_val 
 chk_has Q9 "refusal body names the reason"             admission_capacity "$(cat "$DQ/f1.body" 2>/dev/null)"
 chk Q10 "and they never reached the backend"           0 "$(receipts capQf)"
 chk Q11 "queue_full decisions moved by two"            2 "$(( $(wait_metric loxilb_ai_admission_decisions_total $((qf0+2)) 25 "$(svc $PORT_Q)" 'reason="queue_full"') - qf0 ))"
+chk Q11a "requests_total{denied,429} moved by two"     2 "$(denied_delta 429 "$den0" 2)"
+chk Q11c "and neither counted as completed"            0 "$(( $(completed 429) - cmp0 ))"
 # One held request completes: its unit wakes the head of the queue; that
 # request completes at once and wakes the next, so the four drain in order.
 release capQh1
@@ -431,11 +465,15 @@ release_all; wait
 chk Q16 "the four waiting requests answered 200"       "$FC_Q_DEPTH" "$(count_codes "$DQ" 200 | awk -v h=$FC_MAX_OUT '{print $1 - h}')"
 chk Q17 "admitted decisions moved by $((FC_MAX_OUT+FC_Q_DEPTH))" $((FC_MAX_OUT+FC_Q_DEPTH)) "$(( $(wait_metric loxilb_ai_admission_decisions_total $((adm0+FC_MAX_OUT+FC_Q_DEPTH)) 25 "$(svc $PORT_Q)" 'reason="admitted"') - adm0 ))"
 chk Q18 "gauge back to zero"                           0 "$(wait_metric loxilb_ai_admission_inflight 0 25 "$(svc $PORT_Q)" 'role="service"')"
+# Read after the queue has drained: the class counter lags by a pull, and a
+# wait for it must not hold the queued requests past their window.
+chk Q11b "the 4xx class moved by the two refused"      2 "$(klass_delta 4xx "$k4" 2)"
 
 # ── T: the wait window ──────────────────────────────────────────────────────
 echo ""
 echo "T: two requests wait past ${FC_T_WAIT_MS} ms and are ended with 504"
 to0=$(decisions $PORT_Q queue_timeout)
+den0=$(denied 504); cmp0=$(completed 504); k5=$(klass_settled 5xx)
 DT=$(mktemp -d)
 # The wait window is shortened at runtime for this row: a replace POST of the
 # same rule with the new wait, read back from the data plane before the burst.
@@ -450,6 +488,9 @@ chk_has T4 "the body names the timeout"                admission_queue_timeout "
 chk_ge T5 "and carries the wait it spent (queued_ms)"  "$FC_T_WAIT_MS" "$(jq -r '.queued_ms // "unreadable"' "$DT/q1.body" 2>/dev/null)"
 chk_ge T6 "with Retry-After"                           1 "$(hdr_val "$(cat "$DT/q1.hdr")" Retry-After)"
 chk T7 "queue_timeout decisions moved by two"          2 "$(( $(wait_metric loxilb_ai_admission_decisions_total $((to0+2)) 25 "$(svc $PORT_Q)" 'reason="queue_timeout"') - to0 ))"
+chk T7a "requests_total{denied,504} moved by two"      2 "$(denied_delta 504 "$den0" 2)"
+chk T7b "the 5xx class moved by two"                   2 "$(klass_delta 5xx "$k5" 2)"
+chk T7c "and neither counted as completed"             0 "$(( $(completed 504) - cmp0 ))"
 chk T8 "queued gauge back to zero"                     0 "$(wait_metric loxilb_ai_admission_queued 0 25 "$(svc $PORT_Q)")"
 release_all; wait
 sleep 2

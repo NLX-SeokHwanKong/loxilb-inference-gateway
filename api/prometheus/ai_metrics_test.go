@@ -685,6 +685,8 @@ func TestRecordPDRequest_PhaseTaxonomy(t *testing.T) {
 		{"decode timeout", 3, "decode", "timeout", true},
 		{"prefill error", 4, "prefill", "error", false},
 		{"prefill rejected", 5, "prefill", "rejected", false},
+		{"decode rejected", 6, "decode", "rejected", true},
+		{"decode unknown", 7, "decode", "unknown", true},
 		{"unknown phase", 99, "unknown", "error", false},
 	}
 

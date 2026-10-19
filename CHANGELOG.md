@@ -129,6 +129,25 @@ binary behaves exactly like upstream loxilb.
 
 ### Changed
 
+- **Every request the gateway refuses is counted once in
+  `loxilb_ai_requests_total{outcome="denied"}`, whatever refused it:** the
+  policy gate, capacity, routing (`model_unavailable`, `no_route`,
+  `no_rules`, an L7-policy reject), framing (the 413s, the model-required
+  400, `invalid_cache_salt`) and the content-security block, with the status
+  the client got. The count moved from the four Go gate exports to the deny
+  record the data plane takes once per refusal; refusals made only in the
+  data plane were missing before. A routing or framing refusal never takes a
+  new model label (unknown names read `other`); one that named no model
+  reads `model="none"`. The deny record names the new stages `route`,
+  `framing` and `security`. The new refusals and the outcome changes below
+  take effect with the loxilb-ebpf revision that reports them.
+- **An answer the gateway writes when no backend can take the request** (an
+  outage, a P/D timeout or leg failure, a connect failure) **is counted as
+  `outcome="completed"` with the status it wrote,** so the error ratio sees
+  it. `loxilb_proxy_http_responses_by_status_total` counts the gateway's own
+  HTTP/1.1 answers, and the TTFB histogram samples backend replies only.
+  `deploy/monitoring/README.md` lists the families that count the same
+  requests from another angle and must not be summed with the request total.
 - **On an AI-gateway pool, requests matched by an L7 FORWARD route now pass
   the pool's capacity gate (ceiling and queue) like every other request;** the
   route's private pool copy used to bypass it. Selection inside the route is
@@ -324,6 +343,33 @@ binary behaves exactly like upstream loxilb.
   load balancing is unchanged and documented upstream.
 
 ### Upgrade notes
+
+- **Metric meanings change for P/D requests and for every answer the gateway
+  writes itself.** Dashboards and alerts built on the families below read
+  different numbers after the upgrade; nothing is renamed or removed. The
+  families that count the same requests from another angle, and must not be
+  summed with `loxilb_ai_requests_total`, are listed in
+  `deploy/monitoring/README.md`. Commits are loxilb-ebpf (`ebpf`) or this
+  repository (`gateway`).
+
+  | # | Family | Label / outcome | Before | After | Commit |
+  |---|---|---|---|---|---|
+  | 1 | `loxilb_ai_requests_total` | `status`, P/D (vLLM, TensorRT-LLM) | the prefill reply's status | the status the client received: the decode leg's, or the prefill leg's when it answered the client. SGLang P/D is unchanged | ebpf `e0ece83` |
+  | 2 | `loxilb_ai_requests_total` | `status="500"` / `"429"` from a prefill 5xx/429 that decode recomputed | counted as 500/429 | counted as 200, the status the client got. No series counts the fallback itself yet | ebpf `e0ece83` |
+  | 3 | `loxilb_proxy_http_responses_by_status_total`, `loxilb_proxy_http_responses_total` | P/D | one count per request, by the prefill status | one count per request, by the status the client received | ebpf `e0ece83` |
+  | 4 | `loxilb_proxy_http_ttfb_seconds` | P/D | sampled when the prefill reply arrived | sampled at the client's first byte (the decode leg's first response, or the relay of a prefill answer) | ebpf `e0ece83` |
+  | 5 | `loxilb_ai_pd_requests_total` | vLLM prefill 4xx (not 408/429) | decode called; `complete/success` | decode not called, the prefill's 4xx relayed verbatim; `prefill/rejected` | ebpf `82c7ef8` |
+  | 6 | `loxilb_ai_pd_requests_total` | non-SSE decode completion | `complete/success` whatever the status | 2xx/3xx `complete/success`; 4xx `decode/rejected` (new); 5xx `decode/error`; no status line read `decode/unknown` (new) | ebpf `d428679`, gateway `753041da` |
+  | 7 | `loxilb_ai_requests_total` | unknown model whose head and body arrive in separate reads | forwarded to the listener's first pool without the model check (QA saw a backend 404, `outcome="completed"`) | refused 503 `model_unavailable`, `outcome="denied"`, `model="other"` | ebpf `7d332ca` (routing), `14b2951` + gateway `35042841` (count) |
+  | 8 | `loxilb_ai_requests_total` | `outcome="denied"`: who writes it | the four Go gate exports, so only the refusals a Go export decided (key, bearer, rate limit, quota, policy store) | the deny record the data plane takes once per refusal (`llb_ai_record_deny`), with the status written. The Go exports no longer count, so no refusal is counted twice | gateway `35042841` |
+  | 9 | `loxilb_ai_requests_total` | `outcome="denied"`: refusals added | absent | route: 503 `model_unavailable`, `no_route`, `no_rules`, L7-policy REJECT/no-match. Framing: both 413s, the model-required 400, 400 `invalid_cache_salt`, the SGLang oversize 503. Capacity: 429 capacity/queue full, 504 queue timeout, 503 drain, the P/D in-flight 429, 504 `pd_admission_park_timeout`. The five C-only gate arms: `netid_unavailable`, `objective_not_allowed`, 400 `model_conflict`, 403 `model_not_allowed` (binding), 403 `network_tenant_mismatch`. Security: the LlamaFirewall 403 (only in builds with it) | ebpf `14b2951`, `9bffd3b`, `56bd489` (never also completed); gateway `35042841` |
+  | 10 | `loxilb_ai_requests_total` | `model` on a route or framing refusal | n/a (not counted) | never takes a new label: a served model keeps its name, any other reads `other`; a route refusal that named no model reads `none`, a framing one `""` | gateway `35042841` |
+  | 11 | `loxilb_ai_requests_total` | `model` on the keyless shared-bucket refusal | `""` | the model the request named | gateway `35042841` |
+  | 12 | `loxilb_ai_requests_total` | `outcome="completed"`: gateway-written answers added | absent; the P/D ones only in `loxilb_ai_pd_requests_total` | the status written: 503 `no_healthy_backend` / `pd_pool_unavailable` / `service_unavailable`; P/D leg timeouts 504 (prefill, decode, idle) and the stalled decode stream 502; the P/D decode-init, decode-response and prefill-death 503s, the decode zero-byte 502, the vLLM failover 503, the SGLang 502/503s; the connect-failure 502; an L7-policy REDIRECT with its 3xx. (`backend_unreachable` 502 was already counted.) | ebpf `14b2951`, `9bffd3b` |
+  | 13 | `loxilb_proxy_http_responses_by_status_total`, `loxilb_proxy_http_responses_total` | the gateway's own HTTP/1.1 answers | not counted (backend replies only); `backend_unreachable` 502 moved the 5xx class only if a backend reply did | counted by class: every refusal, outage, timeout, P/D/connect/SGLang failure and L7-policy answer in rows 9 and 12, and `backend_unreachable` | ebpf `14b2951`, `9bffd3b` |
+  | 14 | `loxilb_proxy_http_ttfb_seconds` | the gateway's own answers | not sampled | not sampled (unchanged; now stated in the help text). Backend replies only | ebpf `14b2951` |
+  | 15 | `sec.ai.deny` audit records, `loxilb_ai_netid_requests_total` | refusals and stages | gate and capacity refusals | also route, framing, the P/D in-flight 429 and park timeout, L7-policy REJECT and security; new stage names `route`, `framing`, `security` | ebpf `14b2951`, `9bffd3b`; gateway `35042841` |
+  | 16 | all of the above on HTTP/2 | | | refusals move `requests_total{denied}`, outages `requests_total{completed}`; HTTP/2 has no class count or TTFB sample for any response | ebpf `14b2951` |
 
 - **`tenant_rate_limits` gains a `burst_pct` column.** The gateway adds it on
   start-up if it is missing, so an existing database needs no manual step and

@@ -426,6 +426,16 @@ const (
 	// aiStageObjective is the class stage on a rule that is strict about
 	// objectives: the request named one it may not use.
 	aiStageObjective
+	// aiStageRoute and aiStageFraming refuse outside the gate's verdict
+	// frame, before any backend is chosen: no pool serves the named model,
+	// no rule matches, or an L7 policy rejects (route); the request cannot
+	// be admitted as framed, an oversized body or a model out of reach
+	// (framing).
+	aiStageRoute
+	aiStageFraming
+	// aiStageSecurity is a content-security scanner's block (LlamaFirewall),
+	// also outside the verdict frame.
+	aiStageSecurity
 )
 
 // aiDenyStage names the gate stage that refused the request.
@@ -443,6 +453,12 @@ func aiDenyStage(stage int) string {
 		return "capacity"
 	case aiStageObjective:
 		return "objective"
+	case aiStageRoute:
+		return "route"
+	case aiStageFraming:
+		return "framing"
+	case aiStageSecurity:
+		return "security"
 	}
 	return "keyless"
 }
@@ -495,6 +511,12 @@ func aiDenyReason(stage int, errorCode string) audit.Reason {
 	case aiStageObjective:
 		// A caller asking for something it is not entitled to.
 		return audit.ReasonAuthz
+	case aiStageRoute, aiStageFraming, aiStageSecurity:
+		// Nothing serves the request as asked, or a scanner refused its
+		// content: an admission decision, and the decision field names
+		// which (model_unavailable, no_route, request_body_too_large,
+		// llamafirewall_block, ...).
+		return audit.ReasonAdmission
 	}
 	return audit.ReasonAdmission
 }

@@ -357,7 +357,7 @@ var (
 	proxyHttpResponsesTotal = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Name: "loxilb_proxy_http_responses_total",
-			Help: "Total HTTP responses processed. Use rate() for RPS calculation.",
+			Help: "Total HTTP/1.1 responses clients received: backend replies and the gateway's own answers (refusals, outages). Use rate() for RPS calculation.",
 		},
 	)
 
@@ -365,7 +365,7 @@ var (
 	proxyHttpResponsesByStatus = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "loxilb_proxy_http_responses_by_status_total",
-			Help: "Total HTTP responses by status code class (2xx, 3xx, 4xx, 5xx).",
+			Help: "Total HTTP/1.1 responses clients received by status code class (2xx, 3xx, 4xx, 5xx): backend replies and the gateway's own answers (refusals, outages).",
 		},
 		[]string{"status_class"},
 	)
@@ -971,7 +971,7 @@ func updateTtfbStore(raw ttfbSnapshot) {
 // ttfbDesc keeps the exact metric identity of the former promauto histogram.
 var ttfbDesc = prometheus.NewDesc(
 	"loxilb_proxy_http_ttfb_seconds",
-	"HTTP Time-To-First-Byte latency in seconds.",
+	"HTTP/1.1 Time-To-First-Byte latency in seconds, of backend replies only; the gateway's own answers are not sampled.",
 	nil, nil,
 )
 
