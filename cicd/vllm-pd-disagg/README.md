@@ -64,6 +64,7 @@ Success sentinel: `SCENARIO-vllm-pd-disagg [PASS]`.
 | Phase L | HA session restoration across a 2-loxilb MASTER failover (gated; `validation-convsync.sh` / `validation-xsync.sh`) |
 | Phase M | `kv_transfer_params` accounting: found/missing as the two arms of one branch, plus the extractor's overflow counter |
 | Phase N | worker-scrape outcome accounting: `loxilb_ai_worker_scrape_total{result}` driven through http_error / ok / unparseable / unreachable |
+| Phase O | the P/D client-visible status matrix on :2020: normal, prefill 404 / 500 / 429, decode 404 / 500, and a keep-alive pair (normal then prefill 404 on one client connection). Per row: the response, `requests_total{status}`, `pd_requests_total{phase,status}`, `http_responses_by_status{class}`, the TTFB sample count and both engines' call counts; every other family flat. The class counter and TTFB histogram are pulled every 10 s, so each row polls for its sample (two-pull timeout) instead of sleeping |
 
 The **origin-5xx breaker demotion** for this dialect (a prefill 5xx is
 swallowed as decode-recompute, so only the origin-error streak can demote an
@@ -72,5 +73,9 @@ erroring-but-TCP-healthy prefill) is pinned by leg L of
 gateway, which is exactly the coexistence surface the demotion must respect.
 
 Fault knobs on each mock (loopback admin `:9000`): `/admin/health-fail`,
-`/admin/health-ok`, `/admin/fail-next` (one-shot origin 500), `/admin/reset`,
-`/admin/status`; plus `--fail-every N` at process start.
+`/admin/health-ok`, `/admin/fail-next` (one-shot origin 500; `?status=N` picks
+another status, `&skip=K` lets K inference requests through first),
+`/admin/keepalive-on|off` (HTTP/1.1 replies without `Connection: close`, so a client
+may keep its connection to the gateway), `/admin/reset`, `/admin/status` (includes
+`inference_requests`, every inference POST the engine received); plus
+`--fail-every N` at process start.

@@ -34,10 +34,26 @@ _request_count = 0      # Incremented per POST request; used by --fail-every.
                         # the read-modulo-write of --fail-every becomes
                         # non-deterministic. Lock is cheap; harden now.
 _request_count_lock = threading.Lock()
-_fail_next = False      # One-shot: next inference request answers HTTP 500
+_fail_next = False      # One-shot: next inference request answers HTTP 500 (or N)
                         # (origin-computed error — the connection stays up).
                         # Armed via POST /admin/fail-next, cleared on consume
                         # or /admin/reset; mirrors the mock_sglang_pd.py knob.
+_fail_next_status = 500 # The status the one-shot answers: /admin/fail-next?status=N
+                        # (100..599). Default 500, so every existing caller keeps
+                        # its meaning; a 4xx arms an origin reject (MON-M matrix).
+_fail_next_skip = 0     # &skip=K: let K inference requests through before the
+                        # one-shot fires, so a fault can land on the second of two
+                        # requests a client sends on one kept connection.
+_inference_count = 0    # Every POST to an inference path, injected faults included.
+                        # Unlike _request_count (moved only under --fail-every), it
+                        # always counts, so a scenario can prove whether a leg was
+                        # called at all. Read via GET /admin/status.
+_keepalive = False      # Off: every JSON reply is HTTP/1.0 + "Connection: close" (the
+                        # historical shape). On: HTTP/1.1 without "close", as vLLM's
+                        # uvicorn answers, so a client may keep its connection to the
+                        # gateway across requests. The mock still closes its own
+                        # socket after each reply (legal for HTTP/1.1, and the
+                        # single-threaded server never parks on an idle connection).
 _args = None            # Set by main(); allows handlers to access parsed args
 # The gateway's kv_transfer_params buffer is PD_KV_PARAMS_MAX_LEN = 65536 (sockproxy.h);
 # the extractor overflows on `val_len >= capacity`. Target comfortably above it so the
@@ -115,10 +131,13 @@ class MockVLLMHandler(BaseHTTPRequestHandler):
     def _send_json(self, status, body):
         """Send a JSON response."""
         data = json.dumps(body).encode("utf-8")
+        if _keepalive:
+            self.protocol_version = "HTTP/1.1"
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
-        self.send_header("Connection", "close")
+        if not _keepalive:
+            self.send_header("Connection", "close")
         # Echo back X-Request-Id if present
         req_id = self.headers.get("X-Request-Id", "")
         if req_id:
@@ -214,12 +233,21 @@ class MockVLLMHandler(BaseHTTPRequestHandler):
         # One-shot fail-next fault injection (origin-computed HTTP 500 with the
         # TCP connection healthy — the exact shape the breaker's origin-error
         # streak demotes on; connect-level failure_count never sees it).
-        global _fail_next
-        if _fail_next and self.path in ("/v1/chat/completions", "/v1/completions"):
+        global _fail_next, _inference_count
+        if self.path in ("/v1/chat/completions", "/v1/completions"):
+            with _request_count_lock:
+                _inference_count += 1
+        global _fail_next_skip
+        if _fail_next and _fail_next_skip > 0 and \
+                self.path in ("/v1/chat/completions", "/v1/completions"):
+            _fail_next_skip -= 1
+        elif _fail_next and self.path in ("/v1/chat/completions", "/v1/completions"):
             _fail_next = False
-            print(f"[{SERVER_ROLE}] FAIL-NEXT consumed reqid={self.headers.get('X-Request-Id', '-')}",
-                  flush=True)
-            self._send_json(500, {"error": "injected_fault_oneshot"})
+            print(f"[{SERVER_ROLE}] FAIL-NEXT consumed status={_fail_next_status} "
+                  f"reqid={self.headers.get('X-Request-Id', '-')}", flush=True)
+            self._send_json(_fail_next_status, {"error": "injected_fault_oneshot",
+                                                "status": _fail_next_status,
+                                                "role": SERVER_ROLE})
             return
 
         # --fail-every fault injection (HTTP 500; an isolated 5xx does not trip
@@ -471,15 +499,38 @@ class AdminHandler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_POST(self):
-        global _health_ok, _fail_next, _kv_params_mode, _metrics_mode
+        global _health_ok, _fail_next, _fail_next_status, _kv_params_mode, _metrics_mode
+        global _keepalive, _fail_next_skip
         if not self._auth_ok():
             self.send_response(401)
             self.end_headers()
             return
-        if self.path == "/admin/fail-next":
+        path, _, query = self.path.partition("?")
+        if path == "/admin/fail-next":
+            # ?status=N picks the injected status; no query keeps the historical 500.
+            # &skip=K lets K inference requests through first.
+            status, skip = 500, 0
+            for kv in query.split("&") if query else []:
+                k, _, v = kv.partition("=")
+                if k == "status":
+                    status = int(v) if v.isdigit() else 0
+                elif k == "skip":
+                    skip = int(v) if v.isdigit() else -1
+            if not 100 <= status <= 599 or skip < 0:
+                self.send_response(400)
+                self.end_headers()
+                return
             _fail_next = True
-            self._reply_json({"fail_next": True})
-            print(f"[{SERVER_ROLE}] [admin] fail-next ARMED", flush=True)
+            _fail_next_status = status
+            _fail_next_skip = skip
+            self._reply_json({"fail_next": True, "fail_next_status": status,
+                              "fail_next_skip": skip})
+            print(f"[{SERVER_ROLE}] [admin] fail-next ARMED status={status} skip={skip}",
+                  flush=True)
+        elif path in ("/admin/keepalive-on", "/admin/keepalive-off"):
+            _keepalive = path.endswith("-on")
+            self._reply_json({"keepalive": _keepalive})
+            print(f"[{SERVER_ROLE}] [admin] keepalive = {_keepalive}", flush=True)
         elif self.path in ("/admin/kv-params-on", "/admin/kv-params-off",
                            "/admin/kv-params-oversize"):
             # Shape of kv_transfer_params in the PREFILL response. The print is the
@@ -499,9 +550,13 @@ class AdminHandler(BaseHTTPRequestHandler):
             print(f"[{SERVER_ROLE}] [admin] metrics mode = {_metrics_mode}", flush=True)
         elif self.path == "/admin/reset":
             _fail_next = False
+            _fail_next_status = 500
+            _fail_next_skip = 0
+            _keepalive = False
             _kv_params_mode = "on"
             _metrics_mode = "absent"
-            self._reply_json({"fail_next": False, "kv_params_mode": _kv_params_mode,
+            self._reply_json({"fail_next": False, "fail_next_status": _fail_next_status,
+                              "keepalive": _keepalive, "kv_params_mode": _kv_params_mode,
                               "metrics_mode": _metrics_mode})
             print(f"[{SERVER_ROLE}] [admin] knobs RESET", flush=True)
         elif self.path == "/admin/health-fail":
@@ -535,6 +590,10 @@ class AdminHandler(BaseHTTPRequestHandler):
             data = json.dumps({
                 "health_ok": _health_ok,
                 "fail_next": _fail_next,
+                "fail_next_status": _fail_next_status,
+                "fail_next_skip": _fail_next_skip,
+                "keepalive": _keepalive,
+                "inference_requests": _inference_count,
                 "kv_params_mode": _kv_params_mode,
                 "metrics_mode": _metrics_mode,
                 "role": SERVER_ROLE,
@@ -614,8 +673,8 @@ def main():
     _args = args
 
     # Start admin HTTP server on loopback (127.0.0.1:9000) as daemon thread.
-    # Provides /admin/health-fail, /admin/health-ok, /admin/fail-next,
-    # /admin/reset, /admin/status endpoints.
+    # Provides /admin/health-fail, /admin/health-ok, /admin/fail-next[?status=N&skip=K],
+    # /admin/keepalive-on|off, /admin/reset, /admin/status endpoints.
     admin_thread = threading.Thread(target=_start_admin_server, daemon=True)
     admin_thread.start()
 
