@@ -129,6 +129,25 @@ binary behaves exactly like upstream loxilb.
 
 ### Changed
 
+- **Every request the gateway refuses is counted once in
+  `loxilb_ai_requests_total{outcome="denied"}`, whatever refused it:** the
+  policy gate, capacity, routing (`model_unavailable`, `no_route`,
+  `no_rules`, an L7-policy reject), framing (the 413s, the model-required
+  400, `invalid_cache_salt`) and the content-security block, with the status
+  the client got. The count moved from the four Go gate exports to the deny
+  record the data plane takes once per refusal; refusals made only in the
+  data plane were missing before. A routing or framing refusal never takes a
+  new model label (unknown names read `other`); one that named no model
+  reads `model="none"`. The deny record names the new stages `route`,
+  `framing` and `security`. The new refusals and the outcome changes below
+  take effect with the loxilb-ebpf revision that reports them.
+- **An answer the gateway writes when no backend can take the request** (an
+  outage, a P/D timeout or leg failure, a connect failure) **is counted as
+  `outcome="completed"` with the status it wrote,** so the error ratio sees
+  it. `loxilb_proxy_http_responses_by_status_total` counts the gateway's own
+  HTTP/1.1 answers, and the TTFB histogram samples backend replies only.
+  `deploy/monitoring/README.md` lists the families that count the same
+  requests from another angle and must not be summed with the request total.
 - **On an AI-gateway pool, requests matched by an L7 FORWARD route now pass
   the pool's capacity gate (ceiling and queue) like every other request;** the
   route's private pool copy used to bypass it. Selection inside the route is
