@@ -100,17 +100,29 @@ func NlpRegister(hook cmn.NetHookInterface) {
 	hooks = hook
 }
 
-func NlpIsBlackListedIntf(name string, masterIdx int) bool {
-	if nNl.WhiteList != "none" {
-		filter := nNl.WLRgx.MatchString(name)
-		return !filter
-	}
+// The --blacklist / --whitelist interface filter lives apart from the netlink
+// handle: with --nonlp there is no handle, yet the periodic L3 reconciliation
+// still asks which interfaces it may sync.
+var (
+	intfBlackList = regexp.MustCompile("none")
+	intfWhiteList *regexp.Regexp // nil when the whitelist is "none"
+)
 
-	if name == "lo" {
-		return true
+// NlpSetIntfFilter installs the interface filter. Call it once at start-up,
+// before anything reads it.
+func NlpSetIntfFilter(blackList, whitelist string) {
+	intfBlackList = regexp.MustCompile(blackList)
+	intfWhiteList = nil
+	if whitelist != "none" {
+		intfWhiteList = regexp.MustCompile(whitelist)
 	}
-	filter := nNl.BLRgx.MatchString(name)
-	return filter
+}
+
+func NlpIsBlackListedIntf(name string, masterIdx int) bool {
+	if intfWhiteList != nil {
+		return !intfWhiteList.MatchString(name)
+	}
+	return name == "lo" || intfBlackList.MatchString(name)
 }
 
 func applyAllConfig(name string) bool {
@@ -2127,6 +2139,7 @@ func NlpInit(bgpPeerMode bool, blackList, whitelist string, ipvsCompat bool) *Nl
 	nNl.BLRgx = regexp.MustCompile(blackList)
 	nNl.WhiteList = whitelist
 	nNl.WLRgx = regexp.MustCompile(whitelist)
+	NlpSetIntfFilter(blackList, whitelist)
 	checkInit := make(chan bool)
 	waitInit := make(chan bool)
 

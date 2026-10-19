@@ -782,7 +782,9 @@ func loxiNetInit() {
 		apiserver.WaitAPIServerReady()
 	}
 
-	// Initialize the nlp subsystem
+	// Initialize the nlp subsystem. The interface filter applies with --nonlp
+	// too: L3 reconciliation consults it either way.
+	nlp.NlpSetIntfFilter(opts.Opts.BlackList, opts.Opts.WhiteList)
 	if !opts.Opts.NoNlp {
 		nlp.NlpRegister(NetAPIInit(opts.Opts.BgpPeerMode))
 		nlp.NlpInit(opts.Opts.BgpPeerMode, opts.Opts.BlackList, opts.Opts.WhiteList, opts.Opts.IPVSCompat)
