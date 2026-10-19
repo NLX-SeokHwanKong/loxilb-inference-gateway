@@ -62,6 +62,7 @@ msum() { # msum <family> <label-substr> [label-substr] -> sum of matching sample
         END { printf "%.0f", s + 0 }'
 }
 denied() { msum loxilb_ai_requests_total 'outcome="denied"' "status=\"$1\""; }
+completed() { msum loxilb_ai_requests_total 'outcome="completed"' "status=\"$1\""; }
 klass() { msum loxilb_proxy_http_responses_by_status_total "status_class=\"$1\""; }
 wait_delta() { # wait_delta <want> <before> <cmd...> -> the delta, once it reaches want or after 25 s
   local want=$1 b=$2 got; shift 2
@@ -89,7 +90,7 @@ r=$(req 2030)
 chk_has     "T1 llama pool answers"      "server-llama" "$r"
 chk_not_has "T1 no conflict on agreement" "model_conflict" "$r"
 
-den400=$(denied 400); k4=$(klass 4xx)
+den400=$(denied 400); cmp400=$(completed 400); k4=$(klass 4xx)
 echo ""
 echo "T2: body llama-70b + X-Model mistral-7b (authorized model in body ONLY)"
 echo "    → 400 model_conflict; the llama-only key must never reach mistral"
@@ -107,6 +108,7 @@ chk_has     "T3 model_conflict body" "model_conflict" "$r"
 chk_not_has "T3 no model_unavailable steer" "model_unavailable" "$r"
 chk_eq "T3 requests_total{denied,400} moved by the two conflicts" 2 "$(wait_delta 2 "$den400" denied 400)"
 chk_eq "T3 the 4xx class moved by two"                          2 "$(wait_delta 2 "$k4" klass 4xx)"
+chk_eq "T3 and neither conflict counted as completed"            0 "$(( $(completed 400) - cmp400 ))"
 
 echo ""
 echo "T4: body llama-70b + X-Model llama-70b (both present, equal) → no false conflict"
@@ -114,7 +116,7 @@ r=$(req 2030 -H "X-Model: llama-70b")
 chk_has     "T4 llama pool answers"  "server-llama" "$r"
 chk_not_has "T4 agreement is not a conflict" "model_conflict" "$r"
 
-den401=$(denied 401); k4=$(klass 4xx)
+den401=$(denied 401); cmp401=$(completed 401); k4=$(klass 4xx)
 echo ""
 echo "T5: no key on the enforcing VIP → 401 (conflict check never masks auth)"
 r=$($hexec l3h1 curl -s -i --max-time 8 -X POST \
@@ -125,6 +127,7 @@ r=$($hexec l3h1 curl -s -i --max-time 8 -X POST \
 chk_has "T5 401 status" "401" "$(echo "$r" | head -1)"
 chk_eq "T5 requests_total{denied,401} moved by one" 1 "$(wait_delta 1 "$den401" denied 401)"
 chk_eq "T5 the 4xx class moved by one"              1 "$(wait_delta 1 "$k4" klass 4xx)"
+chk_eq "T5 and not counted as completed"            0 "$(( $(completed 401) - cmp401 ))"
 
 echo ""
 echo "T6: non-enforcing VIP keeps LEGACY behavior — header steers, no 400"

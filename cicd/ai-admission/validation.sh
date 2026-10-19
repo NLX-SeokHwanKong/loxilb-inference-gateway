@@ -78,6 +78,8 @@ klass() { msum loxilb_proxy_http_responses_by_status_total "status_class=\"$1\""
 denied_delta() { # denied_delta <status> <before> <n>
   echo $(( $(wait_metric loxilb_ai_requests_total $(($2+$3)) 25 'outcome="denied"' "status=\"$1\"") - $2 ))
 }
+# A refusal is never also a completion: no outcome="completed" with its status.
+completed() { msum loxilb_ai_requests_total 'outcome="completed"' "status=\"$1\""; }
 klass_delta() { # klass_delta <class> <before> <n>
   echo $(( $(wait_metric loxilb_proxy_http_responses_by_status_total $(($2+$3)) 25 "status_class=\"$1\"") - $2 ))
 }
@@ -241,7 +243,7 @@ chk A4 "gauge back to zero"                    0 "$(wait_metric loxilb_ai_admiss
 echo ""
 echo "B: 12 held requests against a ceiling of $FC_MAX_OUT"
 shed0=$(decisions $PORT_H1 capacity_shed); adm0=$(decisions $PORT_H1 admitted)
-den0=$(denied 429); k4=$(klass 4xx); k2=$(klass 2xx)
+den0=$(denied 429); cmp0=$(completed 429); k4=$(klass 4xx); k2=$(klass 2xx)
 DB=$(mktemp -d)
 hold_burst "$DB" 12 capB "$H1_URL"
 chk B1 "exactly $FC_MAX_OUT reached the backend"      "$FC_MAX_OUT" "$(wait_receipts capB $FC_MAX_OUT 15)"
@@ -263,6 +265,7 @@ chk B13 "capacity_shed decisions moved by four"      4 "$(( $(wait_metric loxilb
 chk B14 "admitted decisions moved by eight"          "$FC_MAX_OUT" "$(( $(decisions $PORT_H1 admitted) - adm0 ))"
 chk B15 "requests_total{denied,429} moved by four"   4 "$(denied_delta 429 "$den0" 4)"
 chk B16 "the 4xx class moved by four"                4 "$(klass_delta 4xx "$k4" 4)"
+chk B16a "and none of the four counted as completed"  0 "$(( $(completed 429) - cmp0 ))"
 chk B17 "the 2xx class moved by the eight served"    "$FC_MAX_OUT" "$(klass_delta 2xx "$k2" "$FC_MAX_OUT")"
 
 # ── N: the endpoint ceiling ─────────────────────────────────────────────────
@@ -417,7 +420,7 @@ echo ""
 echo "Q: 8 held on the queue pool, 4 wait in order, 2 more are refused"
 q0=$(decisions $PORT_Q queued); qf0=$(decisions $PORT_Q queue_full); adm0=$(decisions $PORT_Q admitted)
 wc0=$(msum loxilb_ai_admission_queue_wait_seconds_count "$(svc $PORT_Q)")
-den0=$(denied 429); k4=$(klass 4xx)
+den0=$(denied 429); cmp0=$(completed 429); k4=$(klass 4xx)
 DQ=$(mktemp -d)
 hold_each "$DQ" $FC_MAX_OUT capQh "$Q_URL"
 chk Q1 "the pool filled to the ceiling"                "$FC_MAX_OUT" "$(wait_sum_receipts capQh $FC_MAX_OUT $FC_MAX_OUT 15)"
@@ -439,6 +442,7 @@ chk Q10 "and they never reached the backend"           0 "$(receipts capQf)"
 chk Q11 "queue_full decisions moved by two"            2 "$(( $(wait_metric loxilb_ai_admission_decisions_total $((qf0+2)) 25 "$(svc $PORT_Q)" 'reason="queue_full"') - qf0 ))"
 chk Q11a "requests_total{denied,429} moved by two"     2 "$(denied_delta 429 "$den0" 2)"
 chk Q11b "the 4xx class moved by two"                  2 "$(klass_delta 4xx "$k4" 2)"
+chk Q11c "and neither counted as completed"            0 "$(( $(completed 429) - cmp0 ))"
 # One held request completes: its unit wakes the head of the queue; that
 # request completes at once and wakes the next, so the four drain in order.
 release capQh1
@@ -455,7 +459,7 @@ chk Q18 "gauge back to zero"                           0 "$(wait_metric loxilb_a
 echo ""
 echo "T: two requests wait past ${FC_T_WAIT_MS} ms and are ended with 504"
 to0=$(decisions $PORT_Q queue_timeout)
-den0=$(denied 504); k5=$(klass 5xx)
+den0=$(denied 504); cmp0=$(completed 504); k5=$(klass 5xx)
 DT=$(mktemp -d)
 # The wait window is shortened at runtime for this row: a replace POST of the
 # same rule with the new wait, read back from the data plane before the burst.
@@ -472,6 +476,7 @@ chk_ge T6 "with Retry-After"                           1 "$(hdr_val "$(cat "$DT/
 chk T7 "queue_timeout decisions moved by two"          2 "$(( $(wait_metric loxilb_ai_admission_decisions_total $((to0+2)) 25 "$(svc $PORT_Q)" 'reason="queue_timeout"') - to0 ))"
 chk T7a "requests_total{denied,504} moved by two"      2 "$(denied_delta 504 "$den0" 2)"
 chk T7b "the 5xx class moved by two"                   2 "$(klass_delta 5xx "$k5" 2)"
+chk T7c "and neither counted as completed"             0 "$(( $(completed 504) - cmp0 ))"
 chk T8 "queued gauge back to zero"                     0 "$(wait_metric loxilb_ai_admission_queued 0 25 "$(svc $PORT_Q)")"
 release_all; wait
 sleep 2

@@ -3481,8 +3481,8 @@ echo "#########################################"
 #   keep-alive pair, refusal 2nd 200 then 503 on one kept client connection
 #
 # A refusal is a deny record (requests_total{outcome="denied"}, model "other": a name
-# nobody serves never takes a label) and a class count, but never a TTFB sample and
-# never a lifecycle record.
+# nobody serves never takes a label) and a class count, but never a completion
+# (k503 stays flat), a TTFB sample or a lifecycle record.
 #
 # A prefill 5xx/429 that the decode leg served is no longer in requests_total{500}:
 # the client received a 200. Every row also asserts that NOTHING ELSE moved on the
@@ -3506,13 +3506,14 @@ o_sum()    { printf '%s\n' "$1" | grep -E "$2" | awk '{s+=$NF} END{printf "%d", 
 
 # The families a row reads. Every row asserts each of them: listed ones to their
 # expectation, the rest flat.
-O_KEYS="req200 req404 req500 d503 pdCS pdPR pdPE pdDR pdDE pdDU c2 c3 c4 c5 ttfb"
+O_KEYS="req200 req404 req500 d503 k503 pdCS pdPR pdPE pdDR pdDE pdDU c2 c3 c4 c5 ttfb"
 o_re() {
   case "$1" in
     req200) echo '^loxilb_ai_requests_total\{.*status="200"' ;;
     req404) echo '^loxilb_ai_requests_total\{.*status="404"' ;;
     req500) echo '^loxilb_ai_requests_total\{.*status="500"' ;;
     d503)   echo '^loxilb_ai_requests_total\{.*outcome="denied",status="503"' ;;
+    k503)   echo '^loxilb_ai_requests_total\{.*outcome="completed",status="503"' ;;
     pdCS)   echo '^loxilb_ai_pd_requests_total\{.*phase="complete",status="success"' ;;
     pdPR)   echo '^loxilb_ai_pd_requests_total\{.*phase="prefill",status="rejected"' ;;
     pdPE)   echo '^loxilb_ai_pd_requests_total\{.*phase="prefill",status="error"' ;;
