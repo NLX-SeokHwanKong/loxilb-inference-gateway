@@ -3473,6 +3473,17 @@ echo "#########################################"
 #   keep-alive pair 200 then 404 on one kept client connection: the second request
 #                   records again (the per-request latch is re-armed)
 #
+# Then the answers the gateway writes itself (MON-02), on a model-routed P/D rule the
+# phase adds on port 2030 (plain HTTP) and removes at the end:
+#
+#   unknown model, one read      503 model_unavailable  denied/503  5xx  NO sample  engines +0
+#   unknown model, split reads   the same (head and body 50 ms apart)
+#   keep-alive pair, refusal 2nd 200 then 503 on one kept client connection
+#
+# A refusal is a deny record (requests_total{outcome="denied"}, model "other": a name
+# nobody serves never takes a label) and a class count, but never a TTFB sample and
+# never a lifecycle record.
+#
 # A prefill 5xx/429 that the decode leg served is no longer in requests_total{500}:
 # the client received a 200. Every row also asserts that NOTHING ELSE moved on the
 # families above, which is what catches a double record or a record on the wrong leg.
@@ -3495,12 +3506,13 @@ o_sum()    { printf '%s\n' "$1" | grep -E "$2" | awk '{s+=$NF} END{printf "%d", 
 
 # The families a row reads. Every row asserts each of them: listed ones to their
 # expectation, the rest flat.
-O_KEYS="req200 req404 req500 pdCS pdPR pdPE pdDR pdDE pdDU c2 c3 c4 c5 ttfb"
+O_KEYS="req200 req404 req500 d503 pdCS pdPR pdPE pdDR pdDE pdDU c2 c3 c4 c5 ttfb"
 o_re() {
   case "$1" in
     req200) echo '^loxilb_ai_requests_total\{.*status="200"' ;;
     req404) echo '^loxilb_ai_requests_total\{.*status="404"' ;;
     req500) echo '^loxilb_ai_requests_total\{.*status="500"' ;;
+    d503)   echo '^loxilb_ai_requests_total\{.*outcome="denied",status="503"' ;;
     pdCS)   echo '^loxilb_ai_pd_requests_total\{.*phase="complete",status="success"' ;;
     pdPR)   echo '^loxilb_ai_pd_requests_total\{.*phase="prefill",status="rejected"' ;;
     pdPE)   echo '^loxilb_ai_pd_requests_total\{.*phase="prefill",status="error"' ;;
@@ -3552,16 +3564,18 @@ o_pair() {
       -d "{\"model\":\"${MODEL}\",\"prompt\":\"mon-m-ka2\",\"max_tokens\":8}" 2>/dev/null
 }
 
-# o_settle <before-blob> <want-ttfb-delta> — poll until the pulled sample count has
-# moved by the expectation; the scrape that did is in $O_TMP/last. On timeout return 1
-# with the last two scrapes in $O_TMP/prev and $O_TMP/last.
+# o_settle <before-blob> <want-delta> [key] — poll until the pulled counter (the TTFB
+# sample count unless a key is named) has moved by the expectation; the scrape that
+# did is in $O_TMP/last. On timeout return 1 with the last two scrapes in
+# $O_TMP/prev and $O_TMP/last. A row that expects no sample keys on the class
+# counter instead: it comes from the same pull, so the TTFB count read with it is final.
 o_settle() {
-  local b0 want now waited=0
-  b0=$(o_sum "$1" "$(o_re ttfb)"); want=$2
+  local b0 want now waited=0 key="${3:-ttfb}"
+  b0=$(o_sum "$1" "$(o_re "$key")"); want=$2
   : > "$O_TMP/prev"; : > "$O_TMP/last"
   while :; do
     mv "$O_TMP/last" "$O_TMP/prev"; o_scrape > "$O_TMP/last"
-    now=$(o_sum "$(cat "$O_TMP/last")" "$(o_re ttfb)")
+    now=$(o_sum "$(cat "$O_TMP/last")" "$(o_re "$key")")
     [ $(( now - b0 )) -ge "$want" ] && return 0
     [ "$waited" -ge "$O_PULL_TIMEOUT" ] && return 1
     sleep 1; waited=$((waited + 1))
@@ -3689,6 +3703,123 @@ ka_npd=$(( $(o_sum "$ka_a" "$O_PD_ALL") - $(o_sum "$ka_b" "$O_PD_ALL") ))
 [ "$ka_npd" = "2" ] && check "TO-pair: one lifecycle record per request (+$ka_npd)" 0 \
                     || check "TO-pair: one lifecycle record per request (+$ka_npd)" 1
 o_check_row pair "$ka_b" "$ka_a" "req200=1 req404=1 pdCS=1 pdPR=1 c2=1 c4=1 ttfb=2"
+
+# ── MON-02: the answers the gateway writes itself, on a model-routed P/D rule ────────
+# Port 2020 has no model_name, so nothing on it is model-routed. The rule below serves
+# only ${MODEL}; any other name is refused 503 model_unavailable by the gateway.
+O_MR_PORT=2030
+O_MR_UNKNOWN="mon02-unknown-model"
+o_mr_del() {
+  $hexec llb1 curl -s -X DELETE "http://localhost:11111/netlox/v1/config/loadbalancer/hosturl/10.10.10.254/externalipaddress/10.10.10.254/port/${O_MR_PORT}/protocol/tcp" >/dev/null 2>&1
+}
+# o_mr_req <tag> <model> — one completion on the model-routed rule; prints
+# "<http_code> <num_connects>", the body goes to /tmp/phase-o-<tag>.body in l3h1.
+o_mr_req() {
+  $dexec l3h1 curl -s -m 20 -o "/tmp/phase-o-$1.body" -w '%{http_code} %{num_connects}' \
+    "http://10.10.10.254:${O_MR_PORT}/v1/completions" -H "Content-Type: application/json" \
+    -d "{\"model\":\"$2\",\"prompt\":\"mon-02-$1\",\"max_tokens\":8}" 2>/dev/null
+}
+
+o_mr_del
+$hexec llb1 curl -s -X POST http://localhost:11111/netlox/v1/config/loadbalancer \
+  -H 'Content-Type: application/json' \
+  -d '{"serviceArguments":{"externalIP":"10.10.10.254","port":'"${O_MR_PORT}"',"protocol":"tcp","sel":0,"mode":4,"host":"10.10.10.254","path_prefix":"/","path_match_mode":"prefix","model_name":"'"${MODEL}"'","pd_disagg_mode":true,"sse_mode":true,"monitor":true,"probetype":"http","probeport":8000,"probereq":"/health","probeTimeout":5,"probeRetries":2},"endpoints":[{"endpointIP":"31.31.31.1","targetPort":8000,"weight":1,"ep_role":1,"nixl_port":9001},{"endpointIP":"32.32.32.1","targetPort":8000,"weight":1,"ep_role":2,"nixl_port":9002}]}' \
+  >/dev/null 2>&1
+o_mr_ready=""
+for _i in $(seq 1 24); do
+  [ "$(o_mr_req ready "$MODEL" | cut -d' ' -f1)" = "200" ] && o_mr_ready=1 && break
+  sleep 5
+done
+[ -n "$o_mr_ready" ] && check "TO-mr: the model-routed P/D rule on port ${O_MR_PORT} serves ${MODEL}" 0 \
+                     || check "TO-mr: the model-routed P/D rule on port ${O_MR_PORT} serves ${MODEL}" 1
+# The readiness requests' samples must not land inside a row.
+o_q=$(o_scrape); o_try=0
+while o_settle "$o_q" 1 && [ "$o_try" -lt 5 ]; do o_q=$(o_scrape); o_try=$((o_try + 1)); done
+
+# o_mr_refusal <row> <how> — one refusal of an unknown model, sent in one read (curl)
+# or with head and body in separate reads (the ROUTE-01 probe). Nothing but the deny
+# record and the 5xx class may move; the TTFB count is read from the pull that moved
+# the class counter.
+o_mr_refusal() {
+  local row="$1" how="$2" b a out code p0 d0 p1 d1 npd
+  p0=$(o_calls "$O_PREFILL"); d0=$(o_calls "$O_DECODE")
+  b=$(o_scrape)
+  if [ "$how" = split ]; then
+    out=$($hexec l3h1 python3 ../ai-model-routing/test_split_read_model_route.py \
+      10.10.10.254 "$O_MR_PORT" --model "$O_MR_UNKNOWN" --path /v1/completions \
+      --pause-ms 50 --count 1 --http-only 2>&1)
+    echo "$out" | sed 's/^/    /'
+    echo "$out" | grep -q '^PASS' && code=503 || code="not 503"
+  else
+    out=$(o_mr_req "$row" "$O_MR_UNKNOWN"); code=${out%% *}
+    o_body "$row" | grep -q model_unavailable \
+      && check "TO-$row: the body names model_unavailable" 0 \
+      || check "TO-$row: the body names model_unavailable" 1
+  fi
+  if ! o_settle "$b" 1 c5; then
+    check "TO-$row: the 5xx class moved by +1 within ${O_PULL_TIMEOUT}s (two pulls)" 1
+    o_show_last_two
+  fi
+  a=$(cat "$O_TMP/last")
+  p1=$(o_calls "$O_PREFILL"); d1=$(o_calls "$O_DECODE")
+  [ "$code" = "503" ] && check "TO-$row: client got HTTP 503 model_unavailable" 0 \
+                      || check "TO-$row: client got HTTP 503 model_unavailable (got $code)" 1
+  [ "$((p1 - p0))" = "0" ] && [ "$((d1 - d0))" = "0" ] \
+    && check "TO-$row: neither engine was called" 0 \
+    || check "TO-$row: neither engine was called (prefill +$((p1 - p0)), decode +$((d1 - d0)))" 1
+  npd=$(( $(o_sum "$a" "$O_PD_ALL") - $(o_sum "$b" "$O_PD_ALL") ))
+  [ "$npd" = "0" ] && check "TO-$row: no lifecycle record (+$npd)" 0 \
+                   || check "TO-$row: no lifecycle record (+$npd)" 1
+  [ $(( $(o_sum "$a" '^loxilb_ai_requests_total\{model="other",outcome="denied",status="503"') \
+      - $(o_sum "$b" '^loxilb_ai_requests_total\{model="other",outcome="denied",status="503"') )) = 1 ] \
+    && check "TO-$row: the refusal is counted under model=\"other\", not the name it sent" 0 \
+    || check "TO-$row: the refusal is counted under model=\"other\", not the name it sent" 1
+  o_check_row "$row" "$b" "$a" "d503=1 c5=1"
+}
+
+if [ -n "$o_mr_ready" ]; then
+  o_mr_refusal mr-unknown one
+  o_mr_refusal mr-split split
+
+  # Keep-alive pair on the model-routed rule: a served request, then a refusal on the
+  # same kept client connection. The second request is selected again, so it is
+  # refused rather than sent where the first one went.
+  mr_p0=$(o_calls "$O_PREFILL"); mr_d0=$(o_calls "$O_DECODE")
+  mr_b=$(o_scrape)
+  read -r mr_c1 mr_n1 mr_c2 mr_n2 <<< "$($dexec l3h1 curl -s -m 20 -o /tmp/phase-o-mrka1.body \
+      -w '%{http_code} %{num_connects} ' "http://10.10.10.254:${O_MR_PORT}/v1/completions" \
+      -H "Content-Type: application/json" \
+      -d "{\"model\":\"${MODEL}\",\"prompt\":\"mon-02-ka1\",\"max_tokens\":8}" \
+    --next -s -m 20 -o /tmp/phase-o-mrka2.body \
+      -w '%{http_code} %{num_connects}' "http://10.10.10.254:${O_MR_PORT}/v1/completions" \
+      -H "Content-Type: application/json" \
+      -d "{\"model\":\"${O_MR_UNKNOWN}\",\"prompt\":\"mon-02-ka2\",\"max_tokens\":8}" 2>/dev/null)"
+  # Key on the 5xx class: the refusal is answered after request 1's sample is taken.
+  if ! o_settle "$mr_b" 1 c5; then
+    check "TO-mr-pair: the 5xx class moved by +1 within ${O_PULL_TIMEOUT}s (two pulls)" 1
+    o_show_last_two
+  fi
+  mr_a=$(cat "$O_TMP/last")
+  mr_p1=$(o_calls "$O_PREFILL"); mr_d1=$(o_calls "$O_DECODE")
+  echo "  mr-pair: request 1 HTTP ${mr_c1} (connects ${mr_n1}), request 2 HTTP ${mr_c2} (connects ${mr_n2}); prefill mock +$((mr_p1 - mr_p0)), decode mock +$((mr_d1 - mr_d0))"
+  [ "$mr_c1" = "200" ] && [ "$mr_c2" = "503" ] \
+    && check "TO-mr-pair: served then refused (200, 503)" 0 \
+    || check "TO-mr-pair: served then refused (got ${mr_c1}, ${mr_c2})" 1
+  [ "$mr_n1" = "1" ] && [ "$mr_n2" = "0" ] \
+    && check "TO-mr-pair: the refusal rode the first request's connection (connects 1, 0)" 0 \
+    || check "TO-mr-pair: the refusal rode the first request's connection (connects ${mr_n1}, ${mr_n2})" 1
+  $dexec l3h1 cat /tmp/phase-o-mrka2.body 2>/dev/null | grep -q model_unavailable \
+    && check "TO-mr-pair: request 2's body names model_unavailable" 0 \
+    || check "TO-mr-pair: request 2's body names model_unavailable" 1
+  [ "$((mr_p1 - mr_p0))" = "1" ] && [ "$((mr_d1 - mr_d0))" = "1" ] \
+    && check "TO-mr-pair: prefill +1, decode +1 (only request 1 reached the engines)" 0 \
+    || check "TO-mr-pair: prefill +1, decode +1 (got +$((mr_p1 - mr_p0)), +$((mr_d1 - mr_d0)))" 1
+  mr_npd=$(( $(o_sum "$mr_a" "$O_PD_ALL") - $(o_sum "$mr_b" "$O_PD_ALL") ))
+  [ "$mr_npd" = "1" ] && check "TO-mr-pair: one lifecycle record, request 1's (+$mr_npd)" 0 \
+                      || check "TO-mr-pair: one lifecycle record, request 1's (+$mr_npd)" 1
+  o_check_row mr-pair "$mr_b" "$mr_a" "req200=1 d503=1 pdCS=1 c2=1 c5=1 ttfb=1"
+fi
+o_mr_del
 
 # Restore the shipped default for any later phase or re-run.
 o_mpost "$O_PREFILL" reset >/dev/null 2>&1 || true
