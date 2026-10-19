@@ -56,6 +56,19 @@ http_code=$(echo "$r" | tail -n1)
 check "unknown model returns 503" "503" "$http_code"
 check "body contains model_unavailable" "model_unavailable" "$body"
 
+# ── T4b: Unknown model, head and body in separate reads → still 503 ─────────
+# T4 arrives in one read. Here the request head and the JSON body naming the
+# model are two writes 50 ms apart, so the body is parsed in a read of its own.
+# That read used to select with no Host and take the port's first pool without
+# the model check: on port 2020 the request reached server-llama instead of
+# being refused.
+echo ""
+echo "T4b: Unknown model, head and body in separate reads → 503 + model_unavailable"
+r=$($hexec l3h1 python3 ./test_split_read_model_route.py 10.10.10.254 2020 \
+  --model unknown-xyz --pause-ms 50 --count 3 --http-only 2>&1)
+echo "$r" | sed 's/^/  /'
+check "split-read unknown model returns 503 every time" "PASS" "$r"
+
 # ── T5: X-Model overrides JSON body model ────────────────────────────────────
 echo ""
 echo "T5: X-Model header overrides JSON body model field"

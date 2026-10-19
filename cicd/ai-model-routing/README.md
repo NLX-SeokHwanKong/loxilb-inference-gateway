@@ -41,6 +41,7 @@ l3h1 (10.10.10.1)
 | T2 | JSON body → mistral-7b | `{"model":"mistral-7b",…}` on port 2021 | `server-mistral` |
 | T3 | No model → wildcard | plain GET on port 2022 | `server-wild` |
 | T4 | Unknown model → 503 | `X-Model: unknown-xyz` on port 2020 | HTTP 503 + `model_unavailable` |
+| T4b | Unknown model, split read | head, 50 ms pause, then `{"model":"unknown-xyz",…}` on port 2020, 3 times (`test_split_read_model_route.py`) | HTTP 503 + `model_unavailable` each time, never `server-llama` |
 | T5 | X-Model overrides JSON body | `X-Model: llama-70b` + `{"model":"mistral-7b"}` on port 2020 | `server-llama` |
 | T6 | Concurrent requests | parallel to ports 2020/2021/2022 | separate backends |
 | T7 | Empty X-Model → wildcard | `X-Model: ` on port 2022 | `server-wild` |
