@@ -191,8 +191,6 @@ fi
 # the model-label rule by it (a routing refusal never registers the model it
 # names). The two lists match by position: a stage inserted on one side
 # renames every stage after it on the other, with nothing failing to build.
-# Go may name trailing stages the pinned data plane does not send yet (the
-# names land before the pin bump that sends them); anything else fails.
 # The status label is the one the data plane wrote, carried on the record.
 # ---------------------------------------------------------------------------
 C_STAGES="$(sed -n '/^typedef enum {/,/} ai_gw_admit_stage_t;/p' loxilb-ebpf/common/sockproxy_ai_admit.h \
@@ -203,9 +201,6 @@ if [ -z "$C_STAGES" ] || [ -z "$GO_STAGES" ]; then
   fail "refusal stage lists not found (C: '$C_STAGES' Go: '$GO_STAGES') - did ai_gw_admit_stage_t or aiStageNone move?"
 elif [ "$C_STAGES" = "$GO_STAGES" ]; then
   pass "refusal stages lockstep between C and Go ($C_STAGES)"
-elif [ "${GO_STAGES#"$C_STAGES"}" != "$GO_STAGES" ]; then
-  # Go names a stage before the pin that sends it: inert until then.
-  pass "refusal stages: the pinned data plane's are Go's first ($C_STAGES), Go names more ahead of the pin"
 else
   fail "refusal stages differ between C and Go: C=[$C_STAGES] Go=[$GO_STAGES]"
 fi
