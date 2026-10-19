@@ -80,6 +80,18 @@ denied_delta() { # denied_delta <status> <before> <n>
 }
 # A refusal is never also a completion: no outcome="completed" with its status.
 completed() { msum loxilb_ai_requests_total 'outcome="completed"' "status=\"$1\""; }
+# A baseline read just after an earlier block's answers can miss the ones the
+# next pull has yet to carry: it is taken once the counter has held still for
+# a whole pull period.
+klass_settled() { # klass_settled <class>
+  local a b i
+  b=$(klass "$1")
+  for i in 1 2 3; do
+    a="$b"; sleep 11; b=$(klass "$1")
+    [ "$a" == "$b" ] && break
+  done
+  echo "$b"
+}
 klass_delta() { # klass_delta <class> <before> <n>
   echo $(( $(wait_metric loxilb_proxy_http_responses_by_status_total $(($2+$3)) 25 "status_class=\"$1\"") - $2 ))
 }
@@ -243,7 +255,7 @@ chk A4 "gauge back to zero"                    0 "$(wait_metric loxilb_ai_admiss
 echo ""
 echo "B: 12 held requests against a ceiling of $FC_MAX_OUT"
 shed0=$(decisions $PORT_H1 capacity_shed); adm0=$(decisions $PORT_H1 admitted)
-den0=$(denied 429); cmp0=$(completed 429); k4=$(klass 4xx); k2=$(klass 2xx)
+den0=$(denied 429); cmp0=$(completed 429); k4=$(klass_settled 4xx); k2=$(klass_settled 2xx)
 DB=$(mktemp -d)
 hold_burst "$DB" 12 capB "$H1_URL"
 chk B1 "exactly $FC_MAX_OUT reached the backend"      "$FC_MAX_OUT" "$(wait_receipts capB $FC_MAX_OUT 15)"
@@ -420,7 +432,7 @@ echo ""
 echo "Q: 8 held on the queue pool, 4 wait in order, 2 more are refused"
 q0=$(decisions $PORT_Q queued); qf0=$(decisions $PORT_Q queue_full); adm0=$(decisions $PORT_Q admitted)
 wc0=$(msum loxilb_ai_admission_queue_wait_seconds_count "$(svc $PORT_Q)")
-den0=$(denied 429); cmp0=$(completed 429); k4=$(klass 4xx)
+den0=$(denied 429); cmp0=$(completed 429); k4=$(klass_settled 4xx)
 DQ=$(mktemp -d)
 hold_each "$DQ" $FC_MAX_OUT capQh "$Q_URL"
 chk Q1 "the pool filled to the ceiling"                "$FC_MAX_OUT" "$(wait_sum_receipts capQh $FC_MAX_OUT $FC_MAX_OUT 15)"
@@ -441,7 +453,6 @@ chk_has Q9 "refusal body names the reason"             admission_capacity "$(cat
 chk Q10 "and they never reached the backend"           0 "$(receipts capQf)"
 chk Q11 "queue_full decisions moved by two"            2 "$(( $(wait_metric loxilb_ai_admission_decisions_total $((qf0+2)) 25 "$(svc $PORT_Q)" 'reason="queue_full"') - qf0 ))"
 chk Q11a "requests_total{denied,429} moved by two"     2 "$(denied_delta 429 "$den0" 2)"
-chk Q11b "the 4xx class moved by two"                  2 "$(klass_delta 4xx "$k4" 2)"
 chk Q11c "and neither counted as completed"            0 "$(( $(completed 429) - cmp0 ))"
 # One held request completes: its unit wakes the head of the queue; that
 # request completes at once and wakes the next, so the four drain in order.
@@ -454,12 +465,15 @@ release_all; wait
 chk Q16 "the four waiting requests answered 200"       "$FC_Q_DEPTH" "$(count_codes "$DQ" 200 | awk -v h=$FC_MAX_OUT '{print $1 - h}')"
 chk Q17 "admitted decisions moved by $((FC_MAX_OUT+FC_Q_DEPTH))" $((FC_MAX_OUT+FC_Q_DEPTH)) "$(( $(wait_metric loxilb_ai_admission_decisions_total $((adm0+FC_MAX_OUT+FC_Q_DEPTH)) 25 "$(svc $PORT_Q)" 'reason="admitted"') - adm0 ))"
 chk Q18 "gauge back to zero"                           0 "$(wait_metric loxilb_ai_admission_inflight 0 25 "$(svc $PORT_Q)" 'role="service"')"
+# Read after the queue has drained: the class counter lags by a pull, and a
+# wait for it must not hold the queued requests past their window.
+chk Q11b "the 4xx class moved by the two refused"      2 "$(klass_delta 4xx "$k4" 2)"
 
 # ── T: the wait window ──────────────────────────────────────────────────────
 echo ""
 echo "T: two requests wait past ${FC_T_WAIT_MS} ms and are ended with 504"
 to0=$(decisions $PORT_Q queue_timeout)
-den0=$(denied 504); cmp0=$(completed 504); k5=$(klass 5xx)
+den0=$(denied 504); cmp0=$(completed 504); k5=$(klass_settled 5xx)
 DT=$(mktemp -d)
 # The wait window is shortened at runtime for this row: a replace POST of the
 # same rule with the new wait, read back from the data plane before the burst.
