@@ -38,8 +38,10 @@ binary behaves exactly like upstream loxilb.
   `docs/load-balancing/23-ai-admission-flow-control.md`.
 - **Weighted wake and tenant rotation for the priority bands:**
   `fc_wake_policy: weighted` serves the bands as a deficit round robin by
-  `fc_band_weights` (with `8:3:1`, every 12 wakes are 8 critical, 3 standard and
-  1 sheddable, while all three bands wait), and `fc_tenant_wake: rr` rotates
+  `fc_band_weights`: within a round the bands are served highest first, and the
+  credit decides how many each band gets per round (with `8:3:1`, every 12
+  wakes are 8 critical, 3 standard and 1 sheddable, while all three bands
+  wait); `fc_tenant_wake: rr` rotates
   across the tenants waiting inside a band. Floors still come first; a change
   of policy or weights loses no waiter. Both are off by default (`strict`,
   `fifo`). See `docs/load-balancing/23-ai-admission-flow-control.md`.
@@ -316,9 +318,6 @@ binary behaves exactly like upstream loxilb.
   admission_queue_timeout`, `503 admission_drained`, `429 admission_shed` to an
   evicted waiter) now carries `Content-Length`; for the `504` and the `503` that
   is one header added, nothing removed.
-- `fc_wake_policy: weighted` serves the bands highest first within a round, the
-  credit deciding how many each band gets per round; it used to keep arrival
-  order across bands.
 - **On an AI-gateway pool, requests matched by an L7 FORWARD route now pass
   the pool's capacity gate (ceiling and queue) like every other request;** the
   route's private pool copy used to bypass it. Selection inside the route is
