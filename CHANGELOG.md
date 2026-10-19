@@ -182,6 +182,11 @@ binary behaves exactly like upstream loxilb.
 
 ### Fixed
 
+- **loxilb started with `--nonlp` crashed in its periodic interface
+  reconciliation** (a nil netlink handle behind the interface filter). The
+  `--blacklist` / `--whitelist` filter is now set up without netlink, so
+  `--nonlp` reconciles interfaces under the same filter as a netlink start.
+
 - **HTTP/2 requests on a busy, healthy client connection occasionally failed
   together with no response (the connection was closed)** — the
   header-completion (slowloris) deadline charged the connection with a header
