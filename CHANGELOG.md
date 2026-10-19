@@ -484,6 +484,10 @@ binary behaves exactly like upstream loxilb.
   place of the queue's `504` and the request counted as cancelled — a waiting
   request is now bounded only by its queue window; a client that leaves while
   it waits still frees its place at once.
+- **A P/D request waiting on the per-endpoint prefill queue could be refused
+  `429 admission_capacity` when another request took the freed capacity unit
+  first** — it now waits at the capacity gate, keeping its queue position and
+  deadline.
 - **HTTP/2 requests on a busy, healthy client connection occasionally failed
   together with no response (the connection was closed)** — the
   header-completion (slowloris) deadline charged the connection with a header
