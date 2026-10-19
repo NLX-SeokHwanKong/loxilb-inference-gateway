@@ -239,9 +239,12 @@ wait_done() {
 metrics_raw() { $hexec tqh1 curl -s --max-time 8 "$API/metrics" 2>/dev/null; }
 # bt_snap <port>: one line of "key=value" for the service: series=<n of
 # loxilb_ai_fc_band_total series>, <band>.<outcome>=<v> for each, qw=<resumed
-# waits>, and d.<reason>=<v> for the gate decisions summed over its pools.
+# waits>, and d.<reason>=<v> for the gate decisions summed over its pools;
+# and rs=<HTTP/1.1 responses recorded as received by a client>, the
+# gateway-wide responses-by-status counter (it has no service label).
 bt_snap() {
   metrics_raw | awk -v svc="service=\"$VIP:$1\"" '
+    /^loxilb_proxy_http_responses_by_status_total\{/ { rs += $NF; next }
     index($0, svc) == 0 { next }
     /^loxilb_ai_fc_band_total\{/ {
       match($0, /band="[a-z]+"/); b = substr($0, RSTART + 6, RLENGTH - 7)
@@ -250,7 +253,7 @@ bt_snap() {
     /^loxilb_ai_admission_queue_wait_seconds_count\{/ { qw += $NF; next }
     /^loxilb_ai_admission_decisions_total\{/ {
       match($0, /reason="[a-z_]+"/); d["d." substr($0, RSTART + 8, RLENGTH - 9)] += $NF; next }
-    END { printf "series=%d qw=%d", n, qw
+    END { printf "series=%d qw=%d rs=%d", n, qw, rs
           for (k in v) printf " %s=%d", k, v[k]
           for (k in d) printf " %s=%d", k, d[k]
           print "" }'
@@ -284,16 +287,25 @@ bd() { echo "${BD[$1]:-0}"; }
 #   queued (all bands) = the parks that ended: admitted after a park +
 #                        expired + evicted + cancelled, when the case knows
 #                        how many of its parked requests were admitted
+#   admitted + shed + expired (all bands) = the responses recorded as
+#                        received: every terminal outcome but cancelled is an
+#                        answer its client received (the backend's reply, or
+#                        the gateway's own 429 or 504), recorded once; a
+#                        cancelled request's client left before any answer.
+#                        HTTP/1.1 only: HTTP/2 has no class counter.
 bt_check() {
-  local id=$1 want=$2 ev=$3 b i=0 tq=0 te=0 tc=0 got rs=${4:-}
+  local id=$1 want=$2 ev=$3 b i=0 tq=0 te=0 tc=0 ta=0 got rs=${4:-}
   local -a w=(${want//:/ })
   chk "$id" "fifteen band series for the service" 15 "${BT1[series]:-0}"
   for b in critical standard sheddable; do
     got=$(( $(bd $b.admitted) + $(bd $b.shed) + $(bd $b.expired) + $(bd $b.cancelled) ))
     chk "$id" "$b: admitted + shed + expired + cancelled = its requests" "${w[$i]}" "$got"
     tq=$((tq + $(bd $b.queued))); te=$((te + $(bd $b.expired))); tc=$((tc + $(bd $b.cancelled)))
+    ta=$((ta + $(bd $b.admitted) + $(bd $b.shed) + $(bd $b.expired)))
     i=$((i + 1))
   done
+  [ "$BT_PORT" != "$PORT_H2" ] &&
+    chk "$id" "admitted + shed + expired = responses recorded as received" "$ta" "$(bd rs)"
   chk "$id" "queued = queue-wait samples (one per park, at its end)" "$tq" "$(bd qw)"
   [ -n "$rs" ] && chk "$id" "queued = admitted after a park + expired + evicted + cancelled" "$tq" "$(( rs + te + ev + tc ))"
   return 0
