@@ -146,8 +146,10 @@ chk "unparked: the P/D flow answered (decode banner)" "200 D" "$(awk '{print $1}
 chk "unparked: KV-exact selected EP-B" 1 "$(( $(tier15_hits $EP_B_IDX) - h0 ))"
 
 echo "--- parked, then woken"
-c0=$(band critical queued); a0=$(band critical admitted); s0=$(band standard admitted)
+# The baselines are read after the unparked request's own counts have reached
+# the scrape, like B0; read earlier, they can miss its admission.
 sleep 11; B0=($(band_snap))
+c0=$(band critical queued); a0=$(band critical admitted); s0=$(band standard admitted)
 req filler "$KEY_S" "raw:tenantq b4 filler that shares no block with the corpus"; sleep 1
 chk "the filler holds the one unit" "1 0" "$(fce .inflight) $(fce .queued)"
 h0=$(tier15_hits $EP_B_IDX)

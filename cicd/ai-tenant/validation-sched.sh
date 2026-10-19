@@ -70,7 +70,23 @@ EOF
 
 declare -A RESULT
 pass() { echo "  [PASS] $1 $2"; [ "${RESULT[$1]}" == FAIL ] || RESULT[$1]=PASS; }
-fail() { echo "  [FAIL] $1 $2"; RESULT[$1]=FAIL; }
+fail() { echo "  [FAIL] $1 $2"; [ "${RESULT[$1]}" == FAIL ] || fail_capture "$1"; RESULT[$1]=FAIL; }
+# fail_capture <case>: on a case's first failed check, keep what cleanup would
+# delete with the gateway container: every rule as the API reads it (each with
+# its fc_effective), and the gateway's logs. Taken at the failing check, before
+# the case resets its own rules. Best effort: it never changes a result.
+fail_capture() {
+  local d="$OUT/fail-$1"
+  mkdir -p "$d" 2>/dev/null || return 0
+  $hexec tqh1 curl -s -m 8 "$API/config/loadbalancer/all" > "$d/lb-all.json" 2>/dev/null
+  jq -c '.lbAttr[] | {port: .serviceArguments.port, fc_effective: .serviceArguments.fc_effective}' \
+    "$d/lb-all.json" > "$d/fc-effective.jsonl" 2>/dev/null
+  docker exec tqllb sh -c 'for f in /var/log/loxilb*.log /tmp/loxilb.out /tmp/loxilb.err; do [ -f "$f" ] && { echo "==> $f"; tail -n 5000 "$f"; }; done' \
+    > "$d/gw.log" 2>/dev/null
+  date '+%F %T' > "$d/when"
+  echo "  (state kept in $d)"
+  return 0
+}
 chk()  { if [ "$3" == "$4" ]; then pass "$1" "$2 ($4)"; else fail "$1" "$2: want '$3', got '$4'"; fi; }
 has()  { case "$4" in *"$3"*) pass "$1" "$2";; *) fail "$1" "$2: want '$3' in '$(echo "$4" | cut -c1-200)'";; esac; }
 # gw_restart: kill the gateway and start it again with $(tq_env) (GW_EXTRA_ENV
@@ -737,9 +753,11 @@ chk S6 "the windows as read back" "0 5000 500" "$(fce .bands.critical.wait_ms) $
 bt_begin $PORT_SCHED
 cl_one $PORT_SCHED t-crit s6r1 "$S5"; cl_one $PORT_SCHED t-crit s6r2 "$S5"
 wait_receipts s6r1 1 >/dev/null; wait_receipts s6r2 1 >/dev/null
-cl_one $PORT_SCHED t-shed s6b "$S5"; sleep 0.2; cl_one $PORT_SCHED t-a s6s "$S5"; sleep 0.2
-cl_one $PORT_SCHED t-crit s6c "$S5"; sleep 0.4
-chk S6 "one waiter per band" "1 1 1" "$(bq critical) $(bq standard) $(bq sheddable)"
+# Sheddable parks last and the read follows at once: its 500 ms window can end
+# at the first 1 Hz pass after it, so a later read can find it gone.
+cl_one $PORT_SCHED t-crit s6c "$S5"; sleep 0.2; cl_one $PORT_SCHED t-a s6s "$S5"; sleep 0.2
+cl_one $PORT_SCHED t-shed s6b "$S5"; sleep 0.2
+chk S6 "one waiter per band" "1 1 1" "$(bq sheddable) $(bq standard) $(bq critical)"
 wait_done "$S5" s6b 1 5
 chk S6 "the sheddable waiter ended first: 504 at its window" "504:admission_queue_timeout" "$(cl_errs "$S5" s6b)"
 chk S6 "at 500 ms (to the next 1 Hz pass)" yes "$(within "$(cl_secs "$S5" s6b)" 0.4 2.6)"
