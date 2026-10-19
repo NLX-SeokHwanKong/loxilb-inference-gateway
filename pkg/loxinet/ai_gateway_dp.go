@@ -1771,7 +1771,8 @@ func llb_ai_record_deny(requestID *C.char, producerID C.int, svcIdent *C.char, m
 //	kvParamsFound:    1 when kv_transfer_params was found, 0 otherwise
 //	errorPhase:       lifecycle outcome; names the leg that failed and how.
 //	                  0=complete/success, 1=prefill/timeout, 2=decode/error,
-//	                  3=decode/timeout, 4=prefill/error, 5=prefill/rejected.
+//	                  3=decode/timeout, 4=prefill/error, 5=prefill/rejected,
+//	                  6=decode/rejected, 7=decode/unknown.
 //	                  See prom.RecordPDRequest for the full contract.
 //
 //export llb_ai_pd_record

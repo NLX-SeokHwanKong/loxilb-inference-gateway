@@ -2750,7 +2750,8 @@ echo "#########################################"
 # are mutually exclusive by construction and a request moves exactly one of them — but
 # ONLY when the lifecycle got far enough to parse a prefill response.
 # pdPrefillResponseInspected(errorPhase) is true for {0 complete, 2 decode/error,
-# 3 decode/timeout} and false for {1 prefill/timeout, 4 prefill/error, 5 prefill/rejected}.
+# 3 decode/timeout, 6 decode/rejected, 7 decode/unknown} and false for
+# {1 prefill/timeout, 4 prefill/error, 5 prefill/rejected}.
 # So a DECODE-leg failure still moves the pair (prefill was inspected) while a PREFILL-leg
 # failure moves NEITHER. That asymmetry is the difference between "counts requests" and
 # "counts prefill responses inspected", and M4 below is what tells them apart.

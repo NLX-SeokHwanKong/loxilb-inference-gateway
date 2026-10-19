@@ -922,6 +922,9 @@ func RegisterTokenQuotaSource(fn func() []TokenQuotaState) {
 //	                    3 = decode   / timeout   (decode leg produced no byte)
 //	                    4 = prefill  / error     (prefill leg failed or died)
 //	                    5 = prefill  / rejected  (origin refused; relayed verbatim)
+//	                    6 = decode   / rejected  (origin refused; relayed verbatim)
+//	                    7 = decode   / unknown   (decode completed; its status
+//	                                              line was never read)
 func RecordPDRequest(modelName string, prefillLatencyMs, decodeLatencyMs int64, kvParamsFound, errorPhase int) {
 	model := boundModelLabel(modelName)
 
@@ -945,6 +948,12 @@ func RecordPDRequest(modelName string, prefillLatencyMs, decodeLatencyMs int64, 
 	case 5:
 		phase = "prefill"
 		status = "rejected"
+	case 6:
+		phase = "decode"
+		status = "rejected"
+	case 7:
+		phase = "decode"
+		status = "unknown"
 	default:
 		phase = "unknown"
 		status = "error"
@@ -974,14 +983,14 @@ func RecordPDRequest(modelName string, prefillLatencyMs, decodeLatencyMs int64, 
 // errorPhase got far enough to parse a prefill response, and therefore whether
 // the absence of kv_transfer_params in it is a real observation.
 //
-// Phases 0, 2 and 3 all completed prefill: the request either finished, or
-// failed on the decode leg afterwards. Phases 1, 4 and 5 did not — a prefill
+// Phases 0, 2, 3, 6 and 7 all completed prefill: the request either finished,
+// or ended on the decode leg afterwards. Phases 1, 4 and 5 did not — a prefill
 // timeout, a prefill-side death and an origin reject each leave nothing whose
 // kv_transfer_params could have been read, so counting them as "missing" would
 // report a measurement that was never taken.
 func pdPrefillResponseInspected(errorPhase int) bool {
 	switch errorPhase {
-	case 0, 2, 3:
+	case 0, 2, 3, 6, 7:
 		return true
 	default:
 		return false
