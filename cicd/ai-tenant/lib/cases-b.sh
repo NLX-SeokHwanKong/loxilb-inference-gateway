@@ -381,6 +381,14 @@ case_X5() {
 # park can come before the gate. That an 8 Mbit/s shaper did not slow a 4 MB
 # upload is a finding of its own (the campaign's cleanup list), not a case.
 b15_metric() { bm_sum "$1" "$2" "${3:-}"; }
+# The service's queue-wait histogram: sum in ms, count.
+b15_qw() {
+  metrics_raw | awk -v svc="$(svcl $PORT_PD)" '
+    index($0, svc) == 0 { next }
+    /^loxilb_ai_admission_queue_wait_seconds_sum\{/ { s += $NF }
+    /^loxilb_ai_admission_queue_wait_seconds_count\{/ { c += $NF }
+    END { printf "%d %d", s * 1000, c }'
+}
 case_B15() {
   echo "=== B15 (a): the legacy P/D per-endpoint queue beside a critical waiter"
   local i max=0 v q0 adm0
@@ -393,6 +401,7 @@ case_B15() {
   bt_begin $PORT_PD
   q0=$(b15_metric loxilb_pd_admission_queued_total "")
   adm0=$(bm_sum loxilb_ai_admission_decisions_total "$(svcl $PORT_PD)" 'reason="admitted"')
+  read -r qws0 qwc0 <<< "$(b15_qw)"
   cl_one $PORT_PD t-a b15a "$B3"
   chk B15 "a P/D request holds the one prefill slot (decode held)" 1 "$(pd_wait 8181 b15a 1)"
   cl_one $PORT_PD t-b b15b "$B3"
@@ -400,6 +409,9 @@ case_B15() {
   chk B15 "it waits there holding its service unit" "2 0 0" "$(tq_fce $PORT_PD .inflight) $(tq_fce $PORT_PD .queued) $(pd_receipts 8180 b15b)"
   cl_one $PORT_PD t-crit b15c "$B3"; sleep 0.5
   chk B15 "a critical request waits at the gate" 1 "$(tq_fce $PORT_PD .bands.critical.queued)"
+  # Both waiters wait 2 s more: the legacy-parked one is then >= 2.5 s into
+  # its first park, the critical one ~2 s into its gate wait.
+  sleep 2
   pd_release b15a
   for i in $(seq 1 15); do
     v=$(tq_fce $PORT_PD .inflight); [ "$v" -gt "$max" ] 2>/dev/null && max=$v
@@ -421,8 +433,65 @@ case_B15() {
   bt_end
   bt_check B15 1:2:0 0
   chk B15 "admitted once per request" 3 "$(( $(bm_sum loxilb_ai_admission_decisions_total "$(svcl $PORT_PD)" 'reason="admitted"') - adm0 ))"
+  # Whether the legacy-parked request, resumed, met the prefill ceiling the
+  # critical one had just taken is the race the fix ends: it then waits at
+  # the gate (standard queued 1, a second queue-wait sample) and its sample
+  # counts from its first park, so the two samples sum to >= 4.5 s; counted
+  # from the move it would be ~2 s. Not forced here (B15b forces the wait by
+  # configuration); read and, when it happened, asserted.
+  read -r qws1 qwc1 <<< "$(b15_qw)"
+  if [ "$(bd standard.queued)" = 1 ]; then
+    echo "  B15 reading: the legacy-parked request moved to the gate (queue-wait samples $((qwc1 - qwc0)), sum $((qws1 - qws0)) ms)"
+    chk B15 "moved to the gate: two queue-wait samples" 2 "$((qwc1 - qwc0))"
+    chk B15 "moved to the gate: its wait counts from its first park (sum >= 4500 ms)" yes \
+      "$([ $((qws1 - qws0)) -ge 4500 ] && echo yes || echo "no ($((qws1 - qws0)) ms)")"
+  else
+    echo "  B15 reading: the legacy-parked request ran before the critical one took the prefill unit (no move; queue-wait samples $((qwc1 - qwc0)))"
+  fi
   tqb_post ":$PORT_PD reset" "$(tqb_pd_json)" || fail B15 "P/D rule reset"
   tq_api POST /config/persist '{}' >/dev/null
   gw_restart
 
+}
+
+# B15b: the two counts disagree by configuration, no race. The legacy cap
+# per prefill endpoint is 2 and the rule's prefill ceiling 1: a second
+# request passes the legacy count and meets the ceiling the first holds.
+# Before the fix it was refused 429 admission_capacity at once; now it waits
+# at the gate and runs both legs after the first.
+case_B15b() {
+  echo "=== B15b: the legacy cap above the prefill ceiling: the second request waits at the gate"
+  local q0 adm0 shed0 qws0 qwc0 qws1 qwc1
+  pd_release_all
+  tq_api POST /config/persist '{}' >/dev/null
+  GW_EXTRA_ENV="LLB_PD_MAX_INFLIGHT_PER_EP=2 LLB_PD_QUEUE_DEPTH_PER_EP=4${GW_EXTRA_ENV:+ $GW_EXTRA_ENV}" gw_restart
+  tqb_post ":$PORT_PD ceiling 2, prefill 1" "$(tqb_pd_json ', "fc_prefill_max_inflight": 1' | sed 's/"fc_max_outstanding": 1,/"fc_max_outstanding": 2,/')" || fail B15b "P/D rule ceiling 2, prefill 1"
+  chk B15b "the prefill ceiling is the rule's 1, the legacy cap 2" "1 yes" \
+    "$(tq_fce $PORT_PD .prefill_max_inflight) $(docker exec tqllb sh -c 'tr "\0" "\n" < /proc/$(pgrep -x loxilb | head -1)/environ' | grep -q '^LLB_PD_MAX_INFLIGHT_PER_EP=2$' && echo yes || echo no)"
+  bt_begin $PORT_PD
+  q0=$(b15_metric loxilb_pd_admission_queued_total "")
+  adm0=$(bm_sum loxilb_ai_admission_decisions_total "$(svcl $PORT_PD)" 'reason="admitted"')
+  shed0=$(bm_sum loxilb_ai_admission_decisions_total "$(svcl $PORT_PD)" 'reason="capacity_shed"')
+  read -r qws0 qwc0 <<< "$(b15_qw)"
+  cl_one $PORT_PD t-a b15d "$B3"
+  chk B15b "the first holds the prefill unit (decode held)" 1 "$(pd_wait 8181 b15d 1)"
+  cl_one $PORT_PD t-b b15e "$B3"; sleep 1
+  chk B15b "the second waits at the gate, holding nothing, not on the legacy queue" "1 1 0 0" \
+    "$(tq_fce $PORT_PD .inflight) $(tq_fce $PORT_PD .queued) $(pd_receipts 8180 b15e) $(( $(b15_metric loxilb_pd_admission_queued_total "") - q0 ))"
+  chk B15b "and is not answered" 0 "$(cat "$B3"/b15e-*.code 2>/dev/null | grep -c '^[0-9]')"
+  pd_release b15d
+  chk B15b "the first's release lets the second run" 1 "$(pd_wait 8181 b15e 1 10)"
+  pd_release b15e
+  wait_done "$B3" 'b15[de]' 2 20
+  chk B15b "both answered 200" "200 200" "$(cl_errs "$B3" 'b15[de]')"
+  chk B15b "the second ran both legs" "1 1" "$(pd_receipts 8180 b15e) $(pd_receipts 8181 b15e)"
+  bt_end
+  bt_check B15b 0:2:0 0 1
+  read -r qws1 qwc1 <<< "$(b15_qw)"
+  chk B15b "one queue-wait sample (the second's)" 1 "$((qwc1 - qwc0))"
+  chk B15b "admitted once per request, none refused" "2 0" \
+    "$(( $(bm_sum loxilb_ai_admission_decisions_total "$(svcl $PORT_PD)" 'reason="admitted"') - adm0 )) $(( $(bm_sum loxilb_ai_admission_decisions_total "$(svcl $PORT_PD)" 'reason="capacity_shed"') - shed0 ))"
+  tqb_post ":$PORT_PD reset" "$(tqb_pd_json)" || fail B15b "P/D rule reset"
+  tq_api POST /config/persist '{}' >/dev/null
+  gw_restart
 }

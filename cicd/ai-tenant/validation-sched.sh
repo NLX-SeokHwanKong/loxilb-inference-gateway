@@ -44,7 +44,8 @@ B3b implemented MCP with tenant classes, on a stateless MCP pool with the key ch
 B4 elsewhere:vllm-kvcache-routing-cpu KV-exact: a woken critical request routes by prefix as unparked; run by that scenario's arm b4-band-arm.sh, its result recorded in EVIDENCE beside this one
 B5 implemented CHWBL bounded load: 16 parks and resumes return every unit
 B6 implemented P/D under the weighted policy: one service unit
-B15 implemented a request parked on the legacy P/D queue holds its service unit and takes none on resume; the critical waiter gets the freed unit
+B15 implemented a request parked on the legacy P/D queue holds its service unit and takes none on resume; the critical waiter gets the freed unit; one that then meets the prefill ceiling waits from its first park
+B15b implemented the legacy P/D cap above the prefill ceiling: the second request waits at the gate, not 429, and runs both legs after the first
 P4 implemented fc_critical_reserve_pct 25 at ceiling 4: standard capped at 3 with critical idle; a reserved unit wakes nobody
 P8 implemented the adaptive ceiling tightens: new sheddable refused first, nothing cut, the floor in units follows the ceiling
 S3 implemented min share 0:20:0 under strict: no standard demand, critical holds the whole ceiling; with standard waiting it keeps its unit
@@ -1080,8 +1081,8 @@ echo "=== step 6: the pool back to its shape"
 sched_cfg 8 16 30000 "$(fl6_json 0:0:0 inherit inherit 0:0:0 inherit)" || fail S2 "reset"
 
 # ---- step 3, group B: P/D, stateless MCP, CHWBL, backend failures ---------------
-# B15 last: it persists the configuration and restarts the gateway twice.
-for c in P9 B6 B3a B3b B5 X4 X5 H3 B15; do case_$c; done
+# B15 and B15b last: each persists the configuration and restarts the gateway twice.
+for c in P9 B6 B3a B3b B5 X4 X5 H3 B15 B15b; do case_$c; done
 
 # ---- summary --------------------------------------------------------------------
 echo "=== summary"
