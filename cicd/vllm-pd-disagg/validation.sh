@@ -3886,11 +3886,21 @@ P_DPLOG=/var/log/loxilbdp.log
 P_RE_REAP='generic P/D idle reaper|\[REAPER\]|ERR-01|\[ANSWER_STARTED\]|\[SSE_CAP\]'
 p_log0=$($dexec llb1 sh -c "wc -l < ${P_DPLOG}" 2>/dev/null)
 p_log0=${p_log0:-0}
-p_out=$($dexec l3h1 curl -s --no-buffer -m $((P_CHUNKS * P_PACE_MS / 1000 + 60)) \
+p_t0=$(date +%s)
+$dexec l3h1 curl -s --no-buffer -m $((P_CHUNKS * P_PACE_MS / 1000 + 60)) \
   -o /tmp/phase-p-stream.body -w '%{http_code} %{time_total}' \
   "http://10.10.10.254:${P_PORT}/v1/chat/completions" -H "Content-Type: application/json" \
-  -d "{\"model\":\"${MODEL}\",\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":\"row14\"}],\"max_tokens\":${P_CHUNKS}}" 2>/dev/null)
+  -d "{\"model\":\"${MODEL}\",\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":\"row14\"}],\"max_tokens\":${P_CHUNKS}}" \
+  </dev/null >/tmp/phase-p-curl.out 2>/dev/null &
+p_pid=$!
+# The gateway's sockets once the engine has sent [DONE]: whether the backend leg is
+# closed while the client leg is still open is the row's question.
+sleep $((P_CHUNKS * P_PACE_MS / 1000 + 15))
+echo "  gateway sockets $(( $(date +%s) - p_t0 )) s into the row (port ${P_PORT} / 8000):"
+$hexec llb1 ss -tanoi 2>/dev/null | grep -A1 -E ":${P_PORT}[[:space:]]|:8000[[:space:]]" | sed 's/^/    /'
+wait "$p_pid"
 p_rc=$?
+p_out=$(cat /tmp/phase-p-curl.out 2>/dev/null)
 $dexec "$P_DECODE" curl -s -m 5 -X POST "${P_ADMIN}/reset" >/dev/null 2>&1 || true
 p_code=${p_out%% *}
 p_secs=$(printf '%s' "${p_out#* }" | cut -d. -f1)
@@ -3900,6 +3910,17 @@ echo "  HTTP ${p_code} after ${p_secs:-?} s (curl rc=${p_rc}); ${p_data} data ch
 p_reap=$($dexec llb1 sh -c "tail -n +$((p_log0 + 1)) ${P_DPLOG}" 2>/dev/null | grep -E "$P_RE_REAP")
 echo "  gateway reaper/stream lines during the row: $(printf '%s' "$p_reap" | grep -c .)"
 printf '%s\n' "$p_reap" | grep . | head -20 | sed 's/^/    /'
+# The whole data-plane log for the row, so the real phase path can be read.
+p_all=$($dexec llb1 sh -c "tail -n +$((p_log0 + 1)) ${P_DPLOG}" 2>/dev/null)
+p_all_n=$(printf '%s' "$p_all" | grep -c .)
+echo "  gateway data-plane log during the row (${p_all_n} lines):"
+if [ "$p_all_n" -le 1500 ]; then
+  printf '%s\n' "$p_all" | sed 's/^/    | /'
+else
+  printf '%s\n' "$p_all" | head -750 | sed 's/^/    | /'
+  echo "    | ... $((p_all_n - 1500)) lines elided ..."
+  printf '%s\n' "$p_all" | tail -750 | sed 's/^/    | /'
+fi
 
 [ "$p_code" = "200" ] && check "TP-stream: 200" 0 \
                       || check "TP-stream: 200 (got ${p_code})" 1
