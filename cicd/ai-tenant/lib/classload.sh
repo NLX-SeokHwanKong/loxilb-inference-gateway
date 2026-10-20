@@ -245,6 +245,8 @@ metrics_raw() { $hexec tqh1 curl -s --max-time 8 "$API/metrics" 2>/dev/null; }
 bt_snap() {
   metrics_raw | awk -v svc="service=\"$VIP:$1\"" '
     /^loxilb_proxy_http_responses_by_status_total\{/ { rs += $NF; next }
+    /^loxilb_ai_requests_total\{.*outcome="completed"/ { rc += $NF; next }
+    /^loxilb_ai_requests_total\{.*outcome="denied"/ { rd += $NF; next }
     index($0, svc) == 0 { next }
     /^loxilb_ai_fc_band_total\{/ {
       match($0, /band="[a-z]+"/); b = substr($0, RSTART + 6, RLENGTH - 7)
@@ -253,7 +255,7 @@ bt_snap() {
     /^loxilb_ai_admission_queue_wait_seconds_count\{/ { qw += $NF; next }
     /^loxilb_ai_admission_decisions_total\{/ {
       match($0, /reason="[a-z_]+"/); d["d." substr($0, RSTART + 8, RLENGTH - 9)] += $NF; next }
-    END { printf "series=%d qw=%d rs=%d", n, qw, rs
+    END { printf "series=%d qw=%d rs=%d rc=%d rd=%d", n, qw, rs, rc, rd
           for (k in v) printf " %s=%d", k, v[k]
           for (k in d) printf " %s=%d", k, d[k]
           print "" }'
@@ -314,9 +316,21 @@ bt_check() {
     ta=$((ta + $(bd $b.admitted) + $(bd $b.shed) + $(bd $b.expired)))
     i=$((i + 1))
   done
-  for r in $BT_REFUSED; do ta=$((ta + $(bd d.$r))); done
-  [ "$BT_PROTO" == h1 ] &&
+  local refused=0 adm=0 lo
+  for r in $BT_REFUSED; do refused=$((refused + $(bd d.$r))); done
+  for b in critical standard sheddable; do adm=$((adm + $(bd $b.admitted))); done
+  ta=$((ta + refused))
+  if [ "$BT_PROTO" == h1 ]; then
     chk "$id" "admitted + shed + expired + refused - left = responses recorded as received" "$((ta - ${BT_LEFT:-0}))" "$(bd rs)"
+    # A refusal is counted once, as denied, never also as completed: every
+    # band refusal is one outcome="denied" request, and the completed count
+    # is the admitted requests (less those whose client left, when the
+    # case says how many: whether such a request completes is not asserted).
+    chk "$id" "a refusal is counted once: denied = shed + expired + refused" "$((ta - adm))" "$(bd rd)"
+    lo=$((adm - ${BT_LEFT:-0}))
+    chk "$id" "and never also as completed: admitted - left <= completed <= admitted" yes \
+      "$([ "$(bd rc)" -ge "$lo" ] && [ "$(bd rc)" -le "$adm" ] && echo yes || echo "no (completed $(bd rc), admitted $adm, left ${BT_LEFT:-0})")"
+  fi
   chk "$id" "queued = queue-wait samples (one per park, at its end)" "$tq" "$(bd qw)"
   [ -n "$rs" ] && chk "$id" "queued = admitted after a park + expired + evicted + cancelled" "$tq" "$(( rs + te + ev + tc ))"
   return 0
