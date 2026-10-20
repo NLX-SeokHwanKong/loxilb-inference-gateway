@@ -3871,6 +3871,8 @@ echo "#########################################"
 #   PD  chunked stream whose engine drops [DONE] and goes silent; PE  the engine closes
 #       mid-stream. The gateway's graceful-[DONE] sweep ends both; the rows print which
 #       P/D lifecycle outcome the request records (Q2).
+#   PF  a short and a long chunked stream: the TTFTs are about the same, the decode
+#       durations grow with the length (MON-01).
 
 P_PORT=2031
 P_CHUNKS=100
@@ -4171,6 +4173,72 @@ p_deltas_are TP-E "loxilb_ai_requests_total{outcome,status}" "$P_Q2_RQD" "comple
 pe_term=$(p_terminators "$P_Q2_S0")
 [ "$pe_term" = "0" ] && check "TP-E: loxilb_ai_pd_terminator_synthesized_total flat" 0 \
                      || check "TP-E: loxilb_ai_pd_terminator_synthesized_total flat (got +${pe_term})" 1
+
+# ── PF: a short and a long stream (MON-01: what TTFT and duration mean) ────────────────
+# The same engine streams chunked, P_PF_MS ms apart: P_PF_SHORT content chunks, then
+# P_PF_LONG. TTFT is the time to the decode answer's first event, so it is about the
+# same for both; the decode duration runs to the answer's end, so it grows with the
+# length. Before MON-01 the TTFT family recorded the duration. The bounds are ratios,
+# not milliseconds: the long duration is at least P_PF_RATIO times the short one (the
+# streams' own lengths make it about 7), and the two TTFTs differ by less than a
+# quarter of the long duration (before MON-01 they differed by about the whole stream).
+P_PF_MS=200
+P_PF_SHORT=2
+P_PF_LONG=20
+P_PF_RATIO=3
+# p_hist <scrape> <family> — "<count> <sum>" of a histogram, summed over its labels.
+p_hist() {
+  printf '%s\n' "$1" | awk -v f="$2" '
+    index($0, f "_count") == 1 {c += $NF}
+    index($0, f "_sum") == 1   {s += $NF}
+    END {printf "%d %.6f\n", c, s}'
+}
+# p_stream_row <tag> <chunks> — one paced chunked stream; sets P_PF_TTFT and P_PF_DUR
+# (the request's samples, s) and checks that each family took exactly one.
+p_stream_row() {
+  local tag=$1 n=$2 arm s0 s1 out rc code tn0 ts0 tn1 ts1 dn0 ds0 dn1 ds1 pdd tc dc
+  p_reset
+  arm=$(p_mock "$P_DECODE" stream-chunked-on)$(p_mock "$P_DECODE" "stream-pace?ms=${P_PF_MS}&chunks=${n}")
+  echo "$arm" | grep -q '"stream_chunked": true' && echo "$arm" | grep -q "\"stream_chunks\": ${n}}" \
+    && check "${tag}: the decode engine streams ${n} chunks ${P_PF_MS} ms apart, chunked (control armed)" 0 \
+    || check "${tag}: the decode engine streams ${n} chunks ${P_PF_MS} ms apart, chunked (control armed)" 1
+  s0=$(p_scrape)
+  out=$($dexec l3h1 curl -s --no-buffer -m 60 -o "/tmp/phase-p-${tag}.body" \
+          -w '%{http_code} %{time_total}' "$P_URL" -H "Content-Type: application/json" \
+          -d "{\"model\":\"${MODEL}\",\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":\"pf-${tag}\"}],\"max_tokens\":${n}}" \
+        </dev/null 2>/dev/null)
+  rc=$?
+  sleep 2
+  s1=$(p_scrape)
+  code=${out%% *}
+  read -r tn0 ts0 <<< "$(p_hist "$s0" loxilb_ai_pd_decode_ttft_seconds)"
+  read -r tn1 ts1 <<< "$(p_hist "$s1" loxilb_ai_pd_decode_ttft_seconds)"
+  read -r dn0 ds0 <<< "$(p_hist "$s0" loxilb_ai_pd_decode_duration_seconds)"
+  read -r dn1 ds1 <<< "$(p_hist "$s1" loxilb_ai_pd_decode_duration_seconds)"
+  tc=$((tn1 - tn0)) dc=$((dn1 - dn0))
+  P_PF_TTFT=$(awk -v a="$ts0" -v b="$ts1" 'BEGIN{printf "%.6f", b - a}')
+  P_PF_DUR=$(awk -v a="$ds0" -v b="$ds1" 'BEGIN{printf "%.6f", b - a}')
+  pdd=$(p_delta "$(p_series "$s0" loxilb_ai_pd_requests_total phase status)" \
+                "$(p_series "$s1" loxilb_ai_pd_requests_total phase status)")
+  echo "  ${tag}: HTTP ${code} after ${out#* } s (curl rc=${rc}); TTFT samples +${tc} (${P_PF_TTFT} s), duration samples +${dc} (${P_PF_DUR} s)"
+  [ "$code" = "200" ] && [ "$rc" = "0" ] && p_ends_done "/tmp/phase-p-${tag}.body" \
+    && check "${tag}: 200, curl rc=0, ends with [DONE]" 0 \
+    || check "${tag}: 200, curl rc=0, ends with [DONE] (got ${code}, rc ${rc})" 1
+  p_deltas_are "$tag" "loxilb_ai_pd_requests_total{phase,status}" "$pdd" "complete,success +1"
+  [ "$tc" = "1" ] && [ "$dc" = "1" ] \
+    && check "${tag}: one TTFT sample and one decode duration sample" 0 \
+    || check "${tag}: one TTFT sample and one decode duration sample (got +${tc}, +${dc})" 1
+}
+p_stream_row TP-F-short "$P_PF_SHORT"
+pf_ttft_s=$P_PF_TTFT pf_dur_s=$P_PF_DUR
+p_stream_row TP-F-long "$P_PF_LONG"
+pf_ttft_l=$P_PF_TTFT pf_dur_l=$P_PF_DUR
+awk -v s="$pf_dur_s" -v l="$pf_dur_l" -v r="$P_PF_RATIO" 'BEGIN{exit !(s > 0 && l >= r * s)}' \
+  && check "TP-F: the long stream's duration is >= ${P_PF_RATIO}x the short one's (${pf_dur_l} s vs ${pf_dur_s} s)" 0 \
+  || check "TP-F: the long stream's duration is >= ${P_PF_RATIO}x the short one's (${pf_dur_l} s vs ${pf_dur_s} s)" 1
+awk -v a="$pf_ttft_s" -v b="$pf_ttft_l" -v l="$pf_dur_l" 'BEGIN{d = a - b; if (d < 0) d = -d; exit !(l > 0 && d < l / 4)}' \
+  && check "TP-F: the TTFTs differ by < 1/4 of the long duration (${pf_ttft_s} s vs ${pf_ttft_l} s, long ${pf_dur_l} s)" 0 \
+  || check "TP-F: the TTFTs differ by < 1/4 of the long duration (${pf_ttft_s} s vs ${pf_ttft_l} s, long ${pf_dur_l} s)" 1
 
 p_reset
 p_del
