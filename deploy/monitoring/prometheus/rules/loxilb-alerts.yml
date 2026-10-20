@@ -124,7 +124,10 @@ groups:
         # refuses (401/403/429/503); left in, a rate-limit storm — a warning
         # via LoxilbAIRateLimitSpike — would start a critical page. A client
         # that cancels or stops reading is aborted with cause="client": traffic,
-        # in the denominator only.
+        # in the denominator only. instance:loxilb_ai_error_ratio:rate5m
+        # (loxilb-recording.yml) is this ratio per instance; the alert takes it
+        # over the fleet, so it sums the rates rather than reading the rule
+        # (a ratio of sums, not a sum of ratios).
         expr: >-
           (
             (

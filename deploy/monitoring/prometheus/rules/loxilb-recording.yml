@@ -51,10 +51,10 @@ groups:
       #                otherwise report a credential-store outage as backend
       #                5xx. A client cause (cancel, stall) is traffic, not an
       #                error: it is in the denominator only.
-      # The name keeps "5xx" for compatibility; the ratio is the error ratio
-      # of LoxilbAIErrorRatio. Each half of the numerator falls back to 0
-      # where the instance has traffic but no series of its own.
-      - record: instance:loxilb_ai_5xx_ratio:rate5m
+      # The same ratio as LoxilbAIErrorRatio, per instance. Each half of the
+      # numerator falls back to 0 where the instance has traffic but no
+      # series of its own.
+      - record: instance:loxilb_ai_error_ratio:rate5m
         expr: >-
           (
             (
@@ -77,6 +77,27 @@ groups:
           (
             sum by (cluster, instance)
               (rate(loxilb_ai_requests_total{outcome=~"completed|aborted"}[5m])) > 0
+          )
+
+      # DEPRECATED: use instance:loxilb_ai_error_ratio:rate5m. Kept with its
+      # old meaning for the consumers that read it: completed 5xx over
+      # completed, per instance. It does not see outcome="aborted" at all, so
+      # an answer the engine or the gateway cut is in neither half, and an
+      # instance whose every request was aborted has no sample. It will be
+      # removed in a later release.
+      - record: instance:loxilb_ai_5xx_ratio:rate5m
+        expr: >-
+          (
+            sum by (cluster, instance)
+              (rate(loxilb_ai_requests_total{outcome="completed",status=~"5.."}[5m]))
+            or
+            sum by (cluster, instance)
+              (rate(loxilb_ai_requests_total{outcome="completed"}[5m])) * 0
+          )
+          /
+          (
+            sum by (cluster, instance)
+              (rate(loxilb_ai_requests_total{outcome="completed"}[5m])) > 0
           )
 
       # KV subscriber health floor: 1 = every subscriber connected,

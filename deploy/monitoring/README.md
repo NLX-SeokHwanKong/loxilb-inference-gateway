@@ -133,9 +133,14 @@ unfiltered error ratio starts counting rate-limiting as a backend fault, and
 one that filters only its numerator falls as denials rise — the reading moves
 the wrong way at exactly the wrong moment. A client cause is traffic, not an
 error: it belongs in the denominator only. `LoxilbAIErrorRatio` and
-`instance:loxilb_ai_5xx_ratio:rate5m` (named for compatibility; it is this
-ratio) both follow it; `deploy/monitoring/ci/lint-monitoring.py` fails any
+`instance:loxilb_ai_error_ratio:rate5m` (this ratio per instance) both follow
+it; `deploy/monitoring/ci/lint-monitoring.py` fails any
 expression that filters some selectors of this family and not others.
+
+`instance:loxilb_ai_5xx_ratio:rate5m` is **deprecated** and keeps its old
+meaning, completed 5xx over completed: it does not see `aborted`, so an answer
+the engine or the gateway cut is in neither half. Move its readers to
+`instance:loxilb_ai_error_ratio:rate5m`; it will be removed in a later release.
 
 The counted families are seeded at zero so a window's first error is an
 increase rather than a series appearing: the P/D lifecycle and fallback
@@ -188,6 +193,15 @@ same requests from another angle, so adding it to the request total (or to its
 The TTFB histogram (`loxilb_proxy_http_ttfb_seconds`) samples backend replies
 only: a gateway's own answer reaches its first byte in microseconds and is not
 sampled.
+
+The request duration histogram (`loxilb_ai_request_duration_seconds`) observes
+`completed` requests only. An aborted request's latency is the time to its cut,
+which would pull the served quantiles toward wherever the cuts land. Read the
+P/D decode TTFT (`loxilb_ai_pd_decode_ttft_seconds`) beside it with one
+difference in mind: TTFT samples every streamed decode leg that reached its
+first event, an aborted one included, because that event came before the cut.
+So a TTFT sample need not have a duration sample, and the two `_count` series
+are not expected to agree.
 
 ## Metric parity with upstream OSS loxilb
 

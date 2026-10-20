@@ -328,11 +328,14 @@ var (
 
 	// aiRequestDurationSeconds tracks per-model, per-tenant request latency as
 	// a histogram. Buckets extend to 300s: SSE/streaming completions routinely
-	// run minutes — a 10s top bucket would blind-spot the entire tail.
+	// run minutes — a 10s top bucket would blind-spot the entire tail. It
+	// observes completed requests only (see RecordAIRequest); TTFT
+	// (aiPDDecodeTTFT) does sample an aborted stream that reached its first
+	// event.
 	aiRequestDurationSeconds = promauto.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "loxilb_ai_request_duration_seconds",
-			Help:    "AI Gateway request duration in seconds, SSE activation to stream completion (monotonic clock at data plane).",
+			Help:    "AI Gateway request duration in seconds, SSE activation to stream completion (monotonic clock at data plane). Completed requests only: an aborted request adds no sample.",
 			Buckets: []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0},
 		},
 		[]string{"model", "tenant"},
@@ -481,11 +484,14 @@ var (
 
 	// aiPDDecodeTTFT tracks the decode leg's time to its first streamed event.
 	// Written by the second half of a lifecycle record (RecordPDRecordExtra);
-	// a request whose answer streamed no event adds no sample.
+	// a request whose answer streamed no event adds no sample. Every
+	// lifecycle record carries it, aborted included: a stream the client or
+	// the gateway cut after its first event is sampled, though the request
+	// duration histogram skips it.
 	aiPDDecodeTTFT = promauto.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "loxilb_ai_pd_decode_ttft_seconds",
-			Help:    "P/D decode leg: dispatch to the first streamed event (the first SSE data object, a role-only delta included), in seconds. Streamed requests only.",
+			Help:    "P/D decode leg: dispatch to the first streamed event (the first SSE data object, a role-only delta included), in seconds. Streamed requests only; an aborted stream that reached its first event is sampled.",
 			Buckets: []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0},
 		},
 		[]string{"model"},

@@ -1,5 +1,5 @@
 # promtool unit tests for the AI error ratio: LoxilbAIErrorRatio
-# (loxilb-alerts.yml) and instance:loxilb_ai_5xx_ratio:rate5m
+# (loxilb-alerts.yml) and instance:loxilb_ai_error_ratio:rate5m
 # (loxilb-recording.yml), which compute the same ratio:
 #
 #   (completed 5xx + aborted{cause=~"engine|gateway"}) / (completed + aborted)
@@ -10,6 +10,9 @@
 #   3. a client that cancels or stops reading (cause=client) is traffic: in the
 #      denominator only, never fires;
 #   4. a gate denial storm (outcome=denied) is in neither half.
+#
+# Each case also pins the deprecated instance:loxilb_ai_5xx_ratio:rate5m to
+# its old meaning, completed 5xx over completed: it does not see aborted.
 #
 # Run: promtool test rules tests/ai-error-ratio.test.yml
 
@@ -28,11 +31,16 @@ tests:
       - series: 'loxilb_ai_requests_total{cluster="c1",instance="gw",model="m",tenant="t",status="200",outcome="aborted",cause="engine"}'
         values: '0+6x30'            # 0.1/s
     promql_expr_test:
+      - expr: instance:loxilb_ai_error_ratio:rate5m
+        eval_time: 15m
+        exp_samples:
+          - labels: 'instance:loxilb_ai_error_ratio:rate5m{cluster="c1",instance="gw"}'
+            value: 0.1
       - expr: instance:loxilb_ai_5xx_ratio:rate5m
         eval_time: 15m
         exp_samples:
           - labels: 'instance:loxilb_ai_5xx_ratio:rate5m{cluster="c1",instance="gw"}'
-            value: 0.1
+            value: 0
     alert_rule_test:
       - alertname: LoxilbAIErrorRatio
         eval_time: 15m
@@ -53,6 +61,11 @@ tests:
       - series: 'loxilb_ai_requests_total{cluster="c1",instance="gw",model="m",tenant="t",status="500",outcome="completed",cause=""}'
         values: '0+12x30'           # 0.2/s
     promql_expr_test:
+      - expr: instance:loxilb_ai_error_ratio:rate5m
+        eval_time: 15m
+        exp_samples:
+          - labels: 'instance:loxilb_ai_error_ratio:rate5m{cluster="c1",instance="gw"}'
+            value: 0.2
       - expr: instance:loxilb_ai_5xx_ratio:rate5m
         eval_time: 15m
         exp_samples:
@@ -82,6 +95,11 @@ tests:
       - series: 'loxilb_ai_requests_total{cluster="c1",instance="gw",model="m",tenant="t",status="503",outcome="denied",cause=""}'
         values: '0+600x30'          # 10/s refused by the gate
     promql_expr_test:
+      - expr: instance:loxilb_ai_error_ratio:rate5m
+        eval_time: 15m
+        exp_samples:
+          - labels: 'instance:loxilb_ai_error_ratio:rate5m{cluster="c1",instance="gw"}'
+            value: 0
       - expr: instance:loxilb_ai_5xx_ratio:rate5m
         eval_time: 15m
         exp_samples:

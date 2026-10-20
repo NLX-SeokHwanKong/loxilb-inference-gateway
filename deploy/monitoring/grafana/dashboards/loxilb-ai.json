@@ -159,7 +159,7 @@
         },
         "overrides": []
       },
-      "description": "Completed 5xx plus answers the engine or the gateway cut (outcome=aborted, cause engine|gateway), over completed + aborted requests, matching the LoxilbAIErrorRatio alert. Gate denials are excluded so a rate-limit storm does not read as a backend fault, and a client that cancels or stops reading (cause=client) is traffic, not an error. Shows 0 when traffic is healthy; No data only when there is no AI traffic at all."
+      "description": "Completed 5xx plus answers the engine or the gateway cut (outcome=aborted, cause engine|gateway), over completed + aborted requests: the ratio of the LoxilbAIErrorRatio alert and of instance:loxilb_ai_error_ratio:rate5m, taken here from the counters because the recorded series carries no model or tenant to filter on. Gate denials are excluded so a rate-limit storm does not read as a backend fault, and a client that cancels or stops reading (cause=client) is traffic, not an error. Shows 0 when traffic is healthy; No data only when there is no AI traffic at all."
     },
     {
       "id": 2,
@@ -296,7 +296,7 @@
       "id": 5,
       "type": "timeseries",
       "title": "AI requests/s by status",
-      "description": "Split by outcome because status alone is ambiguous: a backend can answer 429 or 503 itself. completed = answered whole, with the backend's own status; aborted = the client did not get the whole answer, with the status it got (none when it left before any) and the cause (client, engine or gateway); denied = the status the policy gate wrote.",
+      "description": "Split by outcome because status alone is ambiguous: a backend can answer 429 or 503 itself. completed = answered whole, with the backend's own status; aborted = the client did not get the whole answer, with the status it got (none when it left before any) and the cause (client, engine or gateway); denied = the status the policy gate wrote. The error ratio (instance:loxilb_ai_error_ratio:rate5m) is completed 5xx plus aborted with cause engine or gateway, over completed + aborted.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -1283,7 +1283,7 @@
           "id": 54,
           "type": "timeseries",
           "title": "Uncharged-on-close rate: per tenant vs fleet",
-          "description": "The comparison that decides whether the uncharged path is a backend problem or a behavioural one. Each series is a tenant's connection_close reports as a share of that tenant's AI responses (completed and aborted; a denial reached no backend and has no usage to charge), so tenants of very different sizes are comparable; FLEET is the same ratio taken over everything. Every tenant elevated together means a backend is ending connections before usage is readable, and leaving those responses free is the right answer. ONE tenant materially above FLEET is the signal \u2014 that tenant reaches the uncharged path far more often than the fleet does, which is what would reopen the charging question with data instead of argument. Empty is the healthy state.\n\nRead trends, not single points. The two halves of this ratio are recorded at different moments: a request enters the denominator when it completes, while its connection_close report only fires when the client finally closes the connection, which on a kept-alive connection can be minutes later. Over a short window the same request can therefore land on one side and not the other, so an individual sample can exceed 1. The panel carries a 15m minimum interval to damp that; a tenant genuinely sitting above the fleet stays above it across windows, a timing artefact does not.",
+          "description": "The comparison that decides whether the uncharged path is a backend problem or a behavioural one. Each series is a tenant's connection_close reports as a share of that tenant's AI responses (completed and aborted, the denominator of instance:loxilb_ai_error_ratio:rate5m; a denial reached no backend and has no usage to charge), so tenants of very different sizes are comparable; FLEET is the same ratio taken over everything. Every tenant elevated together means a backend is ending connections before usage is readable, and leaving those responses free is the right answer. ONE tenant materially above FLEET is the signal \u2014 that tenant reaches the uncharged path far more often than the fleet does, which is what would reopen the charging question with data instead of argument. Empty is the healthy state.\n\nRead trends, not single points. The two halves of this ratio are recorded at different moments: a request enters the denominator when it completes, while its connection_close report only fires when the client finally closes the connection, which on a kept-alive connection can be minutes later. Over a short window the same request can therefore land on one side and not the other, so an individual sample can exceed 1. The panel carries a 15m minimum interval to damp that; a tenant genuinely sitting above the fleet stays above it across windows, a timing artefact does not.",
           "gridPos": {
             "h": 8,
             "w": 12,

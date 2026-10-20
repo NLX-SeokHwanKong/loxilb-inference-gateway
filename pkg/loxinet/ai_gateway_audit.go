@@ -540,6 +540,11 @@ func aiTokenQuotaCode(errorCode string) bool {
 // the client's three are client_abort, a cut by a cap or a reaper is a
 // timeout, and the engine dying or the rule's listener going ended the
 // backend connection under the answer.
+//
+// listener_closed is backend_conn as the closest available reason, not the
+// true one: the cause is the gateway (the metric reads cause="gateway"), and
+// no backend failed. The vocabulary is closed; a gateway_shutdown reason is
+// the follow-up for its next revision.
 func aiCompleteReason(status int, errorCode string) audit.Reason {
 	switch errorCode {
 	case "client_abort", "client_stall", "client_abort_before_answer":
