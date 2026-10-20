@@ -376,6 +376,41 @@ loxilb_ai_requests_total{model="llama3",tenant="",status="401",outcome="denied"}
 	}
 }
 
+// TestPhase3AITrafficReportAborted pins the aborted outcome: an answer the
+// engine or the gateway cut is an error even with status 200, a client that
+// cancelled is traffic (denominator only), and neither is completed.
+func TestPhase3AITrafficReportAborted(t *testing.T) {
+	mock := newAIMock(t)
+	mock.metricsText = `# TYPE loxilb_ai_requests_total counter
+loxilb_ai_requests_total{cause="",model="llama3",outcome="completed",status="200",tenant="t1"} 80
+loxilb_ai_requests_total{cause="",model="llama3",outcome="completed",status="500",tenant="t1"} 5
+loxilb_ai_requests_total{cause="engine",model="llama3",outcome="aborted",status="200",tenant="t1"} 3
+loxilb_ai_requests_total{cause="gateway",model="llama3",outcome="aborted",status="200",tenant="t1"} 2
+loxilb_ai_requests_total{cause="client",model="llama3",outcome="aborted",status="200",tenant="t1"} 7
+loxilb_ai_requests_total{cause="client",model="llama3",outcome="aborted",status="none",tenant="t1"} 3
+loxilb_ai_requests_total{cause="",model="llama3",outcome="denied",status="429",tenant="t1"} 50
+`
+	b := aiTestBridge(t, mock)
+	cs := session(t, b, guard.RoleViewer)
+
+	out := callOut(t, callTool(t, cs, "ai_traffic_report", nil))
+	for k, want := range map[string]float64{
+		"requests_total":          150,
+		"requests_completed":      85,
+		"requests_aborted":        15,
+		"requests_aborted_errors": 5,
+		"requests_denied":         50,
+		"requests_5xx":            5,
+		"requests_non_2xx":        5,
+		// (5 + 5) / (85 + 15): the client's 10 aborts are in the denominator only.
+		"error_ratio": 0.1,
+	} {
+		if got := out[k].(float64); got != want {
+			t.Errorf("%s = %v, want %v", k, got, want)
+		}
+	}
+}
+
 // TestPhase3AITrafficReportPreOutcomeGateway pins the compatibility direction.
 // The bridge reaches gateways of any age; on one that emits no outcome label
 // the family holds backend-answered traffic only, so treating those samples as

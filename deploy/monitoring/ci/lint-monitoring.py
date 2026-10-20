@@ -258,9 +258,10 @@ def lint_dashboards(mon_dir, exporter, rep):
                 all_exprs.append((name, expr))
                 check_legend(p.get("title"), t, exporter, rep, name)
                 for fam in PARTITIONED_FAMILIES:
-                    msg = outcome_partition_violation(expr, fam)
-                    if msg:
-                        rep.err(name, f"panel '{p.get('title')}' {msg}")
+                    for msg in (outcome_partition_violation(expr, fam),
+                                aborted_cause_violation(expr, fam)):
+                        if msg:
+                            rep.err(name, f"panel '{p.get('title')}' {msg}")
                 for m in METRIC_TOKEN.finditer(expr):
                     ref = m.group(1)
                     if boundary_violation(ref):
@@ -294,9 +295,10 @@ def lint_dashboards(mon_dir, exporter, rep):
 # Outcome-partitioned families
 # ---------------------------------------------------------------------------
 # loxilb_ai_requests_total is partitioned by an `outcome` label: "completed" is
-# a request a backend answered, "denied" is one the AI-gateway policy gate
-# refused before dialling a backend. Both live in one family so it can serve as
-# a denominator for offered load.
+# a request answered whole, "aborted" one whose client did not get the whole
+# answer (with a `cause`: client, engine or gateway), "denied" one the
+# AI-gateway policy gate refused before dialling a backend. All three live in
+# one family so it can serve as a denominator for offered load.
 #
 # That makes ONE mistake very easy and completely silent: filtering the
 # numerator of a ratio to completed traffic while leaving its denominator
@@ -312,6 +314,24 @@ def lint_dashboards(mon_dir, exporter, rep):
 # expr or one dashboard target, either every selector on a partitioned family
 # carries an outcome matcher, or none does.
 PARTITIONED_FAMILIES = ("loxilb_ai_requests_total",)
+
+
+# A second mistake the aborted outcome makes easy: selecting outcome="aborted"
+# with no cause matcher counts a client's cancel (traffic) together with the
+# engine's and the gateway's cuts (errors). A ratio built on it pages for
+# users closing their browser tabs. So a selector that narrows the family to
+# aborted alone must also name its cause.
+def aborted_cause_violation(expr, family):
+    """Return a message when a selector of `family` selects outcome="aborted"
+    without a cause matcher, else None."""
+    for m in re.finditer(re.escape(family) + r"(\{[^}]*\})?", expr):
+        selector = m.group(1) or ""
+        if re.search(r'outcome\s*=\s*"aborted"', selector) and "cause" not in selector:
+            return (f"selects {family}{{outcome=\"aborted\"}} without a cause "
+                    f"matcher -- that counts the client's cancels (traffic) "
+                    f"with the engine's and the gateway's cuts (errors); name "
+                    f"the cause")
+    return None
 
 
 def outcome_partition_violation(expr, family):
@@ -443,9 +463,10 @@ def lint_rules(mon_dir, exporter, title_to_panels, rep):
 
         for rule_name, rule_expr in iter_rule_exprs(rules_path):
             for fam in PARTITIONED_FAMILIES:
-                msg = outcome_partition_violation(rule_expr, fam)
-                if msg:
-                    rep.err(fname, f"rule '{rule_name}' {msg}")
+                for msg in (outcome_partition_violation(rule_expr, fam),
+                            aborted_cause_violation(rule_expr, fam)):
+                    if msg:
+                        rep.err(fname, f"rule '{rule_name}' {msg}")
 
         for dash, panel in pairs:
             if dash not in title_to_panels:
@@ -520,6 +541,26 @@ def promtool_check_exprs(promtool, exprs, rep):
 
 
 # ---------------------------------------------------------------------------
+# The MCP module ships its own copy of the alert rules (it is released on its
+# own), which drifted from the default package's: an alert removed from one
+# lived on in the other, and a description fixed in one stayed wrong in the
+# other. The copy is a copy: byte for byte.
+MCP_ALERT_RULES_COPY = os.path.join("mcp", "deploy", "monitoring", "prometheus",
+                                    "rules", "loxilb-alerts.yml")
+
+
+def lint_mcp_rules_copy(repo_root, mon_dir, rep):
+    src = os.path.join(mon_dir, "prometheus", "rules", "loxilb-alerts.yml")
+    dst = os.path.join(repo_root, MCP_ALERT_RULES_COPY)
+    if not os.path.isfile(dst):
+        return
+    with open(src, "rb") as a, open(dst, "rb") as b:
+        if a.read() != b.read():
+            rep.err(MCP_ALERT_RULES_COPY,
+                    "differs from deploy/monitoring/prometheus/rules/"
+                    "loxilb-alerts.yml; copy it over (the MCP copy is a copy)")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--repo-root", default=None)
@@ -548,6 +589,7 @@ def main():
 
     title_to_panels, exprs = lint_dashboards(mon_dir, exporter, rep)
     lint_rules(mon_dir, exporter, title_to_panels, rep)
+    lint_mcp_rules_copy(repo_root, mon_dir, rep)
 
     promtool = find_promtool(args.promtool)
     if promtool:

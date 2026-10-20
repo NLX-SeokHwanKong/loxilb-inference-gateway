@@ -193,6 +193,32 @@ class LegendValidation(unittest.TestCase):
         self.assertFalse(rep.errors, rep.errors)
 
 
+class McpRulesCopy(unittest.TestCase):
+    """The MCP module's copy of the alert rules is a byte-for-byte copy."""
+
+    def _run(self, src_text, dst_text):
+        with tempfile.TemporaryDirectory() as td:
+            mon = os.path.join(td, "deploy", "monitoring")
+            os.makedirs(os.path.join(mon, "prometheus", "rules"))
+            with open(os.path.join(mon, "prometheus", "rules", "loxilb-alerts.yml"), "w") as fh:
+                fh.write(src_text)
+            dst = os.path.join(td, lint.MCP_ALERT_RULES_COPY)
+            os.makedirs(os.path.dirname(dst))
+            with open(dst, "w") as fh:
+                fh.write(dst_text)
+            rep = lint.Report()
+            lint.lint_mcp_rules_copy(td, mon, rep)
+            return rep
+
+    def test_drift_goes_red(self):
+        rep = self._run("groups: []\n", "groups: []\n# drifted\n")
+        self.assertTrue(any("differs" in e for e in rep.errors), rep.errors)
+
+    def test_identical_passes(self):
+        rep = self._run("groups: []\n", "groups: []\n")
+        self.assertFalse(rep.errors, rep.errors)
+
+
 class OutcomePartition(unittest.TestCase):
     """The R-1 defect class: a ratio whose numerator filters outcome and whose
     denominator does not. Both halves parse, the panel renders, and the number
@@ -238,6 +264,25 @@ class OutcomePartition(unittest.TestCase):
                 '/ sum(rate(loxilb_ai_requests_total{instance=~"$instance"}[5m]))')
         rep = lint_dashboard_fixture(expr, {"loxilb_ai_requests_total"})
         self.assertTrue(any("mixes" in e for e in rep.errors), rep.errors)
+
+    def test_three_outcomes_all_filtered_pass(self):
+        # The error ratio: every selector names its outcome.
+        expr = ('((sum(rate(loxilb_ai_requests_total{outcome="completed",status=~"5.."}[5m])) or vector(0)) + '
+                '(sum(rate(loxilb_ai_requests_total{outcome="aborted",cause=~"engine|gateway"}[5m])) or vector(0))) / '
+                'sum(rate(loxilb_ai_requests_total{outcome=~"completed|aborted"}[5m]))')
+        self.assertIsNone(lint.outcome_partition_violation(expr, self.FAMILY))
+        self.assertIsNone(lint.aborted_cause_violation(expr, self.FAMILY))
+
+    def test_aborted_without_cause_flagged(self):
+        # Client cancels counted as errors.
+        expr = ('sum(rate(loxilb_ai_requests_total{outcome="aborted"}[5m])) / '
+                'sum(rate(loxilb_ai_requests_total{outcome=~"completed|aborted"}[5m]))')
+        self.assertIsNotNone(lint.aborted_cause_violation(expr, self.FAMILY))
+
+    def test_aborted_without_cause_goes_red_on_a_panel(self):
+        expr = 'sum(rate(loxilb_ai_requests_total{outcome="aborted",instance=~"$instance"}[5m]))'
+        rep = lint_dashboard_fixture(expr, {"loxilb_ai_requests_total"})
+        self.assertTrue(any("without a cause" in e for e in rep.errors), rep.errors)
 
     def test_rule_exprs_are_split_per_rule(self):
         """Two rules, one filtered and one not, are not a mixed expression.

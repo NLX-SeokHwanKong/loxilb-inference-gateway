@@ -115,7 +115,7 @@
     {
       "id": 1,
       "type": "stat",
-      "title": "AI error ratio (non-2xx, 5m)",
+      "title": "AI error ratio (5xx + engine/gateway aborts, 5m)",
       "gridPos": {
         "h": 4,
         "w": 4,
@@ -129,7 +129,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "(sum(rate(loxilb_ai_requests_total{outcome=\"completed\",status!~\"2..\",instance=~\"$instance\"}[5m])) or vector(0)) / sum(rate(loxilb_ai_requests_total{outcome=\"completed\",instance=~\"$instance\"}[5m]))"
+          "expr": "((sum(rate(loxilb_ai_requests_total{outcome=\"completed\",status=~\"5..\",instance=~\"$instance\"}[5m])) or vector(0)) + (sum(rate(loxilb_ai_requests_total{outcome=\"aborted\",cause=~\"engine|gateway\",instance=~\"$instance\"}[5m])) or vector(0))) / sum(rate(loxilb_ai_requests_total{outcome=~\"completed|aborted\",instance=~\"$instance\"}[5m]))"
         }
       ],
       "fieldConfig": {
@@ -156,7 +156,7 @@
         },
         "overrides": []
       },
-      "description": "Backend-answered requests only (outcome=completed), matching the LoxilbAIErrorRatio alert. Gate denials are excluded so a rate-limit storm does not read as a backend fault. Shows 0 when traffic is healthy; No data only when there is no AI traffic at all."
+      "description": "Completed 5xx plus answers the engine or the gateway cut (outcome=aborted, cause engine|gateway), over completed + aborted requests, matching the LoxilbAIErrorRatio alert. Gate denials are excluded so a rate-limit storm does not read as a backend fault, and a client that cancels or stops reading (cause=client) is traffic, not an error. Shows 0 when traffic is healthy; No data only when there is no AI traffic at all."
     },
     {
       "id": 2,
@@ -293,7 +293,7 @@
       "id": 5,
       "type": "timeseries",
       "title": "AI requests/s by status",
-      "description": "Split by outcome because status alone is ambiguous: a backend can answer 429 or 503 itself. completed = the backend's own status; denied = the status the policy gate wrote.",
+      "description": "Split by outcome because status alone is ambiguous: a backend can answer 429 or 503 itself. completed = answered whole, with the backend's own status; aborted = the client did not get the whole answer, with the status it got (none when it left before any) and the cause (client, engine or gateway); denied = the status the policy gate wrote.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -307,8 +307,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (status, outcome) (rate(loxilb_ai_requests_total{model=~\"$model\",tenant=~\"$tenant\",instance=~\"$instance\"}[$__rate_interval]))",
-          "legendFormat": "{{status}} ({{outcome}})"
+          "expr": "sum by (status, outcome, cause) (rate(loxilb_ai_requests_total{model=~\"$model\",tenant=~\"$tenant\",instance=~\"$instance\"}[$__rate_interval]))",
+          "legendFormat": "{{status}} {{outcome}} {{cause}}"
         }
       ],
       "options": {
@@ -1280,7 +1280,7 @@
           "id": 54,
           "type": "timeseries",
           "title": "Uncharged-on-close rate: per tenant vs fleet",
-          "description": "The comparison that decides whether the uncharged path is a backend problem or a behavioural one. Each series is a tenant's connection_close reports as a share of that tenant's AI responses, so tenants of very different sizes are comparable; FLEET is the same ratio taken over everything. Every tenant elevated together means a backend is ending connections before usage is readable, and leaving those responses free is the right answer. ONE tenant materially above FLEET is the signal \u2014 that tenant reaches the uncharged path far more often than the fleet does, which is what would reopen the charging question with data instead of argument. Empty is the healthy state.\n\nRead trends, not single points. The two halves of this ratio are recorded at different moments: a request enters the denominator when it completes, while its connection_close report only fires when the client finally closes the connection, which on a kept-alive connection can be minutes later. Over a short window the same request can therefore land on one side and not the other, so an individual sample can exceed 1. The panel carries a 15m minimum interval to damp that; a tenant genuinely sitting above the fleet stays above it across windows, a timing artefact does not.",
+          "description": "The comparison that decides whether the uncharged path is a backend problem or a behavioural one. Each series is a tenant's connection_close reports as a share of that tenant's AI responses (completed and aborted; a denial reached no backend and has no usage to charge), so tenants of very different sizes are comparable; FLEET is the same ratio taken over everything. Every tenant elevated together means a backend is ending connections before usage is readable, and leaving those responses free is the right answer. ONE tenant materially above FLEET is the signal \u2014 that tenant reaches the uncharged path far more often than the fleet does, which is what would reopen the charging question with data instead of argument. Empty is the healthy state.\n\nRead trends, not single points. The two halves of this ratio are recorded at different moments: a request enters the denominator when it completes, while its connection_close report only fires when the client finally closes the connection, which on a kept-alive connection can be minutes later. Over a short window the same request can therefore land on one side and not the other, so an individual sample can exceed 1. The panel carries a 15m minimum interval to damp that; a tenant genuinely sitting above the fleet stays above it across windows, a timing artefact does not.",
           "gridPos": {
             "h": 8,
             "w": 12,
@@ -1295,12 +1295,12 @@
           "targets": [
             {
               "refId": "A",
-              "expr": "sum by (tenant) (rate(loxilb_ai_tokens_missing_total{reason=\"connection_close\",model=~\"$model\",tenant=~\"$tenant\",instance=~\"$instance\"}[$__rate_interval])) / (sum by (tenant) (rate(loxilb_ai_requests_total{model=~\"$model\",tenant=~\"$tenant\",instance=~\"$instance\"}[$__rate_interval])) > 0)",
+              "expr": "sum by (tenant) (rate(loxilb_ai_tokens_missing_total{reason=\"connection_close\",model=~\"$model\",tenant=~\"$tenant\",instance=~\"$instance\"}[$__rate_interval])) / (sum by (tenant) (rate(loxilb_ai_requests_total{outcome!=\"denied\",model=~\"$model\",tenant=~\"$tenant\",instance=~\"$instance\"}[$__rate_interval])) > 0)",
               "legendFormat": "{{tenant}}"
             },
             {
               "refId": "B",
-              "expr": "sum (rate(loxilb_ai_tokens_missing_total{reason=\"connection_close\",model=~\"$model\",tenant=~\"$tenant\",instance=~\"$instance\"}[$__rate_interval])) / (sum (rate(loxilb_ai_requests_total{model=~\"$model\",tenant=~\"$tenant\",instance=~\"$instance\"}[$__rate_interval])) > 0)",
+              "expr": "sum (rate(loxilb_ai_tokens_missing_total{reason=\"connection_close\",model=~\"$model\",tenant=~\"$tenant\",instance=~\"$instance\"}[$__rate_interval])) / (sum (rate(loxilb_ai_requests_total{outcome!=\"denied\",model=~\"$model\",tenant=~\"$tenant\",instance=~\"$instance\"}[$__rate_interval])) > 0)",
               "legendFormat": "FLEET"
             }
           ],

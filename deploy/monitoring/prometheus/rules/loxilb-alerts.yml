@@ -116,27 +116,31 @@ groups:
           panel: "TTFB p50/p95/p99"
 
       - alert: LoxilbAIErrorRatio
-        # outcome="completed" on EVERY selector, and that is load-bearing.
-        # loxilb_ai_requests_total now also counts the requests the policy gate
-        # refuses, which are non-2xx by construction (401/403/429/503). Left
-        # unfiltered, this critical alert would silently change meaning: a
-        # rate-limit storm — today a warning via LoxilbAIRateLimitSpike — would
-        # push denials into both numerator and denominator and start firing a
-        # critical page, against a 5% threshold calibrated on a denominator that
-        # never contained them. Filtering to completed restores exactly the
-        # pre-change population, so the threshold keeps its meaning.
+        # The error ratio: completed 5xx and the answers the engine or the
+        # gateway cut (outcome="aborted", cause engine|gateway: the client got
+        # a 200 and an incomplete answer), over completed + aborted. Every
+        # selector names its outcome, and that is load-bearing:
+        # loxilb_ai_requests_total also counts the requests the policy gate
+        # refuses (401/403/429/503); left in, a rate-limit storm — a warning
+        # via LoxilbAIRateLimitSpike — would start a critical page. A client
+        # that cancels or stops reading is aborted with cause="client": traffic,
+        # in the denominator only.
         expr: >-
           (
-            sum(rate(loxilb_ai_requests_total{outcome="completed",status!~"2.."}[5m]))
+            (
+              (sum(rate(loxilb_ai_requests_total{outcome="completed",status=~"5.."}[5m])) or vector(0))
+              +
+              (sum(rate(loxilb_ai_requests_total{outcome="aborted",cause=~"engine|gateway"}[5m])) or vector(0))
+            )
             /
-            sum(rate(loxilb_ai_requests_total{outcome="completed"}[5m]))
+            sum(rate(loxilb_ai_requests_total{outcome=~"completed|aborted"}[5m]))
           ) > 0.05
-          and sum(rate(loxilb_ai_requests_total{outcome="completed"}[5m])) > 0.1
+          and sum(rate(loxilb_ai_requests_total{outcome=~"completed|aborted"}[5m])) > 0.1
         for: 5m
         labels: { severity: critical }
         annotations:
-          summary: "AI request backend non-2xx ratio above 5%"
-          description: "Backend-answered requests only (outcome=completed); status carries the real backend HTTP status. Gateway refusals are excluded on purpose — they are tracked by LoxilbAIRateLimitSpike and by outcome=denied; the gateway's own outage answers are completions and count."
+          summary: "AI request error ratio above 5%"
+          description: "Completed 5xx plus answers the engine or the gateway cut (outcome=aborted, cause engine|gateway), over completed + aborted requests. Gateway refusals are excluded on purpose — they are tracked by LoxilbAIRateLimitSpike and by outcome=denied; a client cancel (cause=client) is traffic, not an error. The gateway's own outage answers are completions with their 5xx and count."
           dashboard: "LoxiLB / AI Gateway"
           panel: "AI requests/s by status"
 
