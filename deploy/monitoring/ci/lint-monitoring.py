@@ -221,6 +221,14 @@ def lint_dashboards(mon_dir, exporter, rep):
 
         tvars = {v.get("name") for v in
                  d.get("templating", {}).get("list", [])}
+        for v in d.get("templating", {}).get("list", []):
+            if v.get("name") in ("instance", "model", "tenant") and \
+                    v.get("includeAll") and v.get("allValue") != ".*":
+                rep.err(name, f"variable ${v.get('name')} has All without "
+                              f"allValue \".*\": All is then an alternation "
+                              f"of discovered values, and an empty label "
+                              f"(tenant=\"\", a refusal before the key "
+                              f"resolved) matches none of them (MON-05)")
         # bootstrap dashboard is intentionally variable-free
         if "instance" not in tvars and uid != "loxilb-bootstrap":
             rep.warn(name, "no $instance template variable (§3.8)")
@@ -280,6 +288,9 @@ def lint_dashboards(mon_dir, exporter, rep):
                     rep.warn(name, f"panel '{p.get('title')}' selector without "
                                    f"$instance filter")
 
+            for msg in filter_violations(p, tvars, exporter):
+                rep.err(name, f"panel '{p.get('title')}' {msg}")
+
             if lazy:
                 fc = (p.get("fieldConfig") or {}).get("defaults") or {}
                 if "noValue" not in fc:
@@ -289,6 +300,64 @@ def lint_dashboards(mon_dir, exporter, rep):
         title_to_panels[title] = panel_titles
 
     return title_to_panels, all_exprs
+
+
+# ---------------------------------------------------------------------------
+# Dashboard filters (MON-05)
+# ---------------------------------------------------------------------------
+# A dashboard with a $model or $tenant variable promises that every panel
+# obeys it. A selector on a family that carries the label but not the
+# variable ignores the filter silently: the panel shows every model while the
+# picker says one. So, on such a dashboard, every selector of a family with a
+# model (tenant) label carries $model ($tenant); and a panel none of whose
+# families carries either label says "(global)" in its title, so a reader
+# knows the filter does not reach it. With allValue ".*" on the variables,
+# "All" also matches the empty label (a refusal before the key resolved),
+# which an alternation of discovered values never did.
+FILTER_LABELS = (("model", "$model"), ("tenant", "$tenant"))
+SELECTOR_TOKEN = re.compile(r"((?:loxilb|doca|aictrl)_[a-z0-9_]+)(\{[^}]*\})?")
+
+
+def family_labels(ref, exporter):
+    """The label set of the family `ref` names (histogram suffixes folded),
+    or None when it is not known with its labels."""
+    if not isinstance(exporter, dict):
+        return None
+    if ref in exporter:
+        return exporter[ref]
+    for suf in HIST_SUFFIXES:
+        if ref.endswith(suf) and ref[: -len(suf)] in exporter:
+            return exporter[ref[: -len(suf)]]
+    return None
+
+
+def filter_violations(panel, tvars, exporter):
+    """The MON-05 messages for one panel of a dashboard with variables tvars."""
+    wanted = [(lab, var) for lab, var in FILTER_LABELS if lab in tvars]
+    if not wanted:
+        return []
+    msgs = []
+    filterable = known = False
+    for t in panel.get("targets") or []:
+        for m in SELECTOR_TOKEN.finditer(t.get("expr") or ""):
+            labels = family_labels(m.group(1), exporter)
+            if labels is None:
+                continue
+            known = True
+            selector = m.group(2) or ""
+            for lab, var in wanted:
+                if lab in labels:
+                    filterable = True
+                    if var not in selector:
+                        msgs.append(f"selects {m.group(1)} without {var}, so "
+                                    f"the {lab} filter does not reach it")
+    title = panel.get("title") or ""
+    if known and not filterable and "(global)" not in title:
+        msgs.append("queries no family the dashboard's filters reach; say "
+                    "(global) in its title")
+    if filterable and "(global)" in title:
+        msgs.append("says (global) but the dashboard's filters reach it")
+    return sorted(set(msgs))
 
 
 # ---------------------------------------------------------------------------

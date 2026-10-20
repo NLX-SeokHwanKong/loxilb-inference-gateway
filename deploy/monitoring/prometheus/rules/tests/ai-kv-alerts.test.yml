@@ -72,7 +72,7 @@ tests:
               summary: "KV events rejected at the wire (bad_epoch)"
               description: "Subscriber svc1 on gw-a is discarding KV events (reason bad_epoch). KV-exact routing is running on a stale inventory until this clears."
               dashboard: "LoxiLB / AI Gateway"
-              panel: "KV event integrity"
+              panel: "KV event integrity (global)"
       - alertname: LoxilbKvWireReject
         eval_time: 25m
         exp_alerts: []
@@ -101,7 +101,7 @@ tests:
               summary: "KV subscriber disconnected (svc1/ep-a)"
               description: "A previously connected KV event subscriber has been down for 2m; the inventory for its endpoint is frozen and will drift."
               dashboard: "LoxiLB / AI Gateway"
-              panel: "KV subscribers up"
+              panel: "KV subscribers up (global)"
 
   # ── reconnect storm: sustained flapping fires, one reconnect does not ────
   - interval: 30s
@@ -124,7 +124,7 @@ tests:
               summary: "KV subscriber reconnect storm (svc1/ep-a)"
               description: "More than 3 reconnects in 10m sustained for 10m: the ZMQ session is flapping (network, engine restart loop, or publisher overload). Each reconnect risks a gap in KV events."
               dashboard: "LoxiLB / AI Gateway"
-              panel: "KV event integrity"
+              panel: "KV event integrity (global)"
 
   # ── same-EP retries: failing retries fire, succeeding retries do not ─────
   - interval: 30s
@@ -149,7 +149,7 @@ tests:
               summary: "P/D same-endpoint connect retries failing"
               description: "Same-endpoint connect retries are not succeeding (>3 unrecovered in 10m). Prefill/decode attach is degraded; check endpoint health and connection limits."
               dashboard: "LoxiLB / AI Gateway"
-              panel: "P/D endpoint failures"
+              panel: "P/D endpoint failures (global)"
 
   # ── endpoint death fires on either phase dying ───────────────────────────
   - interval: 30s
@@ -170,7 +170,7 @@ tests:
               summary: "P/D endpoint died mid-stream"
               description: "A prefill or decode endpoint died with streams attached in the last 10m. In-flight requests failed over or aborted; investigate the engine that dropped."
               dashboard: "LoxiLB / AI Gateway"
-              panel: "P/D endpoint failures"
+              panel: "P/D endpoint failures (global)"
 
   # ── restore results: rolled-back warns, ROLLBACK-FAILED is critical,
   #    ok-only traffic stays silent ─────────────────────────────────────────
@@ -233,7 +233,7 @@ tests:
               summary: "AI policy store unavailable"
               description: "Requests are being admitted/denied without the policy store for 5m+. Quota, rate-limit, and model-allowlist decisions are running degraded."
               dashboard: "LoxiLB / AI Gateway"
-              panel: "Policy store / unmetered"
+              panel: "Policy store / unmetered (global)"
       - alertname: LoxilbUnmeteredTraffic
         eval_time: 15m
         exp_alerts:
@@ -246,7 +246,7 @@ tests:
               summary: "AI traffic bypassing metering (vip 10.0.0.1)"
               description: "This gateway declares key enforcement on at least one service, yet requests on 10.0.0.1 are completing without token metering for 10m+. Billing/quota accounting is undercounting; check key attribution and usage-object parsing on that service."
               dashboard: "LoxiLB / AI Gateway"
-              panel: "Policy store / unmetered"
+              panel: "Policy store / unmetered (global)"
 
   # ── unmetered traffic on a KEYLESS deployment stays silent ───────────────
   # No service declares api_key_auth=required (gauge at 0, and separately a

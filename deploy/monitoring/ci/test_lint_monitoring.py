@@ -193,6 +193,69 @@ class LegendValidation(unittest.TestCase):
         self.assertFalse(rep.errors, rep.errors)
 
 
+class DashboardFilters(unittest.TestCase):
+    """MON-05: on a dashboard with $model/$tenant, every selector of a family
+    with that label carries the variable, and a panel the filters cannot reach
+    says (global)."""
+
+    EXP = {"loxilb_ai_requests_total": ["model", "tenant", "status", "outcome", "cause"],
+           "loxilb_ai_pd_requests_total": ["model", "phase", "status"],
+           "loxilb_kv_events_total": ["result"]}
+
+    def _panel(self, expr, title="fixture panel"):
+        return {"id": 1, "type": "timeseries", "title": title,
+                "targets": [{"refId": "A", "expr": expr}]}
+
+    def test_missing_model_goes_red(self):
+        msgs = lint.filter_violations(
+            self._panel('rate(loxilb_ai_pd_requests_total{instance=~"$instance"}[5m])'),
+            {"instance", "model", "tenant"}, self.EXP)
+        self.assertTrue(any("without $model" in m for m in msgs), msgs)
+
+    def test_missing_tenant_goes_red(self):
+        msgs = lint.filter_violations(
+            self._panel('rate(loxilb_ai_requests_total{model=~"$model"}[5m])'),
+            {"instance", "model", "tenant"}, self.EXP)
+        self.assertTrue(any("without $tenant" in m for m in msgs), msgs)
+
+    def test_both_filters_pass(self):
+        msgs = lint.filter_violations(
+            self._panel('rate(loxilb_ai_requests_total{model=~"$model",tenant=~"$tenant"}[5m])'),
+            {"instance", "model", "tenant"}, self.EXP)
+        self.assertEqual(msgs, [])
+
+    def test_unreachable_panel_must_say_global(self):
+        msgs = lint.filter_violations(
+            self._panel('rate(loxilb_kv_events_total[5m])'),
+            {"instance", "model", "tenant"}, self.EXP)
+        self.assertTrue(any("(global)" in m for m in msgs), msgs)
+        self.assertEqual(lint.filter_violations(
+            self._panel('rate(loxilb_kv_events_total[5m])', "KV events (global)"),
+            {"instance", "model", "tenant"}, self.EXP), [])
+
+    def test_filterable_panel_must_not_say_global(self):
+        msgs = lint.filter_violations(
+            self._panel('rate(loxilb_ai_pd_requests_total{model=~"$model"}[5m])', "PD (global)"),
+            {"instance", "model"}, self.EXP)
+        self.assertTrue(any("says (global)" in m for m in msgs), msgs)
+
+    def test_all_without_allvalue_goes_red(self):
+        d = dashboard_with_expr('rate(loxilb_x_total[5m])')
+        d["templating"]["list"].append({"name": "tenant", "includeAll": True, "allValue": None})
+        rep = lint.Report()
+        with tempfile.TemporaryDirectory() as td:
+            dash_dir = os.path.join(td, "grafana", "dashboards")
+            os.makedirs(dash_dir)
+            with open(os.path.join(dash_dir, "fixture.json"), "w") as fh:
+                json.dump(d, fh)
+            lint.lint_dashboards(td, {"loxilb_x_total": ["reason"]}, rep)
+        self.assertTrue(any("allValue" in e for e in rep.errors), rep.errors)
+
+    def test_no_filter_variables_no_rule(self):
+        self.assertEqual(lint.filter_violations(
+            self._panel('rate(loxilb_ai_pd_requests_total[5m])'), {"instance"}, self.EXP), [])
+
+
 class McpRulesCopy(unittest.TestCase):
     """The MCP module's copy of the alert rules is a byte-for-byte copy."""
 
