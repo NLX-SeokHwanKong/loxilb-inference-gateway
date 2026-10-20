@@ -150,6 +150,16 @@ binary behaves exactly like upstream loxilb.
 
 ### Changed
 
+- **A fullproxy rule whose `api_key_auth` or `jwt_auth_profile` differs from
+  the rules already on its listener (address, port, protocol) is refused with
+  400** instead of being accepted with a warning. The admission gate reads the
+  credential policy once per listener, before a request is matched to a rule
+  by host, path or model, so a rule that declared `jwt` next to a rule that
+  declared nothing was served unauthenticated or not depending on install
+  order. An unset policy and an explicit `disabled` are different values (the
+  latter strips `X-Api-Key`). A configuration restored from a snapshot is kept
+  whole and the disagreement is logged, as for the listener's TLS settings.
+  The refusal names the rule already there and the arguments, never a value.
 - **Every request the gateway refuses is counted once in
   `loxilb_ai_requests_total{outcome="denied"}`, whatever refused it:** the
   policy gate, capacity, routing (`model_unavailable`, `no_route`,
@@ -365,6 +375,12 @@ binary behaves exactly like upstream loxilb.
 
 ### Upgrade notes
 
+- **Mixed credential policies on one listener are refused.** A snapshot that
+  holds fullproxy rules with different `api_key_auth` / `jwt_auth_profile` on
+  one address, port and protocol still restores (each disagreement is logged
+  with the rule it disagrees with), but the next create or replace of such a
+  rule is refused with 400 until every rule of the listener declares the same
+  policy. Declare it on each rule, or move the differing rule to its own port.
 - **Metric meanings change for P/D requests and for every answer the gateway
   writes itself.** Dashboards and alerts built on the families below read
   different numbers after the upgrade; nothing is renamed or removed. The

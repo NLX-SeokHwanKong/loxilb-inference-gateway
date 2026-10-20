@@ -65,6 +65,16 @@ Enforcement (key validation + rate limiting) engages on any fullproxy rule with
 }
 ```
 
+The credential policy is read **once per listener** (address, port and
+protocol), before a request is matched to a rule by host, path or model. Every
+rule that shares a listener therefore has to declare the same `api_key_auth`
+and, for the JWT modes, the same `jwt_auth_profile`: a create or replace that
+disagrees with the rules already on the listener is refused with `400` (an
+unset policy and an explicit `disabled` are different values), and a
+configuration restored from a snapshot is kept whole with the disagreement
+logged. Without that refusal a `jwt` rule installed after a rule without a
+policy would be served unauthenticated.
+
 ### 2.3 Key lifecycle (admin, Bearer-authenticated)
 
 **Create** — returns the raw key exactly once:
@@ -519,6 +529,7 @@ cd ../ai-apikey            # full key lifecycle + 401/403/429 enforcement (bring
 | `POST /config/ai/apikey` fails with `401` | loxilb started with `--userservice` and no credential was presented | Authenticate first; see the bootstrap note above |
 | Mutating calls return `503` + `Retry-After: 5` right after a gateway restart | Boot-config gate: writes are held until the boot snapshot replay settles | Expected — retry after the `Retry-After` interval; not an outage |
 | Keys accepted but not enforced at the VIP | Rule lacks `sse_mode: true` / not `mode: 4` | Enforcement runs in the fullproxy AI path only |
+| Rule refused with `400`: `api_key_auth, jwt_auth_profile: the rule with ... is already on this address, port and protocol with a different value` | Another rule on the same listener (VIP, port, protocol) declares a different credential policy | Declare the same `api_key_auth` and `jwt_auth_profile` on every rule of the listener; unset and explicit `disabled` differ |
 | Requests hit the wrong model pool | Field casing | `model_name`, `path_prefix`, `path_match_mode` are snake_case — a mis-cased field is silently dropped |
 | Streams cut at ~`inactiveTimeOut` | `sse_mode` not set | Set `sse_mode: true` on streaming rules |
 | Long streams die at exactly N seconds | `max_stream_duration_sec` cap | Raise the cap; it is the intended runaway guard |

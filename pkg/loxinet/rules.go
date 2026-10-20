@@ -4544,6 +4544,24 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 	if jwtProfErr != nil {
 		return RuleArgsErr, &cmn.RuleArgumentError{Err: jwtProfErr}
 	}
+
+	// The admission gate reads the credential policy once per listener, before
+	// a request is matched to a rule, so a rule that declares another policy
+	// than the rules already on its listener would be served under theirs -
+	// unauthenticated, if the listener's rule declared nothing. Refused like a
+	// TLS disagreement above; a restored configuration is kept whole and the
+	// disagreement is logged instead.
+	if lBActs.mode == cmn.LBModeFullProxy {
+		want := listenerAuth{apiKeyAuth: nextApiKeyAuth, jwtAuthProfile: nextJwtAuthProfile}
+		if other, diff := R.lbListenerAuthConflict(eRule, &rt, want); other != nil {
+			conflict := listenerAuthConflictError(other, diff)
+			if !lbConfigReplay(&serv) {
+				return RuleArgsErr, &cmn.RuleArgumentError{Err: conflict}
+			}
+			tk.LogIt(tk.LogError, "lb-rule %s:%d restored on a listener it disagrees with, the listener's credential policy applies: %v\n",
+				serv.ServIP, serv.ServPort, conflict)
+		}
+	}
 	// The capacity queue's two fields resolve the same way, and their pair
 	// rule is judged on what will be stored.
 	nextFcMaxQueueDepth, nextFcMaxQueueWaitMs, fcQueueErr := fcQueueResolve(eRule, &serv)

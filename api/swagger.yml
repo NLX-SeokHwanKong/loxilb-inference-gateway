@@ -10885,6 +10885,14 @@ definitions:
               enforcement off; to clear a declared policy, send "disabled"
               explicitly. Independent of sse_mode and pd_disagg_mode, and
               independent of the management-plane authentication mode.
+              Rules that share a listener (address, port and protocol) share
+              its credential policy, because the admission gate runs before a
+              request is matched to a rule by host, path or model: a create or
+              replace whose api_key_auth or jwt_auth_profile differs from the
+              rules already on the listener is refused with 400 (an unset
+              policy and an explicit "disabled" are different values), and a
+              restored configuration is kept whole with the disagreement
+              logged, as for the listener's TLS settings.
           jwt_auth_profile:
             type: string
             maxLength: 63
@@ -10896,7 +10904,8 @@ definitions:
               On a replace, omitting this field preserves the existing
               reference, in lockstep with api_key_auth's replace semantics.
               While a service references a profile, deleting that profile is
-              refused.
+              refused. Rules that share a listener must name the same profile;
+              a disagreement is refused like a differing api_key_auth.
           max_stream_duration_sec:
             type: integer
             format: int32
@@ -11252,7 +11261,9 @@ definitions:
               The gate reserves before a rule is selected by host, path or
               model, so the value is per listener: on a VIP and port that
               several rules share, the value of the rule installed first on it
-              is the one in force for all of them, as with api_key_auth.
+              is the one in force for all of them (api_key_auth is read per
+              listener too, but a disagreeing api_key_auth or jwt_auth_profile
+              is refused rather than warned about; see api_key_auth).
               Declare the same value on each. A rule applied on a VIP and port
               whose rules resolve to different values is accepted, and the
               reply and the log carry a warning that names the value in
