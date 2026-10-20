@@ -458,6 +458,39 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 11. The end codes are lockstep between C and Go, each with its cause.
+#
+# The data plane names how an answer the client did not get whole ended in
+# the request record's error_code (sp_end_codes, sockproxy_end_cause.h);
+# Go counts that request outcome="aborted" with the code's cause
+# (aiEndCauses, ai_metrics.go) and anything it does not know as completed.
+# A code added on one side only builds and runs: in C alone its requests
+# are silently completed, in Go alone the entry is dead. A cause changed
+# on one side moves requests between an error and traffic in the error
+# ratio. Compare the code:cause pairs, sorted, as check 5 compares the
+# stages.
+# ---------------------------------------------------------------------------
+C_ENDS="$(sed -n '/^static const sp_end_code_t sp_end_codes/,/^};/p' loxilb-ebpf/common/sockproxy_end_cause.h \
+  | sed -nE 's/^[[:space:]]*\[SP_END_[A-Z_]+\][[:space:]]*=[[:space:]]*\{[[:space:]]*"([a-z_]+)",[[:space:]]*"([a-z]+)"[[:space:]]*\},?.*$/\1:\2/p' \
+  | sort | tr '\n' ' ')"
+GO_CAUSES="$(sed -n '/^const (/,/^)/p' api/prometheus/ai_metrics.go \
+  | sed -nE 's/^[[:space:]]*(AICause[A-Za-z]+)[[:space:]]*=[[:space:]]*"([a-z]+)".*$/\1 \2/p')"
+GO_ENDS="$(sed -n '/^var aiEndCauses = map\[string\]string{/,/^}/p' api/prometheus/ai_metrics.go \
+  | sed -nE 's/^[[:space:]]*"([a-z_]+)":[[:space:]]*(AICause[A-Za-z]+),.*$/\1 \2/p' \
+  | while read -r code cause; do
+      printf '%s:%s\n' "$code" "$(printf '%s\n' "$GO_CAUSES" | awk -v c="$cause" '$1 == c {print $2}')"
+    done | sort | tr '\n' ' ')"
+if [ -z "$C_ENDS" ] || [ -z "$GO_ENDS" ] || [ -z "$GO_CAUSES" ]; then
+  fail "end-code tables not found (C: '$C_ENDS' Go: '$GO_ENDS') - did sp_end_codes or aiEndCauses move?"
+elif printf '%s' "$GO_ENDS" | grep -qE ':( |$)'; then
+  fail "an end code in aiEndCauses names a cause with no AICause constant: $GO_ENDS"
+elif [ "$C_ENDS" = "$GO_ENDS" ]; then
+  pass "end codes lockstep between C and Go, each with its cause ($(printf '%s' "$C_ENDS" | wc -w | tr -d ' ') codes)"
+else
+  fail "end codes differ between C and Go: C=[$C_ENDS] Go=[$GO_ENDS]"
+fi
+
+# ---------------------------------------------------------------------------
 # N. Conversation stickiness names the pool whose endpoint index it carries.
 #
 # Delegated to Python, because this one cannot be done with grep. The pool is

@@ -169,6 +169,12 @@ typedef struct proxy_metrics_snapshot {
 
     /* Terminators the graceful-[DONE] sweep wrote for a silent decode engine (the mechanism behind decode/truncated). TAIL-APPEND ONLY — same three-way lockstep. */
     uint64_t pd_terminator_synthesized;
+
+    /* Reaper ends handed to the health thread because the owner worker could not take them (F-13). TAIL-APPEND ONLY — same three-way lockstep. */
+    uint64_t reap_fallback;
+
+    /* Requests with no usable Host at dispatch on a listener whose pools name models (ROUTE-01's second defence). TAIL-APPEND ONLY — same three-way lockstep. */
+    uint64_t route_host_missing;
 } proxy_metrics_snapshot_t;
 
 __attribute__((weak))
