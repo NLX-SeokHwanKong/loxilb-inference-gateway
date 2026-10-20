@@ -1234,11 +1234,18 @@ echo "  loxilb_ai_pd_prefill_duration_seconds_count total: $TH2_COUNT"
 check "TH2: loxilb_ai_pd_prefill_duration_seconds observed >= 1 sample (got $TH2_COUNT)" \
   $([ "${TH2_COUNT:-0}" -ge 1 ] && echo 0 || echo 1)
 
-# TH3: the decode leg was timed at least once (TTFT).
+# TH3: a streamed decode leg reached its first event at least once (TTFT:
+# dispatch to the first streamed event; this suite streams, so it has samples).
 TH3_COUNT=$(h_count_sum loxilb_ai_pd_decode_ttft_seconds)
 echo "  loxilb_ai_pd_decode_ttft_seconds_count total: $TH3_COUNT"
 check "TH3: loxilb_ai_pd_decode_ttft_seconds observed >= 1 sample (got $TH3_COUNT)" \
   $([ "${TH3_COUNT:-0}" -ge 1 ] && echo 0 || echo 1)
+
+# TH3b: the decode leg was timed end to end at least once (duration).
+TH3B_COUNT=$(h_count_sum loxilb_ai_pd_decode_duration_seconds)
+echo "  loxilb_ai_pd_decode_duration_seconds_count total: $TH3B_COUNT"
+check "TH3b: loxilb_ai_pd_decode_duration_seconds observed >= 1 sample (got $TH3B_COUNT)" \
+  $([ "${TH3B_COUNT:-0}" -ge 1 ] && echo 0 || echo 1)
 
 # TH4: error label filter on loxilb_ai_pd_requests_total (use status label, per R7)
 TH4_HAS_ERROR=$(echo "$H_METRICS" | grep -v '^#' | grep 'loxilb_ai_pd_requests_total' | grep -c 'status="error"\|status="timeout"' 2>/dev/null)

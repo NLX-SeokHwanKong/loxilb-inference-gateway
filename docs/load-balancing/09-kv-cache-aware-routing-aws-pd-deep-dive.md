@@ -274,7 +274,9 @@ loxilb_kv_agent_up                                     GAUGE  KV agent liveness 
 loxilb_ai_pd_requests_total                       COUNTER  total P/D requests
 loxilb_ai_pd_kv_params_found_total                COUNTER  requests carrying kv_transfer_params
 loxilb_ai_pd_prefill_duration_seconds             HISTO    prefill-leg latency
-loxilb_ai_pd_decode_ttft_seconds                  HISTO    decode TTFT
+loxilb_ai_pd_decode_ttft_seconds                  HISTO    decode TTFT (to the first streamed event)
+loxilb_ai_pd_decode_duration_seconds              HISTO    decode-leg duration
+loxilb_ai_pd_prefill_fallback_total{reason}       COUNTER  prefills recomputed on the decode leg
 loxilb_pd_sessions_active / loxilb_pd_trie_nodes  GAUGE    session-affinity + Tier-1 trie size
 loxilb_proxy_pd_kv_params_overflow_total                 COUNTER  kv_params buffer overflow (should stay 0)
 ```

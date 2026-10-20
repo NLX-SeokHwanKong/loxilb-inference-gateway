@@ -257,7 +257,7 @@ Panels that are valuable but diagnostic (miss reasons, controller alpha, stage l
 | Panel | Type | Query |
 |-------|------|-------|
 | **Prefill p95** | Time series | `histogram_quantile(0.95, rate(loxilb_ai_pd_prefill_duration_seconds_bucket[5m]))` - p50/p95/p99 lines |
-| **Decode TTFT p95** | Time series | `histogram_quantile(0.95, rate(loxilb_ai_pd_decode_ttft_seconds_bucket[5m]))` - p50/p95/p99 lines |
+| **Decode TTFT p95** | Time series | `histogram_quantile(0.95, rate(loxilb_ai_pd_decode_ttft_seconds_bucket[5m]))` - p50/p95/p99 lines. Decode dispatch to the first streamed event; streamed requests only. Earlier releases measured the whole decode leg under this name, so its values dropped by design; the whole leg is now `loxilb_ai_pd_decode_duration_seconds` |
 
 A per-EP prefill-latency panel is **not possible today**: only the aggregate
 `loxilb_ai_pd_prefill_duration_seconds` histogram exists — there is no per-EP variant. It is

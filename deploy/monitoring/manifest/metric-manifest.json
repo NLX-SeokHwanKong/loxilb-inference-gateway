@@ -1,7 +1,7 @@
 {
  "schema_version": 1,
  "provenance": {
-  "generated_at": "2026-10-20T07:55:29+00:00",
+  "generated_at": "2026-10-20T07:59:05+00:00",
   "source_revision": "ba6e41f9fb127275e017219480eb2c8c5f074a2c"
  },
  "contract": {
@@ -22,9 +22,9 @@
  },
  "coverage": {
   "default_families": 281,
-  "default_referenced": 182,
+  "default_referenced": 184,
   "default_waived": 21,
-  "default_unreferenced": 78,
+  "default_unreferenced": 76,
   "writer_classified": 281,
   "writer_unclassified": 0,
   "writer_unverified": 77
@@ -3057,7 +3057,9 @@
    "activation": "V",
    "priority": "diagnostic",
    "privacy": "none",
-   "consumers": [],
+   "consumers": [
+    "loxilb-ai.json"
+   ],
    "waiver": "",
    "source": "api/prometheus/ai_metrics.go:356",
    "release_scope": "release",
@@ -3271,7 +3273,9 @@
    "activation": "V",
    "priority": "diagnostic",
    "privacy": "none",
-   "consumers": [],
+   "consumers": [
+    "loxilb-ai.json"
+   ],
    "waiver": "",
    "source": "api/prometheus/ai_metrics.go:367",
    "release_scope": "release",

@@ -297,7 +297,8 @@ Inventory snapshot: `GET /netlox/v1/config/ai/kv/inventory`.
 
 **P/D serving:**
 `loxilb_ai_pd_requests_total` · `loxilb_ai_pd_prefill_duration_seconds` ·
-`loxilb_ai_pd_decode_ttft_seconds` · `loxilb_ai_pd_session_hits_total` ·
+`loxilb_ai_pd_decode_ttft_seconds` · `loxilb_ai_pd_decode_duration_seconds` ·
+`loxilb_ai_pd_prefill_fallback_total` · `loxilb_ai_pd_session_hits_total` ·
 `loxilb_pd_admission_shed_total` / `loxilb_pd_admission_queued_total`.
 
 **Failover & endpoint death:**

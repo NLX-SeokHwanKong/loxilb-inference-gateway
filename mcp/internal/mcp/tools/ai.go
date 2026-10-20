@@ -1062,6 +1062,8 @@ type trafficReportOut struct {
 	RequestDuration             *latencySummary  `json:"request_duration,omitempty"`
 	ProxyTTFB                   *latencySummary  `json:"proxy_ttfb,omitempty"`
 	PDDecodeTTFT                *latencySummary  `json:"pd_decode_ttft,omitempty"`
+	PDDecodeDuration            *latencySummary  `json:"pd_decode_duration,omitempty"`
+	PDPrefillFallback           []map[string]any `json:"pd_prefill_fallback,omitempty"`
 	KVParamsFound               float64          `json:"kv_params_found"`
 	KVParamsMissing             float64          `json:"kv_params_missing"`
 	PDSessionHits               float64          `json:"pd_session_hits"`
@@ -1155,7 +1157,18 @@ func (d *Deps) aiTrafficReport() sdk.ToolHandlerFor[trafficReportIn, trafficRepo
 		}
 		out.RequestDuration = summarizeHistogram(byName["loxilb_ai_request_duration_seconds"])
 		out.ProxyTTFB = summarizeHistogram(byName["loxilb_proxy_http_ttfb_seconds"])
+		// TTFT is dispatch to the first streamed event (streamed requests
+		// only); the whole decode leg is the duration family.
 		out.PDDecodeTTFT = summarizeHistogram(byName["loxilb_ai_pd_decode_ttft_seconds"])
+		out.PDDecodeDuration = summarizeHistogram(byName["loxilb_ai_pd_decode_duration_seconds"])
+		if f, ok := byName["loxilb_ai_pd_prefill_fallback_total"]; ok {
+			for _, s := range f.Samples {
+				out.PDPrefillFallback = append(out.PDPrefillFallback, map[string]any{
+					"model": clean(s.Labels["model"]), "reason": clean(s.Labels["reason"]),
+					"count": s.Value,
+				})
+			}
+		}
 		out.KVParamsFound = sumFamily(byName["loxilb_ai_pd_kv_params_found_total"])
 		out.KVParamsMissing = sumFamily(byName["loxilb_ai_pd_kv_params_missing_total"])
 		out.PDSessionHits = sumFamily(byName["loxilb_ai_pd_session_hits_total"])

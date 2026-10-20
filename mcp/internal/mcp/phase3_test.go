@@ -48,6 +48,19 @@ loxilb_ai_request_duration_seconds_count{model="llama3",tenant="t1"} 100
 loxilb_ai_pd_kv_params_found_total{model="llama3"} 5
 # TYPE loxilb_ai_pd_kv_params_missing_total counter
 loxilb_ai_pd_kv_params_missing_total{model="llama3"} 25
+# TYPE loxilb_ai_pd_decode_ttft_seconds histogram
+loxilb_ai_pd_decode_ttft_seconds_bucket{model="llama3",le="0.1"} 4
+loxilb_ai_pd_decode_ttft_seconds_bucket{model="llama3",le="+Inf"} 4
+loxilb_ai_pd_decode_ttft_seconds_sum{model="llama3"} 0.2
+loxilb_ai_pd_decode_ttft_seconds_count{model="llama3"} 4
+# TYPE loxilb_ai_pd_decode_duration_seconds histogram
+loxilb_ai_pd_decode_duration_seconds_bucket{model="llama3",le="10"} 4
+loxilb_ai_pd_decode_duration_seconds_bucket{model="llama3",le="+Inf"} 4
+loxilb_ai_pd_decode_duration_seconds_sum{model="llama3"} 20
+loxilb_ai_pd_decode_duration_seconds_count{model="llama3"} 4
+# TYPE loxilb_ai_pd_prefill_fallback_total counter
+loxilb_ai_pd_prefill_fallback_total{model="llama3",reason="origin_5xx"} 2
+loxilb_ai_pd_prefill_fallback_total{model="llama3",reason="truncated"} 1
 # TYPE loxilb_l4_error_events_total counter
 loxilb_l4_error_events_total{proto="tcp",reason="rst_server"} 42
 # TYPE loxilb_active_conntrack_entries gauge
@@ -311,6 +324,16 @@ func TestPhase3AITrafficReport(t *testing.T) {
 	if got := dur["p50_seconds"].(float64); got != 0.5 {
 		t.Errorf("p50 = %v, want 0.5", got)
 	}
+	// P/D decode: TTFT (first streamed event) and the whole decode leg are
+	// two summaries; the fallbacks are listed by reason.
+	if out["pd_decode_ttft"] == nil || out["pd_decode_duration"] == nil {
+		t.Errorf("pd_decode_ttft / pd_decode_duration summary missing: %v / %v",
+			out["pd_decode_ttft"], out["pd_decode_duration"])
+	}
+	fb, _ := out["pd_prefill_fallback"].([]any)
+	if len(fb) != 2 {
+		t.Errorf("pd_prefill_fallback = %v, want two reasons", out["pd_prefill_fallback"])
+	}
 }
 
 // TestPhase3AITrafficReportOutcome pins how the report reads a gateway that
@@ -408,6 +431,12 @@ func TestPhase3DiagnoseTools(t *testing.T) {
 
 	out = callOut(t, callTool(t, cs, "diagnose_ai_latency", nil))
 	ev, _ = out["evidence"].(map[string]any)
+	if ev["pd_decode_ttft"] == nil || ev["pd_decode_duration"] == nil {
+		t.Errorf("diagnose_ai_latency: decode TTFT / duration evidence missing")
+	}
+	if got, _ := ev["pd_prefill_fallback"].(float64); got != 3 {
+		t.Errorf("pd_prefill_fallback = %v, want 3", ev["pd_prefill_fallback"])
+	}
 	if got := ev["kv_params_missing"].(float64); got != 25 {
 		t.Errorf("kv_params_missing = %v, want 25", got)
 	}

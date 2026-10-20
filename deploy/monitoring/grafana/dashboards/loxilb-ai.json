@@ -544,6 +544,7 @@
           "id": 15,
           "type": "timeseries",
           "title": "Decode TTFT p95",
+          "description": "Decode dispatch to the first streamed event (the first SSE data object, a role-only delta included). Streamed requests only: a non-streamed P/D request adds no sample. In earlier releases the same family measured the whole decode leg, so its values dropped by design. Compare old values with 'Decode duration p95'.",
           "gridPos": {
             "h": 8,
             "w": 12,
@@ -572,6 +573,83 @@
           "fieldConfig": {
             "defaults": {
               "unit": "s",
+              "noValue": "No data"
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 64,
+          "type": "timeseries",
+          "title": "Decode duration p95",
+          "description": "Decode dispatch to the end of the decode response (the whole decode leg), streamed or not. Not sampled for a request a reaper ended.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 45
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "loxilb-prom"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "histogram_quantile(0.95, sum by (le) (rate(loxilb_ai_pd_decode_duration_seconds_bucket{instance=~\"$instance\"}[$__rate_interval])))"
+            }
+          ],
+          "options": {
+            "tooltip": {
+              "mode": "multi"
+            },
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "noValue": "No data"
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 65,
+          "type": "timeseries",
+          "title": "Prefill fallbacks by reason",
+          "description": "Prefills recomputed on the decode leg, by the condition that forced the fallback (origin_5xx, origin_408, origin_429, no_status, truncated, other). A sustained rate means the prefill tier is failing or answering unusably while decode carries the whole cost.",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 53
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "loxilb-prom"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum by (reason) (increase(loxilb_ai_pd_prefill_fallback_total{instance=~\"$instance\"}[$__rate_interval]))",
+              "legendFormat": "{{reason}}"
+            }
+          ],
+          "options": {
+            "tooltip": {
+              "mode": "multi"
+            },
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom"
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
               "noValue": "No data"
             },
             "overrides": []
