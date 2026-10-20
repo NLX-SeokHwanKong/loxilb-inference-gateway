@@ -3853,6 +3853,9 @@ echo "#########################################"
 #       connection; both 200 ending in [DONE], the second rides the first's connection.
 #   PC  length-delimited non-streaming answer on a kept client connection: two requests
 #       on one curl connection; both 200, the second rides the first's connection.
+#   PD  chunked stream whose engine drops [DONE] and goes silent; PE  the engine closes
+#       mid-stream. The gateway's graceful-[DONE] sweep ends both; the rows print which
+#       P/D lifecycle outcome the request records (Q2).
 
 P_PORT=2031
 P_CHUNKS=100
@@ -4029,6 +4032,91 @@ echo "  pair: request 1 HTTP ${pc_c1} (connects ${pc_n1}), request 2 HTTP ${pc_c
 [ "$pc_n1" = "1" ] && [ "$pc_n2" = "0" ] \
   && check "TP-C: the second request rode the first's connection (connects 1, 0)" 0 \
   || check "TP-C: the second request rode the first's connection (connects ${pc_n1}, ${pc_n2})" 1
+
+# ── PD / PE: a stream whose engine never sends its terminator (Q2) ─────────────────────
+# The decode engine streams chunked and then never sends "data: [DONE]" or the 0-chunk.
+#   PD  it goes silent with its socket open (a dropped terminator), then closes after
+#       P_HOLD s.
+#   PE  it closes at once after the last content chunk (an engine dying mid-stream).
+# Either way the gateway's graceful-[DONE] sweep ends the client's answer after
+# P_GRACE s of backend silence. The rows print which {phase,status} that request's P/D
+# lifecycle record lands on: that is the Q2 answer, printed and not asserted until the
+# outcome is decided. Asserted: the client got 200, and the request made exactly one
+# lifecycle record.
+P_HOLD=40
+P_GRACE=25     # PROXY_PD_DECODE_IDLE_CAP_SEC; no rule field sets pd_decode_idle_cap_sec
+p_scrape() { $hexec llb1 curl -s http://localhost:11111/netlox/v1/metrics 2>/dev/null | grep -v '^#'; }
+# p_series <scrape> <family> <label1> <label2> — "<l1>,<l2> <value>" per pair, summed over
+# the other labels (the client renders label names in sorted order).
+p_series() {
+  printf '%s\n' "$1" | grep -E "^$2\\{" |
+    sed -nE "s/.*$3=\"([^\"]*)\".*$4=\"([^\"]*)\".*\\} ([0-9.e+]+)\$/\\1,\\2 \\3/p" |
+    awk '{s[$1]+=$2} END{for (k in s) printf "%s %d\n", k, s[k]}' | sort
+}
+# p_delta <before> <after> — "<key> +N" for every series that moved.
+p_delta() {
+  awk 'NR==FNR{b[$1]=$2; next} {d=$2-b[$1]; if (d) printf "%s %+d\n", $1, d}' \
+    <(printf '%s\n' "$1") <(printf '%s\n' "$2")
+}
+# p_q2_row <tag> <mode> <knob>
+p_q2_row() {
+  local tag=$1 mode=$2 knob=$3 arm s0 s1 pd0 pd1 rq0 rq1 pdd rqd log0 out rc code secs body nrec
+  p_reset
+  arm=$(p_mock "$P_DECODE" stream-chunked-on)$(p_mock "$P_DECODE" "$knob")
+  echo "  decode mock: $arm"
+  echo "$arm" | grep -q '"stream_chunked": true' && echo "$arm" | grep -q "\"stream_end_mode\": \"${mode}\"" \
+    && check "${tag}: the decode engine streams chunked and ends by '${mode}', without [DONE] (control armed)" 0 \
+    || check "${tag}: the decode engine streams chunked and ends by '${mode}', without [DONE] (control armed)" 1
+  s0=$(p_scrape)
+  log0=$($dexec llb1 sh -c "wc -l < ${P_DPLOG}" 2>/dev/null); log0=${log0:-0}
+  out=$($dexec l3h1 curl -s --no-buffer -m $((P_HOLD + 30)) -o "/tmp/phase-p-${tag}.body" \
+          -w '%{http_code} %{time_total}' "$P_URL" -H "Content-Type: application/json" \
+          -d "{\"model\":\"${MODEL}\",\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":\"q2-${tag}\"}],\"max_tokens\":8}" \
+        </dev/null 2>/dev/null)
+  rc=$?
+  sleep 2
+  s1=$(p_scrape)
+  code=${out%% *}
+  secs=$(printf '%s' "${out#* }" | cut -d. -f1)
+  body=$($dexec l3h1 cat "/tmp/phase-p-${tag}.body" 2>/dev/null)
+  pd0=$(p_series "$s0" loxilb_ai_pd_requests_total phase status)
+  pd1=$(p_series "$s1" loxilb_ai_pd_requests_total phase status)
+  rq0=$(p_series "$s0" loxilb_ai_requests_total outcome status)
+  rq1=$(p_series "$s1" loxilb_ai_requests_total outcome status)
+  pdd=$(p_delta "$pd0" "$pd1")
+  rqd=$(p_delta "$rq0" "$rq1")
+  nrec=$(printf '%s\n' "$pdd" | awk '{s+=$2} END{printf "%d", s+0}')
+  echo "  HTTP ${code} after ${secs:-?} s (curl rc=${rc}); $(printf '%s\n' "$body" | grep -c '^data: {') data chunks; last line: $(printf '%s\n' "$body" | grep -v '^$' | tail -1)"
+  echo "  ${tag} Q2 loxilb_ai_pd_requests_total{phase,status} deltas: $(printf '%s' "$pdd" | tr '\n' ' ')"
+  echo "  ${tag} loxilb_ai_requests_total{outcome,status} deltas:     $(printf '%s' "$rqd" | tr '\n' ' ')"
+  echo "  ${tag} gateway lines:"
+  $dexec llb1 sh -c "tail -n +$((log0 + 1)) ${P_DPLOG}" 2>/dev/null \
+    | grep -E 'PD_GRACEFUL_DONE|decode backend EOF|ERR-01|generic P/D idle reaper|\[REAPER\]|\[SSE_CAP\]|P/D flow complete' \
+    | head -20 | sed 's/^/    /'
+  [ "$code" = "200" ] && check "${tag}: 200" 0 || check "${tag}: 200 (got ${code})" 1
+  [ "$nrec" = "1" ] && check "${tag}: exactly one P/D lifecycle record" 0 \
+                    || check "${tag}: exactly one P/D lifecycle record (${nrec})" 1
+  P_Q2_BODY=$body P_Q2_RC=$rc P_Q2_SECS=${secs:-0}
+}
+
+p_q2_row TP-D hold "stream-end?mode=hold&sec=${P_HOLD}"
+# The gateway, not the engine, ended this answer: after the sweep's window, before the
+# engine's close.
+[ "$P_Q2_RC" = "0" ] && check "TP-D: the answer ended (curl rc=0)" 0 \
+                     || check "TP-D: the answer ended (curl rc=${P_Q2_RC})" 1
+[ "$P_Q2_SECS" -ge $((P_GRACE - 1)) ] && [ "$P_Q2_SECS" -lt "$P_HOLD" ] \
+  && check "TP-D: ended by the gateway's sweep (${P_Q2_SECS} s: >= ${P_GRACE} s idle, < the engine's ${P_HOLD} s close)" 0 \
+  || check "TP-D: ended by the gateway's sweep (${P_Q2_SECS} s: >= ${P_GRACE} s idle, < the engine's ${P_HOLD} s close)" 1
+printf '%s\n' "$P_Q2_BODY" | grep -v '^$' | tail -1 | grep -q '^data: \[DONE\]' \
+  && check "TP-D: it ends with the [DONE] the gateway wrote" 0 \
+  || check "TP-D: it ends with the [DONE] the gateway wrote" 1
+printf '%s' "$P_Q2_BODY" | grep -q 'HTTP/1\.' \
+  && check "TP-D: no status line inside the body" 1 \
+  || check "TP-D: no status line inside the body" 0
+
+p_q2_row TP-E cut "stream-end?mode=cut"
+# How a cut chunked answer ends for the client is printed above, not asserted here.
+# The row exists for its lifecycle record.
 
 p_reset
 p_del

@@ -70,6 +70,13 @@ _stream_chunked = False # POST /admin/stream-chunked-on|off. Off: a stream is HT
                         # (the historical shape). On: HTTP/1.1 Transfer-Encoding: chunked,
                         # ended by the 0-chunk, as vLLM's uvicorn streams; "close" only
                         # when keepalive is off. The mock closes its socket either way.
+_stream_end_mode = ""   # POST /admin/stream-end?mode=hold&sec=N|mode=cut: how a decode
+_stream_end_hold = 0    # stream ends instead of "data: [DONE]" (and the 0-chunk). hold:
+                        # the engine goes silent for N s with the socket open, then
+                        # closes (a dropped terminator). cut: it closes at once after
+                        # the last content chunk (an engine dying mid-stream). Both
+                        # leave the gateway's graceful-[DONE] sweep to end the client's
+                        # answer (Q2). "" is the historical ending; /admin/reset restores it.
 # The gateway's kv_transfer_params buffer is PD_KV_PARAMS_MAX_LEN = 65536 (sockproxy.h);
 # the extractor overflows on `val_len >= capacity`. Target comfortably above it so the
 # arm does not sit on the boundary, where a one-field change to the object could silently
@@ -198,7 +205,10 @@ class MockVLLMHandler(BaseHTTPRequestHandler):
         # A paced stream lets the other requests through while it waits; the
         # historical stream keeps the server to itself, as it always did.
         pace = _stream_pace_ms
-        if pace:
+        end_mode, end_hold = _stream_end_mode, _stream_end_hold
+        # A hold must not stall the health probes and scrapes for its length either.
+        let_go = pace or end_mode == "hold"
+        if let_go:
             _serial.release()
         def put(data):
             if chunked:
@@ -211,12 +221,24 @@ class MockVLLMHandler(BaseHTTPRequestHandler):
                 put(f"data: {json.dumps(chunk)}\n\n".encode("utf-8"))
                 time.sleep(pace / 1000.0 if pace else 0.05)
 
-            put(b"data: [DONE]\n\n")
-            if chunked:
-                self.wfile.write(b"0\r\n\r\n")
-                self.wfile.flush()
+            if end_mode == "hold":
+                print(f"[{SERVER_ROLE}] [stream-end] no terminator; silent {end_hold} s, "
+                      f"then close", flush=True)
+                time.sleep(end_hold)
+            elif end_mode == "cut":
+                print(f"[{SERVER_ROLE}] [stream-end] no terminator; closing now", flush=True)
+            else:
+                put(b"data: [DONE]\n\n")
+                if chunked:
+                    self.wfile.write(b"0\r\n\r\n")
+                    self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            # Under a stream-end knob the gateway ends the answer itself and closes
+            # the leg; any other stream keeps the historical behaviour.
+            if not end_mode:
+                raise
         finally:
-            if pace:
+            if let_go:
                 _serial.acquire()
 
     def do_GET(self):
@@ -547,7 +569,7 @@ class AdminHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         global _health_ok, _fail_next, _fail_next_status, _kv_params_mode, _metrics_mode
         global _keepalive, _fail_next_skip, _stream_pace_ms, _stream_chunks
-        global _stream_chunked
+        global _stream_chunked, _stream_end_mode, _stream_end_hold
         if not self._auth_ok():
             self.send_response(401)
             self.end_headers()
@@ -591,6 +613,24 @@ class AdminHandler(BaseHTTPRequestHandler):
             self._reply_json({"stream_pace_ms": ms, "stream_chunks": chunks})
             print(f"[{SERVER_ROLE}] [admin] stream pace = {chunks} chunks every {ms} ms",
                   flush=True)
+        elif path == "/admin/stream-end":
+            # ?mode=hold&sec=N (1..600) or ?mode=cut; /admin/reset restores [DONE].
+            mode, sec = "", 0
+            for kv in query.split("&") if query else []:
+                k, _, v = kv.partition("=")
+                if k == "mode":
+                    mode = v
+                elif k == "sec":
+                    sec = int(v) if v.isdigit() else 0
+            if not (mode == "cut" or (mode == "hold" and 0 < sec <= 600)):
+                self.send_response(400)
+                self.end_headers()
+                return
+            _stream_end_mode, _stream_end_hold = mode, (sec if mode == "hold" else 0)
+            self._reply_json({"stream_end_mode": _stream_end_mode,
+                              "stream_end_hold": _stream_end_hold})
+            print(f"[{SERVER_ROLE}] [admin] stream end = {_stream_end_mode} "
+                  f"{_stream_end_hold} s", flush=True)
         elif path in ("/admin/stream-chunked-on", "/admin/stream-chunked-off"):
             _stream_chunked = path.endswith("-on")
             self._reply_json({"stream_chunked": _stream_chunked})
@@ -625,10 +665,12 @@ class AdminHandler(BaseHTTPRequestHandler):
             _metrics_mode = "absent"
             _stream_pace_ms, _stream_chunks = 0, 0
             _stream_chunked = False
+            _stream_end_mode, _stream_end_hold = "", 0
             self._reply_json({"fail_next": False, "fail_next_status": _fail_next_status,
                               "keepalive": _keepalive, "kv_params_mode": _kv_params_mode,
                               "metrics_mode": _metrics_mode, "stream_pace_ms": 0,
-                              "stream_chunks": 0, "stream_chunked": False})
+                              "stream_chunks": 0, "stream_chunked": False,
+                              "stream_end_mode": "", "stream_end_hold": 0})
             print(f"[{SERVER_ROLE}] [admin] knobs RESET", flush=True)
         elif self.path == "/admin/health-fail":
             _health_ok = False
@@ -670,6 +712,8 @@ class AdminHandler(BaseHTTPRequestHandler):
                 "stream_pace_ms": _stream_pace_ms,
                 "stream_chunks": _stream_chunks,
                 "stream_chunked": _stream_chunked,
+                "stream_end_mode": _stream_end_mode,
+                "stream_end_hold": _stream_end_hold,
                 "role": SERVER_ROLE,
                 "request_count": _request_count,
             }).encode()
@@ -749,7 +793,7 @@ def main():
     # Start admin HTTP server on loopback (127.0.0.1:9000) as daemon thread.
     # Provides /admin/health-fail, /admin/health-ok, /admin/fail-next[?status=N&skip=K],
     # /admin/keepalive-on|off, /admin/stream-pace?ms=N&chunks=K,
-    # /admin/stream-chunked-on|off, /admin/reset,
+    # /admin/stream-chunked-on|off, /admin/stream-end?mode=hold&sec=N|cut, /admin/reset,
     # /admin/status endpoints.
     admin_thread = threading.Thread(target=_start_admin_server, daemon=True)
     admin_thread.start()
