@@ -339,14 +339,37 @@ var (
 		[]string{"model"},
 	)
 
-	// aiPDDecodeTTFT tracks decode time-to-first-token as a histogram.
+	// aiPDDecodeTTFT tracks the decode leg's time to its first streamed event.
+	// Written by the second half of a lifecycle record (RecordPDRecordExtra);
+	// a request whose answer streamed no event adds no sample.
 	aiPDDecodeTTFT = promauto.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "loxilb_ai_pd_decode_ttft_seconds",
-			Help:    "P/D decode time-to-first-token in seconds.",
+			Help:    "P/D decode leg: dispatch to the first streamed event (the first SSE data object, a role-only delta included), in seconds. Streamed requests only.",
 			Buckets: []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0},
 		},
 		[]string{"model"},
+	)
+
+	// aiPDDecodeDuration tracks the whole decode leg. Its buckets reach
+	// minutes, because a long completion streams for that long.
+	aiPDDecodeDuration = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "loxilb_ai_pd_decode_duration_seconds",
+			Help:    "P/D decode leg: dispatch to the end of its response, in seconds. Not sampled for a request a reaper ended.",
+			Buckets: []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0},
+		},
+		[]string{"model"},
+	)
+
+	// aiPDPrefillFallbackTotal counts prefills recomputed on the decode leg,
+	// by the condition that forced it (pdFallbackReasonLabel).
+	aiPDPrefillFallbackTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "loxilb_ai_pd_prefill_fallback_total",
+			Help: "P/D requests whose prefill was recomputed on the decode leg, by model and reason. The reason is the condition that forced the fallback, in verdict order: if the status alone forces it, the status is the reason (origin_5xx, origin_408, origin_429), whether or not the body was cut; if the status would have been relayed and the fallback happened only because the reply was cut, the reason is truncated (a cut 2xx or a cut 4xx); an unreadable status is no_status; a 1xx/3xx is other.",
+		},
+		[]string{"model", "reason"},
 	)
 
 	// aiPDRequestsTotal counts P/D disaggregation requests by model, phase, and status.
@@ -938,7 +961,10 @@ func RegisterTokenQuotaSource(fn func() []TokenQuotaState) {
 //
 //	modelName:        the effective model name
 //	prefillLatencyMs: prefill phase duration in milliseconds; 0 when unknown
-//	decodeLatencyMs:  decode phase duration (TTFT) in milliseconds; 0 when unknown
+//	decodeLatencyMs:  the decode leg, dispatch to the end of its response, in
+//	                  milliseconds; 0 when unknown or not sampled (a reaped
+//	                  request). The time to the first streamed event comes in
+//	                  the record's second half (RecordPDRecordExtra).
 //	kvParamsFound:    1 when kv_transfer_params was found in prefill response, 0 otherwise
 //	errorPhase:       the lifecycle outcome, naming the leg that failed AND how
 //	                  it failed. The pair is exported verbatim as {phase,status}
@@ -946,13 +972,20 @@ func RegisterTokenQuotaSource(fn func() []TokenQuotaState) {
 //	                  leg or the wrong failure mode is an operator-visible lie:
 //	                    0 = complete / success
 //	                    1 = prefill  / timeout   (prefill leg ran out of time)
-//	                    2 = decode   / error     (decode leg failed or died)
+//	                    2 = decode   / error     (the engine died: it closed its
+//	                                              connection or the decode leg
+//	                                              broke before its answer was
+//	                                              complete; never a reaper's)
 //	                    3 = decode   / timeout   (decode leg produced no byte)
 //	                    4 = prefill  / error     (prefill leg failed or died)
 //	                    5 = prefill  / rejected  (origin refused; relayed verbatim)
 //	                    6 = decode   / rejected  (origin refused; relayed verbatim)
 //	                    7 = decode   / unknown   (decode completed; its status
 //	                                              line was never read)
+//	                    8 = decode   / truncated (the gateway ended or cut an
+//	                                              in-progress answer for a cause
+//	                                              other than engine death: engine
+//	                                              silence or a policy cap)
 func RecordPDRequest(modelName string, prefillLatencyMs, decodeLatencyMs int64, kvParamsFound, errorPhase int) {
 	model := boundModelLabel(modelName)
 
@@ -982,6 +1015,9 @@ func RecordPDRequest(modelName string, prefillLatencyMs, decodeLatencyMs int64, 
 	case 7:
 		phase = "decode"
 		status = "unknown"
+	case 8:
+		phase = "decode"
+		status = "truncated"
 	default:
 		phase = "unknown"
 		status = "error"
@@ -993,7 +1029,7 @@ func RecordPDRequest(modelName string, prefillLatencyMs, decodeLatencyMs int64, 
 		aiPDPrefillDuration.WithLabelValues(model).Observe(float64(prefillLatencyMs) / 1000.0)
 	}
 	if decodeLatencyMs > 0 {
-		aiPDDecodeTTFT.WithLabelValues(model).Observe(float64(decodeLatencyMs) / 1000.0)
+		aiPDDecodeDuration.WithLabelValues(model).Observe(float64(decodeLatencyMs) / 1000.0)
 	}
 
 	if kvParamsFound == 1 {
@@ -1007,18 +1043,58 @@ func RecordPDRequest(modelName string, prefillLatencyMs, decodeLatencyMs int64, 
 	}
 }
 
+// Values of the reason label on loxilb_ai_pd_prefill_fallback_total, by the
+// C code (PD_FB_* in loxilb-ebpf common/sockproxy_pd_leak.h). The label is a
+// closed set: any other code is "other".
+var pdFallbackReasons = map[int]string{
+	1: "origin_5xx",
+	2: "origin_408",
+	3: "origin_429",
+	4: "no_status",
+	5: "truncated",
+	6: "other",
+}
+
+// pdFallbackReasonLabel maps a C fallback code to its reason label; "" for 0
+// (no fallback).
+func pdFallbackReasonLabel(code int) string {
+	if code == 0 {
+		return ""
+	}
+	if r, ok := pdFallbackReasons[code]; ok {
+		return r
+	}
+	return "other"
+}
+
+// RecordPDRecordExtra records the second half of one P/D lifecycle record,
+// made by the data plane right after RecordPDRequest for the same request and
+// the same completion event: the decode leg's time to its first streamed event
+// (0 when none) and why the prefill was recomputed on the decode leg (0 when
+// it was not). The model label is the one RecordPDRequest registered for the
+// request (knownModelLabel): this half never mints a series of its own.
+func RecordPDRecordExtra(modelName string, decodeTTFTUs int64, fallbackReason int) {
+	model := knownModelLabel(modelName)
+	if decodeTTFTUs > 0 {
+		aiPDDecodeTTFT.WithLabelValues(model).Observe(float64(decodeTTFTUs) / 1e6)
+	}
+	if r := pdFallbackReasonLabel(fallbackReason); r != "" {
+		aiPDPrefillFallbackTotal.WithLabelValues(model, r).Inc()
+	}
+}
+
 // pdPrefillResponseInspected reports whether a lifecycle with the given
 // errorPhase got far enough to parse a prefill response, and therefore whether
 // the absence of kv_transfer_params in it is a real observation.
 //
-// Phases 0, 2, 3, 6 and 7 all completed prefill: the request either finished,
-// or ended on the decode leg afterwards. Phases 1, 4 and 5 did not — a prefill
+// Phases 0, 2, 3, 6, 7 and 8 all completed prefill: the request either
+// finished, or ended on the decode leg afterwards. Phases 1, 4 and 5 did not — a prefill
 // timeout, a prefill-side death and an origin reject each leave nothing whose
 // kv_transfer_params could have been read, so counting them as "missing" would
 // report a measurement that was never taken.
 func pdPrefillResponseInspected(errorPhase int) bool {
 	switch errorPhase {
-	case 0, 2, 3, 6, 7:
+	case 0, 2, 3, 6, 7, 8:
 		return true
 	default:
 		return false

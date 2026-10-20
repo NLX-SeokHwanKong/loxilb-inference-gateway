@@ -1,17 +1,17 @@
 {
  "schema_version": 1,
  "provenance": {
-  "generated_at": "2026-10-15T14:03:20+00:00",
-  "source_revision": "e98ce489259366adb2f78090f3dfff389d7d461d",
+  "generated_at": "2026-10-20T07:52:21+00:00",
+  "source_revision": "ba6e41f9fb127275e017219480eb2c8c5f074a2c",
   "upstream_repository": "https://github.com/loxilb-io/loxilb",
   "upstream_revision": "98487453eaf1853690de5928eab95a51817ba5d7"
  },
  "contract": {
-  "gateway_families": 334,
+  "gateway_families": 336,
   "upstream_families": 60,
   "present_identical": 35,
   "present_divergent": 0,
-  "absent": 299,
+  "absent": 301,
   "upstream_only": 25
  },
  "upstream_only": [
@@ -1077,6 +1077,19 @@
    }
   },
   {
+   "name": "loxilb_ai_pd_decode_duration_seconds",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "histogram",
+    "labels": [
+     "model"
+    ]
+   }
+  },
+  {
    "name": "loxilb_ai_pd_decode_ttft_seconds",
    "owner": "loxilb",
    "class": "default",
@@ -1125,6 +1138,20 @@
     "type": "histogram",
     "labels": [
      "model"
+    ]
+   }
+  },
+  {
+   "name": "loxilb_ai_pd_prefill_fallback_total",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "counter",
+    "labels": [
+     "model",
+     "reason"
     ]
    }
   },

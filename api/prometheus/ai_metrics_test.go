@@ -171,20 +171,24 @@ func getHistogramSampleCount(hv *prometheus.HistogramVec, lvs ...string) uint64 
 }
 
 // TestRecordPDRequest_Success verifies that RecordPDRequest with errorPhase=0
-// increments the success counter and records both histograms.
+// increments the success counter and records both durations. The decode
+// argument is the whole decode leg: it goes to the duration family, never to
+// TTFT (which only the record's second half writes).
 func TestRecordPDRequest_Success(t *testing.T) {
 	model := "pd-test-success"
 
 	beforeReqs := getCounterValue(aiPDRequestsTotal, model, "complete", "success")
 	beforePrefill := getHistogramSampleCount(aiPDPrefillDuration, model)
-	beforeDecode := getHistogramSampleCount(aiPDDecodeTTFT, model)
+	beforeDecode := getHistogramSampleCount(aiPDDecodeDuration, model)
+	beforeTTFT := getHistogramSampleCount(aiPDDecodeTTFT, model)
 	beforeKvFound := getCounterValue(aiPDKvParamsFound, model)
 
 	RecordPDRequest(model, 150, 50, 1, 0) // 150ms prefill, 50ms decode, kv found, success
 
 	afterReqs := getCounterValue(aiPDRequestsTotal, model, "complete", "success")
 	afterPrefill := getHistogramSampleCount(aiPDPrefillDuration, model)
-	afterDecode := getHistogramSampleCount(aiPDDecodeTTFT, model)
+	afterDecode := getHistogramSampleCount(aiPDDecodeDuration, model)
+	afterTTFT := getHistogramSampleCount(aiPDDecodeTTFT, model)
 	afterKvFound := getCounterValue(aiPDKvParamsFound, model)
 
 	if afterReqs-beforeReqs != 1.0 {
@@ -194,7 +198,10 @@ func TestRecordPDRequest_Success(t *testing.T) {
 		t.Errorf("expected prefill histogram +1 sample, got delta %d", afterPrefill-beforePrefill)
 	}
 	if afterDecode-beforeDecode != 1 {
-		t.Errorf("expected decode histogram +1 sample, got delta %d", afterDecode-beforeDecode)
+		t.Errorf("expected decode duration +1 sample, got delta %d", afterDecode-beforeDecode)
+	}
+	if afterTTFT != beforeTTFT {
+		t.Errorf("the decode argument must not reach TTFT, got +%d", afterTTFT-beforeTTFT)
 	}
 	if afterKvFound-beforeKvFound != 1.0 {
 		t.Errorf("expected kv_params_found +1, got delta %f", afterKvFound-beforeKvFound)
@@ -291,12 +298,12 @@ func TestRecordPDRequest_ZeroLatencySkipsHistograms(t *testing.T) {
 	model := "pd-test-zero-latency"
 
 	beforePrefill := getHistogramSampleCount(aiPDPrefillDuration, model)
-	beforeDecode := getHistogramSampleCount(aiPDDecodeTTFT, model)
+	beforeDecode := getHistogramSampleCount(aiPDDecodeDuration, model)
 
 	RecordPDRequest(model, 0, 0, 0, 0) // all zeros
 
 	afterPrefill := getHistogramSampleCount(aiPDPrefillDuration, model)
-	afterDecode := getHistogramSampleCount(aiPDDecodeTTFT, model)
+	afterDecode := getHistogramSampleCount(aiPDDecodeDuration, model)
 
 	if afterPrefill != beforePrefill {
 		t.Errorf("expected no prefill histogram sample when latency=0, got +%d", afterPrefill-beforePrefill)
@@ -687,6 +694,7 @@ func TestRecordPDRequest_PhaseTaxonomy(t *testing.T) {
 		{"prefill rejected", 5, "prefill", "rejected", false},
 		{"decode rejected", 6, "decode", "rejected", true},
 		{"decode unknown", 7, "decode", "unknown", true},
+		{"decode truncated", 8, "decode", "truncated", true},
 		{"unknown phase", 99, "unknown", "error", false},
 	}
 
@@ -771,5 +779,65 @@ func TestRecordPDRequest_DecodeWedgeReportsKnownKv(t *testing.T) {
 	}
 	if afterMissing != beforeMissing {
 		t.Errorf("it must NOT also count as missing, got delta %f", afterMissing-beforeMissing)
+	}
+}
+
+// TestRecordPDRecordExtra covers the record's second half: TTFT arrives in
+// microseconds and lands in seconds on the TTFT family only; each fallback
+// code maps to its reason, an unknown code to "other", and 0 records nothing.
+// The model label is the one the first half registered: an unregistered name
+// is "other", so this half never mints a series of its own.
+func TestRecordPDRecordExtra(t *testing.T) {
+	model := "pd-extra"
+	RecordPDRequest(model, 0, 0, 0, 0) // the first half registers the label
+
+	beforeTTFT := getHistogramSampleCount(aiPDDecodeTTFT, model)
+	beforeDur := getHistogramSampleCount(aiPDDecodeDuration, model)
+	RecordPDRecordExtra(model, 250000, 0) // 250 ms to the first event
+	if got := getHistogramSampleCount(aiPDDecodeTTFT, model) - beforeTTFT; got != 1 {
+		t.Errorf("TTFT +%d samples, want 1", got)
+	}
+	if got := getHistogramSampleCount(aiPDDecodeDuration, model) - beforeDur; got != 0 {
+		t.Errorf("the extra half must not reach the duration family, got +%d", got)
+	}
+	m := &dto.Metric{}
+	if err := aiPDDecodeTTFT.WithLabelValues(model).(interface{ Write(*dto.Metric) error }).Write(m); err != nil {
+		t.Fatal(err)
+	}
+	if sum := m.GetHistogram().GetSampleSum(); sum < 0.2499 || sum > 0.2501 {
+		t.Errorf("TTFT sum %v s, want 0.25 (us -> s)", sum)
+	}
+
+	for code, want := range map[int]string{1: "origin_5xx", 2: "origin_408", 3: "origin_429",
+		4: "no_status", 5: "truncated", 6: "other", 42: "other", -1: "other"} {
+		before := getCounterValue(aiPDPrefillFallbackTotal, model, want)
+		RecordPDRecordExtra(model, 0, code)
+		if d := getCounterValue(aiPDPrefillFallbackTotal, model, want) - before; d != 1 {
+			t.Errorf("fallback code %d: reason %q +%v, want +1", code, want, d)
+		}
+	}
+
+	beforeTTFT = getHistogramSampleCount(aiPDDecodeTTFT, model)
+	before := 0.0
+	for _, r := range pdFallbackReasons {
+		before += getCounterValue(aiPDPrefillFallbackTotal, model, r)
+	}
+	RecordPDRecordExtra(model, 0, 0)
+	after := 0.0
+	for _, r := range pdFallbackReasons {
+		after += getCounterValue(aiPDPrefillFallbackTotal, model, r)
+	}
+	if after != before || getHistogramSampleCount(aiPDDecodeTTFT, model) != beforeTTFT {
+		t.Errorf("0/0 must record nothing")
+	}
+
+	unreg := "pd-extra-never-registered"
+	beforeOther := getCounterValue(aiPDPrefillFallbackTotal, modelLabelOther, "origin_5xx")
+	RecordPDRecordExtra(unreg, 0, 1)
+	if d := getCounterValue(aiPDPrefillFallbackTotal, modelLabelOther, "origin_5xx") - beforeOther; d != 1 {
+		t.Errorf("an unregistered model must land on %q, got +%v", modelLabelOther, d)
+	}
+	if knownModelLabel(unreg) != modelLabelOther {
+		t.Errorf("the extra half registered %q", unreg)
 	}
 }
