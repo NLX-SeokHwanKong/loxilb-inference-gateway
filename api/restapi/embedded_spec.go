@@ -5977,7 +5977,7 @@ func init() {
             },
             "sse_mode": {
               "default": false,
-              "description": "Enable detection of text/event-stream responses and the associated streaming idle-timeout protection. This flag controls Gateway SSE handling, not whether the backend implements an OpenAI API. Active detected streams remain subject to max_stream_duration_sec and the system stream cap; enabling SSE does not make them unbounded.",
+              "description": "Explicit override for Gateway SSE handling: detection of text/event-stream responses and the associated streaming idle-timeout protection. A text/event-stream response is already handled as a stream on every AI-gateway service, one that declares pd_disagg_mode or an enforcing api_key_auth (required, jwt or apikey-or-jwt), whether or not sse_mode is set. sse_mode turns the same handling on for any other service, a plain L7 rule included, and also lets the Gateway recognise a stream from the raw response bytes when its response parser could not frame them. This flag controls Gateway SSE handling, not whether the backend implements an OpenAI API. Active detected streams remain subject to max_stream_duration_sec and the system stream cap; enabling SSE does not make them unbounded.",
               "type": "boolean",
               "x-nullable": false
             },
@@ -42141,7 +42141,7 @@ func init() {
               ]
             },
             "sse_mode": {
-              "description": "Enable detection of text/event-stream responses and the associated streaming idle-timeout protection. This flag controls Gateway SSE handling, not whether the backend implements an OpenAI API. Active detected streams remain subject to max_stream_duration_sec and the system stream cap; enabling SSE does not make them unbounded.",
+              "description": "Explicit override for Gateway SSE handling: detection of text/event-stream responses and the associated streaming idle-timeout protection. A text/event-stream response is already handled as a stream on every AI-gateway service, one that declares pd_disagg_mode or an enforcing api_key_auth (required, jwt or apikey-or-jwt), whether or not sse_mode is set. sse_mode turns the same handling on for any other service, a plain L7 rule included, and also lets the Gateway recognise a stream from the raw response bytes when its response parser could not frame them. This flag controls Gateway SSE handling, not whether the backend implements an OpenAI API. Active detected streams remain subject to max_stream_duration_sec and the system stream cap; enabling SSE does not make them unbounded.",
               "type": "boolean",
               "default": false,
               "x-nullable": false
@@ -43416,7 +43416,7 @@ func init() {
           ]
         },
         "sse_mode": {
-          "description": "Enable detection of text/event-stream responses and the associated streaming idle-timeout protection. This flag controls Gateway SSE handling, not whether the backend implements an OpenAI API. Active detected streams remain subject to max_stream_duration_sec and the system stream cap; enabling SSE does not make them unbounded.",
+          "description": "Explicit override for Gateway SSE handling: detection of text/event-stream responses and the associated streaming idle-timeout protection. A text/event-stream response is already handled as a stream on every AI-gateway service, one that declares pd_disagg_mode or an enforcing api_key_auth (required, jwt or apikey-or-jwt), whether or not sse_mode is set. sse_mode turns the same handling on for any other service, a plain L7 rule included, and also lets the Gateway recognise a stream from the raw response bytes when its response parser could not frame them. This flag controls Gateway SSE handling, not whether the backend implements an OpenAI API. Active detected streams remain subject to max_stream_duration_sec and the system stream cap; enabling SSE does not make them unbounded.",
           "type": "boolean",
           "default": false,
           "x-nullable": false

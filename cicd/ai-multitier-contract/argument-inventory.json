@@ -3,7 +3,7 @@
   "scope": "LoadbalanceEntry fields and AI KV inventory query parameters; not a test-coverage claim",
   "sourceSha256": {
     "swagger-extras.yml": "7d7d336f949d574ff8d71502def05c4b1cd4a8d53e8716dbcc6f878d3a19c132",
-    "swagger.yml": "342682e0c0354fb394123ef7a2a1783c62baa5418da640bacc7caac653acae38"
+    "swagger.yml": "9d7ea5a798371f77cb4541609625d9b510867aa096bb789d9d190b70ce71814f"
   },
   "fields": [
     {
@@ -2109,7 +2109,7 @@
       "required": false,
       "contract": {
         "default": false,
-        "description": "Enable detection of text/event-stream responses and the associated streaming idle-timeout protection. This flag controls Gateway SSE handling, not whether the backend implements an OpenAI API. Active detected streams remain subject to max_stream_duration_sec and the system stream cap; enabling SSE does not make them unbounded.",
+        "description": "Explicit override for Gateway SSE handling: detection of text/event-stream responses and the associated streaming idle-timeout protection. A text/event-stream response is already handled as a stream on every AI-gateway service, one that declares pd_disagg_mode or an enforcing api_key_auth (required, jwt or apikey-or-jwt), whether or not sse_mode is set. sse_mode turns the same handling on for any other service, a plain L7 rule included, and also lets the Gateway recognise a stream from the raw response bytes when its response parser could not frame them. This flag controls Gateway SSE handling, not whether the backend implements an OpenAI API. Active detected streams remain subject to max_stream_duration_sec and the system stream cap; enabling SSE does not make them unbounded.",
         "type": "boolean",
         "x-nullable": false
       }

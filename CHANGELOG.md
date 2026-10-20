@@ -129,6 +129,14 @@ binary behaves exactly like upstream loxilb.
 
 ### Changed
 
+- **`sse_mode` is now the explicit override for stream handling, not its only
+  switch.** A `text/event-stream` response is handled as a stream (the stream
+  idle protection, `max_stream_duration_sec`, the `[DONE]` accounting) on every
+  AI-gateway service: one that declares `pd_disagg_mode` or an enforcing
+  `api_key_auth`. `sse_mode` turns the same handling on for any other service,
+  a plain L7 rule included, and also lets the gateway recognise a stream from
+  the raw response bytes when its parser could not frame them. Plain L7 rules
+  without `sse_mode` behave as before.
 - **Every request the gateway refuses is counted once in
   `loxilb_ai_requests_total{outcome="denied"}`, whatever refused it:** the
   policy gate, capacity, routing (`model_unavailable`, `no_route`,
@@ -201,6 +209,18 @@ binary behaves exactly like upstream loxilb.
 
 ### Fixed
 
+- **A streamed P/D generation on a rule without `sse_mode` was cut after 180 s
+  with `HTTP/1.1 504` written into its body.** The stream was never recognised,
+  so the generic P/D idle reaper measured from decode dispatch, not from the
+  last relayed byte, and ended every generation longer than its cap (max of the
+  prefill and decode timeouts, plus 60 s) however healthy, appending a whole
+  504 response to the 200 the client was reading. Such streams are now
+  recognised (see Changed). Independently, once the client has begun to
+  receive an answer the gateway no longer writes a status line into it on any
+  path (refusals, outages, reaper timeouts): a stream whose headers are out
+  ends with an SSE error event naming the code, anything else is closed. Five
+  of the raw P/D and refusal writes that used a plain send now go through TLS
+  on a TLS client.
 - **loxilb started with `--nonlp` crashed in its periodic interface
   reconciliation** (a nil netlink handle behind the interface filter). The
   `--blacklist` / `--whitelist` filter is now set up without netlink, so

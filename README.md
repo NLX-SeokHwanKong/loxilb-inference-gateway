@@ -84,7 +84,7 @@ curl -s -X POST http://127.0.0.1:11111/netlox/v1/config/loadbalancer \
 | `kvExactMode: 3` | Engine-exact routing over a single pool (`1` is the prefill/decode topology) |
 | `kvEngineType` | Which engine's cache contract to follow: `vllm` or `sglang` |
 | `kvZmqPort`, `kvBlockSize` | Must match the engine's event port and `--block-size` |
-| `sse_mode` | Stream-aware proxying for token streams |
+| `sse_mode` | Stream-aware proxying for any service. AI-gateway services (`pd_disagg_mode`, an enforcing `api_key_auth`) recognise token streams without it; set it as the override for other rules |
 
 Each vLLM replica publishes its cache events:
 
