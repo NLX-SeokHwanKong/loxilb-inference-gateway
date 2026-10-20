@@ -513,7 +513,7 @@ var (
 	aiPDPrefillFallbackTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "loxilb_ai_pd_prefill_fallback_total",
-			Help: "P/D requests whose prefill was recomputed on the decode leg, by model and reason. The reason is the condition that forced the fallback, in verdict order: if the status alone forces it, the status is the reason (origin_5xx, origin_408, origin_429), whether or not the body was cut; if the status would have been relayed and the fallback happened only because the reply was cut, the reason is truncated (a cut 2xx or a cut 4xx); an unreadable status is no_status; a 1xx/3xx is other.",
+			Help: "P/D requests whose prefill was recomputed on the decode leg, by model and reason. The reason is the condition that forced the fallback, in verdict order: if the status alone forces it, the status is the reason (origin_5xx, origin_408, origin_429), whether or not the body was cut; if the status would have been relayed and the fallback happened only because the reply was cut, the reason is truncated (a cut 2xx; a cut 4xx is relayed with its status as prefill/rejected, with no fallback); an unreadable status is no_status; a 1xx/3xx is other.",
 		},
 		[]string{"model", "reason"},
 	)
