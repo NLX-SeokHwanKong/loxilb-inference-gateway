@@ -218,8 +218,8 @@ const (
 )
 
 // AIStatusNone is the status label of a request no status was ever sent
-// for: a P/D client that left before any answer (status 0 from the data
-// plane).
+// for: a client that left before any answer (status 0 from the data
+// plane), P/D or not.
 const AIStatusNone = "none"
 
 // aiEndCauses maps the data plane's end codes, the error_code of a request

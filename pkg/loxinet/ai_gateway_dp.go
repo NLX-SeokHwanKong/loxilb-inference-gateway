@@ -1582,7 +1582,7 @@ func llb_ai_stream_end(tenantID *C.char, modelName *C.char) C.int {
 //	tenantID:      tenant identifier from the validated API key (NUL-terminated)
 //	modelName:     effective model name extracted from X-Model header or JSON body
 //	statusCode:    HTTP response status code (200, 401, 403, 429, 500, …);
-//	               0 when none was sent (a P/D client that left before any
+//	               0 when none was sent (a client that left before any
 //	               answer)
 //	latencyMs:     request latency in milliseconds; 0 when unknown
 //	promptTokens, completTokens: usage as the datapath read it; never charged here

@@ -4177,12 +4177,13 @@ p_q2_row() {
 }
 # p_deltas_are <tag> <what> <deltas> <want> — the deltas, one "<key> +N" per line, are
 # exactly <want> (one "<key> +N" per line): that series moved by N and nothing else did.
+# An empty <want>: nothing moved.
 p_deltas_are() {
   local got
   got=$(printf '%s\n' "$3" | sed '/^$/d' | sort | tr '\n' ';')
-  [ "$got" = "$(printf '%s\n' "$4" | sort | tr '\n' ';')" ] \
-    && check "$1: $2 moved by exactly: $4" 0 \
-    || check "$1: $2 moved by exactly: $4 (got: ${got:-nothing})" 1
+  [ "$got" = "$(printf '%s\n' "$4" | sed '/^$/d' | sort | tr '\n' ';')" ] \
+    && check "$1: $2 moved by exactly: ${4:-nothing}" 0 \
+    || check "$1: $2 moved by exactly: ${4:-nothing} (got: ${got:-nothing})" 1
 }
 # p_terminators <before-scrape> — the terminator counter's delta once it has been
 # pulled: it is a C global_stats counter RunSockproxyMetrics pulls every 10 s, so poll
@@ -4311,10 +4312,12 @@ awk -v a="$pf_ttft_s" -v b="$pf_ttft_l" -v l="$pf_dur_l" 'BEGIN{d = a - b; if (d
 P_CANCEL_S=2
 P_CANCEL_WAIT=15
 P_PG_HOLD_MS=8000
-# p_cancel_row <tag> <knob-ep> <knob> <stream:true|false> — one request the client
-# abandons after P_CANCEL_S s; sets P_C_CODE, P_C_RC, P_C_PDD, P_C_RQD, P_C_S0, P_C_S1.
+# p_cancel_row <tag> <knob-ep> <knob> <stream:true|false> [poll-family] — one request
+# the client abandons after P_CANCEL_S s, to P_URL; polls for a record in poll-family
+# (default loxilb_ai_pd_requests_total); sets P_C_CODE, P_C_RC, P_C_PDD, P_C_RQD,
+# P_C_S0, P_C_S1.
 p_cancel_row() {
-  local tag=$1 ep=$2 knob=$3 st=$4 arm s0 s1 out waited=0
+  local tag=$1 ep=$2 knob=$3 st=$4 pf=${5:-loxilb_ai_pd_requests_total} arm s0 s1 out waited=0
   p_reset
   arm=$(p_mock "$ep" "$knob")
   echo "  ${tag} mock (${ep}): $arm"
@@ -4328,7 +4331,7 @@ p_cancel_row() {
   P_C_CODE=$out
   while :; do
     s1=$(p_scrape)
-    [ $(( $(m_sum "$s1" loxilb_ai_pd_requests_total) - $(m_sum "$s0" loxilb_ai_pd_requests_total) )) -ge 1 ] && break
+    [ $(( $(m_sum "$s1" "$pf") - $(m_sum "$s0" "$pf") )) -ge 1 ] && break
     [ "$waited" -ge "$P_CANCEL_WAIT" ] && break
     sleep 1; waited=$((waited + 1))
   done
@@ -4385,6 +4388,47 @@ ph_t=$(p_count_delta loxilb_ai_pd_decode_ttft_seconds) ph_d=$(p_count_delta loxi
                   || check "TP-H: no request duration sample (completed only; got +${ph_d})" 1
 # The rest of the paced stream has nowhere to go; let the engine finish it.
 sleep 14
+
+# ── PI: the client leaves before any answer on a rule that is not P/D (PR-D item 1) ──
+#   A plain AI-gateway rule (sse_mode, no pd_disagg) on port P_I_PORT in front of the
+#   decode mock, which holds its answer P_PG_HOLD_MS ms; the client gives up after
+#   P_CANCEL_S s. No status was ever sent: requests aborted/none cause=client +1, and
+#   no P/D lifecycle record (no lifecycle family pairs with a request off P/D: the
+#   request record alone keeps the families 1:1). No TTFT, no duration sample.
+P_I_PORT=2032
+p_i_del() {
+  $hexec llb1 curl -s -X DELETE "http://localhost:11111/netlox/v1/config/loadbalancer/hosturl/10.10.10.254/externalipaddress/10.10.10.254/port/${P_I_PORT}/protocol/tcp" >/dev/null 2>&1
+}
+p_i_del
+$hexec llb1 curl -s -X POST http://localhost:11111/netlox/v1/config/loadbalancer \
+  -H 'Content-Type: application/json' \
+  -d '{"serviceArguments":{"externalIP":"10.10.10.254","port":'"${P_I_PORT}"',"protocol":"tcp","sel":0,"mode":4,"host":"10.10.10.254","sse_mode":true,"monitor":true,"probetype":"http","probeport":8000,"probereq":"/health","probeTimeout":5,"probeRetries":2},"endpoints":[{"endpointIP":"32.32.32.1","targetPort":8000,"weight":1}]}' \
+  >/dev/null 2>&1
+p_i_ready=""
+for _i in $(seq 1 24); do
+  [ "$($dexec l3h1 curl -s -m 20 -o /dev/null -w '%{http_code}' \
+        "http://10.10.10.254:${P_I_PORT}/v1/chat/completions" -H "Content-Type: application/json" \
+        -d "{\"model\":\"${MODEL}\",\"messages\":[{\"role\":\"user\",\"content\":\"pi-ready\"}],\"max_tokens\":8}" 2>/dev/null)" = "200" ] \
+    && p_i_ready=1 && break
+  sleep 5
+done
+[ -n "$p_i_ready" ] && check "TP-I: the plain AI rule (sse_mode, no P/D) on port ${P_I_PORT} serves" 0 \
+                    || check "TP-I: the plain AI rule (sse_mode, no P/D) on port ${P_I_PORT} serves" 1
+P_URL_PD=$P_URL
+P_URL="http://10.10.10.254:${P_I_PORT}/v1/chat/completions"
+p_cancel_row TP-I "$P_DECODE" "answer-delay?ms=${P_PG_HOLD_MS}" true loxilb_ai_requests_total
+P_URL=$P_URL_PD
+[ "$P_C_CODE" = "000" ] && check "TP-I: no status reached the client (HTTP 000)" 0 \
+                        || check "TP-I: no status reached the client (got HTTP ${P_C_CODE})" 1
+p_deltas_are TP-I "loxilb_ai_requests_total{outcome,status,cause}" "$P_C_RQD" "aborted,none,client +1"
+p_deltas_are TP-I "loxilb_ai_pd_requests_total{phase,status}" "$P_C_PDD" ""
+pi_t=$(p_count_delta loxilb_ai_pd_decode_ttft_seconds) pi_d=$(p_count_delta loxilb_ai_request_duration_seconds)
+[ "$pi_t" = "0" ] && [ "$pi_d" = "0" ] \
+  && check "TP-I: no TTFT sample and no request duration sample" 0 \
+  || check "TP-I: no TTFT sample and no request duration sample (got +${pi_t}, +${pi_d})" 1
+# The held answer goes nowhere; let it finish before the mock is reset.
+sleep $(( P_PG_HOLD_MS / 1000 - P_CANCEL_S ))
+p_i_del
 
 p_reset
 p_del
