@@ -126,6 +126,25 @@ binary behaves exactly like upstream loxilb.
   whatever the source, whether the store answered its latest read and
   when a read last answered. See
   `docs/load-balancing/19-ai-gateway-controls.md`.
+- **P/D decode is measured in two parts, and the prefill fallback is
+  counted.**
+  - New `loxilb_ai_pd_decode_duration_seconds`: decode dispatch to the end
+    of the decode response. That is what `loxilb_ai_pd_decode_ttft_seconds`
+    measured before; see Upgrade notes.
+  - New `loxilb_ai_pd_prefill_fallback_total{model,reason}`: one count per
+    prefill recomputed on the decode leg, by the condition that forced it:
+    `origin_5xx`, `origin_408`, `origin_429`, `no_status`, `truncated` (a
+    reply that was usable but cut) or `other` (a 1xx/3xx).
+  - New `loxilb_ai_pd_terminator_synthesized_total`: the `[DONE]`
+    terminators the gateway wrote for a decode engine that went silent
+    without one.
+  - New phase `{phase="decode",status="truncated"}` on
+    `loxilb_ai_pd_requests_total`: the gateway ended or cut an answer in
+    progress for a cause other than the engine dying (engine silence, a
+    duration cap).
+  - The dashboard's P/D row gains "Decode duration p95" and "Prefill
+    fallbacks by reason". The MCP `ai_traffic_report` and
+    `diagnose_ai_latency` report both.
 
 ### Changed
 
@@ -200,6 +219,28 @@ binary behaves exactly like upstream loxilb.
   Store-outage and fault lines are unchanged.
 
 ### Fixed
+
+- **A reaped chunked answer got a `[DONE]` terminator its client could not
+  read.** When the gateway ended a vLLM stream whose engine went silent
+  without its terminator, it wrote `data: [DONE]` unframed into a chunked
+  body. The client's chunked decoding broke (curl exit 18) and it never saw
+  `[DONE]`. The framing now follows the answer the client is being sent,
+  never a backend leg, on both reaper paths: on the owner worker that
+  normally writes it, and on the health-thread fallback used when that
+  worker cannot be woken. The same applies to the SSE duration-cap and
+  stalled-client events.
+- **A P/D stream the gateway ended was counted as a success.** It is now
+  `decode/truncated`. A decode engine that dies mid-stream is now
+  `decode/error`; before, it got no P/D record at all on a chunked answer,
+  and `complete/success` where the sweep later reached it. The P/D
+  requests that the stream timeout, the idle cap and the duration cap end
+  also had no P/D record; they are now recorded by cause (Upgrade notes
+  rows 20–22).
+- **An answer a reaper ended after its 200 had gone out had no
+  `loxilb_ai_requests_total` record** when the reaper freed the connection
+  itself: the graceful-`[DONE]` sweep, the stream timeout and the P/D idle
+  cap. It is now recorded once, `completed`, with the status the client
+  received.
 
 - **A P/D answer sent without a length or chunked framing never ended for the
   client.** The decode answer was relayed whole, but after `[DONE]` the flow
@@ -376,7 +417,7 @@ binary behaves exactly like upstream loxilb.
   | # | Family | Label / outcome | Before | After | Commit |
   |---|---|---|---|---|---|
   | 1 | `loxilb_ai_requests_total` | `status`, P/D (vLLM, TensorRT-LLM) | the prefill reply's status | the status the client received: the decode leg's, or the prefill leg's when it answered the client. SGLang P/D is unchanged | ebpf `e0ece83` |
-  | 2 | `loxilb_ai_requests_total` | `status="500"` / `"429"` from a prefill 5xx/429 that decode recomputed | counted as 500/429 | counted as 200, the status the client got. No series counts the fallback itself yet | ebpf `e0ece83` |
+  | 2 | `loxilb_ai_requests_total` | `status="500"` / `"429"` from a prefill 5xx/429 that decode recomputed | counted as 500/429 | counted as 200, the status the client got. The fallback itself is counted by `loxilb_ai_pd_prefill_fallback_total` (row 19) | ebpf `e0ece83` |
   | 3 | `loxilb_proxy_http_responses_by_status_total`, `loxilb_proxy_http_responses_total` | P/D | one count per request, by the prefill status | one count per request, by the status the client received | ebpf `e0ece83` |
   | 4 | `loxilb_proxy_http_ttfb_seconds` | P/D | sampled when the prefill reply arrived | sampled at the client's first byte (the decode leg's first response, or the relay of a prefill answer) | ebpf `e0ece83` |
   | 5 | `loxilb_ai_pd_requests_total` | vLLM prefill 4xx (not 408/429) | decode called; `complete/success` | decode not called, the prefill's 4xx relayed verbatim; `prefill/rejected` | ebpf `82c7ef8` |
@@ -391,6 +432,14 @@ binary behaves exactly like upstream loxilb.
   | 14 | `loxilb_proxy_http_ttfb_seconds` | the gateway's own answers | not sampled | not sampled (unchanged; now stated in the help text). Backend replies only | ebpf `14b2951` |
   | 15 | `sec.ai.deny` audit records, `loxilb_ai_netid_requests_total` | refusals and stages | gate and capacity refusals | also route, framing, the P/D in-flight 429 and park timeout, L7-policy REJECT and security; new stage names `route`, `framing`, `security` | ebpf `14b2951`, `9bffd3b`; gateway `35042841` |
   | 16 | all of the above on HTTP/2 | | | refusals move `requests_total{denied}`, outages `requests_total{completed}`; HTTP/2 has no class count or TTFB sample for any response | ebpf `14b2951` |
+  | 17 | `loxilb_ai_pd_decode_ttft_seconds` | P/D | decode dispatch to the end of the decode response, every request | decode dispatch to the first streamed event (the first SSE data object, a role-only delta included), streamed requests only. **Its values drop by design**, by about the stream's length, and non-streamed P/D requests stop adding samples. No shipped alert or recording rule reads this family. **Revisit any local alert or SLO tuned on the old values**, and compare those values with row 18, not with the new TTFT | ebpf `2fbbe68`, gateway `292de52a` |
+  | 18 | `loxilb_ai_pd_decode_duration_seconds` (new) | P/D | absent | decode dispatch to the end of the decode response (row 17's old meaning); not sampled for a request a reaper ended | gateway `292de52a` |
+  | 19 | `loxilb_ai_pd_prefill_fallback_total` (new) | `model`, `reason` | absent | one count per prefill recomputed on the decode leg. The reason is the condition that forced it, in verdict order: a status that forces it on its own is the reason even when the reply was also cut | ebpf `2fbbe68`, gateway `292de52a` |
+  | 20 | `loxilb_ai_pd_requests_total` | a P/D answer the gateway ended or cut: the graceful-`[DONE]` sweep, the stream timeout, the idle cap on a begun answer, the duration cap | `complete/success` (sweep) or no record (the others) | `decode/truncated` (new): the gateway ended or cut an in-progress answer for a cause other than engine death. How it ended is `loxilb_ai_pd_terminator_synthesized_total` (row 24) | ebpf `aa7dbc2`, `a8a0906`, `6e8821d`; gateway `292de52a` |
+  | 21 | `loxilb_ai_pd_requests_total` | the decode engine dies mid-stream (EOF) | no record on a chunked answer; `complete/success` where the sweep reached it | `decode/error`: `decode/error` now means only that the engine died | ebpf `a8a0906` |
+  | 22 | `loxilb_ai_pd_requests_total` | a P/D client that stopped reading (stall abort) or cancelled | no record | still no record. A client-cancelled P/D request carries no TTFT or fallback sample either | — |
+  | 23 | `loxilb_ai_requests_total` | `outcome="completed"`: an answer a reaper ended after its 200 (the sweep, the stream timeout, the idle cap) | no record | one record, the status the client received (200) | ebpf `a8a0906`, `6e8821d` |
+  | 24 | `loxilb_ai_pd_terminator_synthesized_total` (new) | | absent | the terminators the sweep wrote. The rest of row 20's `decode/truncated` is answers cut with an error | ebpf `2fbbe68`, gateway `d3bca14b` |
 
 - **`tenant_rate_limits` gains a `burst_pct` column.** The gateway adds it on
   start-up if it is missing, so an existing database needs no manual step and

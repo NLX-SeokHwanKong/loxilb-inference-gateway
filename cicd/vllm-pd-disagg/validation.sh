@@ -1234,11 +1234,18 @@ echo "  loxilb_ai_pd_prefill_duration_seconds_count total: $TH2_COUNT"
 check "TH2: loxilb_ai_pd_prefill_duration_seconds observed >= 1 sample (got $TH2_COUNT)" \
   $([ "${TH2_COUNT:-0}" -ge 1 ] && echo 0 || echo 1)
 
-# TH3: the decode leg was timed at least once (TTFT).
+# TH3: a streamed decode leg reached its first event at least once (TTFT:
+# dispatch to the first streamed event; this suite streams, so it has samples).
 TH3_COUNT=$(h_count_sum loxilb_ai_pd_decode_ttft_seconds)
 echo "  loxilb_ai_pd_decode_ttft_seconds_count total: $TH3_COUNT"
 check "TH3: loxilb_ai_pd_decode_ttft_seconds observed >= 1 sample (got $TH3_COUNT)" \
   $([ "${TH3_COUNT:-0}" -ge 1 ] && echo 0 || echo 1)
+
+# TH3b: the decode leg was timed end to end at least once (duration).
+TH3B_COUNT=$(h_count_sum loxilb_ai_pd_decode_duration_seconds)
+echo "  loxilb_ai_pd_decode_duration_seconds_count total: $TH3B_COUNT"
+check "TH3b: loxilb_ai_pd_decode_duration_seconds observed >= 1 sample (got $TH3B_COUNT)" \
+  $([ "${TH3B_COUNT:-0}" -ge 1 ] && echo 0 || echo 1)
 
 # TH4: error label filter on loxilb_ai_pd_requests_total (use status label, per R7)
 TH4_HAS_ERROR=$(echo "$H_METRICS" | grep -v '^#' | grep 'loxilb_ai_pd_requests_total' | grep -c 'status="error"\|status="timeout"' 2>/dev/null)
@@ -3506,7 +3513,11 @@ o_sum()    { printf '%s\n' "$1" | grep -E "$2" | awk '{s+=$NF} END{printf "%d", 
 
 # The families a row reads. Every row asserts each of them: listed ones to their
 # expectation, the rest flat.
-O_KEYS="req200 req404 req500 d503 k503 pdCS pdPR pdPE pdDR pdDE pdDU c2 c3 c4 c5 ttfb"
+# ttftN: decode TTFT samples; this phase's requests are not streamed, so it never moves.
+# fb5/fb429/fbAll: prefill fallbacks (origin_5xx, origin_429, any reason). The decode
+# duration is not a key: a non-streamed mock answer is timed in whole milliseconds and
+# often rounds to 0 (no sample); Phase H TH3b covers it.
+O_KEYS="req200 req404 req500 d503 k503 pdCS pdPR pdPE pdDR pdDE pdDU c2 c3 c4 c5 ttfb ttftN fb5 fb429 fbAll"
 o_re() {
   case "$1" in
     req200) echo '^loxilb_ai_requests_total\{.*status="200"' ;;
@@ -3522,6 +3533,10 @@ o_re() {
     pdDU)   echo '^loxilb_ai_pd_requests_total\{.*phase="decode",status="unknown"' ;;
     c2|c3|c4|c5) echo "^loxilb_proxy_http_responses_by_status_total\\{status_class=\"${1#c}xx\"" ;;
     ttfb)   echo '^loxilb_proxy_http_ttfb_seconds_count' ;;
+    ttftN)  echo '^loxilb_ai_pd_decode_ttft_seconds_count' ;;
+    fb5)    echo '^loxilb_ai_pd_prefill_fallback_total\{.*reason="origin_5xx"' ;;
+    fb429)  echo '^loxilb_ai_pd_prefill_fallback_total\{.*reason="origin_429"' ;;
+    fbAll)  echo '^loxilb_ai_pd_prefill_fallback_total\{' ;;
   esac
 }
 O_PD_ALL='^loxilb_ai_pd_requests_total\{'
@@ -3659,8 +3674,8 @@ echo "  baseline: TTFB sample count $(o_sum "$(o_scrape)" "$(o_re ttfb)") held f
 #     row          arm-ep        st   http role      P D  expect
 o_row normal       -             -    200  -         1 1 "req200=1 pdCS=1 c2=1 ttfb=1"
 o_row prefill404   "$O_PREFILL"  404  404  prefill   1 0 "req404=1 pdPR=1 c4=1 ttfb=1"
-o_row prefill500   "$O_PREFILL"  500  200  -         1 1 "req200=1 pdCS=1 c2=1 ttfb=1"
-o_row prefill429   "$O_PREFILL"  429  200  -         1 1 "req200=1 pdCS=1 c2=1 ttfb=1"
+o_row prefill500   "$O_PREFILL"  500  200  -         1 1 "req200=1 pdCS=1 c2=1 ttfb=1 fb5=1 fbAll=1"
+o_row prefill429   "$O_PREFILL"  429  200  -         1 1 "req200=1 pdCS=1 c2=1 ttfb=1 fb429=1 fbAll=1"
 o_row decode404    "$O_DECODE"   404  404  decode    1 1 "req404=1 pdDR=1 c4=1 ttfb=1"
 o_row decode500    "$O_DECODE"   500  500  decode    1 1 "req500=1 pdDE=1 c5=1 ttfb=1"
 
@@ -3853,6 +3868,11 @@ echo "#########################################"
 #       connection; both 200 ending in [DONE], the second rides the first's connection.
 #   PC  length-delimited non-streaming answer on a kept client connection: two requests
 #       on one curl connection; both 200, the second rides the first's connection.
+#   PD  chunked stream whose engine drops [DONE] and goes silent; PE  the engine closes
+#       mid-stream. The gateway's graceful-[DONE] sweep ends both; the rows print which
+#       P/D lifecycle outcome the request records (Q2).
+#   PF  a short and a long chunked stream: the TTFTs are about the same, the decode
+#       durations grow with the length (MON-01).
 
 P_PORT=2031
 P_CHUNKS=100
@@ -4029,6 +4049,196 @@ echo "  pair: request 1 HTTP ${pc_c1} (connects ${pc_n1}), request 2 HTTP ${pc_c
 [ "$pc_n1" = "1" ] && [ "$pc_n2" = "0" ] \
   && check "TP-C: the second request rode the first's connection (connects 1, 0)" 0 \
   || check "TP-C: the second request rode the first's connection (connects ${pc_n1}, ${pc_n2})" 1
+
+# ── PD / PE: a stream whose engine never sends its terminator (Q2) ─────────────────────
+# The decode engine streams chunked and then never sends "data: [DONE]" or the 0-chunk.
+#   PD  it goes silent with its socket open (a dropped terminator), then closes after
+#       P_HOLD s.
+#   PE  it closes at once after the last content chunk (an engine dying mid-stream).
+# PD: the gateway's graceful-[DONE] sweep ends the client's answer after P_GRACE s of
+# backend silence, with a chunk-framed [DONE] of its own: decode/truncated +1 (the
+# gateway ended the answer; the engine did not die), requests completed/200 +1 (the
+# status the client received), curl rc 0, the body ends with [DONE], and
+# loxilb_ai_pd_terminator_synthesized_total +1.
+# PE: the engine died: decode/error +1, requests completed/200 +1, and the client sees
+# the cut: curl rc 18 and no [DONE]. Nothing dresses a dead engine up as a clean end,
+# so the terminator counter stays flat.
+P_HOLD=40
+P_GRACE=25     # PROXY_PD_DECODE_IDLE_CAP_SEC; no rule field sets pd_decode_idle_cap_sec
+p_scrape() { $hexec llb1 curl -s http://localhost:11111/netlox/v1/metrics 2>/dev/null | grep -v '^#'; }
+# p_series <scrape> <family> <label1> <label2> — "<l1>,<l2> <value>" per pair, summed over
+# the other labels (the client renders label names in sorted order).
+p_series() {
+  printf '%s\n' "$1" | grep -E "^$2\\{" |
+    sed -nE "s/.*$3=\"([^\"]*)\".*$4=\"([^\"]*)\".*\\} ([0-9.e+]+)\$/\\1,\\2 \\3/p" |
+    awk '{s[$1]+=$2} END{for (k in s) printf "%s %d\n", k, s[k]}' | sort
+}
+# p_delta <before> <after> — "<key> +N" for every series that moved.
+p_delta() {
+  awk 'NR==FNR{b[$1]=$2; next} {d=$2-b[$1]; if (d) printf "%s %+d\n", $1, d}' \
+    <(printf '%s\n' "$1") <(printf '%s\n' "$2")
+}
+# p_q2_row <tag> <mode> <knob>
+p_q2_row() {
+  local tag=$1 mode=$2 knob=$3 arm s0 s1 pd0 pd1 rq0 rq1 pdd rqd log0 out rc code secs body nrec
+  p_reset
+  arm=$(p_mock "$P_DECODE" stream-chunked-on)$(p_mock "$P_DECODE" "$knob")
+  echo "  decode mock: $arm"
+  echo "$arm" | grep -q '"stream_chunked": true' && echo "$arm" | grep -q "\"stream_end_mode\": \"${mode}\"" \
+    && check "${tag}: the decode engine streams chunked and ends by '${mode}', without [DONE] (control armed)" 0 \
+    || check "${tag}: the decode engine streams chunked and ends by '${mode}', without [DONE] (control armed)" 1
+  s0=$(p_scrape)
+  log0=$($dexec llb1 sh -c "wc -l < ${P_DPLOG}" 2>/dev/null); log0=${log0:-0}
+  out=$($dexec l3h1 curl -s --no-buffer -m $((P_HOLD + 30)) -o "/tmp/phase-p-${tag}.body" \
+          -w '%{http_code} %{time_total}' "$P_URL" -H "Content-Type: application/json" \
+          -d "{\"model\":\"${MODEL}\",\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":\"q2-${tag}\"}],\"max_tokens\":8}" \
+        </dev/null 2>/dev/null)
+  rc=$?
+  sleep 2
+  s1=$(p_scrape)
+  code=${out%% *}
+  secs=$(printf '%s' "${out#* }" | cut -d. -f1)
+  body=$($dexec l3h1 cat "/tmp/phase-p-${tag}.body" 2>/dev/null)
+  pd0=$(p_series "$s0" loxilb_ai_pd_requests_total phase status)
+  pd1=$(p_series "$s1" loxilb_ai_pd_requests_total phase status)
+  rq0=$(p_series "$s0" loxilb_ai_requests_total outcome status)
+  rq1=$(p_series "$s1" loxilb_ai_requests_total outcome status)
+  pdd=$(p_delta "$pd0" "$pd1")
+  rqd=$(p_delta "$rq0" "$rq1")
+  nrec=$(printf '%s\n' "$pdd" | awk '{s+=$2} END{printf "%d", s+0}')
+  echo "  HTTP ${code} after ${secs:-?} s (curl rc=${rc}); $(printf '%s\n' "$body" | grep -c '^data: {') data chunks; last line: $(printf '%s\n' "$body" | grep -v '^$' | tail -1)"
+  echo "  ${tag} Q2 loxilb_ai_pd_requests_total{phase,status} deltas: $(printf '%s' "$pdd" | tr '\n' ' ')"
+  echo "  ${tag} loxilb_ai_requests_total{outcome,status} deltas:     $(printf '%s' "$rqd" | tr '\n' ' ')"
+  echo "  ${tag} gateway lines:"
+  $dexec llb1 sh -c "tail -n +$((log0 + 1)) ${P_DPLOG}" 2>/dev/null \
+    | grep -E 'PD_GRACEFUL_DONE|decode backend EOF|ERR-01|generic P/D idle reaper|\[REAPER\]|\[SSE_CAP\]|P/D flow complete' \
+    | head -20 | sed 's/^/    /'
+  [ "$code" = "200" ] && check "${tag}: 200" 0 || check "${tag}: 200 (got ${code})" 1
+  [ "$nrec" = "1" ] && check "${tag}: exactly one P/D lifecycle record" 0 \
+                    || check "${tag}: exactly one P/D lifecycle record (${nrec})" 1
+  P_Q2_BODY=$body P_Q2_RC=$rc P_Q2_SECS=${secs:-0} P_Q2_PDD=$pdd P_Q2_RQD=$rqd P_Q2_S0=$s0
+}
+# p_deltas_are <tag> <what> <deltas> <want> — the deltas, one "<key> +N" per line, are
+# exactly <want> (one "<key> +N" per line): that series moved by N and nothing else did.
+p_deltas_are() {
+  local got
+  got=$(printf '%s\n' "$3" | sed '/^$/d' | sort | tr '\n' ';')
+  [ "$got" = "$(printf '%s\n' "$4" | sort | tr '\n' ';')" ] \
+    && check "$1: $2 moved by exactly: $4" 0 \
+    || check "$1: $2 moved by exactly: $4 (got: ${got:-nothing})" 1
+}
+# p_terminators <before-scrape> — the terminator counter's delta once it has been
+# pulled: it is a C global_stats counter RunSockproxyMetrics pulls every 10 s, so poll
+# for two pulls. Prints the delta.
+p_terminators() {
+  local b a waited=0
+  b=$(printf '%s\n' "$1" | awk '/^loxilb_ai_pd_terminator_synthesized_total /{print $2+0}')
+  while :; do
+    a=$(p_scrape | awk '/^loxilb_ai_pd_terminator_synthesized_total /{print $2+0}')
+    [ $(( ${a:-0} - ${b:-0} )) -ge 1 ] || [ "$waited" -ge 21 ] && break
+    sleep 1; waited=$((waited + 1))
+  done
+  echo $(( ${a:-0} - ${b:-0} ))
+}
+
+p_q2_row TP-D hold "stream-end?mode=hold&sec=${P_HOLD}"
+# The gateway, not the engine, ended this answer: after the sweep's window, before the
+# engine's close.
+[ "$P_Q2_RC" = "0" ] && check "TP-D: the answer ended (curl rc=0)" 0 \
+                     || check "TP-D: the answer ended (curl rc=${P_Q2_RC})" 1
+[ "$P_Q2_SECS" -ge $((P_GRACE - 1)) ] && [ "$P_Q2_SECS" -lt "$P_HOLD" ] \
+  && check "TP-D: ended by the gateway's sweep (${P_Q2_SECS} s: >= ${P_GRACE} s idle, < the engine's ${P_HOLD} s close)" 0 \
+  || check "TP-D: ended by the gateway's sweep (${P_Q2_SECS} s: >= ${P_GRACE} s idle, < the engine's ${P_HOLD} s close)" 1
+printf '%s\n' "$P_Q2_BODY" | grep -v '^$' | tail -1 | grep -q '^data: \[DONE\]' \
+  && check "TP-D: it ends with the [DONE] the gateway wrote" 0 \
+  || check "TP-D: it ends with the [DONE] the gateway wrote" 1
+printf '%s' "$P_Q2_BODY" | grep -q 'HTTP/1\.' \
+  && check "TP-D: no status line inside the body" 1 \
+  || check "TP-D: no status line inside the body" 0
+p_deltas_are TP-D "loxilb_ai_pd_requests_total{phase,status}" "$P_Q2_PDD" "decode,truncated +1"
+p_deltas_are TP-D "loxilb_ai_requests_total{outcome,status}" "$P_Q2_RQD" "completed,200 +1"
+pd_term=$(p_terminators "$P_Q2_S0")
+[ "$pd_term" = "1" ] && check "TP-D: loxilb_ai_pd_terminator_synthesized_total +1" 0 \
+                     || check "TP-D: loxilb_ai_pd_terminator_synthesized_total +1 (got +${pd_term})" 1
+
+p_q2_row TP-E cut "stream-end?mode=cut"
+# The engine died: the client sees the cut, and nothing writes a terminator for it.
+[ "$P_Q2_RC" = "18" ] && check "TP-E: the client sees the cut (curl rc=18)" 0 \
+                      || check "TP-E: the client sees the cut (curl rc=18, got ${P_Q2_RC})" 1
+printf '%s\n' "$P_Q2_BODY" | grep -q '^data: \[DONE\]' \
+  && check "TP-E: no [DONE] in the body" 1 \
+  || check "TP-E: no [DONE] in the body" 0
+p_deltas_are TP-E "loxilb_ai_pd_requests_total{phase,status}" "$P_Q2_PDD" "decode,error +1"
+p_deltas_are TP-E "loxilb_ai_requests_total{outcome,status}" "$P_Q2_RQD" "completed,200 +1"
+pe_term=$(p_terminators "$P_Q2_S0")
+[ "$pe_term" = "0" ] && check "TP-E: loxilb_ai_pd_terminator_synthesized_total flat" 0 \
+                     || check "TP-E: loxilb_ai_pd_terminator_synthesized_total flat (got +${pe_term})" 1
+
+# ── PF: a short and a long stream (MON-01: what TTFT and duration mean) ────────────────
+# The same engine streams chunked, P_PF_MS ms apart: P_PF_SHORT content chunks, then
+# P_PF_LONG. TTFT is the time to the decode answer's first event, so it is about the
+# same for both; the decode duration runs to the answer's end, so it grows with the
+# length. Before MON-01 the TTFT family recorded the duration. The bounds are ratios,
+# not milliseconds: the long duration is at least P_PF_RATIO times the short one (the
+# streams' own lengths make it about 7), and the two TTFTs differ by less than a
+# quarter of the long duration (before MON-01 they differed by about the whole stream).
+P_PF_MS=200
+P_PF_SHORT=2
+P_PF_LONG=20
+P_PF_RATIO=3
+# p_hist <scrape> <family> — "<count> <sum>" of a histogram, summed over its labels.
+p_hist() {
+  printf '%s\n' "$1" | awk -v f="$2" '
+    index($0, f "_count") == 1 {c += $NF}
+    index($0, f "_sum") == 1   {s += $NF}
+    END {printf "%d %.6f\n", c, s}'
+}
+# p_stream_row <tag> <chunks> — one paced chunked stream; sets P_PF_TTFT and P_PF_DUR
+# (the request's samples, s) and checks that each family took exactly one.
+p_stream_row() {
+  local tag=$1 n=$2 arm s0 s1 out rc code tn0 ts0 tn1 ts1 dn0 ds0 dn1 ds1 pdd tc dc
+  p_reset
+  arm=$(p_mock "$P_DECODE" stream-chunked-on)$(p_mock "$P_DECODE" "stream-pace?ms=${P_PF_MS}&chunks=${n}")
+  echo "$arm" | grep -q '"stream_chunked": true' && echo "$arm" | grep -q "\"stream_chunks\": ${n}}" \
+    && check "${tag}: the decode engine streams ${n} chunks ${P_PF_MS} ms apart, chunked (control armed)" 0 \
+    || check "${tag}: the decode engine streams ${n} chunks ${P_PF_MS} ms apart, chunked (control armed)" 1
+  s0=$(p_scrape)
+  out=$($dexec l3h1 curl -s --no-buffer -m 60 -o "/tmp/phase-p-${tag}.body" \
+          -w '%{http_code} %{time_total}' "$P_URL" -H "Content-Type: application/json" \
+          -d "{\"model\":\"${MODEL}\",\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":\"pf-${tag}\"}],\"max_tokens\":${n}}" \
+        </dev/null 2>/dev/null)
+  rc=$?
+  sleep 2
+  s1=$(p_scrape)
+  code=${out%% *}
+  read -r tn0 ts0 <<< "$(p_hist "$s0" loxilb_ai_pd_decode_ttft_seconds)"
+  read -r tn1 ts1 <<< "$(p_hist "$s1" loxilb_ai_pd_decode_ttft_seconds)"
+  read -r dn0 ds0 <<< "$(p_hist "$s0" loxilb_ai_pd_decode_duration_seconds)"
+  read -r dn1 ds1 <<< "$(p_hist "$s1" loxilb_ai_pd_decode_duration_seconds)"
+  tc=$((tn1 - tn0)) dc=$((dn1 - dn0))
+  P_PF_TTFT=$(awk -v a="$ts0" -v b="$ts1" 'BEGIN{printf "%.6f", b - a}')
+  P_PF_DUR=$(awk -v a="$ds0" -v b="$ds1" 'BEGIN{printf "%.6f", b - a}')
+  pdd=$(p_delta "$(p_series "$s0" loxilb_ai_pd_requests_total phase status)" \
+                "$(p_series "$s1" loxilb_ai_pd_requests_total phase status)")
+  echo "  ${tag}: HTTP ${code} after ${out#* } s (curl rc=${rc}); TTFT samples +${tc} (${P_PF_TTFT} s), duration samples +${dc} (${P_PF_DUR} s)"
+  [ "$code" = "200" ] && [ "$rc" = "0" ] && p_ends_done "/tmp/phase-p-${tag}.body" \
+    && check "${tag}: 200, curl rc=0, ends with [DONE]" 0 \
+    || check "${tag}: 200, curl rc=0, ends with [DONE] (got ${code}, rc ${rc})" 1
+  p_deltas_are "$tag" "loxilb_ai_pd_requests_total{phase,status}" "$pdd" "complete,success +1"
+  [ "$tc" = "1" ] && [ "$dc" = "1" ] \
+    && check "${tag}: one TTFT sample and one decode duration sample" 0 \
+    || check "${tag}: one TTFT sample and one decode duration sample (got +${tc}, +${dc})" 1
+}
+p_stream_row TP-F-short "$P_PF_SHORT"
+pf_ttft_s=$P_PF_TTFT pf_dur_s=$P_PF_DUR
+p_stream_row TP-F-long "$P_PF_LONG"
+pf_ttft_l=$P_PF_TTFT pf_dur_l=$P_PF_DUR
+awk -v s="$pf_dur_s" -v l="$pf_dur_l" -v r="$P_PF_RATIO" 'BEGIN{exit !(s > 0 && l >= r * s)}' \
+  && check "TP-F: the long stream's duration is >= ${P_PF_RATIO}x the short one's (${pf_dur_l} s vs ${pf_dur_s} s)" 0 \
+  || check "TP-F: the long stream's duration is >= ${P_PF_RATIO}x the short one's (${pf_dur_l} s vs ${pf_dur_s} s)" 1
+awk -v a="$pf_ttft_s" -v b="$pf_ttft_l" -v l="$pf_dur_l" 'BEGIN{d = a - b; if (d < 0) d = -d; exit !(l > 0 && d < l / 4)}' \
+  && check "TP-F: the TTFTs differ by < 1/4 of the long duration (${pf_ttft_s} s vs ${pf_ttft_l} s, long ${pf_dur_l} s)" 0 \
+  || check "TP-F: the TTFTs differ by < 1/4 of the long duration (${pf_ttft_s} s vs ${pf_ttft_l} s, long ${pf_dur_l} s)" 1
 
 p_reset
 p_del

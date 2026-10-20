@@ -1767,12 +1767,13 @@ func aiRecordDenyC(d aiDenyRecord) {
 //
 //	modelName:        effective model name (NUL-terminated)
 //	prefillLatencyMs: prefill phase duration in milliseconds; 0 when unknown
-//	decodeLatencyMs:  decode phase TTFT in milliseconds; 0 when unknown
+//	decodeLatencyMs:  the decode leg, dispatch to the end of its response, in
+//	                  milliseconds; 0 when unknown or not sampled
 //	kvParamsFound:    1 when kv_transfer_params was found, 0 otherwise
 //	errorPhase:       lifecycle outcome; names the leg that failed and how.
 //	                  0=complete/success, 1=prefill/timeout, 2=decode/error,
 //	                  3=decode/timeout, 4=prefill/error, 5=prefill/rejected,
-//	                  6=decode/rejected, 7=decode/unknown.
+//	                  6=decode/rejected, 7=decode/unknown, 8=decode/truncated.
 //	                  See prom.RecordPDRequest for the full contract.
 //
 //export llb_ai_pd_record
@@ -1780,6 +1781,27 @@ func llb_ai_pd_record(modelName *C.char, prefillLatencyMs C.int64_t, decodeLaten
 	defer cgoRecover("llb_ai_pd_record")
 	modelNameStr := C.GoString(modelName)
 	prom.RecordPDRequest(modelNameStr, int64(prefillLatencyMs), int64(decodeLatencyMs), int(kvParamsFound), int(errorPhase))
+}
+
+// llb_ai_pd_record_extra records the rest of one P/D lifecycle record.
+//
+// C sockproxy calls this right after llb_ai_pd_record, for the same request
+// and the same completion event, every time (sp_pd_record): one record crosses
+// as two calls.
+//
+// Parameters:
+//
+//	modelName:      the same effective model name as llb_ai_pd_record's
+//	decodeTtftUs:   decode dispatch to the first streamed event, in
+//	                microseconds; 0 when the answer streamed no event
+//	fallbackReason: why the prefill was recomputed on the decode leg; 0 when
+//	                it was not. 1=origin_5xx, 2=origin_408, 3=origin_429,
+//	                4=no_status, 5=truncated, 6=other.
+//
+//export llb_ai_pd_record_extra
+func llb_ai_pd_record_extra(modelName *C.char, decodeTtftUs C.int64_t, fallbackReason C.int) {
+	defer cgoRecover("llb_ai_pd_record_extra")
+	prom.RecordPDRecordExtra(C.GoString(modelName), int64(decodeTtftUs), int(fallbackReason))
 }
 
 // llb_ai_pd_session_hit records a P/D Tier-0 session-stickiness cache hit.

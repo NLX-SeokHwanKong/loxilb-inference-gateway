@@ -123,10 +123,14 @@ Playbook (validated in a live L4-error-burst alert drill):
 
 Playbook (validated in a live high-TTFB alert drill):
 
-1. diagnose_ai_latency - compare proxy_ttfb p95 vs ai_request_duration and
-   pd_decode_ttft: if TTFB is high but decode TTFT is normal, the delay is
-   before token generation (queueing, prefill, routing); if both are high the
-   backend itself is slow.
+1. diagnose_ai_latency - compare proxy_ttfb p95 vs ai_request_duration,
+   pd_decode_ttft (decode dispatch to the first streamed event; streamed
+   requests only) and pd_decode_duration (the whole decode leg): if TTFB is
+   high but decode TTFT is normal, the delay is before token generation
+   (queueing, prefill, routing); if decode TTFT is high the decode engine is
+   slow to start; if only the duration is high the answers are long or the
+   engine is slow per token. A non-zero pd_prefill_fallback means prefills are
+   being recomputed on the decode leg: check the prefill tier.
 2. Check load distribution: lb_list for the AI services, endpoint states, and
    whether one backend absorbs the traffic (diagnose_endpoint on suspects).
    A drained or failed vLLM endpoint concentrates load on the rest.

@@ -19,7 +19,7 @@ ENC_MODEL=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.ar
 GWLOG=${LOGD}/loxilb$(hostname).log
 case $ENG in
   vllm)   VER=$VLLM_VERSION; MSRC=$FIX/manifests/$PROF.yaml; FSUB=""
-          GWC='^loxilb_ai_pd_(prefill_duration|decode_ttft)_seconds_count'; GWMIN=6
+          GWC='^loxilb_ai_pd_(prefill_duration|decode_duration)_seconds_count'; GWMIN=6  # requests are not streamed: TTFT has no sample
           EREQ_P='^vllm:request_success_total'; EREQ_D='^vllm:request_success_total'; XFER='^vllm:nixl_xfer_time_seconds_count' ;;
   sglang) VER=$SGL_VERSION; MSRC=$FIX/manifests-sglang/$PROF.yaml; FSUB="/sglang"
           # decode exposes no num_requests_total; each transferred request bootstraps once and allocates once

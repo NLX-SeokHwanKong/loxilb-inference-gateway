@@ -184,6 +184,9 @@ typedef struct proxy_metrics_snapshot {
     // Pools allocated and not yet freed, and pools freed (sockproxy_pool.h). TAIL-APPEND ONLY — same three-way lockstep.
     uint64_t pools_live;
     uint64_t pools_freed_total;
+
+    // Terminators the graceful-[DONE] sweep wrote for a silent decode engine (the mechanism behind decode/truncated). TAIL-APPEND ONLY — same three-way lockstep.
+    uint64_t pd_terminator_synthesized;
 } proxy_metrics_snapshot_t;
 
 // C function from sockproxy.c
@@ -842,6 +845,14 @@ var (
 			Help: "TRT-LLM P/D: the context response finished the request in one step (finish_reason neither length nor not_finished) — the buffered response was relayed to the client and the generation leg skipped. A success outcome, not an error; a sustained high rate means prompts are completing within the context token cap.",
 		},
 	)
+
+	// Metric #40: terminators the gateway synthesised (Counter)
+	pdTerminatorSynthesizedTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "loxilb_ai_pd_terminator_synthesized_total",
+			Help: "P/D streams the gateway ended by writing the SSE [DONE] terminator the decode engine never sent (the graceful-[DONE] sweep, after the engine went silent). The mechanism behind part of loxilb_ai_pd_requests_total{phase=\"decode\",status=\"truncated\"}: the rest of that series is answers the gateway cut with an error (stream timeout, idle cap, duration cap).",
+		},
+	)
 )
 
 // pdKvT15MissReasonLabels enumerates the canonical guard reasons used by the
@@ -1406,6 +1417,10 @@ func RunSockproxyMetrics(ctx context.Context) {
 		if current.pd_trt_ctx_early_exit >= prevSockproxyMetrics.pd_trt_ctx_early_exit {
 			delta := current.pd_trt_ctx_early_exit - prevSockproxyMetrics.pd_trt_ctx_early_exit
 			pdTrtCtxEarlyExitTotal.Add(float64(delta))
+		}
+		if current.pd_terminator_synthesized >= prevSockproxyMetrics.pd_terminator_synthesized {
+			delta := current.pd_terminator_synthesized - prevSockproxyMetrics.pd_terminator_synthesized
+			pdTerminatorSynthesizedTotal.Add(float64(delta))
 		}
 
 		// 3h. Tier-1 byte shaper and the AI admission gate: republish the
