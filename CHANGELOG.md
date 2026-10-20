@@ -129,15 +129,6 @@ binary behaves exactly like upstream loxilb.
 
 ### Changed
 
-- **Streams are recognised by the response framer on every AI-gateway
-  connection; `sse_mode` is the explicit opt-in for other rules.** On a
-  service that declares `pd_disagg_mode` or an enforcing `api_key_auth`, a
-  `text/event-stream` response is handled as a stream (the stream idle
-  protection, `max_stream_duration_sec`, the `[DONE]` accounting) whether or
-  not `sse_mode` is set. On any other rule only `sse_mode` turns stream
-  handling on, and it still enables the raw-bytes sniff (recognition from the
-  response bytes when the framer could not frame them). Plain L7 rules
-  without `sse_mode` are unchanged.
 - **Every request the gateway refuses is counted once in
   `loxilb_ai_requests_total{outcome="denied"}`, whatever refused it:** the
   policy gate, capacity, routing (`model_unavailable`, `no_route`,
@@ -210,17 +201,20 @@ binary behaves exactly like upstream loxilb.
 
 ### Fixed
 
-- **A streamed P/D generation on a rule without `sse_mode` was cut after 180 s
-  with `HTTP/1.1 504` written into its body.** The stream was never recognised,
-  so the generic P/D idle reaper measured from decode dispatch, not from the
-  last relayed byte, and ended every generation longer than its cap (max of the
-  prefill and decode timeouts, plus 60 s) however healthy, appending a whole
-  504 response to the 200 the client was reading. Such streams are now
-  recognised (see Changed). Independently, once the client has begun to
-  receive an answer the gateway no longer writes a status line into it on any
-  path (refusals, outages, reaper timeouts): a stream whose headers are out
-  ends with an SSE error event naming the code, anything else is closed.
-
+- **A P/D answer sent without a length or chunked framing never ended for the
+  client.** The decode answer was relayed whole, but after `[DONE]` the flow
+  reset, and when the engine then closed its connection the gateway kept the
+  client's connection open as if for its next request. Such an answer ends
+  only when the connection closes, so the client waited until its own
+  timeout. The client's connection is now closed with the engine's, after
+  every byte still owed to it is sent. This affects only engines that end
+  their body by closing; vLLM streams chunked and ends on the last chunk, so
+  its answers are framed and its clients keep their connection as before.
+- **The gateway no longer writes a status line into an answer the client has
+  already begun to receive,** on any path that answers on its own (refusals,
+  outages, reaper timeouts): a stream whose headers are out ends with an SSE
+  error event naming the code, anything else is closed. This is a guarantee
+  of the code, not the fix of an observed failure.
 - **Five answers the gateway writes raw were sent in clear on a TLS client
   connection:** the P/D destroy-path 503 (prefill) and 502/503 (decode), the
   502 when no backend took the request at connect, the 400 for an

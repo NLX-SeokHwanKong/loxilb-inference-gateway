@@ -135,7 +135,7 @@ docker run -u root --cap-add SYS_ADMIN --restart unless-stopped --privileged \
 | `kvEngineType` | `"vllm"`(기본값) 또는 `"sglang"` — block-hash 계약을 선택(생성 후 불변) |
 | `kvDpRankCount` | SGLang 데이터 병렬 랭크(= `--dp-size`); 랭크 *N*은 `kvZmqPort`+*N*에서 게시 |
 | `kvWarmupSec` | KV-exact 선택이 동작하기 전의 유예 기간 |
-| `sse_mode` | `true` = SSE 인식 스트리밍(스트림이 유휴 타임아웃을 견디고 `[DONE]` 감지); AI 게이트웨이 키/제한 적용도 활성화. 모든 AI 게이트웨이 서비스(`pd_disagg_mode` 또는 강제 `api_key_auth`)에서는 이 값 없이도 응답 프레이머가 `text/event-stream` 응답을 스트림으로 인식합니다. `sse_mode`는 그 외 규칙에 대한 명시적 opt-in이며 raw 바이트 sniff도 계속 활성화합니다. `sse_mode`가 없는 일반 L7 규칙은 변경 없음 |
+| `sse_mode` | `true` = SSE 인식 스트리밍(스트림이 유휴 타임아웃을 견디고 `[DONE]` 감지); AI 게이트웨이 키/제한 적용도 활성화. `pd_disagg_mode` 규칙에서는 설정과 무관하게 항상 켜짐 |
 | `max_stream_duration_sec` | 스트림당 하드 wall-clock 상한(폭주 방지) |
 | `backend_keepalive_interval_sec` | 긴 스트림 동안 백엔드로의 TCP keepalive |
 | `session_header_name` | 헤더 기반 스티키니스 — MCP는 `"mcp-session-id"`, 채팅은 `"X-Conversation-Id"` |
