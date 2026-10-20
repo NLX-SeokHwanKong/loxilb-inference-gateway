@@ -1,0 +1,166 @@
+{{- $l := .Values.loxilb }}
+{{- /* The audit volume mounts the parent of --audit-dir: loxilb must create the
+       directory itself (0700). A root-level audit dir has no parent to mount. */}}
+{{- $auditParent := dir ($l.audit.dir | trimSuffix "/") }}
+{{- if and .Values.persistence.audit.enabled (or (eq $auditParent "/") (eq $auditParent ".") (eq $auditParent "")) }}
+{{- fail "loxilb.audit.dir must be a nested path such as /var/log/loxilb/audit: its parent directory is what persistence.audit.hostPath is mounted at" }}
+{{- end }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "loxilb-igw.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "loxilb-igw.labels" . | nindent 4 }}
+  {{- with .Values.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "loxilb-igw.selectorLabels" . | nindent 6 }}
+  {{- with .Values.updateStrategy }}
+  updateStrategy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  template:
+    metadata:
+      labels:
+        {{- include "loxilb-igw.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      hostNetwork: {{ .Values.hostNetwork }}
+      dnsPolicy: {{ .Values.dnsPolicy }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      {{- with (concat ((.Values.global | default dict).imagePullSecrets | default list) .Values.imagePullSecrets) }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: loxilb-app
+          image: {{ include "loxilb-igw.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/root/loxilb-io/loxilb/loxilb"]
+          args:
+            {{- include "loxilb-igw.args" . | trim | nindent 12 }}
+          {{- if or .Values.trust.enabled .Values.extraEnv }}
+          env:
+            {{- if .Values.trust.enabled }}
+            # Go reads every directory in SSL_CERT_DIR; the system bundle stays first.
+            - name: SSL_CERT_DIR
+              value: {{ printf "/etc/ssl/certs:%s" .Values.trust.mountPath | quote }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- end }}
+          ports:
+            - name: api
+              containerPort: {{ .Values.ports.api }}
+              protocol: TCP
+            - name: bgp
+              containerPort: {{ .Values.ports.bgp }}
+              protocol: TCP
+            - name: gobgp
+              containerPort: {{ .Values.ports.gobgp }}
+              protocol: TCP
+            {{- if .Values.tls.enabled }}
+            - name: api-tls
+              containerPort: {{ .Values.tls.port }}
+              protocol: TCP
+            {{- end }}
+          {{- with .Values.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          {{- if or .Values.persistence.config.enabled .Values.persistence.audit.enabled .Values.trust.enabled .Values.tls.enabled .Values.extraVolumeMounts }}
+          volumeMounts:
+            {{- if .Values.persistence.config.enabled }}
+            - name: config
+              mountPath: {{ $l.configPath | trimSuffix "/" }}
+            {{- end }}
+            {{- if .Values.persistence.audit.enabled }}
+            - name: audit
+              mountPath: {{ $auditParent }}
+            {{- end }}
+            {{- if .Values.trust.enabled }}
+            - name: integration-ca
+              mountPath: {{ .Values.trust.mountPath }}
+              readOnly: true
+            {{- end }}
+            {{- if .Values.tls.enabled }}
+            # File by file, never the whole Secret directory.
+            - name: tls
+              mountPath: /opt/loxilb/cert/server.crt
+              subPath: {{ .Values.tls.certKey }}
+              readOnly: true
+            - name: tls
+              mountPath: /opt/loxilb/cert/server.key
+              subPath: {{ .Values.tls.keyKey }}
+              readOnly: true
+            {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- end }}
+      {{- if or .Values.persistence.config.enabled .Values.persistence.audit.enabled .Values.trust.enabled .Values.tls.enabled .Values.extraVolumes }}
+      volumes:
+        {{- if .Values.persistence.config.enabled }}
+        - name: config
+          hostPath:
+            path: {{ .Values.persistence.config.hostPath }}
+            type: DirectoryOrCreate
+        {{- end }}
+        {{- if .Values.persistence.audit.enabled }}
+        - name: audit
+          hostPath:
+            path: {{ .Values.persistence.audit.hostPath }}
+            type: DirectoryOrCreate
+        {{- end }}
+        {{- if .Values.trust.enabled }}
+        - name: integration-ca
+          configMap:
+            name: {{ required "trust.existingConfigMap is required when trust.enabled" .Values.trust.existingConfigMap }}
+        {{- end }}
+        {{- if .Values.tls.enabled }}
+        - name: tls
+          secret:
+            secretName: {{ required "tls.existingSecret is required when tls.enabled" .Values.tls.existingSecret }}
+            defaultMode: 0400
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}

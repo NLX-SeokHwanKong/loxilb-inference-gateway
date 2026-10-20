@@ -1,0 +1,121 @@
+{{- if .Values.crds.precheck.enabled }}
+{{- $pc := .Values.crds.precheck }}
+{{- $gw := .Values.crds.gatewayAPI }}
+{{- $gie := .Values.crds.inferenceExtension }}
+{{- $gwURL := $gw.manifestURL | default (printf "https://github.com/kubernetes-sigs/gateway-api/releases/download/%s/%s-install.yaml" $gw.version $gw.channel) }}
+{{- $gieURL := $gie.kustomizeURL | default (printf "https://github.com/kubernetes-sigs/gateway-api-inference-extension/config/crd?ref=%s" $gie.version) }}
+{{- $name := printf "%s-crd-precheck" (include "loxilb-inference-gateway.fullname" .) }}
+# pre-install -10: the Gateway API and Inference Extension CRDs are not this
+# chart's to ship, so this Job checks they exist (and which bundle version) and
+# fails the release with a message that says what to install when they do not.
+# With crds.installGatewayAPI=true it applies them first.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "loxilb-inference-gateway.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ $pc.backoffLimit }}
+  activeDeadlineSeconds: {{ $pc.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "loxilb-inference-gateway.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: crd-precheck
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ $name }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: precheck
+          image: "{{ $pc.image.repository }}:{{ $pc.image.tag }}"
+          imagePullPolicy: {{ $pc.image.pullPolicy }}
+          {{- with $pc.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          env:
+            - name: GWAPI_VERSION
+              value: {{ $gw.version | quote }}
+            - name: GWAPI_CHANNEL
+              value: {{ $gw.channel | quote }}
+            - name: GWAPI_URL
+              value: {{ $gwURL | quote }}
+            - name: GIE_VERSION
+              value: {{ $gie.version | quote }}
+            - name: GIE_URL
+              value: {{ $gieURL | quote }}
+            - name: INSTALL
+              value: {{ .Values.crds.installGatewayAPI | quote }}
+            - name: STRICT
+              value: {{ $pc.strictVersion | quote }}
+          command: ["/bin/sh", "-eu", "-c"]
+          args:
+            - |
+              # The last line of a failure goes to the termination message too,
+              # so `kubectl describe pod` shows it after `helm install` reports
+              # "failed pre-install".
+              fail() { echo "ERROR: $*" | tee /dev/termination-log >&2; exit 1; }
+              warn() { echo "WARNING: $*" >&2; }
+              # version_lt A B: A older than B (vX.Y.Z, pre-release suffixes ignored)
+              version_lt() {
+                awk -v a="${1#v}" -v b="${2#v}" 'BEGIN {
+                  na = split(a, x, "."); nb = split(b, y, "."); n = (na > nb ? na : nb)
+                  for (i = 1; i <= n; i++) { p = x[i] + 0; q = y[i] + 0; if (p < q) exit 0; if (p > q) exit 1 }
+                  exit 1 }'
+              }
+              annotation() { kubectl get crd "$1" -o json 2>/dev/null | jq -r --arg k "$2" '.metadata.annotations[$k] // ""'; }
+
+              if [ "$INSTALL" = "true" ]; then
+                echo "crds.installGatewayAPI=true: applying Gateway API $GWAPI_VERSION ($GWAPI_CHANNEL channel) from $GWAPI_URL"
+                kubectl apply -f "$GWAPI_URL"
+                echo "applying Inference Extension $GIE_VERSION from $GIE_URL"
+                kubectl apply -k "$GIE_URL"
+                kubectl wait --for=condition=Established --timeout=120s \
+                  crd/gatewayclasses.gateway.networking.k8s.io crd/gateways.gateway.networking.k8s.io \
+                  crd/httproutes.gateway.networking.k8s.io crd/inferencepools.inference.networking.k8s.io
+              fi
+
+              missing=""
+              for crd in gatewayclasses.gateway.networking.k8s.io gateways.gateway.networking.k8s.io httproutes.gateway.networking.k8s.io; do
+                kubectl get crd "$crd" >/dev/null 2>&1 || missing="$missing $crd"
+              done
+              [ -z "$missing" ] || fail "Gateway API CRDs are missing:$missing. Install them with: kubectl apply -f $GWAPI_URL  (or set crds.installGatewayAPI=true; needs Kubernetes >= 1.30)"
+
+              kubectl get crd inferencepools.inference.networking.k8s.io >/dev/null 2>&1 \
+                || fail "Inference Extension CRD inferencepools.inference.networking.k8s.io is missing. Install it with: kubectl apply -k \"$GIE_URL\"  (or set crds.installGatewayAPI=true)"
+              kubectl get crd inferencepools.inference.networking.k8s.io -o json | jq -e '[.spec.versions[].name] | index("v1")' >/dev/null \
+                || fail "inferencepools.inference.networking.k8s.io does not serve v1; kube-loxilb needs InferencePool v1 (Inference Extension >= v1.6.0). Upgrade with: kubectl apply -k \"$GIE_URL\""
+
+              have_gw=$(annotation gateways.gateway.networking.k8s.io gateway.networking.k8s.io/bundle-version)
+              have_ch=$(annotation gateways.gateway.networking.k8s.io gateway.networking.k8s.io/channel)
+              have_gie=$(annotation inferencepools.inference.networking.k8s.io inference.networking.k8s.io/bundle-version)
+              echo "Gateway API CRDs: bundle-version ${have_gw:-unknown}, channel ${have_ch:-unknown} (tested with $GWAPI_VERSION $GWAPI_CHANNEL)"
+              echo "Inference Extension CRDs: bundle-version ${have_gie:-unknown} (tested with $GIE_VERSION)"
+
+              # InferencePool.spec.endpointPickerRef is optional only from v1.6.0;
+              # this chart renders pools without one, so older is a hard failure.
+              if [ -n "$have_gie" ] && version_lt "$have_gie" v1.6.0; then
+                fail "Inference Extension $have_gie is too old: an InferencePool without endpointPickerRef needs >= v1.6.0. Upgrade with: kubectl apply -k \"$GIE_URL\""
+              fi
+
+              mismatch=""
+              if [ -n "$have_gw" ] && [ "$have_gw" != "$GWAPI_VERSION" ]; then mismatch="$mismatch gateway-api=$have_gw(tested:$GWAPI_VERSION)"; fi
+              if [ -n "$have_gie" ] && [ "$have_gie" != "$GIE_VERSION" ]; then mismatch="$mismatch inference-extension=$have_gie(tested:$GIE_VERSION)"; fi
+              if [ -n "$mismatch" ]; then
+                if [ "$STRICT" = "true" ]; then
+                  fail "CRD bundle version differs from the tested one:$mismatch (crds.precheck.strictVersion=true)"
+                fi
+                warn "CRD bundle version differs from the tested one:$mismatch - continuing; set crds.precheck.strictVersion=true to fail instead"
+              fi
+              echo "CRD precheck passed"
+{{- end }}

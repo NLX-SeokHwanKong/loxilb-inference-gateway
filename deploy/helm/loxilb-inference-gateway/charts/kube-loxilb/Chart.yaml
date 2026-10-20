@@ -1,0 +1,12 @@
+apiVersion: v2
+name: kube-loxilb
+description: >-
+  kube-loxilb, the Kubernetes controller for loxilb, from the
+  integration/inference-gateway branch: Gateway API plus the Inference
+  Extension (InferencePool) rendered into loxilb rules.
+type: application
+version: 0.1.0
+appVersion: latest
+home: https://github.com/loxilb-io/kube-loxilb
+sources:
+  - https://github.com/loxilb-io/kube-loxilb/tree/integration/inference-gateway

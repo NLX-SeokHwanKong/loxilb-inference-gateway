@@ -1,0 +1,30 @@
+# Headless Service kube-loxilb uses for in-cluster loxilb discovery when
+# --loxiURL is not given: it reads this Service's EndpointSlices by name.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.discoveryService.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "loxilb-igw.labels" . | nindent 4 }}
+  {{- with .Values.discoveryService.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  clusterIP: None
+  selector:
+    {{- include "loxilb-igw.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: loxilb-app
+      port: {{ .Values.ports.api }}
+      targetPort: api
+      protocol: TCP
+    - name: loxilb-app-bgp
+      port: {{ .Values.ports.bgp }}
+      targetPort: bgp
+      protocol: TCP
+    - name: loxilb-app-gobgp
+      port: {{ .Values.ports.gobgp }}
+      targetPort: gobgp
+      protocol: TCP

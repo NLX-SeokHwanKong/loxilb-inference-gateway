@@ -97,7 +97,30 @@ igw_prepare_images() {
     docker build -q -t "$KLB_IMAGE" "$KLB_SRC" >/dev/null || return 1
   fi
 }
-igw_import_images() { "$K3D" image import "$IGW_IMAGE" "$KLB_IMAGE" -c "$CLUSTER" >/dev/null; }
+# k3d imports through `docker save`. With Docker's containerd image store the
+# tarball of a multi-arch image indexes manifests that were never pulled (other
+# platforms, attestations), the node's ctr refuses it with "content digest ...
+# not found", and k3d still exits 0. Where the CLI can export the node's
+# platform alone (docker >= 28) that is done first; either way the node is then
+# asked (crictl) whether it really holds both images instead of trusting the exit status.
+igw_import_images() {
+  local plat="linux/$(docker version -f '{{.Server.Arch}}' 2>/dev/null)" img tar refs=()
+  if docker save --help 2>/dev/null | grep -q -- '--platform'; then
+    mkdir -p "$K8SINF/.work"
+    for img in "$IGW_IMAGE" "$KLB_IMAGE"; do
+      tar="$K8SINF/.work/$(echo "$img" | tr '/:@' '___').tar"
+      if docker save --platform "$plat" -o "$tar" "$img" 2>/dev/null; then refs+=("$tar"); else rm -f "$tar"; refs+=("$img"); fi
+    done
+  else
+    refs=("$IGW_IMAGE" "$KLB_IMAGE")
+  fi
+  "$K3D" image import "${refs[@]}" -c "$CLUSTER" >/dev/null
+  rm -f "$K8SINF"/.work/*.tar
+  for img in "$IGW_IMAGE" "$KLB_IMAGE"; do
+    docker exec "$NODE" crictl images 2>/dev/null | awk 'NR>1 {print $1":"$2}' | grep -qE "(^|/)$(printf '%s' "$img" | sed 's/[.]/\\./g')$" \
+      || { echo "FATAL: $img is not in $NODE after k3d image import"; return 1; }
+  done
+}
 
 # ── deployments ──────────────────────────────────────────────────────────────
 igw_deploy_loxilb() {

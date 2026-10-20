@@ -20,6 +20,20 @@ binary behaves exactly like upstream loxilb.
 
 ### Added
 
+- **Helm chart** `deploy/helm/loxilb-inference-gateway`: one release installs
+  the loxilb-igw DaemonSet, the kube-loxilb controller (from
+  `integration/inference-gateway`, with its CRDs) and the Gateway API objects
+  that express the endpoint-selection policy, one InferencePool + HTTPRoute per
+  `inference.pools[]` with `loxilb.io/model-name`, `loxilb.io/epselect`,
+  `loxilb.io/sse-mode` and free-form `loxilb.io/*` annotations. A pre-install
+  hook fails with the install commands when the Gateway API (v1.5.1) or
+  Inference Extension (v1.6.0) CRDs are missing, or applies them with
+  `crds.installGatewayAPI=true`; `helm test` checks the management REST flavor
+  and InferencePool -> Service -> loxilb rule. `inference.pools[].auth` renders
+  `loxilb.io/api-key-auth` / `loxilb.io/jwt-auth-profile` but NOTES warns that
+  kube-loxilb does not carry them into the rule yet. The new scenario
+  `cicd/k3d-helm-inference-gwapi` installs the chart with `values-k3d-dev.yaml`
+  and re-runs the `k3d-incluster-inference-gwapi` assertions unchanged against it.
 - **Every HTTP/2 client connection logs one line when it ends, naming why**
   (client closed, header deadline, idle timeout, a backend connection ending,
   listener delete, endpoint teardown, the P/D reaper, an error), the backend

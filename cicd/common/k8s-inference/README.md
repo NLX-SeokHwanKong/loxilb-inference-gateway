@@ -1,9 +1,11 @@
 # common/k8s-inference — shared testbed for the k3d in-cluster inference scenarios
 
-Shared by [`k3d-incluster-inference-svc`](../../k3d-incluster-inference-svc) and
-[`k3d-incluster-inference-gwapi`](../../k3d-incluster-inference-gwapi): both run
-**loxilb-inference-gateway and kube-loxilb as Pods** inside a single-node k3d
-cluster and validate the inference-gateway control path end to end.
+Shared by [`k3d-incluster-inference-svc`](../../k3d-incluster-inference-svc),
+[`k3d-incluster-inference-gwapi`](../../k3d-incluster-inference-gwapi) and
+[`k3d-helm-inference-gwapi`](../../k3d-helm-inference-gwapi) (the same stack
+installed by the Helm chart in `deploy/helm/`): all run **loxilb-inference-gateway
+and kube-loxilb as Pods** inside a single-node k3d cluster and validate the
+inference-gateway control path end to end.
 
 | File | Role |
 |---|---|
