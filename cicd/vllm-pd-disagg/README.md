@@ -65,6 +65,7 @@ Success sentinel: `SCENARIO-vllm-pd-disagg [PASS]`.
 | Phase M | `kv_transfer_params` accounting: found/missing as the two arms of one branch, plus the extractor's overflow counter |
 | Phase N | worker-scrape outcome accounting: `loxilb_ai_worker_scrape_total{result}` driven through http_error / ok / unparseable / unreachable |
 | Phase O | the P/D client-visible status matrix on :2020: normal, prefill 404 / 500 / 429, decode 404 / 500, and a keep-alive pair (normal then prefill 404 on one client connection). Per row: the response, `requests_total{status}`, `pd_requests_total{phase,status}`, `http_responses_by_status{class}`, the TTFB sample count and both engines' call counts; every other family flat. Then, on a model-routed P/D rule the phase adds on :2030 (plain HTTP) and removes: an unknown model in one read and with head and body in separate reads (503 `model_unavailable`: `requests_total{outcome="denied",status="503"}` +1 under `model="other"` and `{outcome="completed",status="503"}` +0, 5xx class +1, TTFB +0, no lifecycle record, both engines +0), and a keep-alive pair whose second request is that refusal. The class counter and TTFB histogram are pulled every 10 s, so each row polls for its sample (two-pull timeout) instead of sleeping |
+| Phase P | a P/D stream on a rule **without** `sse_mode` (:2031, added and removed by the phase): the decode mock streams 100 chunks 2 s apart, past the generic P/D idle cap (180 s). The client must get a 200 ending in `[DONE]`, every chunk, and no `HTTP/1.1` inside the body; the elapsed time must pass the cap. Before stream recognition on AI-gateway services, the reaper cut it at 180 s with a 504 written into the body |
 
 The **origin-5xx breaker demotion** for this dialect (a prefill 5xx is
 swallowed as decode-recompute, so only the origin-error streak can demote an
@@ -76,6 +77,7 @@ Fault knobs on each mock (loopback admin `:9000`): `/admin/health-fail`,
 `/admin/health-ok`, `/admin/fail-next` (one-shot origin 500; `?status=N` picks
 another status, `&skip=K` lets K inference requests through first),
 `/admin/keepalive-on|off` (HTTP/1.1 replies without `Connection: close`, so a client
-may keep its connection to the gateway), `/admin/reset`, `/admin/status` (includes
+may keep its connection to the gateway), `/admin/stream-pace?ms=N&chunks=K` (a decode stream of K chunks N ms apart; the mock
+answers other requests while it waits), `/admin/reset`, `/admin/status` (includes
 `inference_requests`, every inference POST the engine received); plus
 `--fail-every N` at process start.

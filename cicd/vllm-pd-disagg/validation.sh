@@ -3830,6 +3830,92 @@ rm -rf "$O_TMP"
 bail_check
 fi  # Phase O
 
+if should_run_phase "P"; then
+echo "#########################################"
+echo "PHASE P — A P/D STREAM ON A RULE WITHOUT sse_mode (port 2031, 1P+1D)"
+echo "#########################################"
+#
+# A P/D rule needs no sse_mode: the gateway recognises the decode leg's
+# text/event-stream on every AI-gateway connection. Unrecognised, the stream never
+# left DECODE_SENDING, so the generic P/D idle reaper measured from decode dispatch
+# and cut every generation longer than its cap (max(prefill, decode timeout) + 60 =
+# 180 s), however healthy, with a raw "HTTP/1.1 504" written into the body of the 200
+# the client was reading. Recognised, the reapers measure from the last relayed
+# byte.
+#
+# The decode mock streams 100 chunks 2 s apart (/admin/stream-pace), past the cap.
+# The client must receive a 200 that ends in [DONE], every chunk, and no status line
+# anywhere in the body. The elapsed time must pass the cap, or the row proved
+# nothing. The rule is plain HTTP on port 2031 and is removed at the end.
+
+P_PORT=2031
+P_CHUNKS=100
+P_PACE_MS=2000
+P_CAP=180
+P_DECODE=l3ep2
+P_ADMIN="http://127.0.0.1:9000/admin"
+p_del() {
+  $hexec llb1 curl -s -X DELETE "http://localhost:11111/netlox/v1/config/loadbalancer/hosturl/10.10.10.254/externalipaddress/10.10.10.254/port/${P_PORT}/protocol/tcp" >/dev/null 2>&1
+}
+
+p_del
+$hexec llb1 curl -s -X POST http://localhost:11111/netlox/v1/config/loadbalancer \
+  -H 'Content-Type: application/json' \
+  -d '{"serviceArguments":{"externalIP":"10.10.10.254","port":'"${P_PORT}"',"protocol":"tcp","sel":0,"mode":4,"host":"10.10.10.254","pd_disagg_mode":true,"monitor":true,"probetype":"http","probeport":8000,"probereq":"/health","probeTimeout":5,"probeRetries":2},"endpoints":[{"endpointIP":"31.31.31.1","targetPort":8000,"weight":1,"ep_role":1,"nixl_port":9001},{"endpointIP":"32.32.32.1","targetPort":8000,"weight":1,"ep_role":2,"nixl_port":9002}]}' \
+  >/dev/null 2>&1
+p_ready=""
+for _i in $(seq 1 24); do
+  [ "$($dexec l3h1 curl -s -m 20 -o /dev/null -w '%{http_code}' \
+        "http://10.10.10.254:${P_PORT}/v1/completions" -H "Content-Type: application/json" \
+        -d "{\"model\":\"${MODEL}\",\"prompt\":\"row14-ready\",\"max_tokens\":8}" 2>/dev/null)" = "200" ] \
+    && p_ready=1 && break
+  sleep 5
+done
+[ -n "$p_ready" ] && check "TP: the P/D rule without sse_mode on port ${P_PORT} serves" 0 \
+                  || check "TP: the P/D rule without sse_mode on port ${P_PORT} serves" 1
+
+p_arm=$($dexec "$P_DECODE" curl -s -m 5 -X POST "${P_ADMIN}/stream-pace?ms=${P_PACE_MS}&chunks=${P_CHUNKS}" 2>/dev/null)
+echo "  decode mock: $p_arm"
+echo "$p_arm" | grep -q "\"stream_chunks\": ${P_CHUNKS}" \
+  && check "TP: the decode mock streams ${P_CHUNKS} chunks ${P_PACE_MS} ms apart" 0 \
+  || check "TP: the decode mock streams ${P_CHUNKS} chunks ${P_PACE_MS} ms apart" 1
+
+echo "  streaming for about $((P_CHUNKS * P_PACE_MS / 1000)) s (the cap is ${P_CAP} s)..."
+p_out=$($dexec l3h1 curl -s --no-buffer -m $((P_CHUNKS * P_PACE_MS / 1000 + 60)) \
+  -o /tmp/phase-p-stream.body -w '%{http_code} %{time_total}' \
+  "http://10.10.10.254:${P_PORT}/v1/chat/completions" -H "Content-Type: application/json" \
+  -d "{\"model\":\"${MODEL}\",\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":\"row14\"}],\"max_tokens\":${P_CHUNKS}}" 2>/dev/null)
+$dexec "$P_DECODE" curl -s -m 5 -X POST "${P_ADMIN}/reset" >/dev/null 2>&1 || true
+p_code=${p_out%% *}
+p_secs=$(printf '%s' "${p_out#* }" | cut -d. -f1)
+p_body=$($dexec l3h1 cat /tmp/phase-p-stream.body 2>/dev/null)
+p_data=$(printf '%s\n' "$p_body" | grep -c '^data: {')
+echo "  HTTP ${p_code} after ${p_secs:-?} s; ${p_data} data chunks; last line: $(printf '%s\n' "$p_body" | grep -v '^$' | tail -1)"
+
+[ "$p_code" = "200" ] && check "TP-stream: 200" 0 \
+                      || check "TP-stream: 200 (got ${p_code})" 1
+[ "${p_secs:-0}" -gt "$P_CAP" ] \
+  && check "TP-stream: it outlived the ${P_CAP} s idle cap (${p_secs} s)" 0 \
+  || check "TP-stream: it outlived the ${P_CAP} s idle cap (${p_secs:-?} s)" 1
+if printf '%s' "$p_body" | grep -q 'HTTP/1\.'; then
+  echo "  a status line inside the body:"
+  printf '%s\n' "$p_body" | grep -n -A3 'HTTP/1\.' | head -8 | sed 's/^/    /'
+  check "TP-stream: no status line inside the body" 1
+else
+  check "TP-stream: no status line inside the body" 0
+fi
+# The content chunks plus the finish_reason chunk.
+[ "$p_data" = "$((P_CHUNKS + 1))" ] \
+  && check "TP-stream: every chunk arrived ($p_data)" 0 \
+  || check "TP-stream: every chunk arrived ($p_data of $((P_CHUNKS + 1)))" 1
+printf '%s\n' "$p_body" | grep -v '^$' | tail -1 | grep -q '^data: \[DONE\]' \
+  && check "TP-stream: it ends with [DONE]" 0 \
+  || check "TP-stream: it ends with [DONE]" 1
+
+p_del
+bail_check
+fi  # Phase P
+
 echo "#########################################"
 echo "Results"
 echo "#########################################"

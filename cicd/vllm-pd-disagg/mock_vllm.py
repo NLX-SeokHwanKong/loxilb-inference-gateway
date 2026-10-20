@@ -18,7 +18,7 @@ import socket
 import threading
 import time
 import uuid
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import HTTPServer, ThreadingHTTPServer, BaseHTTPRequestHandler
 
 MODEL_NAME = "Qwen/Qwen3-0.6B"
 SERVER_ROLE = "normal"  # Set by command-line args
@@ -55,6 +55,16 @@ _keepalive = False      # Off: every JSON reply is HTTP/1.0 + "Connection: close
                         # socket after each reply (legal for HTTP/1.1, and the
                         # single-threaded server never parks on an idle connection).
 _args = None            # Set by main(); allows handlers to access parsed args
+_serial = threading.Lock()  # Held across every request on the API port, so requests
+                        # are handled one at a time exactly as under the historical
+                        # single-threaded HTTPServer. The server is threaded only so
+                        # that a paced stream (below) can let go of it while it waits.
+_stream_pace_ms = 0     # POST /admin/stream-pace?ms=N&chunks=K: a decode stream sends
+_stream_chunks = 0      # K content chunks N ms apart, releasing _serial while it waits,
+                        # so the health probes and /metrics scrapes keep being answered
+                        # through a generation longer than the gateway's P/D idle cap
+                        # (row 14: a P/D stream on a rule without sse_mode). 0 is the
+                        # historical 10-token stream at 50 ms; /admin/reset restores it.
 # The gateway's kv_transfer_params buffer is PD_KV_PARAMS_MAX_LEN = 65536 (sockproxy.h);
 # the extractor overflows on `val_len >= capacity`. Target comfortably above it so the
 # arm does not sit on the boundary, where a one-field change to the object could silently
@@ -174,16 +184,33 @@ class MockVLLMHandler(BaseHTTPRequestHandler):
         self.close_connection = True
         self.end_headers()
 
-        for chunk in chunks:
-            line = f"data: {json.dumps(chunk)}\n\n"
-            self.wfile.write(line.encode("utf-8"))
-            self.wfile.flush()
-            time.sleep(0.05)  # Small delay between chunks
+        # A paced stream lets the other requests through while it waits; the
+        # historical stream keeps the server to itself, as it always did.
+        pace = _stream_pace_ms
+        if pace:
+            _serial.release()
+        try:
+            for chunk in chunks:
+                line = f"data: {json.dumps(chunk)}\n\n"
+                self.wfile.write(line.encode("utf-8"))
+                self.wfile.flush()
+                time.sleep(pace / 1000.0 if pace else 0.05)
 
-        self.wfile.write(b"data: [DONE]\n\n")
-        self.wfile.flush()
+            self.wfile.write(b"data: [DONE]\n\n")
+            self.wfile.flush()
+        finally:
+            if pace:
+                _serial.acquire()
 
     def do_GET(self):
+        with _serial:
+            self._do_get()
+
+    def do_POST(self):
+        with _serial:
+            self._do_post()
+
+    def _do_get(self):
         if self.path == "/v1/models":
             self._handle_models()
         elif self.path == "/health":
@@ -220,7 +247,7 @@ class MockVLLMHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def do_POST(self):
+    def _do_post(self):
         content_len = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(content_len).decode("utf-8") if content_len > 0 else "{}"
 
@@ -395,6 +422,8 @@ class MockVLLMHandler(BaseHTTPRequestHandler):
     def _send_decode_stream(self, cmpl_id, model):
         """Decode: SSE streaming response."""
         tokens = ["Hello", "!", " I", " am", " a", " mock", " vLLM", " decode", " response", "."]
+        if _stream_chunks:
+            tokens = [f" t{i}" for i in range(_stream_chunks)]
         chunks = []
         for i, token in enumerate(tokens):
             chunks.append({
@@ -500,7 +529,7 @@ class AdminHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         global _health_ok, _fail_next, _fail_next_status, _kv_params_mode, _metrics_mode
-        global _keepalive, _fail_next_skip
+        global _keepalive, _fail_next_skip, _stream_pace_ms, _stream_chunks
         if not self._auth_ok():
             self.send_response(401)
             self.end_headers()
@@ -526,6 +555,23 @@ class AdminHandler(BaseHTTPRequestHandler):
             self._reply_json({"fail_next": True, "fail_next_status": status,
                               "fail_next_skip": skip})
             print(f"[{SERVER_ROLE}] [admin] fail-next ARMED status={status} skip={skip}",
+                  flush=True)
+        elif path == "/admin/stream-pace":
+            # ?ms=N&chunks=K, both required and positive; /admin/reset turns it off.
+            ms, chunks = 0, 0
+            for kv in query.split("&") if query else []:
+                k, _, v = kv.partition("=")
+                if k == "ms":
+                    ms = int(v) if v.isdigit() else 0
+                elif k == "chunks":
+                    chunks = int(v) if v.isdigit() else 0
+            if not 0 < ms <= 60000 or not 0 < chunks <= 100000:
+                self.send_response(400)
+                self.end_headers()
+                return
+            _stream_pace_ms, _stream_chunks = ms, chunks
+            self._reply_json({"stream_pace_ms": ms, "stream_chunks": chunks})
+            print(f"[{SERVER_ROLE}] [admin] stream pace = {chunks} chunks every {ms} ms",
                   flush=True)
         elif path in ("/admin/keepalive-on", "/admin/keepalive-off"):
             _keepalive = path.endswith("-on")
@@ -555,9 +601,11 @@ class AdminHandler(BaseHTTPRequestHandler):
             _keepalive = False
             _kv_params_mode = "on"
             _metrics_mode = "absent"
+            _stream_pace_ms, _stream_chunks = 0, 0
             self._reply_json({"fail_next": False, "fail_next_status": _fail_next_status,
                               "keepalive": _keepalive, "kv_params_mode": _kv_params_mode,
-                              "metrics_mode": _metrics_mode})
+                              "metrics_mode": _metrics_mode, "stream_pace_ms": 0,
+                              "stream_chunks": 0})
             print(f"[{SERVER_ROLE}] [admin] knobs RESET", flush=True)
         elif self.path == "/admin/health-fail":
             _health_ok = False
@@ -596,6 +644,8 @@ class AdminHandler(BaseHTTPRequestHandler):
                 "inference_requests": _inference_count,
                 "kv_params_mode": _kv_params_mode,
                 "metrics_mode": _metrics_mode,
+                "stream_pace_ms": _stream_pace_ms,
+                "stream_chunks": _stream_chunks,
                 "role": SERVER_ROLE,
                 "request_count": _request_count,
             }).encode()
@@ -674,7 +724,8 @@ def main():
 
     # Start admin HTTP server on loopback (127.0.0.1:9000) as daemon thread.
     # Provides /admin/health-fail, /admin/health-ok, /admin/fail-next[?status=N&skip=K],
-    # /admin/keepalive-on|off, /admin/reset, /admin/status endpoints.
+    # /admin/keepalive-on|off, /admin/stream-pace?ms=N&chunks=K, /admin/reset,
+    # /admin/status endpoints.
     admin_thread = threading.Thread(target=_start_admin_server, daemon=True)
     admin_thread.start()
 
@@ -688,7 +739,10 @@ def main():
             daemon=True,
         )
         nixl_thread.start()
-    server = HTTPServer((args.host, args.port), MockVLLMHandler)
+    # Threaded for the paced stream only: _serial keeps every other request
+    # one at a time.
+    server = ThreadingHTTPServer((args.host, args.port), MockVLLMHandler)
+    server.daemon_threads = True
     print(f"Mock vLLM server starting: role={SERVER_ROLE} addr={args.host}:{args.port} nixl_port={args.nixl_port or 'disabled'} admin=127.0.0.1:9000 fail_every={args.fail_every or 'disabled'} ep_idx={EP_IDX}")
     print(f"Model: {MODEL_NAME}")
     try:
