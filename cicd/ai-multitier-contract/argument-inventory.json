@@ -3,7 +3,7 @@
   "scope": "LoadbalanceEntry fields and AI KV inventory query parameters; not a test-coverage claim",
   "sourceSha256": {
     "swagger-extras.yml": "7d7d336f949d574ff8d71502def05c4b1cd4a8d53e8716dbcc6f878d3a19c132",
-    "swagger.yml": "342682e0c0354fb394123ef7a2a1783c62baa5418da640bacc7caac653acae38"
+    "swagger.yml": "032af9fc24b2fc53290ba4c9d1ba811e62c5dd141d3787881fabe7a2fd935359"
   },
   "fields": [
     {
@@ -2109,7 +2109,7 @@
       "required": false,
       "contract": {
         "default": false,
-        "description": "Enable detection of text/event-stream responses and the associated streaming idle-timeout protection. This flag controls Gateway SSE handling, not whether the backend implements an OpenAI API. Active detected streams remain subject to max_stream_duration_sec and the system stream cap; enabling SSE does not make them unbounded.",
+        "description": "Enable detection of text/event-stream responses and the associated streaming idle-timeout protection. A rule with pd_disagg_mode always has it, whether or not sse_mode is set. This flag controls Gateway SSE handling, not whether the backend implements an OpenAI API. Active detected streams remain subject to max_stream_duration_sec and the system stream cap; enabling SSE does not make them unbounded.",
         "type": "boolean",
         "x-nullable": false
       }

@@ -3830,6 +3830,211 @@ rm -rf "$O_TMP"
 bail_check
 fi  # Phase O
 
+if should_run_phase "P"; then
+echo "#########################################"
+echo "PHASE P — HOW A P/D ANSWER ENDS FOR THE CLIENT (port 2031, 1P+1D, no sse_mode)"
+echo "#########################################"
+#
+# Row 14. A P/D decode answer the engine delimits by closing (no length, no chunked
+# framing) was relayed whole, but after [DONE] the flow reset to NONE, US-H202 detached
+# the client as a reusable keep-alive connection when the engine closed, and the
+# client's connection was never closed: the answer never ended. The fix closes the
+# client, after its cached bytes are flushed, when its answer ran to the engine's EOF.
+# A framed answer (chunked, as vLLM's uvicorn streams, or with a length) keeps the
+# client's connection for its next request, as before.
+#
+# The rule is plain HTTP on port 2031, P/D without sse_mode (the data plane implies it
+# for P/D), added and removed by the phase.
+#   PA  close-delimited stream: 100 chunks 2 s apart, past the generic P/D idle cap
+#       (180 s), from an engine that ends it by closing. The client must get every
+#       chunk and [DONE], no status line in the body, curl rc 0, and its connection
+#       closed within P_END_BOUND s of the stream's end.
+#   PB  chunked stream on a kept client connection: two streamed requests on one curl
+#       connection; both 200 ending in [DONE], the second rides the first's connection.
+#   PC  length-delimited non-streaming answer on a kept client connection: two requests
+#       on one curl connection; both 200, the second rides the first's connection.
+
+P_PORT=2031
+P_CHUNKS=100
+P_PACE_MS=2000
+P_CAP=180
+P_END_BOUND=10
+P_PREFILL=l3ep1
+P_DECODE=l3ep2
+P_ADMIN="http://127.0.0.1:9000/admin"
+P_URL="http://10.10.10.254:${P_PORT}/v1/chat/completions"
+p_del() {
+  $hexec llb1 curl -s -X DELETE "http://localhost:11111/netlox/v1/config/loadbalancer/hosturl/10.10.10.254/externalipaddress/10.10.10.254/port/${P_PORT}/protocol/tcp" >/dev/null 2>&1
+}
+# p_mock <ep> <knob> — POST an admin knob on one engine mock; prints its JSON reply.
+p_mock() {
+  $dexec "$1" curl -s -m 5 -X POST "${P_ADMIN}/$2" 2>/dev/null
+}
+p_reset() {
+  p_mock "$P_PREFILL" reset >/dev/null; p_mock "$P_DECODE" reset >/dev/null
+}
+# p_pair <tag> <stream:true|false> — two requests on ONE curl connection. Prints
+# "<code1> <connects1> <code2> <connects2> <rc>"; bodies in /tmp/phase-p-<tag>-{1,2}.body.
+p_pair() {
+  local body="{\"model\":\"${MODEL}\",\"stream\":$2,\"messages\":[{\"role\":\"user\",\"content\":\"row14-$1\"}],\"max_tokens\":8}"
+  local out rc
+  out=$($dexec l3h1 curl -s --no-buffer -m 30 -o "/tmp/phase-p-$1-1.body" \
+          -w '%{http_code} %{num_connects} ' "$P_URL" -H "Content-Type: application/json" -d "$body" \
+        --next -s --no-buffer -m 30 -o "/tmp/phase-p-$1-2.body" \
+          -w '%{http_code} %{num_connects} ' "$P_URL" -H "Content-Type: application/json" -d "$body" \
+        </dev/null 2>/dev/null)
+  rc=$?
+  echo "${out}${rc}"
+}
+# p_ends_done <file> — the body's last non-empty line is data: [DONE].
+p_ends_done() {
+  $dexec l3h1 cat "$1" 2>/dev/null | grep -v '^$' | tail -1 | grep -q '^data: \[DONE\]'
+}
+
+p_del
+$hexec llb1 curl -s -X POST http://localhost:11111/netlox/v1/config/loadbalancer \
+  -H 'Content-Type: application/json' \
+  -d '{"serviceArguments":{"externalIP":"10.10.10.254","port":'"${P_PORT}"',"protocol":"tcp","sel":0,"mode":4,"host":"10.10.10.254","pd_disagg_mode":true,"monitor":true,"probetype":"http","probeport":8000,"probereq":"/health","probeTimeout":5,"probeRetries":2},"endpoints":[{"endpointIP":"31.31.31.1","targetPort":8000,"weight":1,"ep_role":1,"nixl_port":9001},{"endpointIP":"32.32.32.1","targetPort":8000,"weight":1,"ep_role":2,"nixl_port":9002}]}' \
+  >/dev/null 2>&1
+p_ready=""
+for _i in $(seq 1 24); do
+  [ "$($dexec l3h1 curl -s -m 20 -o /dev/null -w '%{http_code}' \
+        "http://10.10.10.254:${P_PORT}/v1/completions" -H "Content-Type: application/json" \
+        -d "{\"model\":\"${MODEL}\",\"prompt\":\"row14-ready\",\"max_tokens\":8}" 2>/dev/null)" = "200" ] \
+    && p_ready=1 && break
+  sleep 5
+done
+[ -n "$p_ready" ] && check "TP: the P/D rule without sse_mode on port ${P_PORT} serves" 0 \
+                  || check "TP: the P/D rule without sse_mode on port ${P_PORT} serves" 1
+
+# ── PA: a close-delimited stream ───────────────────────────────────────────────────────
+p_reset
+p_arm=$(p_mock "$P_DECODE" "stream-pace?ms=${P_PACE_MS}&chunks=${P_CHUNKS}")
+echo "  decode mock: $p_arm"
+echo "$p_arm" | grep -q "\"stream_chunks\": ${P_CHUNKS}" \
+  && check "TP-A: the decode mock streams ${P_CHUNKS} chunks ${P_PACE_MS} ms apart, close-delimited" 0 \
+  || check "TP-A: the decode mock streams ${P_CHUNKS} chunks ${P_PACE_MS} ms apart, close-delimited" 1
+
+# The content chunks plus the finish_reason chunk, each followed by one pace.
+P_STREAM_SECS=$(( (P_CHUNKS + 1) * P_PACE_MS / 1000 ))
+echo "  streaming for about ${P_STREAM_SECS} s (the cap is ${P_CAP} s)..."
+# The gateway's own account of the row: its data-plane log from here on.
+P_DPLOG=/var/log/loxilbdp.log
+P_RE_REAP='generic P/D idle reaper|\[REAPER\]|ERR-01|\[ANSWER_STARTED\]|\[SSE_CAP\]'
+p_log0=$($dexec llb1 sh -c "wc -l < ${P_DPLOG}" 2>/dev/null)
+p_log0=${p_log0:-0}
+p_t0=$(date +%s)
+$dexec l3h1 curl -s --no-buffer -m $((P_STREAM_SECS + 60)) \
+  -o /tmp/phase-p-stream.body -w '%{http_code} %{time_total}' "$P_URL" \
+  -H "Content-Type: application/json" \
+  -d "{\"model\":\"${MODEL}\",\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":\"row14\"}],\"max_tokens\":${P_CHUNKS}}" \
+  </dev/null >/tmp/phase-p-curl.out 2>/dev/null &
+p_pid=$!
+# The gateway's sockets after the stream's end: the client's connection on the rule's
+# port must be gone, and with it no leg left open.
+sleep $((P_STREAM_SECS + P_END_BOUND + 3))
+p_ss=$($hexec llb1 ss -tanoi 2>/dev/null)
+echo "  gateway sockets $(( $(date +%s) - p_t0 )) s into the row (port ${P_PORT} / 8000):"
+printf '%s\n' "$p_ss" | grep -A1 -E ":${P_PORT}[[:space:]]|:8000[[:space:]]" | sed 's/^/    /'
+wait "$p_pid"
+p_rc=$?
+p_out=$(cat /tmp/phase-p-curl.out 2>/dev/null)
+p_code=${p_out%% *}
+p_secs=$(printf '%s' "${p_out#* }" | cut -d. -f1)
+p_body=$($dexec l3h1 cat /tmp/phase-p-stream.body 2>/dev/null)
+p_data=$(printf '%s\n' "$p_body" | grep -c '^data: {')
+echo "  HTTP ${p_code} after ${p_secs:-?} s (curl rc=${p_rc}); ${p_data} data chunks; last line: $(printf '%s\n' "$p_body" | grep -v '^$' | tail -1)"
+p_reap=$($dexec llb1 sh -c "tail -n +$((p_log0 + 1)) ${P_DPLOG}" 2>/dev/null | grep -E "$P_RE_REAP")
+echo "  gateway reaper/stream lines during the row: $(printf '%s' "$p_reap" | grep -c .)"
+printf '%s\n' "$p_reap" | grep . | head -20 | sed 's/^/    /'
+# The whole data-plane log for the row, so the real phase path can be read.
+p_all=$($dexec llb1 sh -c "tail -n +$((p_log0 + 1)) ${P_DPLOG}" 2>/dev/null)
+p_all_n=$(printf '%s' "$p_all" | grep -c .)
+echo "  gateway data-plane log during the row (${p_all_n} lines):"
+if [ "$p_all_n" -le 1500 ]; then
+  printf '%s\n' "$p_all" | sed 's/^/    | /'
+else
+  printf '%s\n' "$p_all" | head -750 | sed 's/^/    | /'
+  echo "    | ... $((p_all_n - 1500)) lines elided ..."
+  printf '%s\n' "$p_all" | tail -750 | sed 's/^/    | /'
+fi
+
+[ "$p_code" = "200" ] && check "TP-A: 200" 0 \
+                      || check "TP-A: 200 (got ${p_code})" 1
+# rc 28 is curl's own deadline: everything arrived but the gateway never ended the answer.
+[ "$p_rc" = "0" ] && check "TP-A: the answer ended when the engine closed (curl rc=0)" 0 \
+                  || check "TP-A: the answer ended when the engine closed (curl rc=${p_rc})" 1
+[ "${p_secs:-0}" -le $((P_STREAM_SECS + P_END_BOUND)) ] \
+  && check "TP-A: the client's connection closed within ${P_END_BOUND} s of the stream's end (${p_secs} s, stream ${P_STREAM_SECS} s)" 0 \
+  || check "TP-A: the client's connection closed within ${P_END_BOUND} s of the stream's end (${p_secs:-?} s, stream ${P_STREAM_SECS} s)" 1
+p_open=$(printf '%s\n' "$p_ss" | grep -E "^ESTAB" | grep -cE "10\.10\.10\.254:${P_PORT}[[:space:]]+10\.10\.10\.1:")
+[ "$p_open" = "0" ] && check "TP-A: no client connection left open on the gateway after the stream's end" 0 \
+                    || check "TP-A: no client connection left open on the gateway after the stream's end (${p_open} ESTAB)" 1
+[ "${p_secs:-0}" -gt "$P_CAP" ] \
+  && check "TP-A: it outlived the ${P_CAP} s idle cap (${p_secs} s)" 0 \
+  || check "TP-A: it outlived the ${P_CAP} s idle cap (${p_secs:-?} s)" 1
+if printf '%s' "$p_body" | grep -q 'HTTP/1\.'; then
+  echo "  a status line inside the body:"
+  printf '%s\n' "$p_body" | grep -n -A3 'HTTP/1\.' | head -8 | sed 's/^/    /'
+  check "TP-A: no status line inside the body" 1
+else
+  check "TP-A: no status line inside the body" 0
+fi
+# Flush, then close: the last chunks and [DONE] reached the client before its close.
+[ "$p_data" = "$((P_CHUNKS + 1))" ] \
+  && check "TP-A: every chunk arrived before the close ($p_data)" 0 \
+  || check "TP-A: every chunk arrived before the close ($p_data of $((P_CHUNKS + 1)))" 1
+printf '%s\n' "$p_body" | grep -v '^$' | tail -1 | grep -q '^data: \[DONE\]' \
+  && check "TP-A: it ends with [DONE]" 0 \
+  || check "TP-A: it ends with [DONE]" 1
+# What the client received can look whole even when a reaper acted on the stream;
+# the gateway's log says whether one did.
+printf '%s' "$p_reap" | grep -qE 'generic P/D idle reaper|\[REAPER\]|ERR-01' \
+  && check "TP-A: no P/D reaper acted on the live stream" 1 \
+  || check "TP-A: no P/D reaper acted on the live stream" 0
+
+# ── PB: a chunked stream on a kept client connection ───────────────────────────────────
+# Both engines answer HTTP/1.1 without "close" and the decode engine streams chunked,
+# as vLLM's uvicorn does. The engine still closes its socket after the 0-chunk: the
+# answer was framed, so the client keeps its connection.
+p_reset
+pb_ka=$(p_mock "$P_PREFILL" keepalive-on)$(p_mock "$P_DECODE" keepalive-on)
+pb_ch=$(p_mock "$P_DECODE" stream-chunked-on)
+echo "$pb_ka" | grep -o '"keepalive": true' | wc -l | grep -q '^ *2$' && echo "$pb_ch" | grep -q '"stream_chunked": true' \
+  && check "TP-B: engines answer keep-alive, the decode engine streams chunked (control armed)" 0 \
+  || check "TP-B: engines answer keep-alive, the decode engine streams chunked (control armed)" 1
+read -r pb_c1 pb_n1 pb_c2 pb_n2 pb_rc <<< "$(p_pair chunked true)"
+echo "  pair: request 1 HTTP ${pb_c1} (connects ${pb_n1}), request 2 HTTP ${pb_c2} (connects ${pb_n2}), curl rc=${pb_rc}"
+[ "$pb_c1" = "200" ] && [ "$pb_c2" = "200" ] && [ "$pb_rc" = "0" ] \
+  && check "TP-B: both streams 200, curl rc=0" 0 \
+  || check "TP-B: both streams 200, curl rc=0 (got ${pb_c1}, ${pb_c2}, rc ${pb_rc})" 1
+p_ends_done /tmp/phase-p-chunked-1.body && p_ends_done /tmp/phase-p-chunked-2.body \
+  && check "TP-B: both streams end with [DONE]" 0 \
+  || check "TP-B: both streams end with [DONE]" 1
+[ "$pb_n1" = "1" ] && [ "$pb_n2" = "0" ] \
+  && check "TP-B: the second stream rode the first's connection (connects 1, 0)" 0 \
+  || check "TP-B: the second stream rode the first's connection (connects ${pb_n1}, ${pb_n2})" 1
+
+# ── PC: a length-delimited answer on a kept client connection ──────────────────────────
+p_reset
+pc_ka=$(p_mock "$P_PREFILL" keepalive-on)$(p_mock "$P_DECODE" keepalive-on)
+echo "$pc_ka" | grep -o '"keepalive": true' | wc -l | grep -q '^ *2$' \
+  && check "TP-C: engines answer keep-alive with a Content-Length (control armed)" 0 \
+  || check "TP-C: engines answer keep-alive with a Content-Length (control armed)" 1
+read -r pc_c1 pc_n1 pc_c2 pc_n2 pc_rc <<< "$(p_pair length false)"
+echo "  pair: request 1 HTTP ${pc_c1} (connects ${pc_n1}), request 2 HTTP ${pc_c2} (connects ${pc_n2}), curl rc=${pc_rc}"
+[ "$pc_c1" = "200" ] && [ "$pc_c2" = "200" ] && [ "$pc_rc" = "0" ] \
+  && check "TP-C: both answers 200, curl rc=0" 0 \
+  || check "TP-C: both answers 200, curl rc=0 (got ${pc_c1}, ${pc_c2}, rc ${pc_rc})" 1
+[ "$pc_n1" = "1" ] && [ "$pc_n2" = "0" ] \
+  && check "TP-C: the second request rode the first's connection (connects 1, 0)" 0 \
+  || check "TP-C: the second request rode the first's connection (connects ${pc_n1}, ${pc_n2})" 1
+
+p_reset
+p_del
+bail_check
+fi  # Phase P
+
 echo "#########################################"
 echo "Results"
 echo "#########################################"

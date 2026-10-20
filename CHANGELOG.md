@@ -201,6 +201,27 @@ binary behaves exactly like upstream loxilb.
 
 ### Fixed
 
+- **A P/D answer sent without a length or chunked framing never ended for the
+  client.** The decode answer was relayed whole, but after `[DONE]` the flow
+  reset, and when the engine then closed its connection the gateway kept the
+  client's connection open as if for its next request. Such an answer ends
+  only when the connection closes, so the client waited until its own
+  timeout. The client's connection is now closed with the engine's, after
+  every byte still owed to it is sent. This affects only engines that end
+  their body by closing; vLLM streams chunked and ends on the last chunk, so
+  its answers are framed and its clients keep their connection as before.
+- **The gateway no longer writes a status line into an answer the client has
+  already begun to receive,** on any path that answers on its own (refusals,
+  outages, reaper timeouts): a stream whose headers are out ends with an SSE
+  error event naming the code, anything else is closed. This is a guarantee
+  of the code, not the fix of an observed failure.
+- **Five answers the gateway writes raw were sent in clear on a TLS client
+  connection:** the P/D destroy-path 503 (prefill) and 502/503 (decode), the
+  502 when no backend took the request at connect, the 400 for an
+  unparseable request refused before admission, and the LlamaFirewall 403.
+  Each wrote with a plain send, bypassing the client's TLS session, so a TLS
+  client got plaintext bytes inside the encrypted stream in place of the
+  answer. They now go through TLS on a TLS client.
 - **loxilb started with `--nonlp` crashed in its periodic interface
   reconciliation** (a nil netlink handle behind the interface filter). The
   `--blacklist` / `--whitelist` filter is now set up without netlink, so

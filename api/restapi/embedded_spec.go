@@ -5977,7 +5977,7 @@ func init() {
             },
             "sse_mode": {
               "default": false,
-              "description": "Enable detection of text/event-stream responses and the associated streaming idle-timeout protection. This flag controls Gateway SSE handling, not whether the backend implements an OpenAI API. Active detected streams remain subject to max_stream_duration_sec and the system stream cap; enabling SSE does not make them unbounded.",
+              "description": "Enable detection of text/event-stream responses and the associated streaming idle-timeout protection. A rule with pd_disagg_mode always has it, whether or not sse_mode is set. This flag controls Gateway SSE handling, not whether the backend implements an OpenAI API. Active detected streams remain subject to max_stream_duration_sec and the system stream cap; enabling SSE does not make them unbounded.",
               "type": "boolean",
               "x-nullable": false
             },
@@ -42141,7 +42141,7 @@ func init() {
               ]
             },
             "sse_mode": {
-              "description": "Enable detection of text/event-stream responses and the associated streaming idle-timeout protection. This flag controls Gateway SSE handling, not whether the backend implements an OpenAI API. Active detected streams remain subject to max_stream_duration_sec and the system stream cap; enabling SSE does not make them unbounded.",
+              "description": "Enable detection of text/event-stream responses and the associated streaming idle-timeout protection. A rule with pd_disagg_mode always has it, whether or not sse_mode is set. This flag controls Gateway SSE handling, not whether the backend implements an OpenAI API. Active detected streams remain subject to max_stream_duration_sec and the system stream cap; enabling SSE does not make them unbounded.",
               "type": "boolean",
               "default": false,
               "x-nullable": false
@@ -43416,7 +43416,7 @@ func init() {
           ]
         },
         "sse_mode": {
-          "description": "Enable detection of text/event-stream responses and the associated streaming idle-timeout protection. This flag controls Gateway SSE handling, not whether the backend implements an OpenAI API. Active detected streams remain subject to max_stream_duration_sec and the system stream cap; enabling SSE does not make them unbounded.",
+          "description": "Enable detection of text/event-stream responses and the associated streaming idle-timeout protection. A rule with pd_disagg_mode always has it, whether or not sse_mode is set. This flag controls Gateway SSE handling, not whether the backend implements an OpenAI API. Active detected streams remain subject to max_stream_duration_sec and the system stream cap; enabling SSE does not make them unbounded.",
           "type": "boolean",
           "default": false,
           "x-nullable": false

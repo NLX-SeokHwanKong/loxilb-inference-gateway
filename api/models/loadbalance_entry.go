@@ -1001,7 +1001,7 @@ type LoadbalanceEntryServiceArguments struct {
 	// Enum: [off both request response]
 	SockMapMode *string `json:"sockMapMode,omitempty"`
 
-	// Enable detection of text/event-stream responses and the associated streaming idle-timeout protection. This flag controls Gateway SSE handling, not whether the backend implements an OpenAI API. Active detected streams remain subject to max_stream_duration_sec and the system stream cap; enabling SSE does not make them unbounded.
+	// Enable detection of text/event-stream responses and the associated streaming idle-timeout protection. A rule with pd_disagg_mode always has it, whether or not sse_mode is set. This flag controls Gateway SSE handling, not whether the backend implements an OpenAI API. Active detected streams remain subject to max_stream_duration_sec and the system stream cap; enabling SSE does not make them unbounded.
 	SseMode bool `json:"sse_mode,omitempty"`
 
 	// Backend connect timeout in milliseconds, used when an L7 policy is attached. Zero uses 500 ms. Implementation gap: the value narrows to signed C int for poll without an admission bound; values above 2147483647 can become negative and must not be treated as supported deadlines. See serviceArguments for update/readback limitations.
