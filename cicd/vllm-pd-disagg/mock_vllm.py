@@ -77,6 +77,10 @@ _stream_end_hold = 0    # stream ends instead of "data: [DONE]" (and the 0-chunk
                         # the last content chunk (an engine dying mid-stream). Both
                         # leave the gateway's graceful-[DONE] sweep to end the client's
                         # answer (Q2). "" is the historical ending; /admin/reset restores it.
+_answer_delay_ms = 0    # POST /admin/answer-delay?ms=N (1..60000): every inference request
+                        # is counted on arrival, then held N ms before its answer (a slow
+                        # engine, for a client that leaves while it waits). 0 = no hold;
+                        # /admin/reset restores it.
 # The gateway's kv_transfer_params buffer is PD_KV_PARAMS_MAX_LEN = 65536 (sockproxy.h);
 # the extractor overflows on `val_len >= capacity`. Target comfortably above it so the
 # arm does not sit on the boundary, where a one-field change to the object could silently
@@ -303,6 +307,8 @@ class MockVLLMHandler(BaseHTTPRequestHandler):
         if self.path in ("/v1/chat/completions", "/v1/completions"):
             with _request_count_lock:
                 _inference_count += 1
+            if _answer_delay_ms:
+                time.sleep(_answer_delay_ms / 1000.0)
         global _fail_next_skip
         if _fail_next and _fail_next_skip > 0 and \
                 self.path in ("/v1/chat/completions", "/v1/completions"):
@@ -569,7 +575,7 @@ class AdminHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         global _health_ok, _fail_next, _fail_next_status, _kv_params_mode, _metrics_mode
         global _keepalive, _fail_next_skip, _stream_pace_ms, _stream_chunks
-        global _stream_chunked, _stream_end_mode, _stream_end_hold
+        global _stream_chunked, _stream_end_mode, _stream_end_hold, _answer_delay_ms
         if not self._auth_ok():
             self.send_response(401)
             self.end_headers()
@@ -631,6 +637,20 @@ class AdminHandler(BaseHTTPRequestHandler):
                               "stream_end_hold": _stream_end_hold})
             print(f"[{SERVER_ROLE}] [admin] stream end = {_stream_end_mode} "
                   f"{_stream_end_hold} s", flush=True)
+        elif path == "/admin/answer-delay":
+            # ?ms=N, 1..60000; /admin/reset turns it off.
+            ms = 0
+            for kv in query.split("&") if query else []:
+                k, _, v = kv.partition("=")
+                if k == "ms":
+                    ms = int(v) if v.isdigit() else 0
+            if not 0 < ms <= 60000:
+                self.send_response(400)
+                self.end_headers()
+                return
+            _answer_delay_ms = ms
+            self._reply_json({"answer_delay_ms": ms})
+            print(f"[{SERVER_ROLE}] [admin] answer delay = {ms} ms", flush=True)
         elif path in ("/admin/stream-chunked-on", "/admin/stream-chunked-off"):
             _stream_chunked = path.endswith("-on")
             self._reply_json({"stream_chunked": _stream_chunked})
@@ -666,11 +686,13 @@ class AdminHandler(BaseHTTPRequestHandler):
             _stream_pace_ms, _stream_chunks = 0, 0
             _stream_chunked = False
             _stream_end_mode, _stream_end_hold = "", 0
+            _answer_delay_ms = 0
             self._reply_json({"fail_next": False, "fail_next_status": _fail_next_status,
                               "keepalive": _keepalive, "kv_params_mode": _kv_params_mode,
                               "metrics_mode": _metrics_mode, "stream_pace_ms": 0,
                               "stream_chunks": 0, "stream_chunked": False,
-                              "stream_end_mode": "", "stream_end_hold": 0})
+                              "stream_end_mode": "", "stream_end_hold": 0,
+                              "answer_delay_ms": 0})
             print(f"[{SERVER_ROLE}] [admin] knobs RESET", flush=True)
         elif self.path == "/admin/health-fail":
             _health_ok = False
@@ -714,6 +736,7 @@ class AdminHandler(BaseHTTPRequestHandler):
                 "stream_chunked": _stream_chunked,
                 "stream_end_mode": _stream_end_mode,
                 "stream_end_hold": _stream_end_hold,
+                "answer_delay_ms": _answer_delay_ms,
                 "role": SERVER_ROLE,
                 "request_count": _request_count,
             }).encode()

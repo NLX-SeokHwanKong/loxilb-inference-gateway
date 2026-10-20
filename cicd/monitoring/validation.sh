@@ -5,7 +5,7 @@
 #
 # T0:  Prometheus scrapes loxilb (up==1) within scrape-duration budget
 # T1:  metrics disable → up==0; re-enable → up==1 (scrape access matrix)
-# T2:  N SSE completions → Δ loxilb_ai_requests_total{model="sse-test",status="200"} == N
+# T2:  N SSE completions → Δ loxilb_ai_requests_total{model="sse-test",outcome="completed",status="200"} == N
 # T3:  M plain-JSON 500s via the AI rule → Δ ai_requests_total{status="500"} == M
 #      (regression guard: non-SSE responses on AI rules must be recorded);
 #      T3b: a mode-4 rule without sse_mode/pd/apikey stays out of AI accounting
@@ -87,8 +87,8 @@ if [ "$enabled" = "1" ]; then ok "up==1 after re-enable"; else fail "up never re
 
 # ── T2: SSE ground truth ──────────────────────────────────────────────────────
 echo ""
-echo "T2: 3 SSE completions → Δ ai_requests_total{model=sse-test,status=200} == 3"
-base_sse=$(pq 'loxilb_ai_requests_total{model="sse-test",status="200"}')
+echo "T2: 3 SSE completions → Δ ai_requests_total{model=sse-test,outcome=completed,status=200} == 3"
+base_sse=$(pq 'loxilb_ai_requests_total{model="sse-test",outcome="completed",status="200"}')
 for i in 1 2 3; do
   $hexec l3h1 curl -s --max-time 15 -N -X POST \
     -H "Content-Type: application/json" -H "X-Model: sse-test" \
@@ -97,7 +97,7 @@ for i in 1 2 3; do
 done
 # Poll until the sweep+scrape observe all 3 (see wait_delta); avoids a lone
 # too-early sample reading 0 while the 10s stats sweep has not yet run.
-d=$(wait_delta 'loxilb_ai_requests_total{model="sse-test",status="200"}' "$base_sse" 3)
+d=$(wait_delta 'loxilb_ai_requests_total{model="sse-test",outcome="completed",status="200"}' "$base_sse" 3)
 if intcmp "$d" == 3; then ok "Δ == 3"; else fail "Δ == $d (want 3; base $base_sse)"; fi
 
 # ── T3: non-SSE recording guard ──────────────────────────────────────
@@ -105,15 +105,15 @@ if intcmp "$d" == 3; then ok "Δ == 3"; else fail "Δ == $d (want 3; base $base_
 # ai_gw_mode is derived from sse_mode/pd_disagg/apikey, so the SSE rule is the
 # AI rule and the sse_mode=false rule below is deliberately outside AI accounting.
 echo ""
-echo "T3: 4 plain-JSON 500s via the AI rule → Δ ai_requests_total{model=sse-test,status=500} == 4"
-base_json=$(pq 'loxilb_ai_requests_total{model="sse-test",status="500"}')
+echo "T3: 4 plain-JSON 500s via the AI rule → Δ ai_requests_total{model=sse-test,outcome=completed,status=500} == 4"
+base_json=$(pq 'loxilb_ai_requests_total{model="sse-test",outcome="completed",status="500"}')
 for i in 1 2 3 4; do
   $hexec l3h1 curl -s --max-time 8 -X POST \
     -H "Content-Type: application/json" -H "X-Model: sse-test" \
     -d '{"model":"sse-test","messages":[{"role":"user","content":"e"}]}' \
     "http://10.10.10.254:2020/v1/error" >/dev/null 2>&1
 done
-d=$(wait_delta 'loxilb_ai_requests_total{model="sse-test",status="500"}' "$base_json" 4)
+d=$(wait_delta 'loxilb_ai_requests_total{model="sse-test",outcome="completed",status="500"}' "$base_json" 4)
 if intcmp "$d" == 4; then ok "Δ == 4 (plain-JSON responses recorded)"; else fail "Δ == $d (want 4; base $base_json)"; fi
 
 echo "T3b: requests on a non-AI mode-4 rule stay out of AI accounting"

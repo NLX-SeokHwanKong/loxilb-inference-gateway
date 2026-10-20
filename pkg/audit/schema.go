@@ -94,6 +94,12 @@ const (
 // free-text-shaped field in the envelope and it is not free text: a SIEM
 // rule written against a value here must not break when a log line is
 // reworded.
+//
+// backend_conn is also what a response cut by its listener going away (the
+// data plane's listener_closed) reads: the closest available reason, though
+// the cause is the gateway, not a backend. See aiCompleteReason in
+// pkg/loxinet; a gateway_shutdown reason is the follow-up for the next
+// revision of this vocabulary.
 type Reason string
 
 const (

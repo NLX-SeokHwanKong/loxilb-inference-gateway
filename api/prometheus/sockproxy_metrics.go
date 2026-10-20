@@ -187,6 +187,12 @@ typedef struct proxy_metrics_snapshot {
 
     // Terminators the graceful-[DONE] sweep wrote for a silent decode engine (the mechanism behind decode/truncated). TAIL-APPEND ONLY — same three-way lockstep.
     uint64_t pd_terminator_synthesized;
+
+    // Reaper ends handed to the health thread because the owner worker could not take them (F-13). TAIL-APPEND ONLY — same three-way lockstep.
+    uint64_t reap_fallback;
+
+    // Requests with no usable Host at dispatch on a listener whose pools name models (ROUTE-01's second defence). TAIL-APPEND ONLY — same three-way lockstep.
+    uint64_t route_host_missing;
 } proxy_metrics_snapshot_t;
 
 // C function from sockproxy.c
@@ -853,6 +859,22 @@ var (
 			Help: "P/D streams the gateway ended by writing the SSE [DONE] terminator the decode engine never sent (the graceful-[DONE] sweep, after the engine went silent). The mechanism behind part of loxilb_ai_pd_requests_total{phase=\"decode\",status=\"truncated\"}: the rest of that series is answers the gateway cut with an error (stream timeout, idle cap, duration cap).",
 		},
 	)
+
+	// Metric #41: reaper ends the owner worker could not take (Counter)
+	reapFallbackTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "loxilb_ai_reap_fallback_total",
+			Help: "Connections a reaper (a P/D timeout, the idle cap, the duration cap, a stalled client) ended from the health thread because the connection's owner worker could not be handed the end (no owner, or its wake failed). The request such an end frees has no request record. Expected 0; a non-zero rate means requests are missing from loxilb_ai_requests_total.",
+		},
+	)
+
+	// Metric #42: requests with no Host on a model-routed listener (Counter)
+	routeHostMissingTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "loxilb_ai_route_host_missing_total",
+			Help: "Requests that reached dispatch with no usable Host on a listener whose pools name models. Routed to the pool of the model the request named, or refused (503 model_unavailable / no_route); never sent to another model's pool. Expected 0: a non-zero rate means a path lost the Host.",
+		},
+	)
 )
 
 // pdKvT15MissReasonLabels enumerates the canonical guard reasons used by the
@@ -1421,6 +1443,14 @@ func RunSockproxyMetrics(ctx context.Context) {
 		if current.pd_terminator_synthesized >= prevSockproxyMetrics.pd_terminator_synthesized {
 			delta := current.pd_terminator_synthesized - prevSockproxyMetrics.pd_terminator_synthesized
 			pdTerminatorSynthesizedTotal.Add(float64(delta))
+		}
+		if current.reap_fallback >= prevSockproxyMetrics.reap_fallback {
+			delta := current.reap_fallback - prevSockproxyMetrics.reap_fallback
+			reapFallbackTotal.Add(float64(delta))
+		}
+		if current.route_host_missing >= prevSockproxyMetrics.route_host_missing {
+			delta := current.route_host_missing - prevSockproxyMetrics.route_host_missing
+			routeHostMissingTotal.Add(float64(delta))
 		}
 
 		// 3h. Tier-1 byte shaper and the AI admission gate: republish the

@@ -18,6 +18,7 @@ package prometheus
 
 import (
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -73,7 +74,8 @@ var (
 )
 
 // boundModelLabel sanitises a model name and collapses it to "other" when the
-// distinct-model registry is full (H-11 series-mint DoS guard).
+// distinct-model registry is full (H-11 series-mint DoS guard). A name it
+// registers has its P/D series seeded (seedPDModel).
 func boundModelLabel(modelName string) string {
 	model := sanitizeLabel(modelName)
 	if model == "" {
@@ -89,16 +91,86 @@ func boundModelLabel(modelName string) string {
 	if full {
 		return modelLabelOther
 	}
-	modelLabelMu.Lock()
-	defer modelLabelMu.Unlock()
-	if _, known := modelLabels[model]; known {
-		return model
-	}
-	if len(modelLabels) >= maxModelLabels {
+	if !registerModelLabel(model) {
 		return modelLabelOther
 	}
-	modelLabels[model] = struct{}{}
 	return model
+}
+
+// registerModelLabel admits model to the registry, and seeds its P/D
+// series the first time; false when the registry is full. The seeding runs
+// outside the registry lock.
+func registerModelLabel(model string) bool {
+	modelLabelMu.Lock()
+	_, known := modelLabels[model]
+	if !known {
+		if len(modelLabels) >= maxModelLabels {
+			modelLabelMu.Unlock()
+			return false
+		}
+		modelLabels[model] = struct{}{}
+	}
+	modelLabelMu.Unlock()
+	if !known {
+		seedPDModel(model)
+	}
+	return true
+}
+
+// MON-04: a counter series that does not exist until its first increment
+// hides that increment from increase() and rate(): the first error a
+// window sees reads as nothing. The families panels and alerts count are
+// therefore seeded at zero, within a fixed bound.
+//
+//   - P/D families, per model, at registration (and "other" at init):
+//     every {phase,status} of loxilb_ai_pd_requests_total (10) and every
+//     reason of loxilb_ai_pd_prefill_fallback_total (6). 16 series per model
+//     label, at most 65 labels.
+//   - loxilb_ai_requests_total, per (model, tenant) pair, on the pair's
+//     first record, for a keyed tenant only (tenant="" is a refusal before
+//     the key resolved, and is never seeded): the error statuses under
+//     completed and denied (20), aborted with status 200 for each cause (3),
+//     and aborted with status none for the client (1). 24 series per pair
+//     seen; only pairs that record are seeded.
+
+// aiSeedStatuses are the statuses seeded under completed and denied.
+var aiSeedStatuses = []string{"400", "401", "403", "404", "408", "429", "500", "502", "503", "504"}
+
+// aiSeededPairs holds the (model, tenant) pairs already seeded.
+var aiSeededPairs sync.Map
+
+// seedAIRequestPair seeds loxilb_ai_requests_total for a (model, tenant)
+// pair, once.
+func seedAIRequestPair(model, tenant string) {
+	if tenant == "" {
+		return
+	}
+	if _, seen := aiSeededPairs.LoadOrStore(model+"\x00"+tenant, struct{}{}); seen {
+		return
+	}
+	for _, st := range aiSeedStatuses {
+		aiRequestsTotal.WithLabelValues(model, tenant, st, AIOutcomeCompleted, "").Add(0)
+		aiRequestsTotal.WithLabelValues(model, tenant, st, AIOutcomeDenied, "").Add(0)
+	}
+	for _, cause := range []string{AICauseClient, AICauseEngine, AICauseGateway} {
+		aiRequestsTotal.WithLabelValues(model, tenant, "200", AIOutcomeAborted, cause).Add(0)
+	}
+	aiRequestsTotal.WithLabelValues(model, tenant, AIStatusNone, AIOutcomeAborted, AICauseClient).Add(0)
+}
+
+// seedPDModel seeds the P/D families for a model label.
+func seedPDModel(model string) {
+	for ph := 0; ph < pdPhaseCount; ph++ {
+		phase, status := pdPhaseLabels(ph)
+		aiPDRequestsTotal.WithLabelValues(model, phase, status).Add(0)
+	}
+	for _, reason := range pdFallbackReasons {
+		aiPDPrefillFallbackTotal.WithLabelValues(model, reason).Add(0)
+	}
+}
+
+func init() {
+	seedPDModel(modelLabelOther)
 }
 
 // knownModelLabel is boundModelLabel for a name that may be one nobody
@@ -130,7 +202,68 @@ const (
 	// was chosen (policy gate, capacity, routing, framing), so no backend was
 	// ever asked.
 	AIOutcomeDenied = "denied"
+	// AIOutcomeAborted marks a request whose client did not receive a
+	// complete response: the client left or stopped reading, the engine died
+	// under the answer, or the gateway cut it. The cause label says which.
+	AIOutcomeAborted = "aborted"
 )
+
+// Values of the cause label on loxilb_ai_requests_total: set on
+// outcome="aborted" only, "" on every other outcome. A client cause is
+// traffic, not an error; engine and gateway causes are errors.
+const (
+	AICauseClient  = "client"
+	AICauseEngine  = "engine"
+	AICauseGateway = "gateway"
+)
+
+// AIStatusNone is the status label of a request no status was ever sent
+// for: a P/D client that left before any answer (status 0 from the data
+// plane).
+const AIStatusNone = "none"
+
+// aiEndCauses maps the data plane's end codes, the error_code of a request
+// whose answer the client did not get whole, to their cause. It is the Go
+// half of sp_end_codes in loxilb-ebpf common/sockproxy_end_cause.h, held in
+// lockstep with it by scripts/check-source-invariants.sh. A code not here
+// ("", a deny reason, a code from a newer data plane) is not an end:
+// the request is completed, so an older or newer data plane never turns
+// completions into aborts by accident.
+var aiEndCauses = map[string]string{
+	"client_abort":                 AICauseClient,
+	"client_stall":                 AICauseClient,
+	"client_abort_before_answer":   AICauseClient,
+	"backend_died":                 AICauseEngine,
+	"max_stream_duration_exceeded": AICauseGateway,
+	"pd_decode_stream_timeout":     AICauseGateway,
+	"pd_idle_timeout":              AICauseGateway,
+	"listener_closed":              AICauseGateway,
+}
+
+// AIEndCause is the cause of an end code, "" when errorCode is not one
+// (the request completed).
+func AIEndCause(errorCode string) string {
+	return aiEndCauses[errorCode]
+}
+
+// AIEndCodes lists the end codes AIEndCause knows, sorted.
+func AIEndCodes() []string {
+	codes := make([]string, 0, len(aiEndCauses))
+	for c := range aiEndCauses {
+		codes = append(codes, c)
+	}
+	sort.Strings(codes)
+	return codes
+}
+
+// aiStatusLabel is the status label of a request record: the HTTP status,
+// or AIStatusNone when none was sent.
+func aiStatusLabel(statusCode int) string {
+	if statusCode == 0 {
+		return AIStatusNone
+	}
+	return strconv.Itoa(statusCode)
+}
 
 var (
 	// aiRequestsTotal counts AI Gateway requests that reached a response, per
@@ -167,11 +300,18 @@ var (
 	//
 	//	sum(rate(loxilb_ai_requests_total[5m]))                     offered load
 	//	...{outcome="completed"}                                    served traffic
+	//	...{outcome="aborted"}                                      answers the client did not get whole
 	//	...{outcome="denied"}                                       gate refusals
 	//
-	// The two values are mutually exclusive per request, so summing by outcome
-	// reproduces the unfiltered total. Existing error-ratio semantics are
-	// preserved exactly by selecting outcome="completed".
+	// The three values are mutually exclusive per request, so summing by
+	// outcome reproduces the unfiltered total. An aborted request carries the
+	// cause of its end (cause: client, engine or gateway; "" on the other
+	// outcomes) and the status the client got, or status="none" when it left
+	// before any was sent. The error ratio is
+	//
+	//	(completed 5xx + aborted{cause=~"engine|gateway"}) / (completed + aborted)
+	//
+	// A client cause is traffic, not an error.
 	//
 	// The point-of-denial counters stay: they partition denials by REASON,
 	// which neither status nor outcome carries. They are not a second copy of
@@ -181,18 +321,21 @@ var (
 	aiRequestsTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "loxilb_ai_requests_total",
-			Help: "Total AI Gateway requests by model, tenant, HTTP status code, and outcome (completed = answered, by a backend or by the gateway's own outage, timeout or redirect answer, with the status the client got; denied = refused by the gateway before any backend was chosen: policy gate, capacity, routing, framing).",
+			Help: "Total AI Gateway requests by model, tenant, HTTP status code, outcome and cause (completed = answered whole, by a backend or by the gateway's own outage, timeout or redirect answer, with the status the client got; aborted = the client did not get a complete response, cause client (it left or stopped reading), engine (the backend died under the answer) or gateway (a cap, a reaper or the listener cut it), status none when no status was sent; denied = refused by the gateway before any backend was chosen: policy gate, capacity, routing, framing). cause is empty unless outcome is aborted.",
 		},
-		[]string{"model", "tenant", "status", "outcome"},
+		[]string{"model", "tenant", "status", "outcome", "cause"},
 	)
 
 	// aiRequestDurationSeconds tracks per-model, per-tenant request latency as
 	// a histogram. Buckets extend to 300s: SSE/streaming completions routinely
-	// run minutes — a 10s top bucket would blind-spot the entire tail.
+	// run minutes — a 10s top bucket would blind-spot the entire tail. It
+	// observes completed requests only (see RecordAIRequest); TTFT
+	// (aiPDDecodeTTFT) does sample an aborted stream that reached its first
+	// event.
 	aiRequestDurationSeconds = promauto.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "loxilb_ai_request_duration_seconds",
-			Help:    "AI Gateway request duration in seconds, SSE activation to stream completion (monotonic clock at data plane).",
+			Help:    "AI Gateway request duration in seconds, SSE activation to stream completion (monotonic clock at data plane). Completed requests only: an aborted request adds no sample.",
 			Buckets: []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0},
 		},
 		[]string{"model", "tenant"},
@@ -341,11 +484,14 @@ var (
 
 	// aiPDDecodeTTFT tracks the decode leg's time to its first streamed event.
 	// Written by the second half of a lifecycle record (RecordPDRecordExtra);
-	// a request whose answer streamed no event adds no sample.
+	// a request whose answer streamed no event adds no sample. Every
+	// lifecycle record carries it, aborted included: a stream the client or
+	// the gateway cut after its first event is sampled, though the request
+	// duration histogram skips it.
 	aiPDDecodeTTFT = promauto.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "loxilb_ai_pd_decode_ttft_seconds",
-			Help:    "P/D decode leg: dispatch to the first streamed event (the first SSE data object, a role-only delta included), in seconds. Streamed requests only.",
+			Help:    "P/D decode leg: dispatch to the first streamed event (the first SSE data object, a role-only delta included), in seconds. Streamed requests only; an aborted stream that reached its first event is sampled.",
 			Buckets: []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0},
 		},
 		[]string{"model"},
@@ -367,7 +513,7 @@ var (
 	aiPDPrefillFallbackTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "loxilb_ai_pd_prefill_fallback_total",
-			Help: "P/D requests whose prefill was recomputed on the decode leg, by model and reason. The reason is the condition that forced the fallback, in verdict order: if the status alone forces it, the status is the reason (origin_5xx, origin_408, origin_429), whether or not the body was cut; if the status would have been relayed and the fallback happened only because the reply was cut, the reason is truncated (a cut 2xx or a cut 4xx); an unreadable status is no_status; a 1xx/3xx is other.",
+			Help: "P/D requests whose prefill was recomputed on the decode leg, by model and reason. The reason is the condition that forced the fallback, in verdict order: if the status alone forces it, the status is the reason (origin_5xx, origin_408, origin_429), whether or not the body was cut; if the status would have been relayed and the fallback happened only because the reply was cut, the reason is truncated (a cut 2xx; a cut 4xx is relayed with its status as prefill/rejected, with no fallback); an unreadable status is no_status; a 1xx/3xx is other.",
 		},
 		[]string{"model", "reason"},
 	)
@@ -955,6 +1101,52 @@ func RegisterTokenQuotaSource(fn func() []TokenQuotaState) {
 	})
 }
 
+// pdPhaseLabels is the {phase,status} pair of loxilb_ai_pd_requests_total
+// for an errorPhase (RecordPDRequest documents the values); anything else
+// is {unknown,error}.
+func pdPhaseLabels(errorPhase int) (phase, status string) {
+	switch errorPhase {
+	case 0:
+		phase = "complete"
+		status = "success"
+	case 1:
+		phase = "prefill"
+		status = "timeout"
+	case 2:
+		phase = "decode"
+		status = "error"
+	case 3:
+		phase = "decode"
+		status = "timeout"
+	case 4:
+		phase = "prefill"
+		status = "error"
+	case 5:
+		phase = "prefill"
+		status = "rejected"
+	case 6:
+		phase = "decode"
+		status = "rejected"
+	case 7:
+		phase = "decode"
+		status = "unknown"
+	case 8:
+		phase = "decode"
+		status = "truncated"
+	case 9:
+		phase = "aborted"
+		status = "client"
+	default:
+		phase = "unknown"
+		status = "error"
+	}
+	return phase, status
+}
+
+// pdPhaseCount is the number of errorPhase values with a label pair of
+// their own (0..9): the ones seeded at model registration.
+const pdPhaseCount = 10
+
 // RecordPDRequest records a P/D disaggregation lifecycle event for Prometheus metrics.
 //
 // Parameters:
@@ -986,42 +1178,15 @@ func RegisterTokenQuotaSource(fn func() []TokenQuotaState) {
 //	                                              in-progress answer for a cause
 //	                                              other than engine death: engine
 //	                                              silence or a policy cap)
+//	                    9 = aborted  / client    (the client left, at any stage:
+//	                                              before any answer, with its
+//	                                              answer open, or it stopped
+//	                                              reading; requests_total
+//	                                              outcome="aborted", cause="client")
 func RecordPDRequest(modelName string, prefillLatencyMs, decodeLatencyMs int64, kvParamsFound, errorPhase int) {
 	model := boundModelLabel(modelName)
 
-	var phase, status string
-	switch errorPhase {
-	case 0:
-		phase = "complete"
-		status = "success"
-	case 1:
-		phase = "prefill"
-		status = "timeout"
-	case 2:
-		phase = "decode"
-		status = "error"
-	case 3:
-		phase = "decode"
-		status = "timeout"
-	case 4:
-		phase = "prefill"
-		status = "error"
-	case 5:
-		phase = "prefill"
-		status = "rejected"
-	case 6:
-		phase = "decode"
-		status = "rejected"
-	case 7:
-		phase = "decode"
-		status = "unknown"
-	case 8:
-		phase = "decode"
-		status = "truncated"
-	default:
-		phase = "unknown"
-		status = "error"
-	}
+	phase, status := pdPhaseLabels(errorPhase)
 
 	aiPDRequestsTotal.WithLabelValues(model, phase, status).Inc()
 
@@ -1091,7 +1256,8 @@ func RecordPDRecordExtra(modelName string, decodeTTFTUs int64, fallbackReason in
 // finished, or ended on the decode leg afterwards. Phases 1, 4 and 5 did not — a prefill
 // timeout, a prefill-side death and an origin reject each leave nothing whose
 // kv_transfer_params could have been read, so counting them as "missing" would
-// report a measurement that was never taken.
+// report a measurement that was never taken. errorPhase 9 (the client left) is not
+// listed either: it can come before the prefill response was read.
 func pdPrefillResponseInspected(errorPhase int) bool {
 	switch errorPhase {
 	case 0, 2, 3, 6, 7, 8:
@@ -1205,8 +1371,9 @@ func RecordWorkerScrape(result string) {
 
 // RecordAIRequest is the Go entry point called by the CGO export llb_ai_record_request.
 //
-// C sockproxy calls this once on response completion, so every request it
-// records was answered by a backend and carries outcome="completed".
+// C sockproxy calls this once per request it answered or began to answer.
+// errorCode decides the outcome: an end code (AIEndCause) is
+// outcome="aborted" with its cause, anything else outcome="completed".
 // Gate denials arrive through RecordAIRequestDenied instead.
 //
 // The point-of-denial helpers RecordRateLimitHit and RecordModelNotAllowed
@@ -1218,15 +1385,25 @@ func RecordWorkerScrape(result string) {
 //
 //	tenantID:  tenant identifier from the validated API key
 //	modelName: effective model name (X-Model header > JSON body field > "")
-//	statusCode: HTTP response status code (200, 401, 403, 429, 500, …)
+//	statusCode: HTTP response status code (200, 401, 403, 429, 500, …); 0
+//	            when none was sent (status="none")
 //	latencyMs: request latency in milliseconds; 0 when unknown
-func RecordAIRequest(tenantID, modelName string, statusCode int, latencyMs int64) {
+//	errorCode: the data plane's error_code; an end code makes it aborted
+//
+// The duration histogram observes completed requests only: an aborted
+// request's latency is the time to its cut, which would pull the served
+// quantiles toward wherever the cuts land.
+func RecordAIRequest(tenantID, modelName string, statusCode int, latencyMs int64, errorCode string) {
 	model := boundModelLabel(modelName)
 	tenant := sanitizeLabel(tenantID)
-	status := strconv.Itoa(statusCode)
+	status := aiStatusLabel(statusCode)
+	seedAIRequestPair(model, tenant)
 
-	// Increment request counter for every completed request.
-	aiRequestsTotal.WithLabelValues(model, tenant, status, AIOutcomeCompleted).Inc()
+	if cause := AIEndCause(errorCode); cause != "" {
+		aiRequestsTotal.WithLabelValues(model, tenant, status, AIOutcomeAborted, cause).Inc()
+		return
+	}
+	aiRequestsTotal.WithLabelValues(model, tenant, status, AIOutcomeCompleted, "").Inc()
 
 	// Record latency when available.
 	if latencyMs > 0 {
@@ -1261,9 +1438,10 @@ func RecordAIRequest(tenantID, modelName string, statusCode int, latencyMs int64
 func RecordAIRequestDenied(tenantID, modelName string, statusCode int) {
 	model := boundModelLabel(modelName)
 	tenant := sanitizeLabel(tenantID)
-	status := strconv.Itoa(statusCode)
+	status := aiStatusLabel(statusCode)
+	seedAIRequestPair(model, tenant)
 
-	aiRequestsTotal.WithLabelValues(model, tenant, status, AIOutcomeDenied).Inc()
+	aiRequestsTotal.WithLabelValues(model, tenant, status, AIOutcomeDenied, "").Inc()
 }
 
 // RecordAIRequestDeniedUnserved counts a refusal of a request no pool may
@@ -1278,7 +1456,8 @@ func RecordAIRequestDeniedUnserved(tenantID, modelName, noModelLabel string, sta
 		model = noModelLabel
 	}
 	tenant := sanitizeLabel(tenantID)
-	status := strconv.Itoa(statusCode)
+	status := aiStatusLabel(statusCode)
+	seedAIRequestPair(model, tenant)
 
-	aiRequestsTotal.WithLabelValues(model, tenant, status, AIOutcomeDenied).Inc()
+	aiRequestsTotal.WithLabelValues(model, tenant, status, AIOutcomeDenied, "").Inc()
 }

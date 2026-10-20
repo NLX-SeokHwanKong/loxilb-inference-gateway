@@ -1569,7 +1569,8 @@ func llb_ai_stream_end(tenantID *C.char, modelName *C.char) C.int {
 // which counts it under outcome="denied".
 //
 // The two consumers read different halves of the call. The metrics take
-// only the tenant, model, status and latency: the token series are fed
+// only the tenant, model, status, latency and the error code (an end code
+// makes the request outcome="aborted", prom.AIEndCause): the token series are fed
 // from llb_ai_token_quota_consume, whose counts always match the charge,
 // while the counts passed here can lag on split non-streaming bodies, and
 // stream lifecycle is tracked by llb_ai_stream_start/_end. The record
@@ -1580,11 +1581,15 @@ func llb_ai_stream_end(tenantID *C.char, modelName *C.char) C.int {
 //
 //	tenantID:      tenant identifier from the validated API key (NUL-terminated)
 //	modelName:     effective model name extracted from X-Model header or JSON body
-//	statusCode:    HTTP response status code (200, 401, 403, 429, 500, …)
+//	statusCode:    HTTP response status code (200, 401, 403, 429, 500, …);
+//	               0 when none was sent (a P/D client that left before any
+//	               answer)
 //	latencyMs:     request latency in milliseconds; 0 when unknown
 //	promptTokens, completTokens: usage as the datapath read it; never charged here
 //	streamStart, streamEnd: stream lifecycle flags, tracked by the stream exports
-//	errorCode:     how the response ended when it ended badly ("" otherwise)
+//	errorCode:     how the response ended when it ended badly ("" otherwise);
+//	               an end code of sockproxy_end_cause.h when the client did
+//	               not get the whole answer
 //	requestID:     correlation key shared with the settle and deny records
 //	userID, keyID: identity resolved at admission
 //	svcIdent:      "VIP:port" of the rule ("" when unknown)
@@ -1613,8 +1618,9 @@ func llb_ai_record_request(tenantID *C.char, modelName *C.char, statusCode C.int
 	tenantIDStr := C.GoString(tenantID)
 	modelNameStr := C.GoString(modelName)
 	netIdentityStr := C.GoString(netIdentity)
+	errorCodeStr := C.GoString(errorCode)
 
-	prom.RecordAIRequest(tenantIDStr, modelNameStr, int(statusCode), int64(latencyMs))
+	prom.RecordAIRequest(tenantIDStr, modelNameStr, int(statusCode), int64(latencyMs), errorCodeStr)
 	if netIdentityStr != "" {
 		prom.RecordNetIDRequest(netIdentityStr, tenantIDStr, netIDCompleteOutcome(int(authSrc)))
 	}
@@ -1634,7 +1640,7 @@ func llb_ai_record_request(tenantID *C.char, modelName *C.char, statusCode C.int
 		TokensIn:   int64(promptTokens),
 		TokensOut:  int64(completTokens),
 		IsStream:   isStream != 0,
-		ErrorCode:  C.GoString(errorCode),
+		ErrorCode:  errorCodeStr,
 		WorkerID:   int(producerID),
 
 		ClientIP:    C.GoString(clientIP),

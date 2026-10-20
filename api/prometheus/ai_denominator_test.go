@@ -36,15 +36,15 @@ func TestRecordAIRequestDeniedIsADenominator(t *testing.T) {
 	const model = "m-denominator"
 
 	completed := func(status string) float64 {
-		return getCounterValue(aiRequestsTotal, model, tenant, status, AIOutcomeCompleted)
+		return getCounterValue(aiRequestsTotal, model, tenant, status, AIOutcomeCompleted, "")
 	}
 	denied := func(status string) float64 {
-		return getCounterValue(aiRequestsTotal, model, tenant, status, AIOutcomeDenied)
+		return getCounterValue(aiRequestsTotal, model, tenant, status, AIOutcomeDenied, "")
 	}
 
 	before200, before429c, before429d := completed("200"), completed("429"), denied("429")
 
-	RecordAIRequest(tenant, model, 200, 12)
+	RecordAIRequest(tenant, model, 200, 12, "")
 	RecordAIRequestDenied(tenant, model, 429)
 
 	if d := completed("200") - before200; d != 1.0 {
@@ -101,9 +101,9 @@ func TestRecordAIRequestDeniedLeavesLatencyAlone(t *testing.T) {
 func TestRecordAIRequestDeniedTenantIsEmptyNotAPlaceholder(t *testing.T) {
 	const model = "m-anonymous-denial"
 
-	before := getCounterValue(aiRequestsTotal, model, "", "401", AIOutcomeDenied)
+	before := getCounterValue(aiRequestsTotal, model, "", "401", AIOutcomeDenied, "")
 	RecordAIRequestDenied("", model, 401)
-	if d := getCounterValue(aiRequestsTotal, model, "", "401", AIOutcomeDenied) - before; d != 1.0 {
+	if d := getCounterValue(aiRequestsTotal, model, "", "401", AIOutcomeDenied, "") - before; d != 1.0 {
 		t.Errorf("empty tenant must be recorded as the empty label value, got delta %f", d)
 	}
 }

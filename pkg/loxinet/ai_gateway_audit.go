@@ -21,6 +21,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	prom "github.com/loxilb-io/loxilb/api/prometheus"
 	"github.com/loxilb-io/loxilb/pkg/audit"
 )
 
@@ -219,7 +220,7 @@ func emitAIComplete(c aiCompleteRecord) bool {
 		c.ClientIP, c.OriginIP, c.TrustedHops)
 	r.Outcome = audit.Outcome{
 		Status: c.StatusCode,
-		OK:     c.StatusCode > 0 && c.StatusCode < 400,
+		OK:     c.StatusCode > 0 && c.StatusCode < 400 && prom.AIEndCause(c.ErrorCode) == "",
 		Reason: aiCompleteReason(c.StatusCode, c.ErrorCode),
 	}
 	r.Data = &audit.DataDetail{
@@ -534,14 +535,23 @@ func aiTokenQuotaCode(errorCode string) bool {
 // aiCompleteReason maps a finished response onto the reason vocabulary.
 // The datapath's error code is preferred where it names a transport
 // outcome, because the status alone cannot tell a backend that refused
-// from a client that walked away.
+// from a client that walked away. Every end code (prom.AIEndCodes, the
+// codes of an answer the client did not get whole) has its reason here:
+// the client's three are client_abort, a cut by a cap or a reaper is a
+// timeout, and the engine dying or the rule's listener going ended the
+// backend connection under the answer.
+//
+// listener_closed is backend_conn as the closest available reason, not the
+// true one: the cause is the gateway (the metric reads cause="gateway"), and
+// no backend failed. The vocabulary is closed; a gateway_shutdown reason is
+// the follow-up for its next revision.
 func aiCompleteReason(status int, errorCode string) audit.Reason {
 	switch errorCode {
-	case "client_abort":
+	case "client_abort", "client_stall", "client_abort_before_answer":
 		return audit.ReasonClientAbort
-	case "timeout":
+	case "timeout", "max_stream_duration_exceeded", "pd_decode_stream_timeout", "pd_idle_timeout":
 		return audit.ReasonTimeout
-	case "backend_conn":
+	case "backend_conn", "backend_died", "listener_closed":
 		return audit.ReasonBackendConn
 	case "backend_tls":
 		return audit.ReasonBackendTLS

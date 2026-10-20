@@ -44,6 +44,7 @@
           "refId": "StandardVariableQuery"
         },
         "refresh": 2,
+        "allValue": ".*",
         "includeAll": true,
         "multi": true,
         "current": {
@@ -688,7 +689,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "topk(10, round(increase(loxilb_fw_rule_drop_packets_total{instance=~\"$instance\"}[$__range])) > 0)",
+          "expr": "topk(10, round((clamp_min(loxilb_fw_rule_drop_packets_total{instance=~\"$instance\"} - loxilb_fw_rule_drop_packets_total{instance=~\"$instance\"} offset $__range, 0) or (loxilb_fw_rule_drop_packets_total{instance=~\"$instance\"} unless loxilb_fw_rule_drop_packets_total{instance=~\"$instance\"} offset $__range))) > 0)",
           "format": "table",
           "instant": true
         }

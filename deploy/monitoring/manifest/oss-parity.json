@@ -1,17 +1,17 @@
 {
  "schema_version": 1,
  "provenance": {
-  "generated_at": "2026-10-20T07:55:29+00:00",
-  "source_revision": "ba6e41f9fb127275e017219480eb2c8c5f074a2c",
+  "generated_at": "2026-10-20T12:30:45+00:00",
+  "source_revision": "0d05de6ce01e6e246713cc00b87ac72409191e3e",
   "upstream_repository": "https://github.com/loxilb-io/loxilb",
   "upstream_revision": "98487453eaf1853690de5928eab95a51817ba5d7"
  },
  "contract": {
-  "gateway_families": 337,
+  "gateway_families": 339,
   "upstream_families": 60,
   "present_identical": 35,
   "present_divergent": 0,
-  "absent": 302,
+  "absent": 304,
   "upstream_only": 25
  },
  "upstream_only": [
@@ -1234,6 +1234,17 @@
    }
   },
   {
+   "name": "loxilb_ai_reap_fallback_total",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "counter",
+    "labels": []
+   }
+  },
+  {
    "name": "loxilb_ai_request_duration_seconds",
    "owner": "loxilb",
    "class": "default",
@@ -1256,6 +1267,7 @@
    "gateway": {
     "type": "counter",
     "labels": [
+     "cause",
      "model",
      "outcome",
      "status",
@@ -1275,6 +1287,17 @@
      "reason",
      "service"
     ]
+   }
+  },
+  {
+   "name": "loxilb_ai_route_host_missing_total",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "counter",
+    "labels": []
    }
   },
   {

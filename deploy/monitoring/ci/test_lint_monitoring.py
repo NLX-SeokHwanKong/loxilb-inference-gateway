@@ -193,6 +193,175 @@ class LegendValidation(unittest.TestCase):
         self.assertFalse(rep.errors, rep.errors)
 
 
+class DashboardFilters(unittest.TestCase):
+    """MON-05: on a dashboard with $model/$tenant, every selector of a family
+    with that label carries the variable, and a panel the filters cannot reach
+    says (global)."""
+
+    EXP = {"loxilb_ai_requests_total": ["model", "tenant", "status", "outcome", "cause"],
+           "loxilb_ai_pd_requests_total": ["model", "phase", "status"],
+           "loxilb_kv_events_total": ["result"]}
+
+    def _panel(self, expr, title="fixture panel"):
+        return {"id": 1, "type": "timeseries", "title": title,
+                "targets": [{"refId": "A", "expr": expr}]}
+
+    def test_missing_model_goes_red(self):
+        msgs = lint.filter_violations(
+            self._panel('rate(loxilb_ai_pd_requests_total{instance=~"$instance"}[5m])'),
+            {"instance", "model", "tenant"}, self.EXP)
+        self.assertTrue(any("without $model" in m for m in msgs), msgs)
+
+    def test_missing_tenant_goes_red(self):
+        msgs = lint.filter_violations(
+            self._panel('rate(loxilb_ai_requests_total{model=~"$model"}[5m])'),
+            {"instance", "model", "tenant"}, self.EXP)
+        self.assertTrue(any("without $tenant" in m for m in msgs), msgs)
+
+    def test_both_filters_pass(self):
+        msgs = lint.filter_violations(
+            self._panel('rate(loxilb_ai_requests_total{model=~"$model",tenant=~"$tenant"}[5m])'),
+            {"instance", "model", "tenant"}, self.EXP)
+        self.assertEqual(msgs, [])
+
+    def test_unreachable_panel_must_say_global(self):
+        msgs = lint.filter_violations(
+            self._panel('rate(loxilb_kv_events_total[5m])'),
+            {"instance", "model", "tenant"}, self.EXP)
+        self.assertTrue(any("(global)" in m for m in msgs), msgs)
+        self.assertEqual(lint.filter_violations(
+            self._panel('rate(loxilb_kv_events_total[5m])', "KV events (global)"),
+            {"instance", "model", "tenant"}, self.EXP), [])
+
+    def test_filterable_panel_must_not_say_global(self):
+        msgs = lint.filter_violations(
+            self._panel('rate(loxilb_ai_pd_requests_total{model=~"$model"}[5m])', "PD (global)"),
+            {"instance", "model"}, self.EXP)
+        self.assertTrue(any("says (global)" in m for m in msgs), msgs)
+
+    def test_all_without_allvalue_goes_red(self):
+        d = dashboard_with_expr('rate(loxilb_x_total[5m])')
+        d["templating"]["list"].append({"name": "tenant", "includeAll": True, "allValue": None})
+        rep = lint.Report()
+        with tempfile.TemporaryDirectory() as td:
+            dash_dir = os.path.join(td, "grafana", "dashboards")
+            os.makedirs(dash_dir)
+            with open(os.path.join(dash_dir, "fixture.json"), "w") as fh:
+                json.dump(d, fh)
+            lint.lint_dashboards(td, {"loxilb_x_total": ["reason"]}, rep)
+        self.assertTrue(any("allValue" in e for e in rep.errors), rep.errors)
+
+    def test_no_filter_variables_no_rule(self):
+        self.assertEqual(lint.filter_violations(
+            self._panel('rate(loxilb_ai_pd_requests_total[5m])'), {"instance"}, self.EXP), [])
+
+
+class LazyIncrease(unittest.TestCase):
+    """MON-04: increase() of a lazy family misses its first event."""
+
+    ACT = {"loxilb_lazy_total": "V", "loxilb_eager_total": "E", "loxilb_coll_total": "C"}
+
+    def test_lazy_goes_red(self):
+        for fam in ("loxilb_lazy_total", "loxilb_coll_total"):
+            self.assertIsNotNone(lint.lazy_increase_violation(
+                f'sum(increase({fam}{{instance=~"$instance"}}[15m])) > 0', self.ACT))
+
+    def test_eager_passes(self):
+        self.assertIsNone(lint.lazy_increase_violation(
+            'increase(loxilb_eager_total[5m])', self.ACT))
+
+    def test_the_form_passes(self):
+        self.assertIsNone(lint.lazy_increase_violation(
+            '(clamp_min(loxilb_lazy_total - loxilb_lazy_total offset 15m, 0) or '
+            '(loxilb_lazy_total unless loxilb_lazy_total offset 15m)) > 0', self.ACT))
+
+    def test_rule_goes_red(self):
+        rep = lint.Report()
+        with tempfile.TemporaryDirectory() as td:
+            rules_dir = os.path.join(td, "prometheus", "rules")
+            os.makedirs(rules_dir)
+            with open(os.path.join(rules_dir, "loxilb-alerts.yml"), "w") as fh:
+                fh.write("groups:\n- name: fixture\n  rules:\n"
+                         "  - alert: Fixture\n"
+                         "    expr: increase(loxilb_lazy_total[15m]) > 0\n")
+            lint.lint_rules(td, {"loxilb_lazy_total": []}, {}, rep, self.ACT)
+        self.assertTrue(any("lazy family" in e for e in rep.errors), rep.errors)
+
+    def test_the_shipped_assets_are_clean(self):
+        act = lint.load_activation(REPO)
+        self.assertTrue(act, "manifest not found")
+        rep = lint.Report()
+        exporter = lint.collect_exporter_metrics(REPO)
+        mon = os.path.join(REPO, "deploy", "monitoring")
+        t2p, _ = lint.lint_dashboards(mon, exporter, rep, act)
+        lint.lint_rules(mon, exporter, t2p, rep, act)
+        self.assertFalse([e for e in rep.errors if "lazy family" in e], rep.errors)
+
+
+class ScrapeCluster(unittest.TestCase):
+    """MON-06: the loxilb job puts external_labels.cluster on its series."""
+
+    BASE = ("global:\n  external_labels:\n    # site\n    cluster: c1\n"
+            "scrape_configs:\n  - job_name: loxilb\n    static_configs:\n"
+            "      - targets: [\"127.0.0.1:11111\"]\n%s"
+            "  - job_name: prometheus\n    static_configs:\n"
+            "      - targets: [\"localhost:9090\"]\n")
+
+    def _run(self, job_labels):
+        with tempfile.TemporaryDirectory() as td:
+            os.makedirs(os.path.join(td, "prometheus"))
+            with open(os.path.join(td, "prometheus", "prometheus.yml"), "w") as fh:
+                fh.write(self.BASE % job_labels)
+            rep = lint.Report()
+            lint.lint_scrape_cluster(td, rep)
+            return rep.errors
+
+    def test_missing_goes_red(self):
+        self.assertTrue(any("sets no cluster" in e for e in self._run("")))
+
+    def test_commented_out_goes_red(self):
+        self.assertTrue(any("sets no cluster" in e for e in
+                            self._run("        # labels:\n        #   cluster: c1\n")))
+
+    def test_different_goes_red(self):
+        self.assertTrue(any("differs" in e for e in
+                            self._run("        labels:\n          cluster: c2\n")))
+
+    def test_same_passes(self):
+        self.assertEqual(self._run("        labels:\n          cluster: c1\n"), [])
+
+    def test_the_shipped_config_passes(self):
+        rep = lint.Report()
+        lint.lint_scrape_cluster(os.path.join(REPO, "deploy", "monitoring"), rep)
+        self.assertEqual(rep.errors, [])
+
+
+class McpRulesCopy(unittest.TestCase):
+    """The MCP module's copy of the alert rules is a byte-for-byte copy."""
+
+    def _run(self, src_text, dst_text):
+        with tempfile.TemporaryDirectory() as td:
+            mon = os.path.join(td, "deploy", "monitoring")
+            os.makedirs(os.path.join(mon, "prometheus", "rules"))
+            with open(os.path.join(mon, "prometheus", "rules", "loxilb-alerts.yml"), "w") as fh:
+                fh.write(src_text)
+            dst = os.path.join(td, lint.MCP_ALERT_RULES_COPY)
+            os.makedirs(os.path.dirname(dst))
+            with open(dst, "w") as fh:
+                fh.write(dst_text)
+            rep = lint.Report()
+            lint.lint_mcp_rules_copy(td, mon, rep)
+            return rep
+
+    def test_drift_goes_red(self):
+        rep = self._run("groups: []\n", "groups: []\n# drifted\n")
+        self.assertTrue(any("differs" in e for e in rep.errors), rep.errors)
+
+    def test_identical_passes(self):
+        rep = self._run("groups: []\n", "groups: []\n")
+        self.assertFalse(rep.errors, rep.errors)
+
+
 class OutcomePartition(unittest.TestCase):
     """The R-1 defect class: a ratio whose numerator filters outcome and whose
     denominator does not. Both halves parse, the panel renders, and the number
@@ -238,6 +407,25 @@ class OutcomePartition(unittest.TestCase):
                 '/ sum(rate(loxilb_ai_requests_total{instance=~"$instance"}[5m]))')
         rep = lint_dashboard_fixture(expr, {"loxilb_ai_requests_total"})
         self.assertTrue(any("mixes" in e for e in rep.errors), rep.errors)
+
+    def test_three_outcomes_all_filtered_pass(self):
+        # The error ratio: every selector names its outcome.
+        expr = ('((sum(rate(loxilb_ai_requests_total{outcome="completed",status=~"5.."}[5m])) or vector(0)) + '
+                '(sum(rate(loxilb_ai_requests_total{outcome="aborted",cause=~"engine|gateway"}[5m])) or vector(0))) / '
+                'sum(rate(loxilb_ai_requests_total{outcome=~"completed|aborted"}[5m]))')
+        self.assertIsNone(lint.outcome_partition_violation(expr, self.FAMILY))
+        self.assertIsNone(lint.aborted_cause_violation(expr, self.FAMILY))
+
+    def test_aborted_without_cause_flagged(self):
+        # Client cancels counted as errors.
+        expr = ('sum(rate(loxilb_ai_requests_total{outcome="aborted"}[5m])) / '
+                'sum(rate(loxilb_ai_requests_total{outcome=~"completed|aborted"}[5m]))')
+        self.assertIsNotNone(lint.aborted_cause_violation(expr, self.FAMILY))
+
+    def test_aborted_without_cause_goes_red_on_a_panel(self):
+        expr = 'sum(rate(loxilb_ai_requests_total{outcome="aborted",instance=~"$instance"}[5m]))'
+        rep = lint_dashboard_fixture(expr, {"loxilb_ai_requests_total"})
+        self.assertTrue(any("without a cause" in e for e in rep.errors), rep.errors)
 
     def test_rule_exprs_are_split_per_rule(self):
         """Two rules, one filtered and one not, are not a mixed expression.
