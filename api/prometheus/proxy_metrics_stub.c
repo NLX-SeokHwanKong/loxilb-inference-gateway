@@ -166,6 +166,9 @@ typedef struct proxy_metrics_snapshot {
     /* Pools allocated and not yet freed, and pools freed (sockproxy_pool.h). TAIL-APPEND ONLY — same three-way lockstep. */
     uint64_t pools_live;
     uint64_t pools_freed_total;
+
+    /* Terminators the graceful-[DONE] sweep wrote for a silent decode engine (the mechanism behind decode/truncated). TAIL-APPEND ONLY — same three-way lockstep. */
+    uint64_t pd_terminator_synthesized;
 } proxy_metrics_snapshot_t;
 
 __attribute__((weak))
