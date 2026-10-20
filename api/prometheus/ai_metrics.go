@@ -74,7 +74,8 @@ var (
 )
 
 // boundModelLabel sanitises a model name and collapses it to "other" when the
-// distinct-model registry is full (H-11 series-mint DoS guard).
+// distinct-model registry is full (H-11 series-mint DoS guard). A name it
+// registers has its P/D series seeded (seedPDModel).
 func boundModelLabel(modelName string) string {
 	model := sanitizeLabel(modelName)
 	if model == "" {
@@ -90,16 +91,86 @@ func boundModelLabel(modelName string) string {
 	if full {
 		return modelLabelOther
 	}
-	modelLabelMu.Lock()
-	defer modelLabelMu.Unlock()
-	if _, known := modelLabels[model]; known {
-		return model
-	}
-	if len(modelLabels) >= maxModelLabels {
+	if !registerModelLabel(model) {
 		return modelLabelOther
 	}
-	modelLabels[model] = struct{}{}
 	return model
+}
+
+// registerModelLabel admits model to the registry, and seeds its P/D
+// series the first time; false when the registry is full. The seeding runs
+// outside the registry lock.
+func registerModelLabel(model string) bool {
+	modelLabelMu.Lock()
+	_, known := modelLabels[model]
+	if !known {
+		if len(modelLabels) >= maxModelLabels {
+			modelLabelMu.Unlock()
+			return false
+		}
+		modelLabels[model] = struct{}{}
+	}
+	modelLabelMu.Unlock()
+	if !known {
+		seedPDModel(model)
+	}
+	return true
+}
+
+// MON-04: a counter series that does not exist until its first increment
+// hides that increment from increase() and rate(): the first error a
+// window sees reads as nothing. The families panels and alerts count are
+// therefore seeded at zero, within a fixed bound.
+//
+//   - P/D families, per model, at registration (and "other" at init):
+//     every {phase,status} of loxilb_ai_pd_requests_total (10) and every
+//     reason of loxilb_ai_pd_prefill_fallback_total (6). 16 series per model
+//     label, at most 65 labels.
+//   - loxilb_ai_requests_total, per (model, tenant) pair, on the pair's
+//     first record, for a keyed tenant only (tenant="" is a refusal before
+//     the key resolved, and is never seeded): the error statuses under
+//     completed and denied (20), aborted with status 200 for each cause (3),
+//     and aborted with status none for the client (1). 24 series per pair
+//     seen; only pairs that record are seeded.
+
+// aiSeedStatuses are the statuses seeded under completed and denied.
+var aiSeedStatuses = []string{"400", "401", "403", "404", "408", "429", "500", "502", "503", "504"}
+
+// aiSeededPairs holds the (model, tenant) pairs already seeded.
+var aiSeededPairs sync.Map
+
+// seedAIRequestPair seeds loxilb_ai_requests_total for a (model, tenant)
+// pair, once.
+func seedAIRequestPair(model, tenant string) {
+	if tenant == "" {
+		return
+	}
+	if _, seen := aiSeededPairs.LoadOrStore(model+"\x00"+tenant, struct{}{}); seen {
+		return
+	}
+	for _, st := range aiSeedStatuses {
+		aiRequestsTotal.WithLabelValues(model, tenant, st, AIOutcomeCompleted, "").Add(0)
+		aiRequestsTotal.WithLabelValues(model, tenant, st, AIOutcomeDenied, "").Add(0)
+	}
+	for _, cause := range []string{AICauseClient, AICauseEngine, AICauseGateway} {
+		aiRequestsTotal.WithLabelValues(model, tenant, "200", AIOutcomeAborted, cause).Add(0)
+	}
+	aiRequestsTotal.WithLabelValues(model, tenant, AIStatusNone, AIOutcomeAborted, AICauseClient).Add(0)
+}
+
+// seedPDModel seeds the P/D families for a model label.
+func seedPDModel(model string) {
+	for ph := 0; ph < pdPhaseCount; ph++ {
+		phase, status := pdPhaseLabels(ph)
+		aiPDRequestsTotal.WithLabelValues(model, phase, status).Add(0)
+	}
+	for _, reason := range pdFallbackReasons {
+		aiPDPrefillFallbackTotal.WithLabelValues(model, reason).Add(0)
+	}
+}
+
+func init() {
+	seedPDModel(modelLabelOther)
 }
 
 // knownModelLabel is boundModelLabel for a name that may be one nobody
@@ -1024,6 +1095,52 @@ func RegisterTokenQuotaSource(fn func() []TokenQuotaState) {
 	})
 }
 
+// pdPhaseLabels is the {phase,status} pair of loxilb_ai_pd_requests_total
+// for an errorPhase (RecordPDRequest documents the values); anything else
+// is {unknown,error}.
+func pdPhaseLabels(errorPhase int) (phase, status string) {
+	switch errorPhase {
+	case 0:
+		phase = "complete"
+		status = "success"
+	case 1:
+		phase = "prefill"
+		status = "timeout"
+	case 2:
+		phase = "decode"
+		status = "error"
+	case 3:
+		phase = "decode"
+		status = "timeout"
+	case 4:
+		phase = "prefill"
+		status = "error"
+	case 5:
+		phase = "prefill"
+		status = "rejected"
+	case 6:
+		phase = "decode"
+		status = "rejected"
+	case 7:
+		phase = "decode"
+		status = "unknown"
+	case 8:
+		phase = "decode"
+		status = "truncated"
+	case 9:
+		phase = "aborted"
+		status = "client"
+	default:
+		phase = "unknown"
+		status = "error"
+	}
+	return phase, status
+}
+
+// pdPhaseCount is the number of errorPhase values with a label pair of
+// their own (0..9): the ones seeded at model registration.
+const pdPhaseCount = 10
+
 // RecordPDRequest records a P/D disaggregation lifecycle event for Prometheus metrics.
 //
 // Parameters:
@@ -1063,42 +1180,7 @@ func RegisterTokenQuotaSource(fn func() []TokenQuotaState) {
 func RecordPDRequest(modelName string, prefillLatencyMs, decodeLatencyMs int64, kvParamsFound, errorPhase int) {
 	model := boundModelLabel(modelName)
 
-	var phase, status string
-	switch errorPhase {
-	case 0:
-		phase = "complete"
-		status = "success"
-	case 1:
-		phase = "prefill"
-		status = "timeout"
-	case 2:
-		phase = "decode"
-		status = "error"
-	case 3:
-		phase = "decode"
-		status = "timeout"
-	case 4:
-		phase = "prefill"
-		status = "error"
-	case 5:
-		phase = "prefill"
-		status = "rejected"
-	case 6:
-		phase = "decode"
-		status = "rejected"
-	case 7:
-		phase = "decode"
-		status = "unknown"
-	case 8:
-		phase = "decode"
-		status = "truncated"
-	case 9:
-		phase = "aborted"
-		status = "client"
-	default:
-		phase = "unknown"
-		status = "error"
-	}
+	phase, status := pdPhaseLabels(errorPhase)
 
 	aiPDRequestsTotal.WithLabelValues(model, phase, status).Inc()
 
@@ -1309,6 +1391,7 @@ func RecordAIRequest(tenantID, modelName string, statusCode int, latencyMs int64
 	model := boundModelLabel(modelName)
 	tenant := sanitizeLabel(tenantID)
 	status := aiStatusLabel(statusCode)
+	seedAIRequestPair(model, tenant)
 
 	if cause := AIEndCause(errorCode); cause != "" {
 		aiRequestsTotal.WithLabelValues(model, tenant, status, AIOutcomeAborted, cause).Inc()
@@ -1350,6 +1433,7 @@ func RecordAIRequestDenied(tenantID, modelName string, statusCode int) {
 	model := boundModelLabel(modelName)
 	tenant := sanitizeLabel(tenantID)
 	status := aiStatusLabel(statusCode)
+	seedAIRequestPair(model, tenant)
 
 	aiRequestsTotal.WithLabelValues(model, tenant, status, AIOutcomeDenied, "").Inc()
 }
@@ -1367,6 +1451,7 @@ func RecordAIRequestDeniedUnserved(tenantID, modelName, noModelLabel string, sta
 	}
 	tenant := sanitizeLabel(tenantID)
 	status := aiStatusLabel(statusCode)
+	seedAIRequestPair(model, tenant)
 
 	aiRequestsTotal.WithLabelValues(model, tenant, status, AIOutcomeDenied, "").Inc()
 }

@@ -751,6 +751,88 @@ func histogramCount(t *testing.T, h prometheus.Histogram) uint64 {
 	return m.GetHistogram().GetSampleCount()
 }
 
+// seriesWith counts the series of cv whose labels include every pair in want.
+func seriesWith(t *testing.T, cv *prometheus.CounterVec, want map[string]string) int {
+	t.Helper()
+	ch := make(chan prometheus.Metric, 4096)
+	go func() { cv.Collect(ch); close(ch) }()
+	n := 0
+	for m := range ch {
+		var d dto.Metric
+		if err := m.Write(&d); err != nil {
+			t.Fatalf("metric write: %v", err)
+		}
+		got := map[string]string{}
+		for _, lp := range d.GetLabel() {
+			got[lp.GetName()] = lp.GetValue()
+		}
+		match := true
+		for k, v := range want {
+			if got[k] != v {
+				match = false
+				break
+			}
+		}
+		if match {
+			n++
+		}
+	}
+	return n
+}
+
+// TestSeedAIRequestPair (MON-04): the first record of a keyed (model,
+// tenant) pair seeds its 24 series at zero, once; the first error of a
+// window is then an increase, not a series appearing. tenant="" is never
+// seeded.
+func TestSeedAIRequestPair(t *testing.T) {
+	model, tenant := "m-seed", "t-seed"
+	RecordAIRequest(tenant, model, 200, 10, "")
+	pair := map[string]string{"model": model, "tenant": tenant}
+	// 24 seeded + the completed 200 the record itself wrote.
+	if n := seriesWith(t, aiRequestsTotal, pair); n != 25 {
+		t.Fatalf("pair has %d series after one record, want 24 seeded + 1", n)
+	}
+	if v := getCounterValue(aiRequestsTotal, model, tenant, "503", AIOutcomeCompleted, ""); v != 0 {
+		t.Errorf("a seeded series must read 0, got %f", v)
+	}
+	for _, c := range []string{AICauseClient, AICauseEngine, AICauseGateway} {
+		if n := seriesWith(t, aiRequestsTotal, map[string]string{"model": model, "tenant": tenant,
+			"status": "200", "outcome": AIOutcomeAborted, "cause": c}); n != 1 {
+			t.Errorf("aborted/200/%s not seeded", c)
+		}
+	}
+	if n := seriesWith(t, aiRequestsTotal, map[string]string{"model": model, "tenant": tenant,
+		"status": AIStatusNone, "outcome": AIOutcomeAborted, "cause": AICauseClient}); n != 1 {
+		t.Error("aborted/none/client not seeded")
+	}
+	RecordAIRequestDenied(tenant, model, 401)
+	if n := seriesWith(t, aiRequestsTotal, pair); n != 25 {
+		t.Errorf("a second record seeded again: %d series, want 25", n)
+	}
+	RecordAIRequestDenied("", "m-seed-anon", 401)
+	if n := seriesWith(t, aiRequestsTotal, map[string]string{"model": "m-seed-anon"}); n != 1 {
+		t.Errorf("tenant=\"\" was seeded: %d series, want only the record's own", n)
+	}
+}
+
+// TestSeedPDModel (MON-04): a model's P/D series exist at zero from its
+// registration: every phase pair and every fallback reason.
+func TestSeedPDModel(t *testing.T) {
+	model := boundModelLabel("m-seed-pd")
+	if n := seriesWith(t, aiPDRequestsTotal, map[string]string{"model": model}); n != pdPhaseCount {
+		t.Errorf("pd_requests_total has %d series for a new model, want %d", n, pdPhaseCount)
+	}
+	if n := seriesWith(t, aiPDPrefillFallbackTotal, map[string]string{"model": model}); n != len(pdFallbackReasons) {
+		t.Errorf("pd_prefill_fallback_total has %d series for a new model, want %d", n, len(pdFallbackReasons))
+	}
+	if n := seriesWith(t, aiPDRequestsTotal, map[string]string{"model": modelLabelOther}); n < pdPhaseCount {
+		t.Errorf("\"other\" is not seeded at init (%d series)", n)
+	}
+	if v := getCounterValue(aiPDRequestsTotal, model, "aborted", "client"); v != 0 {
+		t.Errorf("seeded phase 9 reads %f, want 0", v)
+	}
+}
+
 func TestRecordPDRequest_PhaseTaxonomy(t *testing.T) {
 	cases := []struct {
 		name          string
