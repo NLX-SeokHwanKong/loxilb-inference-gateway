@@ -3513,7 +3513,11 @@ o_sum()    { printf '%s\n' "$1" | grep -E "$2" | awk '{s+=$NF} END{printf "%d", 
 
 # The families a row reads. Every row asserts each of them: listed ones to their
 # expectation, the rest flat.
-O_KEYS="req200 req404 req500 d503 k503 pdCS pdPR pdPE pdDR pdDE pdDU c2 c3 c4 c5 ttfb"
+# ttftN: decode TTFT samples; this phase's requests are not streamed, so it never moves.
+# fb5/fb429/fbAll: prefill fallbacks (origin_5xx, origin_429, any reason). The decode
+# duration is not a key: a non-streamed mock answer is timed in whole milliseconds and
+# often rounds to 0 (no sample); Phase H TH3b covers it.
+O_KEYS="req200 req404 req500 d503 k503 pdCS pdPR pdPE pdDR pdDE pdDU c2 c3 c4 c5 ttfb ttftN fb5 fb429 fbAll"
 o_re() {
   case "$1" in
     req200) echo '^loxilb_ai_requests_total\{.*status="200"' ;;
@@ -3529,6 +3533,10 @@ o_re() {
     pdDU)   echo '^loxilb_ai_pd_requests_total\{.*phase="decode",status="unknown"' ;;
     c2|c3|c4|c5) echo "^loxilb_proxy_http_responses_by_status_total\\{status_class=\"${1#c}xx\"" ;;
     ttfb)   echo '^loxilb_proxy_http_ttfb_seconds_count' ;;
+    ttftN)  echo '^loxilb_ai_pd_decode_ttft_seconds_count' ;;
+    fb5)    echo '^loxilb_ai_pd_prefill_fallback_total\{.*reason="origin_5xx"' ;;
+    fb429)  echo '^loxilb_ai_pd_prefill_fallback_total\{.*reason="origin_429"' ;;
+    fbAll)  echo '^loxilb_ai_pd_prefill_fallback_total\{' ;;
   esac
 }
 O_PD_ALL='^loxilb_ai_pd_requests_total\{'
@@ -3666,8 +3674,8 @@ echo "  baseline: TTFB sample count $(o_sum "$(o_scrape)" "$(o_re ttfb)") held f
 #     row          arm-ep        st   http role      P D  expect
 o_row normal       -             -    200  -         1 1 "req200=1 pdCS=1 c2=1 ttfb=1"
 o_row prefill404   "$O_PREFILL"  404  404  prefill   1 0 "req404=1 pdPR=1 c4=1 ttfb=1"
-o_row prefill500   "$O_PREFILL"  500  200  -         1 1 "req200=1 pdCS=1 c2=1 ttfb=1"
-o_row prefill429   "$O_PREFILL"  429  200  -         1 1 "req200=1 pdCS=1 c2=1 ttfb=1"
+o_row prefill500   "$O_PREFILL"  500  200  -         1 1 "req200=1 pdCS=1 c2=1 ttfb=1 fb5=1 fbAll=1"
+o_row prefill429   "$O_PREFILL"  429  200  -         1 1 "req200=1 pdCS=1 c2=1 ttfb=1 fb429=1 fbAll=1"
 o_row decode404    "$O_DECODE"   404  404  decode    1 1 "req404=1 pdDR=1 c4=1 ttfb=1"
 o_row decode500    "$O_DECODE"   500  500  decode    1 1 "req500=1 pdDE=1 c5=1 ttfb=1"
 
@@ -4045,11 +4053,14 @@ echo "  pair: request 1 HTTP ${pc_c1} (connects ${pc_n1}), request 2 HTTP ${pc_c
 #   PD  it goes silent with its socket open (a dropped terminator), then closes after
 #       P_HOLD s.
 #   PE  it closes at once after the last content chunk (an engine dying mid-stream).
-# Either way the gateway's graceful-[DONE] sweep ends the client's answer after
-# P_GRACE s of backend silence. The rows print which {phase,status} that request's P/D
-# lifecycle record lands on: that is the Q2 answer, printed and not asserted until the
-# outcome is decided. Asserted: the client got 200, and the request made exactly one
-# lifecycle record.
+# PD: the gateway's graceful-[DONE] sweep ends the client's answer after P_GRACE s of
+# backend silence, with a chunk-framed [DONE] of its own: decode/truncated +1 (the
+# gateway ended the answer; the engine did not die), requests completed/200 +1 (the
+# status the client received), curl rc 0, the body ends with [DONE], and
+# loxilb_ai_pd_terminator_synthesized_total +1.
+# PE: the engine died: decode/error +1, requests completed/200 +1, and the client sees
+# the cut: curl rc 18 and no [DONE]. Nothing dresses a dead engine up as a clean end,
+# so the terminator counter stays flat.
 P_HOLD=40
 P_GRACE=25     # PROXY_PD_DECODE_IDLE_CAP_SEC; no rule field sets pd_decode_idle_cap_sec
 p_scrape() { $hexec llb1 curl -s http://localhost:11111/netlox/v1/metrics 2>/dev/null | grep -v '^#'; }
@@ -4103,7 +4114,29 @@ p_q2_row() {
   [ "$code" = "200" ] && check "${tag}: 200" 0 || check "${tag}: 200 (got ${code})" 1
   [ "$nrec" = "1" ] && check "${tag}: exactly one P/D lifecycle record" 0 \
                     || check "${tag}: exactly one P/D lifecycle record (${nrec})" 1
-  P_Q2_BODY=$body P_Q2_RC=$rc P_Q2_SECS=${secs:-0}
+  P_Q2_BODY=$body P_Q2_RC=$rc P_Q2_SECS=${secs:-0} P_Q2_PDD=$pdd P_Q2_RQD=$rqd P_Q2_S0=$s0
+}
+# p_deltas_are <tag> <what> <deltas> <want> — the deltas, one "<key> +N" per line, are
+# exactly <want> (one "<key> +N" per line): that series moved by N and nothing else did.
+p_deltas_are() {
+  local got
+  got=$(printf '%s\n' "$3" | sed '/^$/d' | sort | tr '\n' ';')
+  [ "$got" = "$(printf '%s\n' "$4" | sort | tr '\n' ';')" ] \
+    && check "$1: $2 moved by exactly: $4" 0 \
+    || check "$1: $2 moved by exactly: $4 (got: ${got:-nothing})" 1
+}
+# p_terminators <before-scrape> — the terminator counter's delta once it has been
+# pulled: it is a C global_stats counter RunSockproxyMetrics pulls every 10 s, so poll
+# for two pulls. Prints the delta.
+p_terminators() {
+  local b a waited=0
+  b=$(printf '%s\n' "$1" | awk '/^loxilb_ai_pd_terminator_synthesized_total /{print $2+0}')
+  while :; do
+    a=$(p_scrape | awk '/^loxilb_ai_pd_terminator_synthesized_total /{print $2+0}')
+    [ $(( ${a:-0} - ${b:-0} )) -ge 1 ] || [ "$waited" -ge 21 ] && break
+    sleep 1; waited=$((waited + 1))
+  done
+  echo $(( ${a:-0} - ${b:-0} ))
 }
 
 p_q2_row TP-D hold "stream-end?mode=hold&sec=${P_HOLD}"
@@ -4120,10 +4153,24 @@ printf '%s\n' "$P_Q2_BODY" | grep -v '^$' | tail -1 | grep -q '^data: \[DONE\]' 
 printf '%s' "$P_Q2_BODY" | grep -q 'HTTP/1\.' \
   && check "TP-D: no status line inside the body" 1 \
   || check "TP-D: no status line inside the body" 0
+p_deltas_are TP-D "loxilb_ai_pd_requests_total{phase,status}" "$P_Q2_PDD" "decode,truncated +1"
+p_deltas_are TP-D "loxilb_ai_requests_total{outcome,status}" "$P_Q2_RQD" "completed,200 +1"
+pd_term=$(p_terminators "$P_Q2_S0")
+[ "$pd_term" = "1" ] && check "TP-D: loxilb_ai_pd_terminator_synthesized_total +1" 0 \
+                     || check "TP-D: loxilb_ai_pd_terminator_synthesized_total +1 (got +${pd_term})" 1
 
 p_q2_row TP-E cut "stream-end?mode=cut"
-# How a cut chunked answer ends for the client is printed above, not asserted here.
-# The row exists for its lifecycle record.
+# The engine died: the client sees the cut, and nothing writes a terminator for it.
+[ "$P_Q2_RC" = "18" ] && check "TP-E: the client sees the cut (curl rc=18)" 0 \
+                      || check "TP-E: the client sees the cut (curl rc=18, got ${P_Q2_RC})" 1
+printf '%s\n' "$P_Q2_BODY" | grep -q '^data: \[DONE\]' \
+  && check "TP-E: no [DONE] in the body" 1 \
+  || check "TP-E: no [DONE] in the body" 0
+p_deltas_are TP-E "loxilb_ai_pd_requests_total{phase,status}" "$P_Q2_PDD" "decode,error +1"
+p_deltas_are TP-E "loxilb_ai_requests_total{outcome,status}" "$P_Q2_RQD" "completed,200 +1"
+pe_term=$(p_terminators "$P_Q2_S0")
+[ "$pe_term" = "0" ] && check "TP-E: loxilb_ai_pd_terminator_synthesized_total flat" 0 \
+                     || check "TP-E: loxilb_ai_pd_terminator_synthesized_total flat (got +${pe_term})" 1
 
 p_reset
 p_del
