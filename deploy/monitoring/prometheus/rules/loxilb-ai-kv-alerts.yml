@@ -42,7 +42,7 @@ groups:
       - alert: LoxilbKvReconnectStorm
         expr: >-
           sum by (cluster, instance, service, ep)
-          (increase(loxilb_kv_subscriber_reconnect_total[10m])) > 3
+          ((clamp_min(loxilb_kv_subscriber_reconnect_total - loxilb_kv_subscriber_reconnect_total offset 10m, 0) or (loxilb_kv_subscriber_reconnect_total unless loxilb_kv_subscriber_reconnect_total offset 10m))) > 3
         for: 10m
         labels: { severity: warning }
         annotations:
@@ -54,7 +54,7 @@ groups:
       - alert: LoxilbKvZeroHitWatchdog
         expr: >-
           sum by (cluster, instance, service_id)
-          (increase(loxilb_pd_kv_zero_hit_watchdog_total[15m])) > 0
+          ((clamp_min(loxilb_pd_kv_zero_hit_watchdog_total - loxilb_pd_kv_zero_hit_watchdog_total offset 15m, 0) or (loxilb_pd_kv_zero_hit_watchdog_total unless loxilb_pd_kv_zero_hit_watchdog_total offset 15m))) > 0
         labels: { severity: warning }
         annotations:
           summary: "KV zero-hit watchdog tripped (service {{ $labels.service_id }})"
@@ -65,7 +65,7 @@ groups:
       - alert: LoxilbTrtllmDrainOwnershipFault
         expr: >-
           sum by (cluster, instance, reason)
-          (increase(loxilb_ai_kv_trtllm_drain_ownership_fault_total[10m])) > 0
+          ((clamp_min(loxilb_ai_kv_trtllm_drain_ownership_fault_total - loxilb_ai_kv_trtllm_drain_ownership_fault_total offset 10m, 0) or (loxilb_ai_kv_trtllm_drain_ownership_fault_total unless loxilb_ai_kv_trtllm_drain_ownership_fault_total offset 10m))) > 0
         labels: { severity: warning }
         annotations:
           summary: "TRT-LLM drain ownership fault ({{ $labels.reason }})"

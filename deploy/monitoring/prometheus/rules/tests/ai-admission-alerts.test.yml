@@ -174,3 +174,21 @@ tests:
               description: "A capacity unit was released that was never taken (underflow) or an executing request had no pool (unknown_permit). This is a defect, not load: report it with the gateway log."
               dashboard: "LoxiLB / AI Gateway"
               panel: "Gate accounting anomalies (global)"
+
+  # ── MON-04: the anomaly's series does not exist until its first event ────
+  # (a lazy vector child): it appears at 1. increase() over the window sees
+  # one sample and reads nothing; the alert must still fire.
+  - interval: 30s
+    input_series:
+      - series: 'loxilb_ai_admission_anomalies_total{instance="gw",kind="unknown_permit"}'
+        values: '_x10 1x50'
+    alert_rule_test:
+      - alertname: LoxilbAIAdmissionAnomaly
+        eval_time: 6m
+        exp_alerts:
+          - exp_labels: { severity: warning, instance: gw, kind: unknown_permit }
+            exp_annotations:
+              summary: "AI admission gate bookkeeping anomaly (unknown_permit)"
+              description: "A capacity unit was released that was never taken (underflow) or an executing request had no pool (unknown_permit). This is a defect, not load: report it with the gateway log."
+              dashboard: "LoxiLB / AI Gateway"
+              panel: "Gate accounting anomalies (global)"

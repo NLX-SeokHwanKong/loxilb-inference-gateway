@@ -256,6 +256,48 @@ class DashboardFilters(unittest.TestCase):
             self._panel('rate(loxilb_ai_pd_requests_total[5m])'), {"instance"}, self.EXP), [])
 
 
+class LazyIncrease(unittest.TestCase):
+    """MON-04: increase() of a lazy family misses its first event."""
+
+    ACT = {"loxilb_lazy_total": "V", "loxilb_eager_total": "E", "loxilb_coll_total": "C"}
+
+    def test_lazy_goes_red(self):
+        for fam in ("loxilb_lazy_total", "loxilb_coll_total"):
+            self.assertIsNotNone(lint.lazy_increase_violation(
+                f'sum(increase({fam}{{instance=~"$instance"}}[15m])) > 0', self.ACT))
+
+    def test_eager_passes(self):
+        self.assertIsNone(lint.lazy_increase_violation(
+            'increase(loxilb_eager_total[5m])', self.ACT))
+
+    def test_the_form_passes(self):
+        self.assertIsNone(lint.lazy_increase_violation(
+            '(clamp_min(loxilb_lazy_total - loxilb_lazy_total offset 15m, 0) or '
+            '(loxilb_lazy_total unless loxilb_lazy_total offset 15m)) > 0', self.ACT))
+
+    def test_rule_goes_red(self):
+        rep = lint.Report()
+        with tempfile.TemporaryDirectory() as td:
+            rules_dir = os.path.join(td, "prometheus", "rules")
+            os.makedirs(rules_dir)
+            with open(os.path.join(rules_dir, "loxilb-alerts.yml"), "w") as fh:
+                fh.write("groups:\n- name: fixture\n  rules:\n"
+                         "  - alert: Fixture\n"
+                         "    expr: increase(loxilb_lazy_total[15m]) > 0\n")
+            lint.lint_rules(td, {"loxilb_lazy_total": []}, {}, rep, self.ACT)
+        self.assertTrue(any("lazy family" in e for e in rep.errors), rep.errors)
+
+    def test_the_shipped_assets_are_clean(self):
+        act = lint.load_activation(REPO)
+        self.assertTrue(act, "manifest not found")
+        rep = lint.Report()
+        exporter = lint.collect_exporter_metrics(REPO)
+        mon = os.path.join(REPO, "deploy", "monitoring")
+        t2p, _ = lint.lint_dashboards(mon, exporter, rep, act)
+        lint.lint_rules(mon, exporter, t2p, rep, act)
+        self.assertFalse([e for e in rep.errors if "lazy family" in e], rep.errors)
+
+
 class ScrapeCluster(unittest.TestCase):
     """MON-06: the loxilb job puts external_labels.cluster on its series."""
 

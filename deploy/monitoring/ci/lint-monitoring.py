@@ -190,7 +190,7 @@ def ds_uid(obj):
     return None
 
 
-def lint_dashboards(mon_dir, exporter, rep):
+def lint_dashboards(mon_dir, exporter, rep, activation=None):
     files = sorted(glob.glob(os.path.join(mon_dir, "grafana/dashboards/*.json")))
     if not files:
         rep.err("dashboards", "no dashboard JSON files found")
@@ -270,6 +270,9 @@ def lint_dashboards(mon_dir, exporter, rep):
                                 aborted_cause_violation(expr, fam)):
                         if msg:
                             rep.err(name, f"panel '{p.get('title')}' {msg}")
+                msg = lazy_increase_violation(expr, activation or {})
+                if msg:
+                    rep.err(name, f"panel '{p.get('title')}' {msg}")
                 for m in METRIC_TOKEN.finditer(expr):
                     ref = m.group(1)
                     if boundary_violation(ref):
@@ -300,6 +303,42 @@ def lint_dashboards(mon_dir, exporter, rep):
         title_to_panels[title] = panel_titles
 
     return title_to_panels, all_exprs
+
+
+# ---------------------------------------------------------------------------
+# increase() on a lazy family (MON-04)
+# ---------------------------------------------------------------------------
+# A lazy family's series does not exist until its first increment, and
+# increase() over a window counts only what happens after a series' first
+# sample: the first event a window sees reads as nothing, so a "> 0" alert
+# misses the first anomaly and a count panel shows 0 for it. A family the
+# manifest classes lazy (V lazy vector children, C sample-lazy collector,
+# Q quota-lazy collector, D+V) is counted with the form that also counts a
+# series' first value:
+#   clamp_min(X - X offset W, 0) or (X unless X offset W)
+LAZY_ACTIVATION = {"V", "C", "Q", "D+V"}
+INCREASE_TOKEN = re.compile(r"increase\(\s*((?:loxilb|doca|aictrl)_[a-z0-9_]+)")
+
+
+def load_activation(repo_root):
+    manifest = os.path.join(repo_root, "deploy", "monitoring", "manifest",
+                            "metric-manifest.json")
+    try:
+        data = json.load(open(manifest, encoding="utf-8"))
+        return {f["name"]: f.get("activation") for f in data["families"]}
+    except (OSError, KeyError, json.JSONDecodeError):
+        return {}
+
+
+def lazy_increase_violation(expr, activation):
+    """A message when expr takes increase() of a lazy family, else None."""
+    for m in INCREASE_TOKEN.finditer(expr):
+        if activation.get(m.group(1)) in LAZY_ACTIVATION:
+            return (f"takes increase() of {m.group(1)}, a lazy family "
+                    f"({activation[m.group(1)]}): its first event reads as "
+                    f"nothing; use clamp_min(X - X offset W, 0) or "
+                    f"(X unless X offset W)")
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -510,7 +549,7 @@ def iter_rule_exprs(rules_path):
     return out
 
 
-def lint_rules(mon_dir, exporter, title_to_panels, rep):
+def lint_rules(mon_dir, exporter, title_to_panels, rep, activation=None):
     rule_paths = sorted(glob.glob(os.path.join(mon_dir,
                                                "prometheus/rules/*.yml")))
     if not rule_paths:
@@ -536,6 +575,9 @@ def lint_rules(mon_dir, exporter, title_to_panels, rep):
                             aborted_cause_violation(rule_expr, fam)):
                     if msg:
                         rep.err(fname, f"rule '{rule_name}' {msg}")
+            msg = lazy_increase_violation(rule_expr, activation or {})
+            if msg:
+                rep.err(fname, f"rule '{rule_name}' {msg}")
 
         for dash, panel in pairs:
             if dash not in title_to_panels:
@@ -692,8 +734,9 @@ def main():
         rep.err("exporter", "suspiciously few metric names found — is the "
                             "api/prometheus source present and readable?")
 
-    title_to_panels, exprs = lint_dashboards(mon_dir, exporter, rep)
-    lint_rules(mon_dir, exporter, title_to_panels, rep)
+    activation = load_activation(repo_root)
+    title_to_panels, exprs = lint_dashboards(mon_dir, exporter, rep, activation)
+    lint_rules(mon_dir, exporter, title_to_panels, rep, activation)
     lint_mcp_rules_copy(repo_root, mon_dir, rep)
     lint_scrape_cluster(mon_dir, rep)
 

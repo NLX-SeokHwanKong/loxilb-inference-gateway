@@ -1737,7 +1737,7 @@
         },
         {
           "refId": "D",
-          "expr": "increase(loxilb_ai_kv_attest_echo_total{result=\"fail\",instance=~\"$instance\"}[$__rate_interval])",
+          "expr": "(clamp_min(loxilb_ai_kv_attest_echo_total{result=\"fail\",instance=~\"$instance\"} - loxilb_ai_kv_attest_echo_total{result=\"fail\",instance=~\"$instance\"} offset $__rate_interval, 0) or (loxilb_ai_kv_attest_echo_total{result=\"fail\",instance=~\"$instance\"} unless loxilb_ai_kv_attest_echo_total{result=\"fail\",instance=~\"$instance\"} offset $__rate_interval))",
           "legendFormat": "echo_fail"
         }
       ]
@@ -1787,7 +1787,7 @@
             },
             {
               "refId": "D",
-              "expr": "sum by (service_id) (increase(loxilb_pd_kv_zero_hit_watchdog_total{instance=~\"$instance\"}[$__rate_interval]))",
+              "expr": "sum by (service_id) ((clamp_min(loxilb_pd_kv_zero_hit_watchdog_total{instance=~\"$instance\"} - loxilb_pd_kv_zero_hit_watchdog_total{instance=~\"$instance\"} offset $__rate_interval, 0) or (loxilb_pd_kv_zero_hit_watchdog_total{instance=~\"$instance\"} unless loxilb_pd_kv_zero_hit_watchdog_total{instance=~\"$instance\"} offset $__rate_interval)))",
               "legendFormat": "zero_hit_watchdog svc {{service_id}}"
             },
             {
@@ -2646,7 +2646,7 @@
           "targets": [
             {
               "refId": "A",
-              "expr": "sum by (kind) (increase(loxilb_ai_admission_anomalies_total{instance=~\"$instance\"}[$__rate_interval]))",
+              "expr": "sum by (kind) ((clamp_min(loxilb_ai_admission_anomalies_total{instance=~\"$instance\"} - loxilb_ai_admission_anomalies_total{instance=~\"$instance\"} offset $__rate_interval, 0) or (loxilb_ai_admission_anomalies_total{instance=~\"$instance\"} unless loxilb_ai_admission_anomalies_total{instance=~\"$instance\"} offset $__rate_interval)))",
               "legendFormat": "{{kind}}"
             }
           ],

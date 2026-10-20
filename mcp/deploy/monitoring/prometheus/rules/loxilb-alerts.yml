@@ -304,7 +304,7 @@ groups:
           panel: "KV attestation (global)"
 
       - alert: KvExactEchoChallengeFailures
-        expr: increase(loxilb_ai_kv_attest_echo_total{result="fail"}[30m]) > 0
+        expr: (clamp_min(loxilb_ai_kv_attest_echo_total{result="fail"} - loxilb_ai_kv_attest_echo_total{result="fail"} offset 30m, 0) or (loxilb_ai_kv_attest_echo_total{result="fail"} unless loxilb_ai_kv_attest_echo_total{result="fail"} offset 30m)) > 0
         labels: { severity: warning }
         annotations:
           summary: "KV-exact echo challenge failing"
@@ -374,7 +374,7 @@ groups:
           panel: "Accept valve: contexts vs bound (global)"
 
       - alert: LoxilbAIAdmissionAnomaly
-        expr: sum by (instance, kind) (increase(loxilb_ai_admission_anomalies_total[15m])) > 0
+        expr: sum by (instance, kind) ((clamp_min(loxilb_ai_admission_anomalies_total - loxilb_ai_admission_anomalies_total offset 15m, 0) or (loxilb_ai_admission_anomalies_total unless loxilb_ai_admission_anomalies_total offset 15m))) > 0
         for: 0m
         labels: { severity: warning }
         annotations:
