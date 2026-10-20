@@ -3881,19 +3881,32 @@ echo "$p_arm" | grep -q "\"stream_chunks\": ${P_CHUNKS}" \
   || check "TP: the decode mock streams ${P_CHUNKS} chunks ${P_PACE_MS} ms apart" 1
 
 echo "  streaming for about $((P_CHUNKS * P_PACE_MS / 1000)) s (the cap is ${P_CAP} s)..."
+# The gateway's own account of the row: its data-plane log from here on.
+P_DPLOG=/var/log/loxilbdp.log
+P_RE_REAP='generic P/D idle reaper|\[REAPER\]|ERR-01|\[ANSWER_STARTED\]|\[SSE_CAP\]'
+p_log0=$($dexec llb1 sh -c "wc -l < ${P_DPLOG}" 2>/dev/null)
+p_log0=${p_log0:-0}
 p_out=$($dexec l3h1 curl -s --no-buffer -m $((P_CHUNKS * P_PACE_MS / 1000 + 60)) \
   -o /tmp/phase-p-stream.body -w '%{http_code} %{time_total}' \
   "http://10.10.10.254:${P_PORT}/v1/chat/completions" -H "Content-Type: application/json" \
   -d "{\"model\":\"${MODEL}\",\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":\"row14\"}],\"max_tokens\":${P_CHUNKS}}" 2>/dev/null)
+p_rc=$?
 $dexec "$P_DECODE" curl -s -m 5 -X POST "${P_ADMIN}/reset" >/dev/null 2>&1 || true
 p_code=${p_out%% *}
 p_secs=$(printf '%s' "${p_out#* }" | cut -d. -f1)
 p_body=$($dexec l3h1 cat /tmp/phase-p-stream.body 2>/dev/null)
 p_data=$(printf '%s\n' "$p_body" | grep -c '^data: {')
-echo "  HTTP ${p_code} after ${p_secs:-?} s; ${p_data} data chunks; last line: $(printf '%s\n' "$p_body" | grep -v '^$' | tail -1)"
+echo "  HTTP ${p_code} after ${p_secs:-?} s (curl rc=${p_rc}); ${p_data} data chunks; last line: $(printf '%s\n' "$p_body" | grep -v '^$' | tail -1)"
+p_reap=$($dexec llb1 sh -c "tail -n +$((p_log0 + 1)) ${P_DPLOG}" 2>/dev/null | grep -E "$P_RE_REAP")
+echo "  gateway reaper/stream lines during the row: $(printf '%s' "$p_reap" | grep -c .)"
+printf '%s\n' "$p_reap" | grep . | head -20 | sed 's/^/    /'
 
 [ "$p_code" = "200" ] && check "TP-stream: 200" 0 \
                       || check "TP-stream: 200 (got ${p_code})" 1
+# The decode engine ends its stream by closing; the answer must end with it. rc 28 is
+# curl's own deadline: everything arrived but the gateway never ended the answer.
+[ "$p_rc" = "0" ] && check "TP-stream: the answer ended when the engine closed (curl rc=0)" 0 \
+                  || check "TP-stream: the answer ended when the engine closed (curl rc=${p_rc})" 1
 [ "${p_secs:-0}" -gt "$P_CAP" ] \
   && check "TP-stream: it outlived the ${P_CAP} s idle cap (${p_secs} s)" 0 \
   || check "TP-stream: it outlived the ${P_CAP} s idle cap (${p_secs:-?} s)" 1
@@ -3911,6 +3924,11 @@ fi
 printf '%s\n' "$p_body" | grep -v '^$' | tail -1 | grep -q '^data: \[DONE\]' \
   && check "TP-stream: it ends with [DONE]" 0 \
   || check "TP-stream: it ends with [DONE]" 1
+# What the client received can look whole even when a reaper acted on the stream;
+# the gateway's log says whether one did.
+printf '%s' "$p_reap" | grep -qE 'generic P/D idle reaper|\[REAPER\]|ERR-01' \
+  && check "TP-stream: no P/D reaper acted on the live stream" 1 \
+  || check "TP-stream: no P/D reaper acted on the live stream" 0
 
 p_del
 bail_check
