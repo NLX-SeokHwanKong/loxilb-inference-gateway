@@ -398,7 +398,7 @@ sleep 2.5
 chk X3 "its unit returned on close, the backend still holding it" "0 1" "$(fce .inflight) $(cl_receipts x3)"
 cl_release x3
 bt_end
-bt_check X3 0:1:0 0
+BT_LEFT=1 bt_check X3 0:1:0 0
 
 echo "=== X13: eviction: a critical arrival at a full queue takes a sheddable waiter's place"
 sched_cfg 1 2 10000 ', "fc_shed_queue": "on", "fc_wake_policy": "inherit", "fc_tenant_max_share_pct": 0' || fail X13 "pool shape"
@@ -499,7 +499,7 @@ chk X16 "sheddable: admitted 2, queued 2, shed 1 (the eviction)" "2 2 1 0 0" "$(
 
 echo "=== P6: over h2c nothing queues, and the shed order holds"
 h2run() { local t=$1; shift; source ./keys.env; local k; eval k=\$KEY_${t//-/_}; $hexec tqh1 python3 "$(pwd)/lib/h2_band.py" $VIP $PORT_H2 --api-key "$k" "$@"; }
-bt_begin $PORT_H2
+bt_begin $PORT_H2 h2
 h2run t-a --streams 2 --delay-ms 4000 --nonce-prefix p6run > "$S3/p6run.out" 2>&1 &
 H2BG=$!
 sleep 1
@@ -708,7 +708,7 @@ echo "=== H2: over h2c nothing waits, so a floor never binds; the reserve decide
 H2F=", \"api_key_auth\": \"required\", \"backend_protocol\": \"http2\", \"fc_max_outstanding\": 2"
 h2cfg() { tq_api POST /config/loadbalancer "$(tq_rule_json $PORT_H2 "$H2F, \"fc_band_min_share_pct\": \"$1\", \"fc_critical_reserve_pct\": $2" 9090 9091)" | cut -c1-3; }
 has H2 "a sheddable floor of 50 % on the h2c pool" "200" "$(h2cfg 0:0:50 0)"
-bt_begin $PORT_H2
+bt_begin $PORT_H2 h2
 h2run t-a --streams 2 --delay-ms 3000 --nonce-prefix h2a > "$S4/h2a.out" 2>&1 &
 H2BG=$!
 sleep 1
@@ -1068,7 +1068,7 @@ chk X9 "the rule is gone: a second delete finds nothing" 404 "$(tq_rule_del_mode
 echo "=== H4: S10 over h2c, every knob but the reserve set"
 h2knobs() { tq_api POST /config/loadbalancer "$(tq_rule_json $PORT_H2 ", \"api_key_auth\": \"required\", \"backend_protocol\": \"http2\", \"fc_max_outstanding\": 2, $1" 9090 9091)"; }
 has H4 "the knobs applied" 200 "$(h2knobs '"fc_wake_policy": "weighted", "fc_band_weights": "8:3:1", "fc_band_min_share_pct": "0:20:10", "fc_critical_reserve_pct": 0, "fc_band_wait_ms": "1000:2000:500", "fc_band_queue_pct": "25:50:25", "fc_shed_queue": "inherit", "fc_tenant_wake": "rr", "fc_llmd_headers": "on"')"
-bt_begin $PORT_H2
+bt_begin $PORT_H2 h2
 for i in 1 2 3 4 5 6 7 8; do
   chk H4 "round $i: two streams, both admitted" '{"200":2}' "$(h2run t-a --streams 2 --delay-ms 50 --nonce-prefix h4-$i | jq -c 'select(.summary) | .summary')"
 done

@@ -261,7 +261,7 @@ case_X4() {
 case_H3() {
   echo "=== H3: over h2c: a stream cancelled while running returns its unit; a dead endpoint fails over"
   h2runp() { local p=$1 t=$2; shift 2; source ./keys.env; local k; eval k=\$KEY_${t//-/_}; $hexec tqh1 python3 "$(pwd)/lib/h2_band.py" $VIP $p --api-key "$k" "$@"; }
-  bt_begin $PORT_H2
+  bt_begin $PORT_H2 h2
   h2runp $PORT_H2 t-a --streams 1 --delay-ms 6000 --rst 1 --rst-after-s 1.5 --nonce-prefix h3rst > "$B3/h3rst.out" 2>&1 &
   local pid=$!
   sleep 1
@@ -275,7 +275,7 @@ case_H3() {
   # (b) The product: a stream whose backend connect fails is answered 503
   # backend_unreachable on that stream with no retry (sockproxy_h2.c, the
   # stream connect-failure branch); the others run on the live endpoint.
-  bt_begin $PORT_H2X
+  bt_begin $PORT_H2X h2
   local o="$B3/h3fo.out" n200 nfail nonce lost=0 got=""
   h2runp $PORT_H2X t-a --streams 2 --nonce-prefix h3fo > "$o"
   h2runp $PORT_H2X t-a --streams 2 --nonce-prefix h3fo2 >> "$o"
@@ -424,8 +424,13 @@ case_B15() {
   # own (class-blind) order: a request arriving at pd_select_prefill does not
   # wait behind one parked there (try 5: the critical one took it). Not
   # asserted; that the parked request runs in the end is.
+  # The peak is 2 when the parked request resumed before the critical one
+  # took the prefill unit; when it met that unit held it handed its own back
+  # and moved to the gate holding nothing, so the polls may only see 1. Its
+  # resume taking a unit would read 3.
   v=$(tq_fce $PORT_PD .inflight); [ "$v" -gt "$max" ] 2>/dev/null && max=$v
-  chk B15 "its resume took no service unit (never above the ceiling)" 2 "$max"
+  chk B15 "its resume took no service unit (never above the ceiling)" yes \
+    "$([ "$max" -ge 1 ] && [ "$max" -le 2 ] && echo yes || echo "no (peak $max)")"
   pd_release b15b; pd_wait 8181 b15c 1 10 >/dev/null; pd_release b15c
   wait_done "$B3" 'b15?' 3 20
   chk B15 "all answered 200" "200 200 200" "$(cl_errs "$B3" 'b15?')"

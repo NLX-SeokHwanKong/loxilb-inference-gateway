@@ -265,9 +265,13 @@ bt_parse() { # bt_parse <array-name> <snapshot>
   for kv in $2; do a[${kv%%=*}]=${kv#*=}; done
 }
 # The collector republishes every 10 s: a reading taken 11 s after the last
-# request of a case has seen all of it.
+# request of a case has seen all of it. The start of a case settles too: the
+# responses counter is gateway-wide, and a request the previous case sent
+# after its own reading (a check that the pool is idle again, a stream left
+# to time out) is published only by the next republish.
 bt_settle() { sleep 11; }
-bt_begin() { bt_parse BT0 "$(bt_snap "$1")"; BT_PORT=$1; }
+# bt_begin <port> [h2]: h2 when the service's clients speak HTTP/2
+bt_begin() { bt_settle; bt_parse BT0 "$(bt_snap "$1")"; BT_PORT=$1; BT_PROTO=${2:-h1}; }
 bt_end() {
   local k
   bt_settle
@@ -287,14 +291,20 @@ bd() { echo "${BD[$1]:-0}"; }
 #   queued (all bands) = the parks that ended: admitted after a park +
 #                        expired + evicted + cancelled, when the case knows
 #                        how many of its parked requests were admitted
-#   admitted + shed + expired (all bands) = the responses recorded as
-#                        received: every terminal outcome but cancelled is an
-#                        answer its client received (the backend's reply, or
-#                        the gateway's own 429 or 504), recorded once; a
-#                        cancelled request's client left before any answer.
+#   admitted + shed + expired (all bands) + refused - left = the responses
+#                        recorded as received: every terminal outcome but
+#                        cancelled is an answer its client received (the
+#                        backend's reply, or the gateway's own 429 or 504),
+#                        recorded once; a cancelled request's client left
+#                        before any answer. refused = the gate's refusals that
+#                        are no band outcome (queue full, tenant share,
+#                        capacity, no healthy capacity, a drain), each
+#                        answered; left = admitted requests whose client left
+#                        before the backend answered (BT_LEFT, from the case).
 #                        HTTP/1.1 only: HTTP/2 has no class counter.
+BT_REFUSED="capacity_shed queue_full tenant_share no_healthy_capacity draining drained"
 bt_check() {
-  local id=$1 want=$2 ev=$3 b i=0 tq=0 te=0 tc=0 ta=0 got rs=${4:-}
+  local id=$1 want=$2 ev=$3 b r i=0 tq=0 te=0 tc=0 ta=0 got rs=${4:-}
   local -a w=(${want//:/ })
   chk "$id" "fifteen band series for the service" 15 "${BT1[series]:-0}"
   for b in critical standard sheddable; do
@@ -304,8 +314,9 @@ bt_check() {
     ta=$((ta + $(bd $b.admitted) + $(bd $b.shed) + $(bd $b.expired)))
     i=$((i + 1))
   done
-  [ "$BT_PORT" != "$PORT_H2" ] &&
-    chk "$id" "admitted + shed + expired = responses recorded as received" "$ta" "$(bd rs)"
+  for r in $BT_REFUSED; do ta=$((ta + $(bd d.$r))); done
+  [ "$BT_PROTO" == h1 ] &&
+    chk "$id" "admitted + shed + expired + refused - left = responses recorded as received" "$((ta - ${BT_LEFT:-0}))" "$(bd rs)"
   chk "$id" "queued = queue-wait samples (one per park, at its end)" "$tq" "$(bd qw)"
   [ -n "$rs" ] && chk "$id" "queued = admitted after a park + expired + evicted + cancelled" "$tq" "$(( rs + te + ev + tc ))"
   return 0
