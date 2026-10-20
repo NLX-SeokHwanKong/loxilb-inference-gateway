@@ -58,6 +58,26 @@ var BuildTags string = ""
 // upstream loxilb, so this must ship in any release the UI flavor-gates on.
 const Product = "loxilb-inference-gateway"
 
+// Feature tokens GET /netlox/v1/version lists under "features": the
+// gateway-only capabilities a controller checks for before it sends the
+// matching rule fields. The REST layer ignores fields it does not know, so a
+// build that lacks a token would install a rule WITHOUT the policy the caller
+// asked for and report success; the controller's check on this list is what
+// turns that into a refusal. Tokens are the rule field names they stand for.
+const (
+	// FeatureAPIKeyAuth - serviceArguments.api_key_auth is accepted and enforced.
+	FeatureAPIKeyAuth = "api_key_auth"
+	// FeatureJWTAuthProfile - the Bearer arm (api_key_auth "jwt" / "apikey-or-jwt")
+	// and the serviceArguments.jwt_auth_profile reference are accepted and enforced.
+	FeatureJWTAuthProfile = "jwt_auth_profile"
+)
+
+// VersionFeatures - the features this build advertises, in a fixed order. A
+// fresh slice each call: callers may append to it.
+func VersionFeatures() []string {
+	return []string{FeatureAPIKeyAuth, FeatureJWTAuthProfile}
+}
+
 // This file defines the go interface implementation needed to interact with loxinet go module
 
 const (

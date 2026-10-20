@@ -20,6 +20,13 @@ binary behaves exactly like upstream loxilb.
 
 ### Added
 
+- **`GET /netlox/v1/version` lists the gateway-only capabilities of the build
+  under `features`** (`api_key_auth`, `jwt_auth_profile`), as stable tokens a
+  controller checks before it sends the matching rule fields. The REST layer
+  ignores fields it does not know, so a build without a token would install a
+  rule without the credential policy the caller asked for and report success;
+  kube-loxilb reads this list to refuse the rule instead. Absent on builds
+  that predate the field.
 - **Helm chart** `deploy/helm/loxilb-inference-gateway`: one release installs
   the loxilb-igw DaemonSet, the kube-loxilb controller (from
   `integration/inference-gateway`, with its CRDs) and the Gateway API objects
