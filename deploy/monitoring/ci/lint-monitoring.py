@@ -610,6 +610,42 @@ def promtool_check_exprs(promtool, exprs, rep):
 
 
 # ---------------------------------------------------------------------------
+# MON-06: external_labels are attached only to what leaves Prometheus
+# (alerts, federation, remote write), never to its own series. The recording
+# rules group by (cluster, instance) and the KV alerts by cluster, so the
+# loxilb scrape job must put the same cluster on the series it scrapes, or
+# every cluster:/instance: series is produced without it. The promtool tests
+# inject cluster into their inputs, so they cannot see this; this check can.
+EXT_CLUSTER = re.compile(r"external_labels:\s*\n(?:[ \t]*#.*\n)*[ \t]+cluster:[ \t]*(\S+)")
+JOB_CLUSTER = re.compile(r"^[ \t]+cluster:[ \t]*(\S+)", re.M)
+
+
+def lint_scrape_cluster(mon_dir, rep):
+    path = os.path.join(mon_dir, "prometheus", "prometheus.yml")
+    try:
+        text = open(path, encoding="utf-8").read()
+    except OSError:
+        return
+    ext = EXT_CLUSTER.search(text)
+    m = re.search(r"^\s*- job_name:\s*loxilb\s*$", text, re.M)
+    if not ext or not m:
+        rep.err("prometheus.yml", "external_labels.cluster or the loxilb "
+                                  "scrape job not found")
+        return
+    nxt = re.search(r"^\s*- job_name:", text[m.end():], re.M)
+    job = text[m.end(): m.end() + nxt.start()] if nxt else text[m.end():]
+    job = "\n".join(l for l in job.splitlines() if not l.lstrip().startswith("#"))
+    got = JOB_CLUSTER.findall(job)
+    if not got:
+        rep.err("prometheus.yml", "the loxilb scrape job sets no cluster "
+                                  "label: the recording rules' by (cluster, "
+                                  "instance) produce series without it")
+    elif any(g != ext.group(1) for g in got):
+        rep.err("prometheus.yml", f"the loxilb scrape job's cluster {got} "
+                                  f"differs from external_labels.cluster "
+                                  f"'{ext.group(1)}'")
+
+
 # The MCP module ships its own copy of the alert rules (it is released on its
 # own), which drifted from the default package's: an alert removed from one
 # lived on in the other, and a description fixed in one stayed wrong in the
@@ -659,6 +695,7 @@ def main():
     title_to_panels, exprs = lint_dashboards(mon_dir, exporter, rep)
     lint_rules(mon_dir, exporter, title_to_panels, rep)
     lint_mcp_rules_copy(repo_root, mon_dir, rep)
+    lint_scrape_cluster(mon_dir, rep)
 
     promtool = find_promtool(args.promtool)
     if promtool:

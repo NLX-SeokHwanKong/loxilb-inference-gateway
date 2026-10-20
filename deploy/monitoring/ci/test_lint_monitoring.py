@@ -256,6 +256,44 @@ class DashboardFilters(unittest.TestCase):
             self._panel('rate(loxilb_ai_pd_requests_total[5m])'), {"instance"}, self.EXP), [])
 
 
+class ScrapeCluster(unittest.TestCase):
+    """MON-06: the loxilb job puts external_labels.cluster on its series."""
+
+    BASE = ("global:\n  external_labels:\n    # site\n    cluster: c1\n"
+            "scrape_configs:\n  - job_name: loxilb\n    static_configs:\n"
+            "      - targets: [\"127.0.0.1:11111\"]\n%s"
+            "  - job_name: prometheus\n    static_configs:\n"
+            "      - targets: [\"localhost:9090\"]\n")
+
+    def _run(self, job_labels):
+        with tempfile.TemporaryDirectory() as td:
+            os.makedirs(os.path.join(td, "prometheus"))
+            with open(os.path.join(td, "prometheus", "prometheus.yml"), "w") as fh:
+                fh.write(self.BASE % job_labels)
+            rep = lint.Report()
+            lint.lint_scrape_cluster(td, rep)
+            return rep.errors
+
+    def test_missing_goes_red(self):
+        self.assertTrue(any("sets no cluster" in e for e in self._run("")))
+
+    def test_commented_out_goes_red(self):
+        self.assertTrue(any("sets no cluster" in e for e in
+                            self._run("        # labels:\n        #   cluster: c1\n")))
+
+    def test_different_goes_red(self):
+        self.assertTrue(any("differs" in e for e in
+                            self._run("        labels:\n          cluster: c2\n")))
+
+    def test_same_passes(self):
+        self.assertEqual(self._run("        labels:\n          cluster: c1\n"), [])
+
+    def test_the_shipped_config_passes(self):
+        rep = lint.Report()
+        lint.lint_scrape_cluster(os.path.join(REPO, "deploy", "monitoring"), rep)
+        self.assertEqual(rep.errors, [])
+
+
 class McpRulesCopy(unittest.TestCase):
     """The MCP module's copy of the alert rules is a byte-for-byte copy."""
 

@@ -251,6 +251,13 @@ families, against 60 upstream families.
 ## Operational notes
 
 - Scrape interval is 10 s to match loxilb's internal stats sweep — don't lower it.
+- **`cluster` is set in two places, and per site in both:** `external_labels.cluster`
+  and the `labels: {cluster: ...}` of the `loxilb` scrape job in `prometheus.yml`.
+  External labels reach only what leaves Prometheus (alerts, federation, remote
+  write), never its own series, so without the scrape label every `cluster:` and
+  `instance:` recording-rule series and every `by (cluster)` alert would come out
+  without it. `lint-monitoring.py` fails when the two differ. The promtool tests
+  inject `cluster` into their inputs, so they cannot catch this on their own.
 - `up == 0` has two meanings: process/network down, or metrics collection disabled
   (HTTP 503). The `LoxilbScrapeDown` alert runbook covers both.
 - `loxilb_active_conntrack_entries`, `loxilb_requests_total`, and per-client/per-endpoint
