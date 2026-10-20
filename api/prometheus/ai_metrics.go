@@ -1250,7 +1250,7 @@ func RecordPDRecordExtra(modelName string, decodeTTFTUs int64, fallbackReason in
 // finished, or ended on the decode leg afterwards. Phases 1, 4 and 5 did not — a prefill
 // timeout, a prefill-side death and an origin reject each leave nothing whose
 // kv_transfer_params could have been read, so counting them as "missing" would
-// report a measurement that was never taken. Phase 9 (the client left) is not
+// report a measurement that was never taken. errorPhase 9 (the client left) is not
 // listed either: it can come before the prefill response was read.
 func pdPrefillResponseInspected(errorPhase int) bool {
 	switch errorPhase {
