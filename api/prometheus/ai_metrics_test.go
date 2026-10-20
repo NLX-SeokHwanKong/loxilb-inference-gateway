@@ -88,22 +88,22 @@ func tokensMissingAllReasons(model, tenant string) float64 {
 func TestRecordAIRequest(t *testing.T) {
 	tenant := "test-tenant-record"
 
-	beforeOK := getCounterValue(aiRequestsTotal, "m1", tenant, "200", AIOutcomeCompleted)
-	before429 := getCounterValue(aiRequestsTotal, "m1", tenant, "429", AIOutcomeCompleted)
+	beforeOK := getCounterValue(aiRequestsTotal, "m1", tenant, "200", AIOutcomeCompleted, "")
+	before429 := getCounterValue(aiRequestsTotal, "m1", tenant, "429", AIOutcomeCompleted, "")
 	beforeRL := getCounterValue(aiRateLimitHitsTotal, tenant, "rate_limit_exceeded")
 
-	RecordAIRequest(tenant, "m1", 200, 42)
-	RecordAIRequest(tenant, "m1", 429, 0)
+	RecordAIRequest(tenant, "m1", 200, 42, "")
+	RecordAIRequest(tenant, "m1", 429, 0, "")
 
-	if d := getCounterValue(aiRequestsTotal, "m1", tenant, "200", AIOutcomeCompleted) - beforeOK; d != 1.0 {
+	if d := getCounterValue(aiRequestsTotal, "m1", tenant, "200", AIOutcomeCompleted, "") - beforeOK; d != 1.0 {
 		t.Fatalf("expected requests_total{status=200} +1, got delta %f", d)
 	}
 	// A backend can answer 429 itself. This one is completed, not denied --
 	// which is precisely why status alone cannot carry the distinction.
-	if d := getCounterValue(aiRequestsTotal, "m1", tenant, "429", AIOutcomeCompleted) - before429; d != 1.0 {
+	if d := getCounterValue(aiRequestsTotal, "m1", tenant, "429", AIOutcomeCompleted, "") - before429; d != 1.0 {
 		t.Fatalf("expected requests_total{status=429} +1, got delta %f", d)
 	}
-	if d := getCounterValue(aiRequestsTotal, "m1", tenant, "429", AIOutcomeDenied); d != 0.0 {
+	if d := getCounterValue(aiRequestsTotal, "m1", tenant, "429", AIOutcomeDenied, ""); d != 0.0 {
 		t.Fatalf("RecordAIRequest must never write outcome=denied, got %f", d)
 	}
 	if d := getCounterValue(aiRateLimitHitsTotal, tenant, "rate_limit_exceeded") - beforeRL; d != 0.0 {
@@ -678,6 +678,79 @@ func TestTokenQuotaCollectorScopedSeries(t *testing.T) {
 // Each row also pins whether the lifecycle may contribute to kv_params_missing.
 // Only a lifecycle that actually parsed a prefill response can report that
 // kv_transfer_params was absent from it.
+// TestRecordAIRequestAborted: an end code makes the request aborted with
+// its cause and never completed; a code that is not an end (a deny reason,
+// a code from a newer data plane) stays completed; a request no status was
+// sent for reads status="none"; the duration histogram sees completions
+// only.
+func TestRecordAIRequestAborted(t *testing.T) {
+	tenant := "test-tenant-aborted"
+	model := "m-aborted"
+	want := map[string]string{
+		"client_abort":                 AICauseClient,
+		"client_stall":                 AICauseClient,
+		"client_abort_before_answer":   AICauseClient,
+		"backend_died":                 AICauseEngine,
+		"max_stream_duration_exceeded": AICauseGateway,
+		"pd_decode_stream_timeout":     AICauseGateway,
+		"pd_idle_timeout":              AICauseGateway,
+		"listener_closed":              AICauseGateway,
+	}
+	if got := AIEndCodes(); len(got) != len(want) {
+		t.Fatalf("AIEndCodes() = %v, want the %d codes of sp_end_codes", got, len(want))
+	}
+	for code, cause := range want {
+		if got := AIEndCause(code); got != cause {
+			t.Errorf("AIEndCause(%q) = %q, want %q", code, got, cause)
+		}
+		before := getCounterValue(aiRequestsTotal, model, tenant, "200", AIOutcomeAborted, cause)
+		beforeDone := getCounterValue(aiRequestsTotal, model, tenant, "200", AIOutcomeCompleted, "")
+		RecordAIRequest(tenant, model, 200, 30, code)
+		if d := getCounterValue(aiRequestsTotal, model, tenant, "200", AIOutcomeAborted, cause) - before; d != 1.0 {
+			t.Errorf("%s: requests_total{outcome=aborted,cause=%s} delta %f, want 1", code, cause, d)
+		}
+		if d := getCounterValue(aiRequestsTotal, model, tenant, "200", AIOutcomeCompleted, "") - beforeDone; d != 0.0 {
+			t.Errorf("%s: an aborted request was also counted completed (delta %f)", code, d)
+		}
+	}
+	for _, code := range []string{"", "rate_limit_exceeded", "timeout", "some_future_code"} {
+		if AIEndCause(code) != "" {
+			t.Errorf("AIEndCause(%q) is a cause; only end codes are", code)
+		}
+		before := getCounterValue(aiRequestsTotal, model, tenant, "200", AIOutcomeCompleted, "")
+		RecordAIRequest(tenant, model, 200, 30, code)
+		if d := getCounterValue(aiRequestsTotal, model, tenant, "200", AIOutcomeCompleted, "") - before; d != 1.0 {
+			t.Errorf("%q: not an end code, want completed +1, got %f", code, d)
+		}
+	}
+	// The client left before any answer: no status was sent.
+	before := getCounterValue(aiRequestsTotal, model, tenant, AIStatusNone, AIOutcomeAborted, AICauseClient)
+	RecordAIRequest(tenant, model, 0, 5, "client_abort_before_answer")
+	if d := getCounterValue(aiRequestsTotal, model, tenant, AIStatusNone, AIOutcomeAborted, AICauseClient) - before; d != 1.0 {
+		t.Errorf("status 0: want requests_total{status=none,outcome=aborted,cause=client} +1, got %f", d)
+	}
+	if d := getCounterValue(aiRequestsTotal, model, tenant, "0", AIOutcomeAborted, AICauseClient); d != 0.0 {
+		t.Errorf("status 0 must read none, not \"0\" (got %f)", d)
+	}
+	// Completions only in the duration histogram.
+	h := aiRequestDurationSeconds.WithLabelValues("m-aborted-hist", tenant).(prometheus.Histogram)
+	beforeN := histogramCount(t, h)
+	RecordAIRequest(tenant, "m-aborted-hist", 200, 40, "backend_died")
+	RecordAIRequest(tenant, "m-aborted-hist", 200, 40, "")
+	if n := histogramCount(t, h) - beforeN; n != 1 {
+		t.Errorf("duration histogram observed %d samples, want 1 (the completion only)", n)
+	}
+}
+
+func histogramCount(t *testing.T, h prometheus.Histogram) uint64 {
+	t.Helper()
+	var m dto.Metric
+	if err := h.Write(&m); err != nil {
+		t.Fatalf("histogram write: %v", err)
+	}
+	return m.GetHistogram().GetSampleCount()
+}
+
 func TestRecordPDRequest_PhaseTaxonomy(t *testing.T) {
 	cases := []struct {
 		name          string
@@ -695,6 +768,7 @@ func TestRecordPDRequest_PhaseTaxonomy(t *testing.T) {
 		{"decode rejected", 6, "decode", "rejected", true},
 		{"decode unknown", 7, "decode", "unknown", true},
 		{"decode truncated", 8, "decode", "truncated", true},
+		{"aborted by the client", 9, "aborted", "client", false},
 		{"unknown phase", 99, "unknown", "error", false},
 	}
 

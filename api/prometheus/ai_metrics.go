@@ -18,6 +18,7 @@ package prometheus
 
 import (
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -130,7 +131,68 @@ const (
 	// was chosen (policy gate, capacity, routing, framing), so no backend was
 	// ever asked.
 	AIOutcomeDenied = "denied"
+	// AIOutcomeAborted marks a request whose client did not receive a
+	// complete response: the client left or stopped reading, the engine died
+	// under the answer, or the gateway cut it. The cause label says which.
+	AIOutcomeAborted = "aborted"
 )
+
+// Values of the cause label on loxilb_ai_requests_total: set on
+// outcome="aborted" only, "" on every other outcome. A client cause is
+// traffic, not an error; engine and gateway causes are errors.
+const (
+	AICauseClient  = "client"
+	AICauseEngine  = "engine"
+	AICauseGateway = "gateway"
+)
+
+// AIStatusNone is the status label of a request no status was ever sent
+// for: a P/D client that left before any answer (status 0 from the data
+// plane).
+const AIStatusNone = "none"
+
+// aiEndCauses maps the data plane's end codes, the error_code of a request
+// whose answer the client did not get whole, to their cause. It is the Go
+// half of sp_end_codes in loxilb-ebpf common/sockproxy_end_cause.h, held in
+// lockstep with it by scripts/check-source-invariants.sh. A code not here
+// ("", a deny reason, a code from a newer data plane) is not an end:
+// the request is completed, so an older or newer data plane never turns
+// completions into aborts by accident.
+var aiEndCauses = map[string]string{
+	"client_abort":                 AICauseClient,
+	"client_stall":                 AICauseClient,
+	"client_abort_before_answer":   AICauseClient,
+	"backend_died":                 AICauseEngine,
+	"max_stream_duration_exceeded": AICauseGateway,
+	"pd_decode_stream_timeout":     AICauseGateway,
+	"pd_idle_timeout":              AICauseGateway,
+	"listener_closed":              AICauseGateway,
+}
+
+// AIEndCause is the cause of an end code, "" when errorCode is not one
+// (the request completed).
+func AIEndCause(errorCode string) string {
+	return aiEndCauses[errorCode]
+}
+
+// AIEndCodes lists the end codes AIEndCause knows, sorted.
+func AIEndCodes() []string {
+	codes := make([]string, 0, len(aiEndCauses))
+	for c := range aiEndCauses {
+		codes = append(codes, c)
+	}
+	sort.Strings(codes)
+	return codes
+}
+
+// aiStatusLabel is the status label of a request record: the HTTP status,
+// or AIStatusNone when none was sent.
+func aiStatusLabel(statusCode int) string {
+	if statusCode == 0 {
+		return AIStatusNone
+	}
+	return strconv.Itoa(statusCode)
+}
 
 var (
 	// aiRequestsTotal counts AI Gateway requests that reached a response, per
@@ -167,11 +229,18 @@ var (
 	//
 	//	sum(rate(loxilb_ai_requests_total[5m]))                     offered load
 	//	...{outcome="completed"}                                    served traffic
+	//	...{outcome="aborted"}                                      answers the client did not get whole
 	//	...{outcome="denied"}                                       gate refusals
 	//
-	// The two values are mutually exclusive per request, so summing by outcome
-	// reproduces the unfiltered total. Existing error-ratio semantics are
-	// preserved exactly by selecting outcome="completed".
+	// The three values are mutually exclusive per request, so summing by
+	// outcome reproduces the unfiltered total. An aborted request carries the
+	// cause of its end (cause: client, engine or gateway; "" on the other
+	// outcomes) and the status the client got, or status="none" when it left
+	// before any was sent. The error ratio is
+	//
+	//	(completed 5xx + aborted{cause=~"engine|gateway"}) / (completed + aborted)
+	//
+	// A client cause is traffic, not an error.
 	//
 	// The point-of-denial counters stay: they partition denials by REASON,
 	// which neither status nor outcome carries. They are not a second copy of
@@ -181,9 +250,9 @@ var (
 	aiRequestsTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "loxilb_ai_requests_total",
-			Help: "Total AI Gateway requests by model, tenant, HTTP status code, and outcome (completed = answered, by a backend or by the gateway's own outage, timeout or redirect answer, with the status the client got; denied = refused by the gateway before any backend was chosen: policy gate, capacity, routing, framing).",
+			Help: "Total AI Gateway requests by model, tenant, HTTP status code, outcome and cause (completed = answered whole, by a backend or by the gateway's own outage, timeout or redirect answer, with the status the client got; aborted = the client did not get a complete response, cause client (it left or stopped reading), engine (the backend died under the answer) or gateway (a cap, a reaper or the listener cut it), status none when no status was sent; denied = refused by the gateway before any backend was chosen: policy gate, capacity, routing, framing). cause is empty unless outcome is aborted.",
 		},
-		[]string{"model", "tenant", "status", "outcome"},
+		[]string{"model", "tenant", "status", "outcome", "cause"},
 	)
 
 	// aiRequestDurationSeconds tracks per-model, per-tenant request latency as
@@ -986,6 +1055,11 @@ func RegisterTokenQuotaSource(fn func() []TokenQuotaState) {
 //	                                              in-progress answer for a cause
 //	                                              other than engine death: engine
 //	                                              silence or a policy cap)
+//	                    9 = aborted  / client    (the client left, at any stage:
+//	                                              before any answer, with its
+//	                                              answer open, or it stopped
+//	                                              reading; requests_total
+//	                                              outcome="aborted", cause="client")
 func RecordPDRequest(modelName string, prefillLatencyMs, decodeLatencyMs int64, kvParamsFound, errorPhase int) {
 	model := boundModelLabel(modelName)
 
@@ -1018,6 +1092,9 @@ func RecordPDRequest(modelName string, prefillLatencyMs, decodeLatencyMs int64, 
 	case 8:
 		phase = "decode"
 		status = "truncated"
+	case 9:
+		phase = "aborted"
+		status = "client"
 	default:
 		phase = "unknown"
 		status = "error"
@@ -1091,7 +1168,8 @@ func RecordPDRecordExtra(modelName string, decodeTTFTUs int64, fallbackReason in
 // finished, or ended on the decode leg afterwards. Phases 1, 4 and 5 did not — a prefill
 // timeout, a prefill-side death and an origin reject each leave nothing whose
 // kv_transfer_params could have been read, so counting them as "missing" would
-// report a measurement that was never taken.
+// report a measurement that was never taken. Phase 9 (the client left) is not
+// listed either: it can come before the prefill response was read.
 func pdPrefillResponseInspected(errorPhase int) bool {
 	switch errorPhase {
 	case 0, 2, 3, 6, 7, 8:
@@ -1205,8 +1283,9 @@ func RecordWorkerScrape(result string) {
 
 // RecordAIRequest is the Go entry point called by the CGO export llb_ai_record_request.
 //
-// C sockproxy calls this once on response completion, so every request it
-// records was answered by a backend and carries outcome="completed".
+// C sockproxy calls this once per request it answered or began to answer.
+// errorCode decides the outcome: an end code (AIEndCause) is
+// outcome="aborted" with its cause, anything else outcome="completed".
 // Gate denials arrive through RecordAIRequestDenied instead.
 //
 // The point-of-denial helpers RecordRateLimitHit and RecordModelNotAllowed
@@ -1218,15 +1297,24 @@ func RecordWorkerScrape(result string) {
 //
 //	tenantID:  tenant identifier from the validated API key
 //	modelName: effective model name (X-Model header > JSON body field > "")
-//	statusCode: HTTP response status code (200, 401, 403, 429, 500, …)
+//	statusCode: HTTP response status code (200, 401, 403, 429, 500, …); 0
+//	            when none was sent (status="none")
 //	latencyMs: request latency in milliseconds; 0 when unknown
-func RecordAIRequest(tenantID, modelName string, statusCode int, latencyMs int64) {
+//	errorCode: the data plane's error_code; an end code makes it aborted
+//
+// The duration histogram observes completed requests only: an aborted
+// request's latency is the time to its cut, which would pull the served
+// quantiles toward wherever the cuts land.
+func RecordAIRequest(tenantID, modelName string, statusCode int, latencyMs int64, errorCode string) {
 	model := boundModelLabel(modelName)
 	tenant := sanitizeLabel(tenantID)
-	status := strconv.Itoa(statusCode)
+	status := aiStatusLabel(statusCode)
 
-	// Increment request counter for every completed request.
-	aiRequestsTotal.WithLabelValues(model, tenant, status, AIOutcomeCompleted).Inc()
+	if cause := AIEndCause(errorCode); cause != "" {
+		aiRequestsTotal.WithLabelValues(model, tenant, status, AIOutcomeAborted, cause).Inc()
+		return
+	}
+	aiRequestsTotal.WithLabelValues(model, tenant, status, AIOutcomeCompleted, "").Inc()
 
 	// Record latency when available.
 	if latencyMs > 0 {
@@ -1261,9 +1349,9 @@ func RecordAIRequest(tenantID, modelName string, statusCode int, latencyMs int64
 func RecordAIRequestDenied(tenantID, modelName string, statusCode int) {
 	model := boundModelLabel(modelName)
 	tenant := sanitizeLabel(tenantID)
-	status := strconv.Itoa(statusCode)
+	status := aiStatusLabel(statusCode)
 
-	aiRequestsTotal.WithLabelValues(model, tenant, status, AIOutcomeDenied).Inc()
+	aiRequestsTotal.WithLabelValues(model, tenant, status, AIOutcomeDenied, "").Inc()
 }
 
 // RecordAIRequestDeniedUnserved counts a refusal of a request no pool may
@@ -1278,7 +1366,7 @@ func RecordAIRequestDeniedUnserved(tenantID, modelName, noModelLabel string, sta
 		model = noModelLabel
 	}
 	tenant := sanitizeLabel(tenantID)
-	status := strconv.Itoa(statusCode)
+	status := aiStatusLabel(statusCode)
 
-	aiRequestsTotal.WithLabelValues(model, tenant, status, AIOutcomeDenied).Inc()
+	aiRequestsTotal.WithLabelValues(model, tenant, status, AIOutcomeDenied, "").Inc()
 }
