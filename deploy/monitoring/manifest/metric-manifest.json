@@ -1,18 +1,18 @@
 {
  "schema_version": 1,
  "provenance": {
-  "generated_at": "2026-10-21T02:25:08+00:00",
-  "source_revision": "ecfc3c12376bad712c61f6781fe13a9e5fc3fd9e"
+  "generated_at": "2026-10-21T05:12:18+00:00",
+  "source_revision": "347afb82382e64698723bb4f8da37c4fd53b3962"
  },
  "contract": {
-  "total": 339,
+  "total": 340,
   "owners": {
-   "loxilb": 316,
+   "loxilb": 317,
    "loxilb-ai-controller": 19,
    "loxilb-kv-agent": 4
   },
   "classes": {
-   "default": 283,
+   "default": 284,
    "dpu-doca": 24,
    "aictrl-bridge": 8,
    "kv-agent-health": 1,
@@ -21,11 +21,11 @@
   }
  },
  "coverage": {
-  "default_families": 283,
+  "default_families": 284,
   "default_referenced": 184,
   "default_waived": 21,
-  "default_unreferenced": 78,
-  "writer_classified": 283,
+  "default_unreferenced": 79,
+  "writer_classified": 284,
   "writer_unclassified": 0,
   "writer_unverified": 77
  },

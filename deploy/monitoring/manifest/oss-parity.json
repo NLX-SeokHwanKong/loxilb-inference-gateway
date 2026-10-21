@@ -1,17 +1,17 @@
 {
  "schema_version": 1,
  "provenance": {
-  "generated_at": "2026-10-20T12:30:45+00:00",
-  "source_revision": "0d05de6ce01e6e246713cc00b87ac72409191e3e",
+  "generated_at": "2026-10-21T05:12:18+00:00",
+  "source_revision": "347afb82382e64698723bb4f8da37c4fd53b3962",
   "upstream_repository": "https://github.com/loxilb-io/loxilb",
   "upstream_revision": "98487453eaf1853690de5928eab95a51817ba5d7"
  },
  "contract": {
-  "gateway_families": 339,
+  "gateway_families": 340,
   "upstream_families": 60,
   "present_identical": 35,
   "present_divergent": 0,
-  "absent": 304,
+  "absent": 305,
   "upstream_only": 25
  },
  "upstream_only": [

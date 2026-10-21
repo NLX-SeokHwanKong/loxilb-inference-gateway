@@ -10,14 +10,14 @@
   "Combined codes (D+P etc.) apply both behaviors."
  ],
  "expected": {
-  "total": 339,
+  "total": 340,
   "owners": {
-   "loxilb": 316,
+   "loxilb": 317,
    "loxilb-ai-controller": 19,
    "loxilb-kv-agent": 4
   },
   "classes": {
-   "default": 283,
+   "default": 284,
    "dpu-doca": 24,
    "aictrl-bridge": 8,
    "kv-agent-health": 1,
@@ -1341,7 +1341,7 @@
      { "symbol": "init", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 390, "call_line": 391, "calls": "admissionCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
     ],
     "data_sources": [
-     { "symbol": "refreshAdmissionStore", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 475, "writes": "admissionStore" },
+     { "symbol": "refreshAdmissionStore", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 506, "writes": "admissionStore" },
      { "symbol": "RunSockproxyMetrics", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1195, "call_line": 1461, "calls": "refreshAdmissionStore" },
      { "symbol": "Init", "kind": "func", "file": "api/prometheus/prometheus.go", "def_line": 773, "call_line": 823, "calls": "RunSockproxyMetrics", "entry_point": "main" }
     ],
@@ -1355,7 +1355,7 @@
      { "symbol": "init", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 390, "call_line": 391, "calls": "admissionCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
     ],
     "data_sources": [
-     { "symbol": "refreshAdmissionStore", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 475, "writes": "admissionStore" },
+     { "symbol": "refreshAdmissionStore", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 506, "writes": "admissionStore" },
      { "symbol": "RunSockproxyMetrics", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1195, "call_line": 1461, "calls": "refreshAdmissionStore" },
      { "symbol": "Init", "kind": "func", "file": "api/prometheus/prometheus.go", "def_line": 773, "call_line": 823, "calls": "RunSockproxyMetrics", "entry_point": "main" }
     ],
@@ -1369,7 +1369,7 @@
      { "symbol": "init", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 390, "call_line": 391, "calls": "admissionCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
     ],
     "data_sources": [
-     { "symbol": "refreshAdmissionStore", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 475, "writes": "admissionStore" },
+     { "symbol": "refreshAdmissionStore", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 506, "writes": "admissionStore" },
      { "symbol": "RunSockproxyMetrics", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1195, "call_line": 1461, "calls": "refreshAdmissionStore" },
      { "symbol": "Init", "kind": "func", "file": "api/prometheus/prometheus.go", "def_line": 773, "call_line": 823, "calls": "RunSockproxyMetrics", "entry_point": "main" }
     ],
@@ -1383,7 +1383,7 @@
      { "symbol": "init", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 390, "call_line": 391, "calls": "admissionCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
     ],
     "data_sources": [
-     { "symbol": "refreshAdmissionStore", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 475, "writes": "admissionStore" },
+     { "symbol": "refreshAdmissionStore", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 506, "writes": "admissionStore" },
      { "symbol": "RunSockproxyMetrics", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1195, "call_line": 1461, "calls": "refreshAdmissionStore" },
      { "symbol": "Init", "kind": "func", "file": "api/prometheus/prometheus.go", "def_line": 773, "call_line": 823, "calls": "RunSockproxyMetrics", "entry_point": "main" }
     ],
@@ -1397,7 +1397,7 @@
      { "symbol": "init", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 390, "call_line": 391, "calls": "admissionCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
     ],
     "data_sources": [
-     { "symbol": "refreshAdmissionStore", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 475, "writes": "admissionStore" },
+     { "symbol": "refreshAdmissionStore", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 506, "writes": "admissionStore" },
      { "symbol": "RunSockproxyMetrics", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1195, "call_line": 1461, "calls": "refreshAdmissionStore" },
      { "symbol": "Init", "kind": "func", "file": "api/prometheus/prometheus.go", "def_line": 773, "call_line": 823, "calls": "RunSockproxyMetrics", "entry_point": "main" }
     ],
@@ -1803,8 +1803,8 @@
       "symbol": "RunSockproxyMetrics",
       "kind": "func",
       "file": "api/prometheus/sockproxy_metrics.go",
-      "def_line": 1162,
-      "call_line": 1416,
+      "def_line": 1195,
+      "call_line": 1461,
       "calls": "refreshAdmissionStore"
      },
      {
@@ -1827,7 +1827,7 @@
      { "symbol": "init", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 390, "call_line": 391, "calls": "admissionCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
     ],
     "data_sources": [
-     { "symbol": "refreshAdmissionStore", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 475, "writes": "admissionStore" },
+     { "symbol": "refreshAdmissionStore", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 506, "writes": "admissionStore" },
      { "symbol": "RunSockproxyMetrics", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1195, "call_line": 1461, "calls": "refreshAdmissionStore" },
      { "symbol": "Init", "kind": "func", "file": "api/prometheus/prometheus.go", "def_line": 773, "call_line": 823, "calls": "RunSockproxyMetrics", "entry_point": "main" }
     ],
@@ -1841,7 +1841,7 @@
      { "symbol": "init", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 390, "call_line": 391, "calls": "admissionCollector", "entry_point": "registry-collector", "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect" }
     ],
     "data_sources": [
-     { "symbol": "refreshAdmissionStore", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 475, "writes": "admissionStore" },
+     { "symbol": "refreshAdmissionStore", "kind": "func", "file": "api/prometheus/ai_admission_metrics.go", "def_line": 506, "writes": "admissionStore" },
      { "symbol": "RunSockproxyMetrics", "kind": "func", "file": "api/prometheus/sockproxy_metrics.go", "def_line": 1195, "call_line": 1461, "calls": "refreshAdmissionStore" },
      { "symbol": "Init", "kind": "func", "file": "api/prometheus/prometheus.go", "def_line": 773, "call_line": 823, "calls": "RunSockproxyMetrics", "entry_point": "main" }
     ],
