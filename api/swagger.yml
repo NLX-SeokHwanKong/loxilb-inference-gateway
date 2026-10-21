@@ -10583,8 +10583,8 @@ definitions:
             type: string
             description: >-
               Opaque LB identifier, supplied by the client or minted as UUIDv4
-              when absent. An id already bound to another rule is rejected
-              (lbrule-id conflict). A replace that differs from the stored rule
+              when absent. An id already bound to another rule is refused with
+              400 (lbrule-id conflict). A replace that differs from the stored rule
               in this field alone rebinds the id to the existing rule in place,
               without touching the data plane, and answers success; a replace
               that changes other fields carries the new id along. Do not assume

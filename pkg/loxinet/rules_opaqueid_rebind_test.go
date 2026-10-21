@@ -17,8 +17,11 @@
 package loxinet
 
 import (
+	"errors"
 	"testing"
 	"time"
+
+	cmn "github.com/loxilb-io/loxilb/common"
 )
 
 // TestRebindOpaqueIDMovesTheIndex: a replace that differs only in the id moves
@@ -119,5 +122,33 @@ func TestRebindOpaqueIDRefusesAnotherRulesID(t *testing.T) {
 	}
 	if got := R.GetLBRuleByOpaqueID(other.id); got != other {
 		t.Errorf("the refused rule lost its own id (got %v)", got)
+	}
+}
+
+// TestOpaqueIDConflictIsAnArgumentError: an id bound to another rule is the
+// caller's mistake, so it is refused as a RuleArgumentError - the type the REST
+// layer answers with 400 and the original wording - on a create and on a
+// rebind alike. An untyped error would fall through the message classifier to
+// 500 "Internal service error" with the reason hidden, and a controller would
+// retry forever.
+func TestOpaqueIDConflictIsAnArgumentError(t *testing.T) {
+	R := newTestRuleH()
+	owner := &ruleEnt{}
+	owner.tuples = ruleTuples{path: "vip-a"}
+	owner.id = "99999999-9999-4999-8999-999999999999"
+	R.registerOpaqueID(owner)
+	other := &ruleEnt{}
+	other.tuples = ruleTuples{path: "vip-b"}
+
+	var ruleArg *cmn.RuleArgumentError
+	if _, err := R.resolveOpaqueID(owner.id, other); !errors.As(err, &ruleArg) {
+		t.Fatalf("create: want RuleArgumentError (HTTP 400), got %T: %v", err, err)
+	} else if msg := err.Error(); msg != "lbrule-id conflict: id already bound to a different rule" {
+		t.Errorf("create: wording %q", msg)
+	}
+	other.id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	R.registerOpaqueID(other)
+	if _, err := R.rebindOpaqueID(other, owner.id); !errors.As(err, &ruleArg) {
+		t.Fatalf("rebind: want RuleArgumentError (HTTP 400), got %T: %v", err, err)
 	}
 }

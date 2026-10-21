@@ -824,7 +824,7 @@ type LoadbalanceEntryServiceArguments struct {
 	// Appends preload to the generated HSTS value when hsts_max_age is nonzero and the HTTPS/L7 injection path is active. It does not register the domain in a browser preload list.
 	HstsPreload bool `json:"hsts_preload,omitempty"`
 
-	// Opaque LB identifier, supplied by the client or minted as UUIDv4 when absent. An id already bound to another rule is rejected (lbrule-id conflict). A replace that differs from the stored rule in this field alone rebinds the id to the existing rule in place, without touching the data plane, and answers success; a replace that changes other fields carries the new id along. Do not assume immutable identity or automatic L7 reference migration.
+	// Opaque LB identifier, supplied by the client or minted as UUIDv4 when absent. An id already bound to another rule is refused with 400 (lbrule-id conflict). A replace that differs from the stored rule in this field alone rebinds the id to the existing rule in place, without touching the data plane, and answers success; a replace that changes other fields carries the new id along. Do not assume immutable identity or automatic L7 reference migration.
 	ID string `json:"id,omitempty"`
 
 	// Inactivity timeout in seconds. The domain rejects values above 86400; zero resolves to 240 for TCP/SCTP and 20 for other protocols. On an attached L7 policy, a nonzero timeoutMemberData overrides the relay idle deadline.

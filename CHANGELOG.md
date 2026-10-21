@@ -240,6 +240,11 @@ binary behaves exactly like upstream loxilb.
 
 ### Fixed
 
+- **A rule whose `id` is already bound to another rule is refused with 400
+  and the reason** (`lbrule-id conflict: id already bound to a different
+  rule`). It was answered 500 `Internal service error` with the wording
+  hidden, which told a controller to retry a request that can only succeed
+  once the other rule gives the id up. Create and replace alike.
 - **loxilb started with `--nonlp` crashed in its periodic interface
   reconciliation** (a nil netlink handle behind the interface filter). The
   `--blacklist` / `--whitelist` filter is now set up without netlink, so

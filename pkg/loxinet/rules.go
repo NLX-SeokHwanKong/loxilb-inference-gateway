@@ -1770,7 +1770,12 @@ func (R *RuleH) resolveOpaqueID(supplied string, r *ruleEnt) (string, error) {
 	if R.opaqueID != nil {
 		if existing := R.opaqueID[supplied]; existing != nil && existing != r &&
 			existing.tuples.ruleKey() != r.tuples.ruleKey() {
-			return "", errors.New("lbrule-id conflict: id already bound to a different rule")
+			// The caller's input, not a gateway fault: typed so the REST layer
+			// answers 400 with this wording. An untyped error fell through the
+			// message classifier to 500 "Internal service error", which hid the
+			// reason and told a controller to keep retrying a request that can
+			// only succeed once the other rule gives the id up.
+			return "", &cmn.RuleArgumentError{Err: errors.New("lbrule-id conflict: id already bound to a different rule")}
 		}
 	}
 	return supplied, nil
