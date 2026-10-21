@@ -218,8 +218,8 @@ const (
 )
 
 // AIStatusNone is the status label of a request no status was ever sent
-// for: a client that left before any answer (status 0 from the data
-// plane), P/D or not.
+// for (status 0 from the data plane): a client that left before any
+// answer, P/D or not, or a backend off P/D that closed before it.
 const AIStatusNone = "none"
 
 // aiEndCauses maps the data plane's end codes, the error_code of a request
@@ -306,8 +306,8 @@ var (
 	// The three values are mutually exclusive per request, so summing by
 	// outcome reproduces the unfiltered total. An aborted request carries the
 	// cause of its end (cause: client, engine or gateway; "" on the other
-	// outcomes) and the status the client got, or status="none" when it left
-	// before any was sent. The error ratio is
+	// outcomes) and the status the client got, or status="none" when it
+	// ended before any was sent. The error ratio is
 	//
 	//	(completed 5xx + aborted{cause=~"engine|gateway"}) / (completed + aborted)
 	//
@@ -321,7 +321,7 @@ var (
 	aiRequestsTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "loxilb_ai_requests_total",
-			Help: "Total AI Gateway requests by model, tenant, HTTP status code, outcome and cause (completed = answered whole, by a backend or by the gateway's own outage, timeout or redirect answer, with the status the client got; aborted = the client did not get a complete response, cause client (it left or stopped reading), engine (the backend died under the answer) or gateway (a cap, a reaper or the listener cut it), status none when no status was sent; denied = refused by the gateway before any backend was chosen: policy gate, capacity, routing, framing). cause is empty unless outcome is aborted.",
+			Help: "Total AI Gateway requests by model, tenant, HTTP status code, outcome and cause (completed = answered whole, by a backend or by the gateway's own outage, timeout or redirect answer, with the status the client got; aborted = the client did not get a complete response, cause client (it left or stopped reading), engine (the backend died under the answer, or before it off P/D) or gateway (a cap, a reaper or the listener cut it), status none when no status was sent; denied = refused by the gateway before any backend was chosen: policy gate, capacity, routing, framing). cause is empty unless outcome is aborted.",
 		},
 		[]string{"model", "tenant", "status", "outcome", "cause"},
 	)

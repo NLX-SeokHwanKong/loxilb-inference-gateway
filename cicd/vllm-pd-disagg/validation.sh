@@ -4428,7 +4428,104 @@ pi_t=$(p_count_delta loxilb_ai_pd_decode_ttft_seconds) pi_d=$(p_count_delta loxi
   || check "TP-I: no TTFT sample and no request duration sample (got +${pi_t}, +${pi_d})" 1
 # The held answer goes nowhere; let it finish before the mock is reset.
 sleep $(( P_PG_HOLD_MS / 1000 - P_CANCEL_S ))
+
+# ── PJ: the engine dies before any answer on the same plain rule (#120) ──────────────
+#   The decode mock reads the request and closes with no byte written (drop-next). No
+#   status was ever sent: requests aborted/none cause=engine +1, no lifecycle record.
+#   The client gets the bare close, no 502 (F-18, a relay gap): printed, not asserted.
+p_reset
+pj_arm=$(p_mock "$P_DECODE" drop-next)
+echo "  TP-J mock (${P_DECODE}): $pj_arm"
+[ -n "$pj_arm" ] && check "TP-J: ${P_DECODE} armed with drop-next" 0 || check "TP-J: ${P_DECODE} armed with drop-next" 1
+pj_s0=$(p_scrape)
+pj_code=$($dexec l3h1 curl -s --no-buffer -m 10 -o /tmp/phase-p-TP-J.body -w '%{http_code}' \
+            "http://10.10.10.254:${P_I_PORT}/v1/chat/completions" -H "Content-Type: application/json" \
+            -d "{\"model\":\"${MODEL}\",\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":\"drop-TP-J\"}],\"max_tokens\":8}" \
+          </dev/null 2>/dev/null)
+pj_rc=$?
+pj_waited=0
+while :; do
+  pj_s1=$(p_scrape)
+  [ $(( $(m_sum "$pj_s1" loxilb_ai_requests_total) - $(m_sum "$pj_s0" loxilb_ai_requests_total) )) -ge 1 ] && break
+  [ "$pj_waited" -ge "$P_CANCEL_WAIT" ] && break
+  sleep 1; pj_waited=$((pj_waited + 1))
+done
+sleep 1; pj_s1=$(p_scrape)
+pj_pdd=$(p_delta "$(p_series "$pj_s0" loxilb_ai_pd_requests_total phase status)" \
+                 "$(p_series "$pj_s1" loxilb_ai_pd_requests_total phase status)")
+pj_rqd=$(p_delta "$(p_series "$pj_s0" loxilb_ai_requests_total outcome status cause)" \
+                 "$(p_series "$pj_s1" loxilb_ai_requests_total outcome status cause)")
+echo "  TP-J: client HTTP ${pj_code} (curl rc=${pj_rc}; F-18: a bare close, no 502); recorded within ${pj_waited} s"
+echo "  TP-J loxilb_ai_requests_total{outcome,status,cause} deltas: $(printf '%s' "$pj_rqd" | tr '\n' ' ')"
+[ "$pj_code" = "000" ] && check "TP-J: no status reached the client (HTTP 000)" 0 \
+                       || check "TP-J: no status reached the client (got HTTP ${pj_code})" 1
+p_deltas_are TP-J "loxilb_ai_requests_total{outcome,status,cause}" "$pj_rqd" "aborted,none,engine +1"
+p_deltas_are TP-J "loxilb_ai_pd_requests_total{phase,status}" "$pj_pdd" ""
 p_i_del
+
+# ── PK: a P/D client that leaves while queued at the gate (#120) ─────────────────────
+#   The P/D rule again, now with a capacity of one and a queue of one (fc_* fields, as
+#   cicd/ai-admission sets them). A holder takes the unit while the prefill engine holds
+#   its answer P_PG_HOLD_MS ms; a second request waits in the queue and its client gives
+#   up after P_CANCEL_S s. Over the window, once the holder has its answer: the queued one
+#   is requests aborted/none cause=client +1 and lifecycle aborted/client +1 (the client
+#   left, at the gate: phase 9 pairs with it); the holder is completed/200 and
+#   complete/success. No other series moves.
+p_reset
+p_del
+$hexec llb1 curl -s -X POST http://localhost:11111/netlox/v1/config/loadbalancer \
+  -H 'Content-Type: application/json' \
+  -d '{"serviceArguments":{"externalIP":"10.10.10.254","port":'"${P_PORT}"',"protocol":"tcp","sel":0,"mode":4,"host":"10.10.10.254","pd_disagg_mode":true,"fc_max_outstanding":1,"fc_max_queue_depth":1,"fc_max_queue_wait_ms":30000,"monitor":true,"probetype":"http","probeport":8000,"probereq":"/health","probeTimeout":5,"probeRetries":2},"endpoints":[{"endpointIP":"31.31.31.1","targetPort":8000,"weight":1,"ep_role":1,"nixl_port":9001},{"endpointIP":"32.32.32.1","targetPort":8000,"weight":1,"ep_role":2,"nixl_port":9002}]}' \
+  >/dev/null 2>&1
+pk_ready=""
+for _i in $(seq 1 24); do
+  [ "$($dexec l3h1 curl -s -m 20 -o /dev/null -w '%{http_code}' \
+        "http://10.10.10.254:${P_PORT}/v1/completions" -H "Content-Type: application/json" \
+        -d "{\"model\":\"${MODEL}\",\"prompt\":\"pk-ready\",\"max_tokens\":8}" 2>/dev/null)" = "200" ] \
+    && pk_ready=1 && break
+  sleep 5
+done
+[ -n "$pk_ready" ] && check "TP-K: the P/D rule with capacity 1, queue 1 on port ${P_PORT} serves" 0 \
+                   || check "TP-K: the P/D rule with capacity 1, queue 1 on port ${P_PORT} serves" 1
+pk_arm=$(p_mock "$P_PREFILL" "answer-delay?ms=${P_PG_HOLD_MS}")
+[ -n "$pk_arm" ] && check "TP-K: ${P_PREFILL} armed with answer-delay ${P_PG_HOLD_MS} ms" 0 \
+                 || check "TP-K: ${P_PREFILL} armed with answer-delay ${P_PG_HOLD_MS} ms" 1
+pk_s0=$(p_scrape)
+( $dexec l3h1 curl -s -m 30 -o /tmp/phase-p-TP-K-holder.body -w '%{http_code}' "$P_URL" \
+    -H "Content-Type: application/json" \
+    -d "{\"model\":\"${MODEL}\",\"stream\":false,\"messages\":[{\"role\":\"user\",\"content\":\"pk-holder\"}],\"max_tokens\":8}" \
+    </dev/null > /tmp/phase-p-TP-K-holder.code 2>/dev/null ) &
+pk_holder=$!
+sleep 1
+pk_code=$($dexec l3h1 curl -s -m "$P_CANCEL_S" -o /tmp/phase-p-TP-K.body -w '%{http_code}' "$P_URL" \
+            -H "Content-Type: application/json" \
+            -d "{\"model\":\"${MODEL}\",\"stream\":false,\"messages\":[{\"role\":\"user\",\"content\":\"pk-queued\"}],\"max_tokens\":8}" \
+          </dev/null 2>/dev/null)
+pk_rc=$?
+wait "$pk_holder"
+pk_hcode=$(cat /tmp/phase-p-TP-K-holder.code 2>/dev/null)
+pk_waited=0
+while :; do
+  pk_s1=$(p_scrape)
+  [ $(( $(m_sum "$pk_s1" loxilb_ai_pd_requests_total) - $(m_sum "$pk_s0" loxilb_ai_pd_requests_total) )) -ge 2 ] && break
+  [ "$pk_waited" -ge "$P_CANCEL_WAIT" ] && break
+  sleep 1; pk_waited=$((pk_waited + 1))
+done
+sleep 1; pk_s1=$(p_scrape)
+pk_pdd=$(p_delta "$(p_series "$pk_s0" loxilb_ai_pd_requests_total phase status)" \
+                 "$(p_series "$pk_s1" loxilb_ai_pd_requests_total phase status)")
+pk_rqd=$(p_delta "$(p_series "$pk_s0" loxilb_ai_requests_total outcome status cause)" \
+                 "$(p_series "$pk_s1" loxilb_ai_requests_total outcome status cause)")
+echo "  TP-K: queued client HTTP ${pk_code} (curl rc=${pk_rc}); holder HTTP ${pk_hcode}; recorded within ${pk_waited} s"
+echo "  TP-K loxilb_ai_pd_requests_total{phase,status} deltas: $(printf '%s' "$pk_pdd" | tr '\n' ' ')"
+echo "  TP-K loxilb_ai_requests_total{outcome,status,cause} deltas: $(printf '%s' "$pk_rqd" | tr '\n' ' ')"
+[ "$pk_rc" = "28" ] && [ "$pk_code" = "000" ] \
+  && check "TP-K: the queued client gave up at ${P_CANCEL_S} s with no status (curl rc=28, HTTP 000)" 0 \
+  || check "TP-K: the queued client gave up at ${P_CANCEL_S} s with no status (curl rc=${pk_rc}, HTTP ${pk_code})" 1
+[ "$pk_hcode" = "200" ] && check "TP-K: the holder got its 200" 0 \
+                        || check "TP-K: the holder got its 200 (got HTTP ${pk_hcode})" 1
+p_deltas_are TP-K "loxilb_ai_pd_requests_total{phase,status}" "$pk_pdd" "$(printf 'aborted,client +1\ncomplete,success +1')"
+p_deltas_are TP-K "loxilb_ai_requests_total{outcome,status,cause}" "$pk_rqd" "$(printf 'aborted,none,client +1\ncompleted,200,- +1')"
 
 p_reset
 p_del

@@ -322,10 +322,16 @@ binary behaves exactly like upstream loxilb.
   family pairs with a request off P/D, so that record alone keeps the
   families 1:1 (Upgrade notes row 38). A request still being read, an idle
   keep-alive connection and a half-close hold the gateway ended are not
-  recorded. A backend that closes before any answer on such a rule is named
-  the engine's end, not the client's, and is still not recorded; neither is
-  a P/D rule's request outside its prefill and decode (at the gate, queued,
-  parked).
+  recorded.
+- **A P/D client that left at the gate, in the capacity queue or parked
+  reached no record.** It is now recorded once in both families, as a
+  client leaving in the prefill is: `outcome="aborted"`, `status="none"`,
+  `cause="client"` and `{phase="aborted",status="client"}` (row 39). A
+  client giving up while parked is the signal that the queue is too long.
+- **A plain backend that closed before any answer reached no record.** It
+  is now `outcome="aborted"`, `cause="engine"`, `status="none"` (row 40),
+  so an engine dying before its first byte no longer vanishes from the
+  metrics. The client on that path still gets the bare close, no 502.
 - **A stream the inline teardown freed stayed on the active-streams
   gauge** (`loxilb_ai_active_streams`) until the process restarted. It is
   ended there now.
@@ -588,6 +594,8 @@ binary behaves exactly like upstream loxilb.
   | 36 | `loxilb_ai_pd_prefill_fallback_total{reason="truncated"}`, `loxilb_ai_pd_requests_total` | a prefill 4xx cut at the buffer cap | recomputed on the decode leg; `truncated` fallback, `complete/success` | relayed with its status; `prefill/rejected`, no fallback. `truncated` is a cut 2xx only | ebpf `8d85276` |
   | 37 | `data.ai.complete` audit records | `outcome.reason` of an aborted answer | `ok` | `client_abort` (cancel, stall, leaving before any answer), `timeout` (a cap or a reaper), `backend_conn` (the engine dying; also the listener going away, the closest available reason) | gateway `e64ce853` |
   | 38 | `loxilb_ai_requests_total` | a client that left before any answer, on a rule that is not P/D (HTTP/1.1) | no record | `outcome="aborted"`, `status="none"`, `cause="client"`, one record; no `loxilb_ai_pd_requests_total` record (no lifecycle family pairs with it). **`status="none"` (row 26) is no longer P/D-only** | ebpf `174fb525` (#119); gateway CI row TP-I |
+  | 39 | `loxilb_ai_requests_total`, `loxilb_ai_pd_requests_total` | a P/D client that left at the gate, in the capacity queue or parked (before any prefill) | no record in either | one record in each: `outcome="aborted"`, `status="none"`, `cause="client"` and `{phase="aborted",status="client"}`, as row 27 for a client leaving in the prefill | ebpf `6294e71` (#120); gateway CI row TP-K |
+  | 40 | `loxilb_ai_requests_total` | a backend on a rule that is not P/D that closed before any answer | no record | `outcome="aborted"`, `status="none"`, **`cause="engine"`** (new combination: `status="none"` was the client's only), one record, no lifecycle record | ebpf `0a77af5` (#120); gateway CI row TP-J |
 
 - **`tenant_rate_limits` gains a `burst_pct` column.** The gateway adds it on
   start-up if it is missing, so an existing database needs no manual step and

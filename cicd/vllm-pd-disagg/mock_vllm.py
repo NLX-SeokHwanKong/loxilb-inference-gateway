@@ -77,6 +77,10 @@ _stream_end_hold = 0    # stream ends instead of "data: [DONE]" (and the 0-chunk
                         # the last content chunk (an engine dying mid-stream). Both
                         # leave the gateway's graceful-[DONE] sweep to end the client's
                         # answer (Q2). "" is the historical ending; /admin/reset restores it.
+_drop_next = False      # One-shot: POST /admin/drop-next: the next inference request is
+                        # read (and counted) and its connection closed with no byte
+                        # written: an engine that dies before its answer. Cleared on
+                        # consume or /admin/reset.
 _answer_delay_ms = 0    # POST /admin/answer-delay?ms=N (1..60000): every inference request
                         # is counted on arrival, then held N ms before its answer (a slow
                         # engine, for a client that leaves while it waits). 0 = no hold;
@@ -309,6 +313,13 @@ class MockVLLMHandler(BaseHTTPRequestHandler):
                 _inference_count += 1
             if _answer_delay_ms:
                 time.sleep(_answer_delay_ms / 1000.0)
+        global _drop_next
+        if _drop_next and self.path in ("/v1/chat/completions", "/v1/completions"):
+            _drop_next = False
+            print(f"[{SERVER_ROLE}] DROP-NEXT consumed: closing with no answer "
+                  f"reqid={self.headers.get('X-Request-Id', '-')}", flush=True)
+            self.close_connection = True
+            return
         global _fail_next_skip
         if _fail_next and _fail_next_skip > 0 and \
                 self.path in ("/v1/chat/completions", "/v1/completions"):
@@ -576,6 +587,7 @@ class AdminHandler(BaseHTTPRequestHandler):
         global _health_ok, _fail_next, _fail_next_status, _kv_params_mode, _metrics_mode
         global _keepalive, _fail_next_skip, _stream_pace_ms, _stream_chunks
         global _stream_chunked, _stream_end_mode, _stream_end_hold, _answer_delay_ms
+        global _drop_next
         if not self._auth_ok():
             self.send_response(401)
             self.end_headers()
@@ -651,6 +663,10 @@ class AdminHandler(BaseHTTPRequestHandler):
             _answer_delay_ms = ms
             self._reply_json({"answer_delay_ms": ms})
             print(f"[{SERVER_ROLE}] [admin] answer delay = {ms} ms", flush=True)
+        elif path == "/admin/drop-next":
+            _drop_next = True
+            self._reply_json({"drop_next": True})
+            print(f"[{SERVER_ROLE}] [admin] drop-next ARMED", flush=True)
         elif path in ("/admin/stream-chunked-on", "/admin/stream-chunked-off"):
             _stream_chunked = path.endswith("-on")
             self._reply_json({"stream_chunked": _stream_chunked})
@@ -687,12 +703,13 @@ class AdminHandler(BaseHTTPRequestHandler):
             _stream_chunked = False
             _stream_end_mode, _stream_end_hold = "", 0
             _answer_delay_ms = 0
+            _drop_next = False
             self._reply_json({"fail_next": False, "fail_next_status": _fail_next_status,
                               "keepalive": _keepalive, "kv_params_mode": _kv_params_mode,
                               "metrics_mode": _metrics_mode, "stream_pace_ms": 0,
                               "stream_chunks": 0, "stream_chunked": False,
                               "stream_end_mode": "", "stream_end_hold": 0,
-                              "answer_delay_ms": 0})
+                              "answer_delay_ms": 0, "drop_next": False})
             print(f"[{SERVER_ROLE}] [admin] knobs RESET", flush=True)
         elif self.path == "/admin/health-fail":
             _health_ok = False
@@ -816,7 +833,8 @@ def main():
     # Start admin HTTP server on loopback (127.0.0.1:9000) as daemon thread.
     # Provides /admin/health-fail, /admin/health-ok, /admin/fail-next[?status=N&skip=K],
     # /admin/keepalive-on|off, /admin/stream-pace?ms=N&chunks=K,
-    # /admin/stream-chunked-on|off, /admin/stream-end?mode=hold&sec=N|cut, /admin/reset,
+    # /admin/stream-chunked-on|off, /admin/stream-end?mode=hold&sec=N|cut,
+    # /admin/answer-delay?ms=N, /admin/drop-next, /admin/reset,
     # /admin/status endpoints.
     admin_thread = threading.Thread(target=_start_admin_server, daemon=True)
     admin_thread.start()
