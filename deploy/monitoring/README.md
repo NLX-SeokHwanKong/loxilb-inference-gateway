@@ -113,7 +113,7 @@ its `outcome` label, because the readings answer different questions:
 |---|---|---|
 | `loxilb_ai_requests_total` | offered load | total request rate; capacity |
 | `{outcome="completed"}` | answered whole: by a backend, or by the gateway when no backend could take the request (outage, P/D timeout or leg failure, connect failure) or by a configured redirect | backend behaviour — latency correlation, the 5xx half of the error ratio |
-| `{outcome="aborted"}` | the client did not get a complete response; `cause` says why: `client` (it cancelled, reset or stopped reading), `engine` (the backend died under the answer), `gateway` (a duration cap, a reaper or the listener cut it). `status` is what the client got — `200` for a cut stream, `none` when it left before any status was sent | cancellations (`cause="client"`, traffic), and the engine/gateway half of the error ratio |
+| `{outcome="aborted"}` | the client did not get a complete response; `cause` says why: `client` (it cancelled, reset or stopped reading), `engine` (the backend died under the answer, or before it off P/D), `gateway` (a duration cap, a reaper or the listener cut it). `status` is what the client got — `200` for a cut stream, `none` when no status was sent (the client left, or off P/D the backend closed, before any answer) | cancellations (`cause="client"`, traffic), and the engine/gateway half of the error ratio |
 | `{outcome="denied"}` | refused by the gateway before any backend was chosen: policy gate, capacity, routing, framing, L7-policy reject, content-security block | denial rate, without consulting a second family |
 
 The three outcomes are mutually exclusive per request, so `sum by (outcome)`
