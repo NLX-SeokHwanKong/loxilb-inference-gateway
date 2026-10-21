@@ -20,6 +20,14 @@ binary behaves exactly like upstream loxilb.
 
 ### Added
 
+- **P/D occupancy gauges.** Three new metrics read the P/D load at each
+  collection: `loxilb_pd_prefill_inflight` and `loxilb_pd_decode_inflight`
+  (the admission units held on prefill and on decode endpoints now) and
+  `loxilb_pd_parked_connections` (client connections parked for a prefill
+  slot). They are gauges of the snapshot and return to zero when the load is
+  gone. The C, Go and stub mirrors of the snapshot now assert the struct's
+  size, so a mirror that falls out of step fails the build instead of
+  reading the wrong fields.
 - **Priority bands in the capacity gate's queue:** a request's class
   (`critical`, `standard`, `sheddable`) is its band at the gate. Under
   `fc_wake_policy: strict` (the default) a freed unit goes to the highest band
