@@ -86,6 +86,25 @@ metric_val() {
 
 adm_shed()     { metric_val "^loxilb_pd_admission_shed_total "; }
 adm_queued()   { metric_val "^loxilb_pd_admission_queued_total "; }
+# series_sum <family> <label=value>... — the sum of every series of the family that
+# carries all the given labels, in any order (a label's place in the line is never read).
+series_sum() {
+    local fam=$1; shift
+    llb_curl "${METRICS}" 2>/dev/null | awk -v fam="$fam" -v want="$*" '
+        BEGIN { n = split(want, w, " ") }
+        index($0, fam "{") == 1 {
+            ok = 1
+            for (i = 1; i <= n; i++) {
+                split(w[i], kv, "=")
+                if (index($0, kv[1] "=\"" kv[2] "\"") == 0) { ok = 0; break }
+            }
+            if (ok) s += $NF
+        }
+        END { printf "%d", s + 0 }'
+}
+# A client that left before any answer: the request record and the lifecycle's aborted.
+adm_left_req() { series_sum loxilb_ai_requests_total outcome=aborted status=none cause=client; }
+adm_left_pd()  { series_sum loxilb_ai_pd_requests_total phase=aborted status=client; }
 adm_overflow() { metric_val "^loxilb_pd_admission_overflow_shed_total "; }
 
 # dplog_count <FIXED-STRING> — count matching lines in the in-container datapath log.
@@ -387,6 +406,7 @@ b_ovlog_b2=$(dplog_count "${L_OVERFLOW}")
 b_looselog_b2=$(dplog_count "${L_LOOSE}")
 b_shedlog_b2=$(dplog_count "${L_SHED}")
 b_pool3over_b2=$(dplog_count "${POOL3_OVER}")
+b_left_req_b2=$(adm_left_req); b_left_pd_b2=$(adm_left_pd)
 
 park_rcs="${CFGDIR}/.adm-b-park-rcs"
 : > "${park_rcs}"
@@ -428,6 +448,8 @@ d_ovlog=$(( $(dplog_count "${L_OVERFLOW}") - b_ovlog_b2 ))
 d_looselog=$(( $(dplog_count "${L_LOOSE}") - b_looselog_b2 ))
 d_shedlog=$(( $(dplog_count "${L_SHED}") - b_shedlog_b2 ))
 d_pool3over=$(( $(dplog_count "${POOL3_OVER}") - b_pool3over_b2 ))
+d_left_req=$(( $(adm_left_req) - b_left_req_b2 ))
+d_left_pd=$(( $(adm_left_pd) - b_left_pd_b2 ))
 
 n_parkrc=$(count_lines . "${park_rcs}")
 n_held=$(count_lines '^28$' "${park_rcs}")
@@ -440,6 +462,18 @@ assert "B-drive: Δcounter == Δpark log lines (${d_qd} == ${d_qdlog})" \
     "$([[ "$d_qd" == "$d_qdlog" ]] && echo 1 || echo 0)"
 assert "B-drive: every park probe was HELD, not answered (curl 28 x ${n_held})" \
     "$([[ "$n_held" == "${PROBE_N}" ]] && echo 1 || echo 0)"
+
+# Every client in this window left before any answer, and each is recorded once in both
+# families (ebpf #120): the PROBE_N park probes gave up while PARKED, and the HOLD_N holders
+# were let go while their prefill hung (in flight, recorded since PR-C). Both families move
+# by PROBE_N + HOLD_N; before #120 the parked ones reached neither, so both read HOLD_N.
+# The two overflow requests were refused (429, denied) and are in neither.
+assert "B-left: requests aborted/none/client moved by park probes + holders (Δ${d_left_req}, want $(( PROBE_N + HOLD_N )))" \
+    "$([[ "$d_left_req" == "$(( PROBE_N + HOLD_N ))" ]] && echo 1 || echo 0)"
+assert "B-left: lifecycle aborted/client moved by park probes + holders (Δ${d_left_pd}, want $(( PROBE_N + HOLD_N )))" \
+    "$([[ "$d_left_pd" == "$(( PROBE_N + HOLD_N ))" ]] && echo 1 || echo 0)"
+assert "B-left: the two families agree 1:1 (${d_left_req} == ${d_left_pd})" \
+    "$([[ "$d_left_req" == "$d_left_pd" ]] && echo 1 || echo 0)"
 
 # The exact split is what attributes the window: had the six park probes overflowed instead
 # of parking, Δqueued would be short and Δoverflow long by the same amount. Asserting both
