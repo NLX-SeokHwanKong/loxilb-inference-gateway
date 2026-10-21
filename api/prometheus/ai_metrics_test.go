@@ -831,6 +831,10 @@ func TestSeedPDModel(t *testing.T) {
 	if v := getCounterValue(aiPDRequestsTotal, model, "aborted", "client"); v != 0 {
 		t.Errorf("seeded phase 9 reads %f, want 0", v)
 	}
+	if n := seriesWith(t, aiPDRequestsTotal, map[string]string{"model": model,
+		"phase": "aborted", "status": "gateway"}); n != 1 {
+		t.Error("phase 10 (aborted/gateway) not seeded")
+	}
 }
 
 func TestRecordPDRequest_PhaseTaxonomy(t *testing.T) {
@@ -851,6 +855,7 @@ func TestRecordPDRequest_PhaseTaxonomy(t *testing.T) {
 		{"decode unknown", 7, "decode", "unknown", true},
 		{"decode truncated", 8, "decode", "truncated", true},
 		{"aborted by the client", 9, "aborted", "client", false},
+		{"aborted by the gateway", 10, "aborted", "gateway", false},
 		{"unknown phase", 99, "unknown", "error", false},
 	}
 

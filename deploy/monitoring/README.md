@@ -113,7 +113,7 @@ its `outcome` label, because the readings answer different questions:
 |---|---|---|
 | `loxilb_ai_requests_total` | offered load | total request rate; capacity |
 | `{outcome="completed"}` | answered whole: by a backend, or by the gateway when no backend could take the request (outage, P/D timeout or leg failure, connect failure) or by a configured redirect | backend behaviour — latency correlation, the 5xx half of the error ratio |
-| `{outcome="aborted"}` | the client did not get a complete response; `cause` says why: `client` (it cancelled, reset or stopped reading), `engine` (the backend died under the answer, or before it off P/D), `gateway` (a duration cap, a reaper or the listener cut it). `status` is what the client got — `200` for a cut stream, `none` when no status was sent (the client left, or off P/D the backend closed, before any answer) | cancellations (`cause="client"`, traffic), and the engine/gateway half of the error ratio |
+| `{outcome="aborted"}` | the client did not get a complete response; `cause` says why: `client` (it cancelled, reset or stopped reading), `engine` (the backend died under the answer), `gateway` (a duration cap, a reaper or the listener cut it, also before any answer). `status` is what the client got — `200` for a cut stream, `none` when no status was sent (the client left, or the listener went, before any answer). A backend off P/D that closes before any answer gets the client a 502, counted `completed` | cancellations (`cause="client"`, traffic), and the engine/gateway half of the error ratio |
 | `{outcome="denied"}` | refused by the gateway before any backend was chosen: policy gate, capacity, routing, framing, L7-policy reject, content-security block | denial rate, without consulting a second family |
 
 The three outcomes are mutually exclusive per request, so `sum by (outcome)`
@@ -188,7 +188,7 @@ same requests from another angle, so adding it to the request total (or to its
 | `loxilb_ai_admission_decisions_total` (capacity_shed, queue_full, queue_timeout, drained, draining, no_healthy_capacity, tenant_share) | capacity-gate decisions | the capacity refusals in `{outcome="denied"}` |
 | `loxilb_pd_admission_shed_total`, `loxilb_pd_admission_overflow_shed_total` | the P/D in-flight 429 (`pd_overloaded`) | part of `{outcome="denied",status="429"}` |
 | `loxilb_ai_rate_limit_hits_total`, `loxilb_ai_token_quota_denied_total` | rate-limit and quota refusals, by reason | part of `{outcome="denied"}` (see the inequality above) |
-| `loxilb_ai_pd_requests_total` | every P/D request's lifecycle, failures included; `{phase="aborted",status="client"}` is the client leaving at any stage, 1:1 with the P/D requests in `{outcome="aborted",cause="client"}` | the P/D requests in `requests_total` |
+| `loxilb_ai_pd_requests_total` | every P/D request's lifecycle, failures included; `{phase="aborted",status="client"}` is the client leaving at any stage, 1:1 with the P/D requests in `{outcome="aborted",cause="client"}`; `{phase="aborted",status="gateway"}` is the rule's listener going before any answer, 1:1 with the P/D requests in `{outcome="aborted",status="none",cause="gateway"}` | the P/D requests in `requests_total` |
 
 The TTFB histogram (`loxilb_proxy_http_ttfb_seconds`) samples backend replies
 only: a gateway's own answer reaches its first byte in microseconds and is not

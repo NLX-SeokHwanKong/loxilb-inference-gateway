@@ -4429,10 +4429,11 @@ pi_t=$(p_count_delta loxilb_ai_pd_decode_ttft_seconds) pi_d=$(p_count_delta loxi
 # The held answer goes nowhere; let it finish before the mock is reset.
 sleep $(( P_PG_HOLD_MS / 1000 - P_CANCEL_S ))
 
-# ── PJ: the engine dies before any answer on the same plain rule (#120) ──────────────
-#   The decode mock reads the request and closes with no byte written (drop-next). No
-#   status was ever sent: requests aborted/none cause=engine +1, no lifecycle record.
-#   The client gets the bare close, no 502 (F-18, a relay gap): printed, not asserted.
+# ── PJ: the engine dies before any answer on the same plain rule (#120, F-18) ────────
+#   The decode mock reads the request and closes with no byte written (drop-next). The
+#   gateway answers the client as a refused connect is answered: a 502 backend_unreachable,
+#   recorded completed/502 (as a TLS leg failing before its answer is), no lifecycle
+#   record.
 p_reset
 pj_arm=$(p_mock "$P_DECODE" drop-next)
 echo "  TP-J mock (${P_DECODE}): $pj_arm"
@@ -4455,13 +4456,59 @@ pj_pdd=$(p_delta "$(p_series "$pj_s0" loxilb_ai_pd_requests_total phase status)"
                  "$(p_series "$pj_s1" loxilb_ai_pd_requests_total phase status)")
 pj_rqd=$(p_delta "$(p_series "$pj_s0" loxilb_ai_requests_total outcome status cause)" \
                  "$(p_series "$pj_s1" loxilb_ai_requests_total outcome status cause)")
-echo "  TP-J: client HTTP ${pj_code} (curl rc=${pj_rc}; F-18: a bare close, no 502); recorded within ${pj_waited} s"
+echo "  TP-J: client HTTP ${pj_code} (curl rc=${pj_rc}); recorded within ${pj_waited} s"
 echo "  TP-J loxilb_ai_requests_total{outcome,status,cause} deltas: $(printf '%s' "$pj_rqd" | tr '\n' ' ')"
-[ "$pj_code" = "000" ] && check "TP-J: no status reached the client (HTTP 000)" 0 \
-                       || check "TP-J: no status reached the client (got HTTP ${pj_code})" 1
-p_deltas_are TP-J "loxilb_ai_requests_total{outcome,status,cause}" "$pj_rqd" "aborted,none,engine +1"
+[ "$pj_code" = "502" ] && $dexec l3h1 grep -q backend_unreachable /tmp/phase-p-TP-J.body 2>/dev/null \
+  && check "TP-J: the client got the gateway's 502 backend_unreachable" 0 \
+  || check "TP-J: the client got the gateway's 502 backend_unreachable (got HTTP ${pj_code})" 1
+p_deltas_are TP-J "loxilb_ai_requests_total{outcome,status,cause}" "$pj_rqd" "completed,502,- +1"
 p_deltas_are TP-J "loxilb_ai_pd_requests_total{phase,status}" "$pj_pdd" ""
-p_i_del
+
+# p_listener_row <tag> <url> <knob-ep> <del-cmd> — one request held by its engine
+#   (answer-delay P_PG_HOLD_MS ms) whose rule is deleted P_CANCEL_S s in: the listener
+#   goes before any answer (F-17). Sets P_L_CODE, P_L_PDD, P_L_RQD.
+p_listener_row() {
+  local tag=$1 url=$2 ep=$3 del=$4 arm s0 s1 waited=0
+  p_reset
+  arm=$(p_mock "$ep" "answer-delay?ms=${P_PG_HOLD_MS}")
+  [ -n "$arm" ] && check "${tag}: ${ep} armed with answer-delay ${P_PG_HOLD_MS} ms" 0 \
+                || check "${tag}: ${ep} armed with answer-delay ${P_PG_HOLD_MS} ms" 1
+  s0=$(p_scrape)
+  ( $dexec l3h1 curl -s -m 20 -o /tmp/phase-p-${tag}.body -w '%{http_code}' "$url" \
+      -H "Content-Type: application/json" \
+      -d "{\"model\":\"${MODEL}\",\"stream\":false,\"messages\":[{\"role\":\"user\",\"content\":\"listener-${tag}\"}],\"max_tokens\":8}" \
+      </dev/null > /tmp/phase-p-${tag}.code 2>/dev/null ) &
+  local cpid=$!
+  sleep "$P_CANCEL_S"
+  $del
+  wait "$cpid"
+  P_L_CODE=$(cat /tmp/phase-p-${tag}.code 2>/dev/null)
+  while :; do
+    s1=$(p_scrape)
+    [ $(( $(m_sum "$s1" loxilb_ai_requests_total) - $(m_sum "$s0" loxilb_ai_requests_total) )) -ge 1 ] && break
+    [ "$waited" -ge "$P_CANCEL_WAIT" ] && break
+    sleep 1; waited=$((waited + 1))
+  done
+  sleep 1; s1=$(p_scrape)
+  P_L_PDD=$(p_delta "$(p_series "$s0" loxilb_ai_pd_requests_total phase status)" \
+                    "$(p_series "$s1" loxilb_ai_pd_requests_total phase status)")
+  P_L_RQD=$(p_delta "$(p_series "$s0" loxilb_ai_requests_total outcome status cause)" \
+                    "$(p_series "$s1" loxilb_ai_requests_total outcome status cause)")
+  echo "  ${tag}: client HTTP ${P_L_CODE}; recorded within ${waited} s"
+  echo "  ${tag} loxilb_ai_pd_requests_total{phase,status} deltas: $(printf '%s' "$P_L_PDD" | tr '\n' ' ')"
+  echo "  ${tag} loxilb_ai_requests_total{outcome,status,cause} deltas: $(printf '%s' "$P_L_RQD" | tr '\n' ' ')"
+  [ "$P_L_CODE" = "000" ] && check "${tag}: no status reached the client (HTTP 000)" 0 \
+                          || check "${tag}: no status reached the client (got HTTP ${P_L_CODE})" 1
+  # The held answer goes nowhere; let it finish before the mock is reset.
+  sleep $(( P_PG_HOLD_MS / 1000 - P_CANCEL_S ))
+}
+
+# ── PL: the listener goes before any answer on the plain rule (F-17) ─────────────────
+#   The rule of PI is deleted while the decode engine holds its answer: requests
+#   aborted/none cause=gateway +1 (listener_closed), no lifecycle record.
+p_listener_row TP-L "http://10.10.10.254:${P_I_PORT}/v1/chat/completions" "$P_DECODE" p_i_del
+p_deltas_are TP-L "loxilb_ai_requests_total{outcome,status,cause}" "$P_L_RQD" "aborted,none,gateway +1"
+p_deltas_are TP-L "loxilb_ai_pd_requests_total{phase,status}" "$P_L_PDD" ""
 
 # ── PK: a P/D client that leaves while queued at the gate (#120) ─────────────────────
 #   The P/D rule again, now with a capacity of one and a queue of one (fc_* fields, as
@@ -4526,6 +4573,13 @@ echo "  TP-K loxilb_ai_requests_total{outcome,status,cause} deltas: $(printf '%s
                         || check "TP-K: the holder got its 200 (got HTTP ${pk_hcode})" 1
 p_deltas_are TP-K "loxilb_ai_pd_requests_total{phase,status}" "$pk_pdd" "$(printf 'aborted,client +1\ncomplete,success +1')"
 p_deltas_are TP-K "loxilb_ai_requests_total{outcome,status,cause}" "$pk_rqd" "$(printf 'aborted,none,client +1\ncompleted,200,- +1')"
+
+# ── PM: the listener goes before any answer on the P/D rule (F-17) ───────────────────
+#   The P/D rule of PK is deleted while the prefill engine holds its answer: requests
+#   aborted/none cause=gateway +1 and lifecycle aborted/gateway (10) +1, nothing else.
+p_listener_row TP-M "$P_URL" "$P_PREFILL" p_del
+p_deltas_are TP-M "loxilb_ai_pd_requests_total{phase,status}" "$P_L_PDD" "aborted,gateway +1"
+p_deltas_are TP-M "loxilb_ai_requests_total{outcome,status,cause}" "$P_L_RQD" "aborted,none,gateway +1"
 
 p_reset
 p_del

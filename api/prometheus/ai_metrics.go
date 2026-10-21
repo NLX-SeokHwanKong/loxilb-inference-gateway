@@ -123,8 +123,8 @@ func registerModelLabel(model string) bool {
 // therefore seeded at zero, within a fixed bound.
 //
 //   - P/D families, per model, at registration (and "other" at init):
-//     every {phase,status} of loxilb_ai_pd_requests_total (10) and every
-//     reason of loxilb_ai_pd_prefill_fallback_total (6). 16 series per model
+//     every {phase,status} of loxilb_ai_pd_requests_total (11) and every
+//     reason of loxilb_ai_pd_prefill_fallback_total (6). 17 series per model
 //     label, at most 65 labels.
 //   - loxilb_ai_requests_total, per (model, tenant) pair, on the pair's
 //     first record, for a keyed tenant only (tenant="" is a refusal before
@@ -218,8 +218,10 @@ const (
 )
 
 // AIStatusNone is the status label of a request no status was ever sent
-// for (status 0 from the data plane): a client that left before any
-// answer, P/D or not, or a backend off P/D that closed before it.
+// for (status 0 from the data plane): a client that left, or the rule's
+// listener that went, before any answer, P/D or not; or a backend off P/D
+// that closed before it when its client could not be told (it is otherwise
+// answered 502, completed).
 const AIStatusNone = "none"
 
 // aiEndCauses maps the data plane's end codes, the error_code of a request
@@ -321,7 +323,7 @@ var (
 	aiRequestsTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "loxilb_ai_requests_total",
-			Help: "Total AI Gateway requests by model, tenant, HTTP status code, outcome and cause (completed = answered whole, by a backend or by the gateway's own outage, timeout or redirect answer, with the status the client got; aborted = the client did not get a complete response, cause client (it left or stopped reading), engine (the backend died under the answer, or before it off P/D) or gateway (a cap, a reaper or the listener cut it), status none when no status was sent; denied = refused by the gateway before any backend was chosen: policy gate, capacity, routing, framing). cause is empty unless outcome is aborted.",
+			Help: "Total AI Gateway requests by model, tenant, HTTP status code, outcome and cause (completed = answered whole, by a backend or by the gateway's own outage, timeout or redirect answer, with the status the client got; aborted = the client did not get a complete response, cause client (it left or stopped reading), engine (the backend died under the answer) or gateway (a cap, a reaper or the listener cut it, also before any answer), status none when no status was sent; denied = refused by the gateway before any backend was chosen: policy gate, capacity, routing, framing). cause is empty unless outcome is aborted.",
 		},
 		[]string{"model", "tenant", "status", "outcome", "cause"},
 	)
@@ -1136,6 +1138,9 @@ func pdPhaseLabels(errorPhase int) (phase, status string) {
 	case 9:
 		phase = "aborted"
 		status = "client"
+	case 10:
+		phase = "aborted"
+		status = "gateway"
 	default:
 		phase = "unknown"
 		status = "error"
@@ -1144,8 +1149,8 @@ func pdPhaseLabels(errorPhase int) (phase, status string) {
 }
 
 // pdPhaseCount is the number of errorPhase values with a label pair of
-// their own (0..9): the ones seeded at model registration.
-const pdPhaseCount = 10
+// their own (0..10): the ones seeded at model registration.
+const pdPhaseCount = 11
 
 // RecordPDRequest records a P/D disaggregation lifecycle event for Prometheus metrics.
 //
@@ -1183,6 +1188,10 @@ const pdPhaseCount = 10
 //	                                              answer open, or it stopped
 //	                                              reading; requests_total
 //	                                              outcome="aborted", cause="client")
+//	                   10 = aborted  / gateway   (the rule's listener went before
+//	                                              any answer, at any stage;
+//	                                              requests_total outcome="aborted",
+//	                                              status="none", cause="gateway")
 func RecordPDRequest(modelName string, prefillLatencyMs, decodeLatencyMs int64, kvParamsFound, errorPhase int) {
 	model := boundModelLabel(modelName)
 
