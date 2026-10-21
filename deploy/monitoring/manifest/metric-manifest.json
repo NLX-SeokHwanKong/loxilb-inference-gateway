@@ -1,8 +1,8 @@
 {
  "schema_version": 1,
  "provenance": {
-  "generated_at": "2026-10-21T12:22:41+00:00",
-  "source_revision": "1fb7ad99823b81eab4ba7b7186c5b0073b110285"
+  "generated_at": "2026-10-21T13:18:15+00:00",
+  "source_revision": "7ad46b15ff231b52d7e5352e673e805297a0f386"
  },
  "contract": {
   "total": 343,
@@ -10351,7 +10351,7 @@
      "entry_point": "registry-collector"
     }
    ],
-   "verification_evidence": "source verification 2026-10-19: api/prometheus/sockproxy_pd_occupancy_metrics.go Collect emits this family from pdOccupancyStore on every scrape, present from the start at zero; the store is replaced once per collection cycle by RunSockproxyMetrics from the C proxy_get_metrics() snapshot (pdOccupancyFromC), whose pd_prefill_inflight / pd_decode_inflight / pd_parked_connections are summed by proxy_get_metrics in loxilb-ebpf/common/sockproxy_metrics.c (pd_ep_loads[].active_conns by endpoint role over the P/D pools; client connections in PD_PHASE_PARKED). sockproxy_pd_occupancy_metrics_test.go drives the store and the collector; no bed arm recorded here has scored this family's values."
+   "verification_evidence": "source verification 2026-10-19: api/prometheus/sockproxy_pd_occupancy_metrics.go Collect emits this family from pdOccupancyStore on every scrape, present from the start at zero; the store is replaced once per collection cycle by RunSockproxyMetrics from the C proxy_get_metrics() snapshot (pdOccupancyFromC), whose pd_prefill_inflight / pd_decode_inflight / pd_parked_connections are summed by proxy_get_metrics in loxilb-ebpf/common/sockproxy_metrics.c (pd_ep_loads[].active_conns by endpoint role over the P/D pools; pd_parked[].count of the per-EP prefill queues under pd_parked_lock, over the P/D pools; a connection's pd_phase is the owner worker's and is not read). sockproxy_pd_occupancy_metrics_test.go drives the store and the collector; no bed arm recorded here has scored this family's values."
   },
   {
    "name": "loxilb_pd_decode_zero_byte_eof_total",
@@ -11007,7 +11007,7 @@
      "entry_point": "registry-collector"
     }
    ],
-   "verification_evidence": "source verification 2026-10-19: api/prometheus/sockproxy_pd_occupancy_metrics.go Collect emits this family from pdOccupancyStore on every scrape, present from the start at zero; the store is replaced once per collection cycle by RunSockproxyMetrics from the C proxy_get_metrics() snapshot (pdOccupancyFromC), whose pd_prefill_inflight / pd_decode_inflight / pd_parked_connections are summed by proxy_get_metrics in loxilb-ebpf/common/sockproxy_metrics.c (pd_ep_loads[].active_conns by endpoint role over the P/D pools; client connections in PD_PHASE_PARKED). sockproxy_pd_occupancy_metrics_test.go drives the store and the collector; no bed arm recorded here has scored this family's values."
+   "verification_evidence": "source verification 2026-10-19: api/prometheus/sockproxy_pd_occupancy_metrics.go Collect emits this family from pdOccupancyStore on every scrape, present from the start at zero; the store is replaced once per collection cycle by RunSockproxyMetrics from the C proxy_get_metrics() snapshot (pdOccupancyFromC), whose pd_prefill_inflight / pd_decode_inflight / pd_parked_connections are summed by proxy_get_metrics in loxilb-ebpf/common/sockproxy_metrics.c (pd_ep_loads[].active_conns by endpoint role over the P/D pools; pd_parked[].count of the per-EP prefill queues under pd_parked_lock, over the P/D pools; a connection's pd_phase is the owner worker's and is not read). sockproxy_pd_occupancy_metrics_test.go drives the store and the collector; no bed arm recorded here has scored this family's values."
   },
   {
    "name": "loxilb_pd_prefill_ep_died_total",
@@ -11113,7 +11113,7 @@
      "entry_point": "registry-collector"
     }
    ],
-   "verification_evidence": "source verification 2026-10-19: api/prometheus/sockproxy_pd_occupancy_metrics.go Collect emits this family from pdOccupancyStore on every scrape, present from the start at zero; the store is replaced once per collection cycle by RunSockproxyMetrics from the C proxy_get_metrics() snapshot (pdOccupancyFromC), whose pd_prefill_inflight / pd_decode_inflight / pd_parked_connections are summed by proxy_get_metrics in loxilb-ebpf/common/sockproxy_metrics.c (pd_ep_loads[].active_conns by endpoint role over the P/D pools; client connections in PD_PHASE_PARKED). sockproxy_pd_occupancy_metrics_test.go drives the store and the collector; no bed arm recorded here has scored this family's values."
+   "verification_evidence": "source verification 2026-10-19: api/prometheus/sockproxy_pd_occupancy_metrics.go Collect emits this family from pdOccupancyStore on every scrape, present from the start at zero; the store is replaced once per collection cycle by RunSockproxyMetrics from the C proxy_get_metrics() snapshot (pdOccupancyFromC), whose pd_prefill_inflight / pd_decode_inflight / pd_parked_connections are summed by proxy_get_metrics in loxilb-ebpf/common/sockproxy_metrics.c (pd_ep_loads[].active_conns by endpoint role over the P/D pools; pd_parked[].count of the per-EP prefill queues under pd_parked_lock, over the P/D pools; a connection's pd_phase is the owner worker's and is not read). sockproxy_pd_occupancy_metrics_test.go drives the store and the collector; no bed arm recorded here has scored this family's values."
   },
   {
    "name": "loxilb_pd_sessions_active",

@@ -67,7 +67,7 @@ var pdDecodeInflightDesc = prometheus.NewDesc(
 
 var pdParkedConnectionsDesc = prometheus.NewDesc(
 	"loxilb_pd_parked_connections",
-	"Client connections waiting for a P/D admission unit (the PARKED phase), summed over the listeners.",
+	"Client connections parked on a prefill endpoint's admission queue (no P/D unit was free), summed over the P/D pools. The capacity gate's queue is loxilb_ai_admission_queued.",
 	nil, nil,
 )
 
