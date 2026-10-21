@@ -118,9 +118,12 @@ inference:
       # Any other loxilb.io/* annotation, verbatim (kv-exact-mode, pd-disagg, chwbl-*, ...).
       annotations: {}
       # Rendered as loxilb.io/api-key-auth and loxilb.io/jwt-auth-profile.
-      # WARNING: kube-loxilb does not carry these into the loxilb rule yet
-      # (no api_key_auth / jwt_auth_profile in its LB model); NOTES.txt warns
-      # whenever they are set.
+      # kube-loxilb feat/auth-annotation (830fa59) or later carries them into
+      # the loxilb rule; an older kube-loxilb installs the rule WITHOUT the
+      # policy. The JWT modes need a cluster-scoped JWTAuthProfile named
+      # jwtAuthProfile (phase 2 renders it) and the gateway needs its API-key
+      # store (--aikey-db-*): without the store every verified token is
+      # refused 503 policy_store_unavailable. NOTES.txt warns on both.
       auth:
         mode: none                       # none | required | jwt | apikey-or-jwt
         jwtAuthProfile: ""

@@ -5,7 +5,7 @@ description: >-
   the kube-loxilb controller, and the Gateway API objects (GatewayClass,
   Gateway, InferencePool, HTTPRoute) that express the endpoint-selection policy.
 type: application
-version: 0.1.0
+version: 0.1.1
 appVersion: latest
 kubeVersion: ">=1.30.0-0"
 home: https://github.com/loxilb-io/loxilb-inference-gateway
@@ -26,5 +26,5 @@ dependencies:
     version: 0.1.0
     condition: loxilb-igw.enabled
   - name: kube-loxilb
-    version: 0.1.0
+    version: 0.1.1
     condition: kube-loxilb.enabled

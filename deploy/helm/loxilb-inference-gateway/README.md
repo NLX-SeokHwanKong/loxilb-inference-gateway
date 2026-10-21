@@ -26,9 +26,18 @@ helm test igw -n kube-system --logs
 ```
 
 The VIP must be an address the loxilb node can bind (fullproxy binds a socket):
-in the k3d testbed it is the node IP. The published `kube-loxilb:latest` does
-not yet include the inference-gateway integration; build the branch
-(`cicd/common/k8s-inference/k3d_common.sh` does).
+in the k3d testbed it is the node IP. With several loxilb instances the default
+`kube-loxilb.setRoles` makes kube-loxilb elect the master that holds the VIP;
+a standby keeps the rules without a listener until it takes the VIP over. The
+published `kube-loxilb:latest` does not yet include the inference-gateway
+integration; build `feat/auth-annotation` (830fa59 or later, which also carries
+the credential-policy annotations and the `JWTAuthProfile` CRD this chart ships)
+as `cicd/common/k8s-inference/k3d_common.sh` does.
+
+`inference.pools[].auth` needs that kube-loxilb, a `JWTAuthProfile` per profile
+name (phase 2 renders them) and a gateway with its API-key store configured
+(`--aikey-db-*`): without the store the gateway refuses every verified token
+with 503 `policy_store_unavailable`. NOTES.txt warns on each of these.
 
 ## Values
 

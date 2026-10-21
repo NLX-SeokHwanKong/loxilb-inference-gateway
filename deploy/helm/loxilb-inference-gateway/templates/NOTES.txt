@@ -3,6 +3,11 @@
 {{- $gw := .Values.inference.gateway }}
 {{- $gwNs := include "loxilb-inference-gateway.gatewayNamespace" . }}
 {{- $authPools := include "loxilb-inference-gateway.authPools" . -}}
+{{- $hasKeyStore := false -}}
+{{- range (($igw.loxilb | default dict).extraArgs | default list) }}{{ if hasPrefix "--aikey-db-host" (toString .) }}{{ $hasKeyStore = true }}{{ end }}{{ end -}}
+{{- $jwtProfiles := list -}}
+{{- range $p := .Values.inference.pools }}{{ with $p.auth }}{{ if and .jwtAuthProfile (or (eq (.mode | toString) "jwt") (eq (.mode | toString) "apikey-or-jwt")) }}{{ $jwtProfiles = append $jwtProfiles (.jwtAuthProfile | toString) }}{{ end }}{{ end }}{{ end -}}
+{{- $jwtProfiles = $jwtProfiles | uniq -}}
 loxilb-inference-gateway chart {{ .Chart.Version }}: release {{ .Release.Name }} in namespace {{ .Release.Namespace }}
 
 Installed
@@ -45,11 +50,25 @@ Prerequisites (checked by the pre-install hook)
 
 Warnings
 {{- if $authPools }}
-  ! inference.pools[].auth is set on {{ $authPools }}. The chart renders
-    loxilb.io/api-key-auth and loxilb.io/jwt-auth-profile on the InferencePool,
-    but kube-loxilb does not yet carry them into the loxilb rule (its LB model
-    has no api_key_auth / jwt_auth_profile): until that kube-loxilb change
-    lands, these rules run WITHOUT the authentication declared here.
+  ! inference.pools[].auth is set on {{ $authPools }}. kube-loxilb carries
+    loxilb.io/api-key-auth and loxilb.io/jwt-auth-profile into the loxilb rule
+    from feat/auth-annotation (830fa59) on; an OLDER kube-loxilb installs these
+    rules WITHOUT the authentication declared here. The chart cannot tell which
+    kube-loxilb runs: check `kubectl -n {{ .Release.Namespace }} get crd jwtauthprofiles.jwtauthprofile.loxilb.io`
+    is served and the rule reads back with api_key_auth.
+{{- if $jwtProfiles }}
+  ! JWT mode needs a cluster-scoped JWTAuthProfile for each of: {{ join ", " $jwtProfiles }}.
+    kube-loxilb holds the rule (ProfileNotFound) until the profile exists and is
+    programmed on every gateway. This chart version does not render profiles yet
+    (phase 2 does); create them by hand, see charts/kube-loxilb/README.md.
+{{- end }}
+{{- if and $igw.enabled (not $hasKeyStore) }}
+  ! loxilb-igw runs without an API-key store (no --aikey-db-host in
+    loxilb-igw.loxilb.extraArgs). The gateway fails closed on every request
+    that carries an identity but has no store to check it against: a VERIFIED
+    token is refused 503 policy_store_unavailable. JWT-only setups need the
+    store too (phase 2 bundles PostgreSQL; until then point --aikey-db-* at one).
+{{- end }}
 {{- end }}
 {{- if .Values.inference.externalEndpointPicker.enabled }}
   ! inference.externalEndpointPicker is enabled. loxilb-inference-gateway

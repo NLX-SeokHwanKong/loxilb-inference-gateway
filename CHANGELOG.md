@@ -37,8 +37,12 @@ binary behaves exactly like upstream loxilb.
   Inference Extension (v1.6.0) CRDs are missing, or applies them with
   `crds.installGatewayAPI=true`; `helm test` checks the management REST flavor
   and InferencePool -> Service -> loxilb rule. `inference.pools[].auth` renders
-  `loxilb.io/api-key-auth` / `loxilb.io/jwt-auth-profile` but NOTES warns that
-  kube-loxilb does not carry them into the rule yet. The new scenario
+  `loxilb.io/api-key-auth` / `loxilb.io/jwt-auth-profile`, which kube-loxilb
+  `feat/auth-annotation` (830fa59) carries into the rule; the kube-loxilb
+  subchart ships that branch's `JWTAuthProfile` CRD and RBAC, and NOTES warns
+  when an older kube-loxilb, a missing profile or a gateway without its
+  API-key store would leave such a rule unauthenticated or refusing every
+  token. The new scenario
   `cicd/k3d-helm-inference-gwapi` installs the chart with `values-k3d-dev.yaml`
   and re-runs the `k3d-incluster-inference-gwapi` assertions unchanged against it.
 - **Every HTTP/2 client connection logs one line when it ends, naming why**

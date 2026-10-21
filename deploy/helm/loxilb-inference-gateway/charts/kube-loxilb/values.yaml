@@ -7,9 +7,11 @@ enabled: true
 
 image:
   repository: ghcr.io/loxilb-io/kube-loxilb
-  # No published tag carries integration/inference-gateway yet: the :latest
-  # image does not know --inferenceExtension. Build the branch
-  # (cicd/common/k8s-inference/k3d_common.sh does) and point repository/tag at it.
+  # No published tag carries the inference-gateway integration yet: the
+  # :latest image does not know --inferenceExtension. Build feat/auth-annotation
+  # @ 830fa59 or later (it carries the credential-policy annotations and the
+  # JWTAuthProfile manager; cicd/common/k8s-inference/k3d_common.sh shows how)
+  # and point repository/tag at it.
   tag: latest
   pullPolicy: IfNotPresent
 imagePullSecrets: []
