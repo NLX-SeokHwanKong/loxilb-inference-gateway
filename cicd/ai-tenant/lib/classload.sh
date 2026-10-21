@@ -241,12 +241,16 @@ metrics_raw() { $hexec tqh1 curl -s --max-time 8 "$API/metrics" 2>/dev/null; }
 # loxilb_ai_fc_band_total series>, <band>.<outcome>=<v> for each, qw=<resumed
 # waits>, and d.<reason>=<v> for the gate decisions summed over its pools;
 # and rs=<HTTP/1.1 responses recorded as received by a client>, the
-# gateway-wide responses-by-status counter (it has no service label).
+# gateway-wide responses-by-status counter (it has no service label); rc, rd,
+# ra = loxilb_ai_requests_total completed, denied, aborted, and rac its
+# aborted with cause client (gateway-wide too).
 bt_snap() {
   metrics_raw | awk -v svc="service=\"$VIP:$1\"" '
     /^loxilb_proxy_http_responses_by_status_total\{/ { rs += $NF; next }
     /^loxilb_ai_requests_total\{.*outcome="completed"/ { rc += $NF; next }
     /^loxilb_ai_requests_total\{.*outcome="denied"/ { rd += $NF; next }
+    /^loxilb_ai_requests_total\{.*outcome="aborted"/ {
+      ra += $NF; if ($0 ~ /cause="client"/) rac += $NF; next }
     index($0, svc) == 0 { next }
     /^loxilb_ai_fc_band_total\{/ {
       match($0, /band="[a-z]+"/); b = substr($0, RSTART + 6, RLENGTH - 7)
@@ -255,7 +259,7 @@ bt_snap() {
     /^loxilb_ai_admission_queue_wait_seconds_count\{/ { qw += $NF; next }
     /^loxilb_ai_admission_decisions_total\{/ {
       match($0, /reason="[a-z_]+"/); d["d." substr($0, RSTART + 8, RLENGTH - 9)] += $NF; next }
-    END { printf "series=%d qw=%d rs=%d rc=%d rd=%d", n, qw, rs, rc, rd
+    END { printf "series=%d qw=%d rs=%d rc=%d rd=%d ra=%d rac=%d", n, qw, rs, rc, rd, ra, rac
           for (k in v) printf " %s=%d", k, v[k]
           for (k in d) printf " %s=%d", k, d[k]
           print "" }'
@@ -272,8 +276,10 @@ bt_parse() { # bt_parse <array-name> <snapshot>
 # after its own reading (a check that the pool is idle again, a stream left
 # to time out) is published only by the next republish.
 bt_settle() { sleep 11; }
-# bt_begin <port> [h2]: h2 when the service's clients speak HTTP/2
-bt_begin() { bt_settle; bt_parse BT0 "$(bt_snap "$1")"; BT_PORT=$1; BT_PROTO=${2:-h1}; }
+# bt_begin <port> [h1|h2] [noai]: h2 when the service's clients speak HTTP/2;
+# noai when the service is not in AI-gateway mode, whose requests the data
+# plane never records in loxilb_ai_requests_total (proxy_owes_completion)
+bt_begin() { bt_settle; bt_parse BT0 "$(bt_snap "$1")"; BT_PORT=$1; BT_PROTO=${2:-h1}; BT_AI=${3:-ai}; }
 bt_end() {
   local k
   bt_settle
@@ -304,6 +310,15 @@ bd() { echo "${BD[$1]:-0}"; }
 #                        answered; left = admitted requests whose client left
 #                        before the backend answered (BT_LEFT, from the case).
 #                        HTTP/1.1 only: HTTP/2 has no class counter.
+#   completed + denied + aborted = admitted + shed + expired + refused +
+#                        cancelled: every request that reached the gate
+#                        leaves one request record. A cancelled request (its
+#                        client left while it waited) is aborted, cause
+#                        client, at its teardown; so is an admitted one whose
+#                        client left before the answer: cancelled <= aborted
+#                        with cause client <= cancelled + left. The band
+#                        outcome is the per-band split of the gate's
+#                        decisions beside it, not a second record.
 BT_REFUSED="capacity_shed queue_full tenant_share no_healthy_capacity draining drained"
 bt_check() {
   local id=$1 want=$2 ev=$3 b r i=0 tq=0 te=0 tc=0 ta=0 got rs=${4:-}
@@ -326,10 +341,19 @@ bt_check() {
     # band refusal is one outcome="denied" request, and the completed count
     # is the admitted requests (less those whose client left, when the
     # case says how many: whether such a request completes is not asserted).
-    chk "$id" "a refusal is counted once: denied = shed + expired + refused" "$((ta - adm))" "$(bd rd)"
-    lo=$((adm - ${BT_LEFT:-0}))
-    chk "$id" "and never also as completed: admitted - left <= completed <= admitted" yes \
-      "$([ "$(bd rc)" -ge "$lo" ] && [ "$(bd rc)" -le "$adm" ] && echo yes || echo "no (completed $(bd rc), admitted $adm, left ${BT_LEFT:-0})")"
+    if [ "$BT_AI" == noai ]; then
+      # Outside the AI gateway neither outcome is written: the family does
+      # not move at all over the case (nothing else runs in the window).
+      chk "$id" "outside the AI gateway the AI request family does not move (completed, denied, aborted)" "0 0 0" "$(bd rc) $(bd rd) $(bd ra)"
+    else
+      chk "$id" "a refusal is counted once: denied = shed + expired + refused" "$((ta - adm))" "$(bd rd)"
+      lo=$((adm - ${BT_LEFT:-0}))
+      chk "$id" "and never also as completed: admitted - left <= completed <= admitted" yes \
+        "$([ "$(bd rc)" -ge "$lo" ] && [ "$(bd rc)" -le "$adm" ] && echo yes || echo "no (completed $(bd rc), admitted $adm, left ${BT_LEFT:-0})")"
+      chk "$id" "one request record per request: completed + denied + aborted = the requests" "$((ta + tc))" "$(( $(bd rc) + $(bd rd) + $(bd ra) ))"
+      chk "$id" "a cancelled request is aborted by its client: cancelled <= aborted (client) <= cancelled + left" yes \
+        "$([ "$(bd rac)" -ge "$tc" ] && [ "$(bd rac)" -le "$((tc + ${BT_LEFT:-0}))" ] && echo yes || echo "no (aborted client $(bd rac), cancelled $tc, left ${BT_LEFT:-0})")"
+    fi
   fi
   chk "$id" "queued = queue-wait samples (one per park, at its end)" "$tq" "$(bd qw)"
   [ -n "$rs" ] && chk "$id" "queued = admitted after a park + expired + evicted + cancelled" "$tq" "$(( rs + te + ev + tc ))"

@@ -119,7 +119,7 @@ case_B6() {
 # only the standard row and wakes in arrival order.
 case_B3a() {
   echo "=== B3a: stateless MCP: standard only, arrival order"
-  bt_begin $PORT_MCP
+  bt_begin $PORT_MCP h1 noai
   local i
   for i in 1 2 3 4; do mcp_one $PORT_MCP b3a-$i "$B3"; sleep 0.3; done
   sleep 0.3
