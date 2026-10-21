@@ -2265,6 +2265,61 @@ func init() {
       ],
       "type": "object"
     },
+    "FcBandEffective": {
+      "description": "One priority band of a model pool as the capacity gate holds it, read back in fc_effective.bands.",
+      "properties": {
+        "floor_units": {
+          "description": "The floor in service units against effective_max_outstanding, as the gate enforces it: rounded up in the band's favour but never to the whole ceiling for a share under 100, and clamped so the floors and the reserve never exceed the ceiling; 0 without a ceiling.",
+          "format": "int32",
+          "type": "integer",
+          "x-omitempty": false
+        },
+        "inflight": {
+          "description": "Service units the band holds right now.",
+          "format": "int32",
+          "type": "integer",
+          "x-omitempty": false
+        },
+        "min_share_pct": {
+          "description": "The band's floor in percent of the ceiling in force: a guarantee under contention, not a reservation; it binds only while that band has a waiter.",
+          "format": "int32",
+          "type": "integer",
+          "x-omitempty": false
+        },
+        "queue_pct": {
+          "description": "The most of the queue depth the band may hold, in percent; 0 is the shared depth. A ceiling on the band's own occupancy, not a reservation.",
+          "format": "int32",
+          "type": "integer",
+          "x-omitempty": false
+        },
+        "queued": {
+          "description": "Requests of the band waiting right now.",
+          "format": "int32",
+          "type": "integer",
+          "x-omitempty": false
+        },
+        "wait_ms": {
+          "description": "The band's configured wait window in milliseconds; 0 is the queue's (queue_wait_ms). A window above queue_wait_ms runs at queue_wait_ms.",
+          "format": "int32",
+          "type": "integer",
+          "x-omitempty": false
+        },
+        "weight": {
+          "description": "The band's credits per round under the weighted wake; 0 is not set.",
+          "format": "int32",
+          "type": "integer",
+          "x-omitempty": false
+        },
+        "weight_pct": {
+          "description": "The weight's share of the round (the sum of the three weights) in percent, rounded to the nearest; 0 when no weight is set.",
+          "format": "int32",
+          "type": "integer",
+          "x-omitempty": false
+        }
+      },
+      "readOnly": true,
+      "type": "object"
+    },
     "FileSystemInfoEntry": {
       "properties": {
         "avail": {
@@ -5036,6 +5091,35 @@ func init() {
               "type": "string",
               "x-nullable": false
             },
+            "fc_band_min_share_pct": {
+              "description": "Each band's floor, critical:standard:sheddable, in percent of the service ceiling in force (rounded up to whole units, and following the adaptive ceiling). A floor is a guarantee under contention, not a reservation: it binds only while that band has a waiter, so with no demand in the band the other bands take every unit. When a unit frees, the highest-ranked band that is below its floor and has a runnable waiter takes it; when no band is below its floor, the wake policy chooses. HTTP/2 streams and role legs never wait, so on a service that carries only HTTP/2 a floor never binds. Each 0 to 100, at most 100 together (400 naming fc_band_min_share_pct). 0:0:0 (the default) is no floor. A floor is independent of the wake policy and of the weights. Replace and null semantics as fc_band_weights.",
+              "type": "string",
+              "x-nullable": false
+            },
+            "fc_band_queue_pct": {
+              "description": "The most of the queue depth each band may hold, critical:standard:sheddable, in percent, rounded up to whole waiters and at least one; 0 is the shared depth. It bounds that band's own occupancy of fc_max_queue_depth and is a ceiling, not a reservation: what a band does not use stays open to every other band, and the queue as a whole never holds more than fc_max_queue_depth. A band at its share is refused with 429 admission_capacity (reason queue_full); nobody is evicted to make room for it. At most 100 together when all three are non-zero. 0:0:0 (the default) is no share. Replace and null semantics as fc_band_weights.",
+              "type": "string",
+              "x-nullable": false
+            },
+            "fc_band_wait_ms": {
+              "description": "Each band's wait window, critical:standard:sheddable, in milliseconds, each 0 to 3600000. A band's window is a cap inside the rule's window (fc_max_queue_wait_ms), never above it: a larger value runs at the rule's window, and 0 is the rule's window. A waiter whose window ends is answered 504 admission_queue_timeout. 0:0:0 (the default) resets every band to the queue's window. Replace and null semantics as fc_band_weights.",
+              "type": "string",
+              "x-nullable": false
+            },
+            "fc_band_weights": {
+              "description": "The weighted wake's weights, written critical:standard:sheddable (for example 8:3:1): three whole numbers, each 1 to 62, at most 64 together, or 0:0:0 for none (a zero weight beside non-zero ones is refused, 400). Each is the band's credits per round. Declared under strict they are stored and reported as not in use in fc_effective, so a later switch to weighted finds them. A change of weights starts a new round. Not three whole numbers separated by ':' is refused (400). 0:0:0 resets to none; omitted on a replace keeps the stored value; explicit JSON null is rejected.",
+              "type": "string",
+              "x-nullable": false
+            },
+            "fc_critical_reserve_pct": {
+              "default": 0,
+              "description": "The only true reservation: the percent of the ceiling in force (rounded up to whole units) that no other band may take, even when critical is idle. It holds on HTTP/2 and role legs as well, which never wait. Together with the standard and sheddable entries of fc_band_min_share_pct at most 100 (400 naming fc_critical_reserve_pct); the critical entry of fc_band_min_share_pct is a separate floor, and critical holds the larger of the two. 0 or omitted on create is none. Replace and null semantics as fc_max_outstanding.",
+              "format": "int32",
+              "maximum": 100,
+              "minimum": 0,
+              "type": "integer",
+              "x-nullable": false
+            },
             "fc_decode_max_inflight": {
               "default": 0,
               "description": "The per-endpoint ceiling on decode legs of disaggregated requests. 0 or omitted leaves the process default (LLB_FC_DECODE_MAX_INFLIGHT) in force; at most 100000. Changeable at runtime by a replace POST (the stored value is kept when omitted, an explicit 0 resets to the process default). Explicit JSON null is rejected. The value in force and its source are read back in fc_effective.",
@@ -5075,6 +5159,48 @@ func init() {
                     "off"
                   ],
                   "type": "string"
+                },
+                "band_fallback_reason": {
+                  "description": "Why the gate runs band settings other than the configured ones: a combination the API refuses a rule to declare, reached by inheriting the environment (LLB_FC_*) or by a restore replay, runs on the defaults and is logged once at apply time. sockmap_request - sockMapMode request or both on a rule that is not an AI-gateway service: every band knob at its default (the request direction never reaches the gate). zero_weight - weighted with a zero weight: strict. no_queue - shed queue on with no queue depth: off. none - the configuration runs as configured.",
+                  "enum": [
+                    "none",
+                    "sockmap_request",
+                    "zero_weight",
+                    "no_queue"
+                  ],
+                  "type": "string"
+                },
+                "bands": {
+                  "description": "Each priority band's live counts and the knobs in force (after any fallback). min_share_pct and floor_units are the floor alone; the critical reserve is reported beside the bands.",
+                  "properties": {
+                    "critical": {
+                      "$ref": "#/definitions/FcBandEffective"
+                    },
+                    "critical_reserve_pct": {
+                      "description": "The critical reserve in percent of the ceiling in force - units no other band may take, even when critical is idle.",
+                      "format": "int32",
+                      "type": "integer",
+                      "x-omitempty": false
+                    },
+                    "critical_reserve_units": {
+                      "description": "The reserve in service units against effective_max_outstanding, as the gate enforces it; 0 without a ceiling.",
+                      "format": "int32",
+                      "type": "integer",
+                      "x-omitempty": false
+                    },
+                    "sheddable": {
+                      "$ref": "#/definitions/FcBandEffective"
+                    },
+                    "standard": {
+                      "$ref": "#/definitions/FcBandEffective"
+                    }
+                  },
+                  "type": "object"
+                },
+                "bands_configured": {
+                  "description": "true when any band knob in force differs from its default.",
+                  "type": "boolean",
+                  "x-omitempty": false
                 },
                 "config_source": {
                   "description": "Where the objectives and the tenant and key classes this gateway is applying came from. store - the AI key store answered the last read. lkg - the store has not answered since the gateway started and the last-known-good file (aigw-lkg.json under the configuration path) is being served; writes are refused with 503 meanwhile and loxilb_ai_class_config_lkg_intervals_total counts. none - nothing was read (no store configured, or a store that has not answered and no file); every request is standard. The same value on every rule - it is the gateway's, not the rule's.",
@@ -5130,6 +5256,14 @@ func init() {
                   "format": "int32",
                   "type": "integer",
                   "x-omitempty": false
+                },
+                "llmd_headers": {
+                  "description": "Whether refusals carry x-llm-d-request-dropped-reason and x-llm-d-inference-ttl may shorten a wait.",
+                  "enum": [
+                    "on",
+                    "off"
+                  ],
+                  "type": "string"
                 },
                 "max_outstanding": {
                   "description": "Pool-wide ceiling on executing inference requests; 0 is unlimited.",
@@ -5231,10 +5365,66 @@ func init() {
                   "type": "boolean",
                   "x-omitempty": false
                 },
+                "shed_queue": {
+                  "description": "As configured: whether a sheddable request at the ceiling waits in its band instead of 429 admission_shed.",
+                  "enum": [
+                    "on",
+                    "off"
+                  ],
+                  "type": "string"
+                },
+                "shed_queue_effective": {
+                  "description": "The shed queue the gate runs.",
+                  "enum": [
+                    "on",
+                    "off"
+                  ],
+                  "type": "string"
+                },
                 "source": {
                   "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default).",
                   "properties": {
                     "adaptive": {
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ],
+                      "type": "string"
+                    },
+                    "band_min_share_pct": {
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ],
+                      "type": "string"
+                    },
+                    "band_queue_pct": {
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ],
+                      "type": "string"
+                    },
+                    "band_wait_ms": {
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ],
+                      "type": "string"
+                    },
+                    "band_weights": {
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ],
+                      "type": "string"
+                    },
+                    "critical_reserve_pct": {
                       "enum": [
                         "rule",
                         "env",
@@ -5282,6 +5472,14 @@ func init() {
                       ],
                       "type": "string"
                     },
+                    "llmd_headers": {
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ],
+                      "type": "string"
+                    },
                     "max_outstanding": {
                       "enum": [
                         "rule",
@@ -5322,6 +5520,14 @@ func init() {
                       ],
                       "type": "string"
                     },
+                    "shed_queue": {
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ],
+                      "type": "string"
+                    },
                     "telemetry_stale_ms": {
                       "enum": [
                         "rule",
@@ -5338,7 +5544,23 @@ func init() {
                       ],
                       "type": "string"
                     },
+                    "tenant_wake": {
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ],
+                      "type": "string"
+                    },
                     "ttft_target_ms": {
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ],
+                      "type": "string"
+                    },
+                    "wake_policy": {
                       "enum": [
                         "rule",
                         "env",
@@ -5386,6 +5608,22 @@ func init() {
                   "type": "integer",
                   "x-omitempty": false
                 },
+                "tenant_wake": {
+                  "description": "The order inside one band, as configured (fifo, or rr across tenants).",
+                  "enum": [
+                    "fifo",
+                    "rr"
+                  ],
+                  "type": "string"
+                },
+                "tenant_wake_effective": {
+                  "description": "The order inside one band the gate runs (fifo, or rr across tenants).",
+                  "enum": [
+                    "fifo",
+                    "rr"
+                  ],
+                  "type": "string"
+                },
                 "tenants_active": {
                   "description": "Tenants holding a unit or waiting on the pool now, while it holds tenants to a share.",
                   "format": "int32",
@@ -5397,6 +5635,22 @@ func init() {
                   "type": "integer",
                   "x-omitempty": false
                 },
+                "wake_policy": {
+                  "description": "The wake policy as configured, by the rule or inherited (source.wake_policy); wake_policy_effective is the one the gate runs. strict - while higher-band demand keeps the ceiling full, a lower band is admitted zero requests; each waiter is refused when its band's wait window ends. weighted - a deficit round robin: while several bands have waiters, each receives its weight's share of wake-ups, exactly over whole rounds (8:3:1 is 8, 3, 1 in every 12); the share is of admissions, not of tokens, GPU time or latency. No band is promoted because it has waited long.",
+                  "enum": [
+                    "strict",
+                    "weighted"
+                  ],
+                  "type": "string"
+                },
+                "wake_policy_effective": {
+                  "description": "The wake policy the gate runs. Differs from wake_policy only when band_fallback_reason is not none.",
+                  "enum": [
+                    "strict",
+                    "weighted"
+                  ],
+                  "type": "string"
+                },
                 "warming_endpoints": {
                   "description": "Endpoints inside their warm-up window.",
                   "format": "int32",
@@ -5406,6 +5660,11 @@ func init() {
                 "warmup_ms": {
                   "format": "int32",
                   "type": "integer",
+                  "x-omitempty": false
+                },
+                "weights_in_use": {
+                  "description": "true when wake_policy_effective is weighted and the weights decide the wake; declared weights are stored but not in use otherwise.",
+                  "type": "boolean",
                   "x-omitempty": false
                 }
               },
@@ -5423,6 +5682,16 @@ func init() {
             },
             "fc_expose_headers": {
               "description": "on puts X-Loxilb-Admission-Inflight, X-Loxilb-Admission-Queued and X-Loxilb-Admission-Limit on the head of every admitted inference response (HTTP/1 and HTTP/2, streamed ones included), the same three a capacity refusal carries: the pool's executing units and waiting requests as the response head goes out, and the service ceiling in force (0 is none). Fields of those names from the backend are replaced. off leaves responses as the backend sent them; inherit, or omitted on create, runs on the process default (LLB_FC_EXPOSE_HEADERS). Refused (400) with sockMapMode both or response, where the gateway never sees the response. Replace and null semantics as fc_mode.",
+              "enum": [
+                "on",
+                "off",
+                "inherit"
+              ],
+              "type": "string",
+              "x-nullable": false
+            },
+            "fc_llmd_headers": {
+              "description": "on: adds x-llm-d-request-dropped-reason to the admission refusals (HTTP/1.1 answers and HTTP/2 stream refusals); lets a valid x-llm-d-inference-ttl on an HTTP/1.1 request (Go duration syntax, positive, held at one day) shorter than the window that applies shorten that request's wait, never extend it, where a wait the client's TTL ended is answered 429 admission_ttl_expired and a wait a window of the rule ended stays 504 admission_queue_timeout; and forwards the gateway's resolved values in x-llm-d-inference-objective (the class the request was admitted as) and x-llm-d-inference-fairness-id (the authenticated tenant, none for a request without one), removing the client's copy of either name and of the deprecated x-gateway-inference-* names, on HTTP/1.1 and HTTP/2 alike (on a chunked HTTP/1.1 request the copies are removed and nothing is written; HTTP/2 streams never wait, so the TTL does not apply to them). off leaves all of it out: the TTL header is ignored and every header is forwarded as sent. inherit, or omitted on create, runs on the process default (LLB_FC_LLMD_HEADERS, else off). Replace and null semantics as fc_mode.",
               "enum": [
                 "on",
                 "off",
@@ -5478,6 +5747,16 @@ func init() {
               "type": "integer",
               "x-nullable": false
             },
+            "fc_shed_queue": {
+              "description": "off refuses a sheddable request at the ceiling at once with 429 admission_shed; on lets it wait in its band, and when the queue is full an arriving request of any higher band (standard or critical) evicts the youngest sheddable waiter, which is answered 429 admission_shed. on is refused (400) while the queue depth in force (fc_max_queue_depth, else LLB_FC_MAX_QUEUE_DEPTH) is 0. inherit, or omitted on create, runs on the process default (LLB_FC_SHED_QUEUE, else off). Replace and null semantics as fc_mode.",
+              "enum": [
+                "on",
+                "off",
+                "inherit"
+              ],
+              "type": "string",
+              "x-nullable": false
+            },
             "fc_telemetry_stale_ms": {
               "default": 0,
               "description": "How long an endpoint's scraped queue depth is trusted by the P/D scorers without a refresh, in milliseconds; an older value is replaced by the candidates' average. 0 or omitted leaves the process default (LLB_FC_TELEMETRY_STALE_MS, else 30000) in force. The scraper stamps whole seconds, so the window is effectively rounded to them. Replace and null semantics as fc_max_outstanding.",
@@ -5496,6 +5775,16 @@ func init() {
               "type": "integer",
               "x-nullable": false
             },
+            "fc_tenant_wake": {
+              "description": "The order inside one band. fifo wakes the oldest runnable waiter and does not tell tenants apart; rr rotates across the tenants with a runnable waiter in the band, oldest first inside one tenant, each band keeping its own place in the rotation. rr needs no fc_tenant_max_share_pct. inherit, or omitted on create, runs on the process default (LLB_FC_TENANT_WAKE, else fifo). Replace and null semantics as fc_mode.",
+              "enum": [
+                "fifo",
+                "rr",
+                "inherit"
+              ],
+              "type": "string",
+              "x-nullable": false
+            },
             "fc_ttft_target_ms": {
               "default": 0,
               "description": "With fc_adaptive on: an endpoint whose streamed responses take longer than this from admission to their first data event (an eighth-weighted average, trusted for fc_telemetry_stale_ms) is backpressure. Only streamed responses are measured: a buffered response's first byte comes with the whole completion. 0 or omitted leaves the process default (LLB_FC_TTFT_TARGET_MS, else TTFT unused) in force. Replace and null semantics as fc_max_outstanding.",
@@ -5503,6 +5792,16 @@ func init() {
               "maximum": 3600000,
               "minimum": 0,
               "type": "integer",
+              "x-nullable": false
+            },
+            "fc_wake_policy": {
+              "description": "Which priority band a freed service unit wakes when requests of several bands wait (critical, standard, sheddable: the class the request's objective resolved to). Bands act only with fc_mode enforce, below the ceiling every band is admitted at once, and HTTP/2 streams and P/D role legs never queue (for them the band decides the refusal only). strict wakes the highest band with a runnable waiter: while higher-band demand keeps the ceiling full, a lower band is admitted zero requests, and each waiter is refused when its band's wait window ends. weighted is a deficit round robin by fc_band_weights: each band with a runnable waiter gets its weight in credits per round, the highest band with credit left is served first, one wake costs one credit, and a band with no runnable waiter forfeits its turn; over whole rounds the wake-ups split exactly as the weights do (8:3:1 is 8 critical, 3 standard, 1 sheddable in every 12). The share is of admissions, not of tokens or latency, and a floor is served before the round. weighted needs every weight at least 1 (400 otherwise). inherit, or omitted on create, runs on the process default (LLB_FC_WAKE_POLICY, else strict). Refused (400) beside sockMapMode both or request on a rule that is not an AI-gateway service, as is every band knob other than its default. Such a rule that INHERITS weighted (or another band setting it would be refused for declaring) runs every band knob at its default instead, logs one warning at apply time and reads back fc_effective.wake_policy_effective with band_fallback_reason; so does weighted without a weight for every band. A change of policy starts a new round and loses no waiter. Replace and null semantics as fc_mode.",
+              "enum": [
+                "strict",
+                "weighted",
+                "inherit"
+              ],
+              "type": "string",
               "x-nullable": false
             },
             "fc_warmup_ms": {
@@ -33117,7 +33416,7 @@ func init() {
             "BearerAuth": []
           }
         ],
-        "description": "Removes the catalog \u2192 parser mapping, causing the system to fall back to:\n1. URL path-based routing (e.g., /v1/chat/completions \u2192 openai)\n2. Default mock parser\n\nRemoval is runtime-only and succeeds with 204 even when no mapping exists. Registry unavailability can produce 500. This does not edit YAML or guarantee that later catalog synchronization will preserve the removal.\n",
+        "description": "Removes the catalog → parser mapping, causing the system to fall back to:\n1. URL path-based routing (e.g., /v1/chat/completions → openai)\n2. Default mock parser\n\nRemoval is runtime-only and succeeds with 204 even when no mapping exists. Registry unavailability can produce 500. This does not edit YAML or guarantee that later catalog synchronization will preserve the removal.\n",
         "tags": [
           "Tracing"
         ],
@@ -37517,7 +37816,7 @@ func init() {
       }
     },
     "BfdEntry": {
-      "description": "BFD session input for an existing cluster instance. New sessions require interval >= 100000 microseconds and retryCount > 0. Interval narrows from uint64 to uint32 without an upper-bound check. On an existing session, zero interval/retryCount preserves the current value, source-IP changes are not applied, and an unchanged request conflicts. Initial setup can return success before asynchronous creation fails.",
+      "description": "BFD session input for an existing cluster instance. New sessions require interval \u003e= 100000 microseconds and retryCount \u003e 0. Interval narrows from uint64 to uint32 without an upper-bound check. On an existing session, zero interval/retryCount preserves the current value, source-IP changes are not applied, and an unchanged request conflicts. Initial setup can return success before asynchronous creation fails.",
       "type": "object",
       "properties": {
         "instance": {
@@ -38470,6 +38769,61 @@ func init() {
           "type": "string"
         }
       }
+    },
+    "FcBandEffective": {
+      "description": "One priority band of a model pool as the capacity gate holds it, read back in fc_effective.bands.",
+      "type": "object",
+      "properties": {
+        "floor_units": {
+          "description": "The floor in service units against effective_max_outstanding, as the gate enforces it: rounded up in the band's favour but never to the whole ceiling for a share under 100, and clamped so the floors and the reserve never exceed the ceiling; 0 without a ceiling.",
+          "type": "integer",
+          "format": "int32",
+          "x-omitempty": false
+        },
+        "inflight": {
+          "description": "Service units the band holds right now.",
+          "type": "integer",
+          "format": "int32",
+          "x-omitempty": false
+        },
+        "min_share_pct": {
+          "description": "The band's floor in percent of the ceiling in force: a guarantee under contention, not a reservation; it binds only while that band has a waiter.",
+          "type": "integer",
+          "format": "int32",
+          "x-omitempty": false
+        },
+        "queue_pct": {
+          "description": "The most of the queue depth the band may hold, in percent; 0 is the shared depth. A ceiling on the band's own occupancy, not a reservation.",
+          "type": "integer",
+          "format": "int32",
+          "x-omitempty": false
+        },
+        "queued": {
+          "description": "Requests of the band waiting right now.",
+          "type": "integer",
+          "format": "int32",
+          "x-omitempty": false
+        },
+        "wait_ms": {
+          "description": "The band's configured wait window in milliseconds; 0 is the queue's (queue_wait_ms). A window above queue_wait_ms runs at queue_wait_ms.",
+          "type": "integer",
+          "format": "int32",
+          "x-omitempty": false
+        },
+        "weight": {
+          "description": "The band's credits per round under the weighted wake; 0 is not set.",
+          "type": "integer",
+          "format": "int32",
+          "x-omitempty": false
+        },
+        "weight_pct": {
+          "description": "The weight's share of the round (the sum of the three weights) in percent, rounded to the nearest; 0 when no weight is set.",
+          "type": "integer",
+          "format": "int32",
+          "x-omitempty": false
+        }
+      },
+      "readOnly": true
     },
     "FileSystemInfoEntry": {
       "type": "object",
@@ -41075,7 +41429,7 @@ func init() {
               }
             },
             "api_key_auth": {
-              "description": "Data-plane credential enforcement declaration for this service. Omission is a state of its own. OMITTED declares nothing: the service is not marked AI-facing, proxying stays byte-identical, and a backend-owned X-Api-Key header passes through untouched. An explicit \"disabled\" declares the service AI-facing without enforcement: no key is validated, but X-Api-Key is the gateway's credential namespace and the header is stripped before dispatch. \"required\" makes the data plane validate the X-Api-Key header against the API-key store before the request reaches a backend, fails closed when the policy cannot be evaluated, and likewise strips the header. \"jwt\" validates an Authorization Bearer JWT against the service's jwt_auth_profile instead; X-Api-Key is not consulted. \"apikey-or-jwt\" accepts either credential with a fixed precedence: a present X-Api-Key decides alone (its rejection is final, with no JWT fallback), otherwise a Bearer token decides, and a request carrying neither is refused. Both JWT modes require jwt_auth_profile to name a configured profile. Reading a service back preserves the declaration exactly: an omitted policy reads back with this field absent, never resolved to a value. On a replace of an existing service, omitting this field leaves the declared policy unchanged \u2014 it never silently turns enforcement off; to clear a declared policy, send \"disabled\" explicitly. Independent of sse_mode and pd_disagg_mode, and independent of the management-plane authentication mode.",
+              "description": "Data-plane credential enforcement declaration for this service. Omission is a state of its own. OMITTED declares nothing: the service is not marked AI-facing, proxying stays byte-identical, and a backend-owned X-Api-Key header passes through untouched. An explicit \"disabled\" declares the service AI-facing without enforcement: no key is validated, but X-Api-Key is the gateway's credential namespace and the header is stripped before dispatch. \"required\" makes the data plane validate the X-Api-Key header against the API-key store before the request reaches a backend, fails closed when the policy cannot be evaluated, and likewise strips the header. \"jwt\" validates an Authorization Bearer JWT against the service's jwt_auth_profile instead; X-Api-Key is not consulted. \"apikey-or-jwt\" accepts either credential with a fixed precedence: a present X-Api-Key decides alone (its rejection is final, with no JWT fallback), otherwise a Bearer token decides, and a request carrying neither is refused. Both JWT modes require jwt_auth_profile to name a configured profile. Reading a service back preserves the declaration exactly: an omitted policy reads back with this field absent, never resolved to a value. On a replace of an existing service, omitting this field leaves the declared policy unchanged — it never silently turns enforcement off; to clear a declared policy, send \"disabled\" explicitly. Independent of sse_mode and pd_disagg_mode, and independent of the management-plane authentication mode.",
               "type": "string",
               "enum": [
                 "disabled",
@@ -41233,6 +41587,35 @@ func init() {
               ],
               "x-nullable": false
             },
+            "fc_band_min_share_pct": {
+              "description": "Each band's floor, critical:standard:sheddable, in percent of the service ceiling in force (rounded up to whole units, and following the adaptive ceiling). A floor is a guarantee under contention, not a reservation: it binds only while that band has a waiter, so with no demand in the band the other bands take every unit. When a unit frees, the highest-ranked band that is below its floor and has a runnable waiter takes it; when no band is below its floor, the wake policy chooses. HTTP/2 streams and role legs never wait, so on a service that carries only HTTP/2 a floor never binds. Each 0 to 100, at most 100 together (400 naming fc_band_min_share_pct). 0:0:0 (the default) is no floor. A floor is independent of the wake policy and of the weights. Replace and null semantics as fc_band_weights.",
+              "type": "string",
+              "x-nullable": false
+            },
+            "fc_band_queue_pct": {
+              "description": "The most of the queue depth each band may hold, critical:standard:sheddable, in percent, rounded up to whole waiters and at least one; 0 is the shared depth. It bounds that band's own occupancy of fc_max_queue_depth and is a ceiling, not a reservation: what a band does not use stays open to every other band, and the queue as a whole never holds more than fc_max_queue_depth. A band at its share is refused with 429 admission_capacity (reason queue_full); nobody is evicted to make room for it. At most 100 together when all three are non-zero. 0:0:0 (the default) is no share. Replace and null semantics as fc_band_weights.",
+              "type": "string",
+              "x-nullable": false
+            },
+            "fc_band_wait_ms": {
+              "description": "Each band's wait window, critical:standard:sheddable, in milliseconds, each 0 to 3600000. A band's window is a cap inside the rule's window (fc_max_queue_wait_ms), never above it: a larger value runs at the rule's window, and 0 is the rule's window. A waiter whose window ends is answered 504 admission_queue_timeout. 0:0:0 (the default) resets every band to the queue's window. Replace and null semantics as fc_band_weights.",
+              "type": "string",
+              "x-nullable": false
+            },
+            "fc_band_weights": {
+              "description": "The weighted wake's weights, written critical:standard:sheddable (for example 8:3:1): three whole numbers, each 1 to 62, at most 64 together, or 0:0:0 for none (a zero weight beside non-zero ones is refused, 400). Each is the band's credits per round. Declared under strict they are stored and reported as not in use in fc_effective, so a later switch to weighted finds them. A change of weights starts a new round. Not three whole numbers separated by ':' is refused (400). 0:0:0 resets to none; omitted on a replace keeps the stored value; explicit JSON null is rejected.",
+              "type": "string",
+              "x-nullable": false
+            },
+            "fc_critical_reserve_pct": {
+              "description": "The only true reservation: the percent of the ceiling in force (rounded up to whole units) that no other band may take, even when critical is idle. It holds on HTTP/2 and role legs as well, which never wait. Together with the standard and sheddable entries of fc_band_min_share_pct at most 100 (400 naming fc_critical_reserve_pct); the critical entry of fc_band_min_share_pct is a separate floor, and critical holds the larger of the two. 0 or omitted on create is none. Replace and null semantics as fc_max_outstanding.",
+              "type": "integer",
+              "format": "int32",
+              "default": 0,
+              "maximum": 100,
+              "minimum": 0,
+              "x-nullable": false
+            },
             "fc_decode_max_inflight": {
               "description": "The per-endpoint ceiling on decode legs of disaggregated requests. 0 or omitted leaves the process default (LLB_FC_DECODE_MAX_INFLIGHT) in force; at most 100000. Changeable at runtime by a replace POST (the stored value is kept when omitted, an explicit 0 resets to the process default). Explicit JSON null is rejected. The value in force and its source are read back in fc_effective.",
               "type": "integer",
@@ -41273,6 +41656,48 @@ func init() {
                     "on",
                     "off"
                   ]
+                },
+                "band_fallback_reason": {
+                  "description": "Why the gate runs band settings other than the configured ones: a combination the API refuses a rule to declare, reached by inheriting the environment (LLB_FC_*) or by a restore replay, runs on the defaults and is logged once at apply time. sockmap_request - sockMapMode request or both on a rule that is not an AI-gateway service: every band knob at its default (the request direction never reaches the gate). zero_weight - weighted with a zero weight: strict. no_queue - shed queue on with no queue depth: off. none - the configuration runs as configured.",
+                  "type": "string",
+                  "enum": [
+                    "none",
+                    "sockmap_request",
+                    "zero_weight",
+                    "no_queue"
+                  ]
+                },
+                "bands": {
+                  "description": "Each priority band's live counts and the knobs in force (after any fallback). min_share_pct and floor_units are the floor alone; the critical reserve is reported beside the bands.",
+                  "type": "object",
+                  "properties": {
+                    "critical": {
+                      "$ref": "#/definitions/FcBandEffective"
+                    },
+                    "critical_reserve_pct": {
+                      "description": "The critical reserve in percent of the ceiling in force - units no other band may take, even when critical is idle.",
+                      "type": "integer",
+                      "format": "int32",
+                      "x-omitempty": false
+                    },
+                    "critical_reserve_units": {
+                      "description": "The reserve in service units against effective_max_outstanding, as the gate enforces it; 0 without a ceiling.",
+                      "type": "integer",
+                      "format": "int32",
+                      "x-omitempty": false
+                    },
+                    "sheddable": {
+                      "$ref": "#/definitions/FcBandEffective"
+                    },
+                    "standard": {
+                      "$ref": "#/definitions/FcBandEffective"
+                    }
+                  }
+                },
+                "bands_configured": {
+                  "description": "true when any band knob in force differs from its default.",
+                  "type": "boolean",
+                  "x-omitempty": false
                 },
                 "config_source": {
                   "description": "Where the objectives and the tenant and key classes this gateway is applying came from. store - the AI key store answered the last read. lkg - the store has not answered since the gateway started and the last-known-good file (aigw-lkg.json under the configuration path) is being served; writes are refused with 503 meanwhile and loxilb_ai_class_config_lkg_intervals_total counts. none - nothing was read (no store configured, or a store that has not answered and no file); every request is standard. The same value on every rule - it is the gateway's, not the rule's.",
@@ -41326,8 +41751,15 @@ func init() {
                 "inflight": {
                   "description": "Inference requests executing on the pool right now.",
                   "type": "integer",
-                  "x-omitempty": false,
                   "format": "int32"
+                },
+                "llmd_headers": {
+                  "description": "Whether refusals carry x-llm-d-request-dropped-reason and x-llm-d-inference-ttl may shorten a wait.",
+                  "type": "string",
+                  "enum": [
+                    "on",
+                    "off"
+                  ]
                 },
                 "max_outstanding": {
                   "description": "Pool-wide ceiling on executing inference requests; 0 is unlimited.",
@@ -41405,11 +41837,67 @@ func init() {
                   "type": "boolean",
                   "x-omitempty": false
                 },
+                "shed_queue": {
+                  "description": "As configured: whether a sheddable request at the ceiling waits in its band instead of 429 admission_shed.",
+                  "type": "string",
+                  "enum": [
+                    "on",
+                    "off"
+                  ]
+                },
+                "shed_queue_effective": {
+                  "description": "The shed queue the gate runs.",
+                  "type": "string",
+                  "enum": [
+                    "on",
+                    "off"
+                  ]
+                },
                 "source": {
                   "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default).",
                   "type": "object",
                   "properties": {
                     "adaptive": {
+                      "type": "string",
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ]
+                    },
+                    "band_min_share_pct": {
+                      "type": "string",
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ]
+                    },
+                    "band_queue_pct": {
+                      "type": "string",
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ]
+                    },
+                    "band_wait_ms": {
+                      "type": "string",
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ]
+                    },
+                    "band_weights": {
+                      "type": "string",
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ]
+                    },
+                    "critical_reserve_pct": {
                       "type": "string",
                       "enum": [
                         "rule",
@@ -41457,6 +41945,14 @@ func init() {
                         "default"
                       ]
                     },
+                    "llmd_headers": {
+                      "type": "string",
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ]
+                    },
                     "max_outstanding": {
                       "type": "string",
                       "enum": [
@@ -41497,6 +41993,14 @@ func init() {
                         "default"
                       ]
                     },
+                    "shed_queue": {
+                      "type": "string",
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ]
+                    },
                     "telemetry_stale_ms": {
                       "type": "string",
                       "enum": [
@@ -41513,7 +42017,23 @@ func init() {
                         "default"
                       ]
                     },
+                    "tenant_wake": {
+                      "type": "string",
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ]
+                    },
                     "ttft_target_ms": {
+                      "type": "string",
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ]
+                    },
+                    "wake_policy": {
                       "type": "string",
                       "enum": [
                         "rule",
@@ -41557,8 +42077,23 @@ func init() {
                 "tenant_slots": {
                   "description": "Tenants the pool tracks by name at once for the tenant share; tenants past it share one budget. Fixed when the pool is created (LLB_FC_TENANT_SLOTS).",
                   "type": "integer",
-                  "x-omitempty": false,
                   "format": "int32"
+                },
+                "tenant_wake": {
+                  "description": "The order inside one band, as configured (fifo, or rr across tenants).",
+                  "type": "string",
+                  "enum": [
+                    "fifo",
+                    "rr"
+                  ]
+                },
+                "tenant_wake_effective": {
+                  "description": "The order inside one band the gate runs (fifo, or rr across tenants).",
+                  "type": "string",
+                  "enum": [
+                    "fifo",
+                    "rr"
+                  ]
                 },
                 "tenants_active": {
                   "description": "Tenants holding a unit or waiting on the pool now, while it holds tenants to a share.",
@@ -41568,8 +42103,23 @@ func init() {
                 },
                 "ttft_target_ms": {
                   "type": "integer",
-                  "x-omitempty": false,
                   "format": "int32"
+                },
+                "wake_policy": {
+                  "description": "The wake policy as configured, by the rule or inherited (source.wake_policy); wake_policy_effective is the one the gate runs. strict - while higher-band demand keeps the ceiling full, a lower band is admitted zero requests; each waiter is refused when its band's wait window ends. weighted - a deficit round robin: while several bands have waiters, each receives its weight's share of wake-ups, exactly over whole rounds (8:3:1 is 8, 3, 1 in every 12); the share is of admissions, not of tokens, GPU time or latency. No band is promoted because it has waited long.",
+                  "type": "string",
+                  "enum": [
+                    "strict",
+                    "weighted"
+                  ]
+                },
+                "wake_policy_effective": {
+                  "description": "The wake policy the gate runs. Differs from wake_policy only when band_fallback_reason is not none.",
+                  "type": "string",
+                  "enum": [
+                    "strict",
+                    "weighted"
+                  ]
                 },
                 "warming_endpoints": {
                   "description": "Endpoints inside their warm-up window.",
@@ -41579,8 +42129,11 @@ func init() {
                 },
                 "warmup_ms": {
                   "type": "integer",
-                  "x-omitempty": false,
                   "format": "int32"
+                },
+                "weights_in_use": {
+                  "description": "true when wake_policy_effective is weighted and the weights decide the wake; declared weights are stored but not in use otherwise.",
+                  "type": "boolean"
                 }
               },
               "readOnly": true
@@ -41596,6 +42149,16 @@ func init() {
             },
             "fc_expose_headers": {
               "description": "on puts X-Loxilb-Admission-Inflight, X-Loxilb-Admission-Queued and X-Loxilb-Admission-Limit on the head of every admitted inference response (HTTP/1 and HTTP/2, streamed ones included), the same three a capacity refusal carries: the pool's executing units and waiting requests as the response head goes out, and the service ceiling in force (0 is none). Fields of those names from the backend are replaced. off leaves responses as the backend sent them; inherit, or omitted on create, runs on the process default (LLB_FC_EXPOSE_HEADERS). Refused (400) with sockMapMode both or response, where the gateway never sees the response. Replace and null semantics as fc_mode.",
+              "type": "string",
+              "enum": [
+                "on",
+                "off",
+                "inherit"
+              ],
+              "x-nullable": false
+            },
+            "fc_llmd_headers": {
+              "description": "on: adds x-llm-d-request-dropped-reason to the admission refusals (HTTP/1.1 answers and HTTP/2 stream refusals); lets a valid x-llm-d-inference-ttl on an HTTP/1.1 request (Go duration syntax, positive, held at one day) shorter than the window that applies shorten that request's wait, never extend it, where a wait the client's TTL ended is answered 429 admission_ttl_expired and a wait a window of the rule ended stays 504 admission_queue_timeout; and forwards the gateway's resolved values in x-llm-d-inference-objective (the class the request was admitted as) and x-llm-d-inference-fairness-id (the authenticated tenant, none for a request without one), removing the client's copy of either name and of the deprecated x-gateway-inference-* names, on HTTP/1.1 and HTTP/2 alike (on a chunked HTTP/1.1 request the copies are removed and nothing is written; HTTP/2 streams never wait, so the TTL does not apply to them). off leaves all of it out: the TTL header is ignored and every header is forwarded as sent. inherit, or omitted on create, runs on the process default (LLB_FC_LLMD_HEADERS, else off). Replace and null semantics as fc_mode.",
               "type": "string",
               "enum": [
                 "on",
@@ -41651,6 +42214,16 @@ func init() {
               "minimum": 0,
               "x-nullable": false
             },
+            "fc_shed_queue": {
+              "description": "off refuses a sheddable request at the ceiling at once with 429 admission_shed; on lets it wait in its band, and when the queue is full an arriving request of any higher band (standard or critical) evicts the youngest sheddable waiter, which is answered 429 admission_shed. on is refused (400) while the queue depth in force (fc_max_queue_depth, else LLB_FC_MAX_QUEUE_DEPTH) is 0. inherit, or omitted on create, runs on the process default (LLB_FC_SHED_QUEUE, else off). Replace and null semantics as fc_mode.",
+              "type": "string",
+              "enum": [
+                "on",
+                "off",
+                "inherit"
+              ],
+              "x-nullable": false
+            },
             "fc_telemetry_stale_ms": {
               "description": "How long an endpoint's scraped queue depth is trusted by the P/D scorers without a refresh, in milliseconds; an older value is replaced by the candidates' average. 0 or omitted leaves the process default (LLB_FC_TELEMETRY_STALE_MS, else 30000) in force. The scraper stamps whole seconds, so the window is effectively rounded to them. Replace and null semantics as fc_max_outstanding.",
               "type": "integer",
@@ -41669,6 +42242,16 @@ func init() {
               "minimum": 0,
               "x-nullable": false
             },
+            "fc_tenant_wake": {
+              "description": "The order inside one band. fifo wakes the oldest runnable waiter and does not tell tenants apart; rr rotates across the tenants with a runnable waiter in the band, oldest first inside one tenant, each band keeping its own place in the rotation. rr needs no fc_tenant_max_share_pct. inherit, or omitted on create, runs on the process default (LLB_FC_TENANT_WAKE, else fifo). Replace and null semantics as fc_mode.",
+              "type": "string",
+              "enum": [
+                "fifo",
+                "rr",
+                "inherit"
+              ],
+              "x-nullable": false
+            },
             "fc_ttft_target_ms": {
               "description": "With fc_adaptive on: an endpoint whose streamed responses take longer than this from admission to their first data event (an eighth-weighted average, trusted for fc_telemetry_stale_ms) is backpressure. Only streamed responses are measured: a buffered response's first byte comes with the whole completion. 0 or omitted leaves the process default (LLB_FC_TTFT_TARGET_MS, else TTFT unused) in force. Replace and null semantics as fc_max_outstanding.",
               "type": "integer",
@@ -41676,6 +42259,16 @@ func init() {
               "default": 0,
               "maximum": 3600000,
               "minimum": 0,
+              "x-nullable": false
+            },
+            "fc_wake_policy": {
+              "description": "Which priority band a freed service unit wakes when requests of several bands wait (critical, standard, sheddable: the class the request's objective resolved to). Bands act only with fc_mode enforce, below the ceiling every band is admitted at once, and HTTP/2 streams and P/D role legs never queue (for them the band decides the refusal only). strict wakes the highest band with a runnable waiter: while higher-band demand keeps the ceiling full, a lower band is admitted zero requests, and each waiter is refused when its band's wait window ends. weighted is a deficit round robin by fc_band_weights: each band with a runnable waiter gets its weight in credits per round, the highest band with credit left is served first, one wake costs one credit, and a band with no runnable waiter forfeits its turn; over whole rounds the wake-ups split exactly as the weights do (8:3:1 is 8 critical, 3 standard, 1 sheddable in every 12). The share is of admissions, not of tokens or latency, and a floor is served before the round. weighted needs every weight at least 1 (400 otherwise). inherit, or omitted on create, runs on the process default (LLB_FC_WAKE_POLICY, else strict). Refused (400) beside sockMapMode both or request on a rule that is not an AI-gateway service, as is every band knob other than its default. Such a rule that INHERITS weighted (or another band setting it would be refused for declaring) runs every band knob at its default instead, logs one warning at apply time and reads back fc_effective.wake_policy_effective with band_fallback_reason; so does weighted without a weight for every band. A change of policy starts a new round and loses no waiter. Replace and null semantics as fc_mode.",
+              "type": "string",
+              "enum": [
+                "strict",
+                "weighted",
+                "inherit"
+              ],
               "x-nullable": false
             },
             "fc_warmup_ms": {
@@ -41796,7 +42389,7 @@ func init() {
               "x-nullable": false
             },
             "kvExactMode": {
-              "description": "KV-cache exact (Tier 1.5) routing mode. Selects the ENDPOINT TOPOLOGY only \u2014 the serving framework is chosen independently by kvEngineType, and engine support for each mode is bounded by the per-engine capability matrix in the kvEngineType description (NOT every mode works with every engine). 0 = off. 1 = exact routing over a P/D role-partitioned pool: requires pd_disagg_mode=true (rejected otherwise) and endpoints tagged ep_role 1/2; only ep_role=1 (prefill) endpoints are subscribed and scored, and Tier 1.5 sits between Tier 1 (trie) and Tier 2 (min-load) in the P/D ladder. 2 = reserved and rejected; no NATS implementation is available. 3 = single-pool exact routing: requires mode=4 (fullproxy) and pd_disagg_mode=false (both rejected otherwise); ALL endpoints are subscribed and scored. Mode 3 does NOT reproduce the P/D ladder \u2014 there is no Tier-0 P/D session-affinity stage, no Tier-1 P/D trie and no P/D backpressure admission stage on this path; management admission and strict binding enforcement still apply. A Tier-1.5 miss falls back to the rule's own sel selector. vllm/sglang consume ZMQ events; trtllm consumes HTTP-polled events. All enabled exact modes require model_name and a loadable tokenizer. vLLM Exact additionally requires the Gateway process to have been launched with a non-empty LLB_KV_NONE_HASH_SEED of at most 23 bytes, matching the engine's PYTHONHASHSEED: it is a property of the Gateway's deployment, not of this request, so on a Gateway launched without it EVERY vLLM Exact rule is refused and no request body can succeed. Query the Gateway's readiness rather than discovering this by submitting. See kvHashAlgo for what the seed governs. Profile/API-surface constraints apply independently; see kvModelProfile and kvExactApiMode.",
+              "description": "KV-cache exact (Tier 1.5) routing mode. Selects the ENDPOINT TOPOLOGY only — the serving framework is chosen independently by kvEngineType, and engine support for each mode is bounded by the per-engine capability matrix in the kvEngineType description (NOT every mode works with every engine). 0 = off. 1 = exact routing over a P/D role-partitioned pool: requires pd_disagg_mode=true (rejected otherwise) and endpoints tagged ep_role 1/2; only ep_role=1 (prefill) endpoints are subscribed and scored, and Tier 1.5 sits between Tier 1 (trie) and Tier 2 (min-load) in the P/D ladder. 2 = reserved and rejected; no NATS implementation is available. 3 = single-pool exact routing: requires mode=4 (fullproxy) and pd_disagg_mode=false (both rejected otherwise); ALL endpoints are subscribed and scored. Mode 3 does NOT reproduce the P/D ladder — there is no Tier-0 P/D session-affinity stage, no Tier-1 P/D trie and no P/D backpressure admission stage on this path; management admission and strict binding enforcement still apply. A Tier-1.5 miss falls back to the rule's own sel selector. vllm/sglang consume ZMQ events; trtllm consumes HTTP-polled events. All enabled exact modes require model_name and a loadable tokenizer. vLLM Exact additionally requires the Gateway process to have been launched with a non-empty LLB_KV_NONE_HASH_SEED of at most 23 bytes, matching the engine's PYTHONHASHSEED: it is a property of the Gateway's deployment, not of this request, so on a Gateway launched without it EVERY vLLM Exact rule is refused and no request body can succeed. Query the Gateway's readiness rather than discovering this by submitting. See kvHashAlgo for what the seed governs. Profile/API-surface constraints apply independently; see kvModelProfile and kvExactApiMode.",
               "type": "integer",
               "format": "int64",
               "default": 0,
@@ -41816,7 +42409,7 @@ func init() {
               "x-nullable": false
             },
             "kvModelProfile": {
-              "description": "ID of the ModelPromptProfile this rule binds to. Naming a profile makes the rule STRICT: the profile must be published in the gateway's profile registry, its alias policy must admit the rule's model_name, its pinned tokenizer artifacts must load and digest-match, and a composed KV-exact binding (model-profile@generation + engine-contract@generation) is allocated at create time \u2014 admission fails closed while no engine-contract registry is available. Absent = legacy profile-less rule (no binding; documented migration behavior). Immutable after create (delete+recreate to change), with ONE sanctioned exception: the migration attach. A replace-POST that names a profile on a live profile-less rule is admitted and re-runs the full strict bring-up (admission checks run BEFORE any mutation, so a refused attach leaves the rule, binding, and data plane untouched; enforcement reports pending until the data-plane contract installs and is acknowledged). The reverse transitions \u2014 dropping the profile or changing it to another \u2014 stay refused, as does any kvExactApiMode change during the attach (raw-string equality; an undeclared apiMode must stay undeclared in the attach POST). CAVEAT operators must be shown: attaching changes the rule's EFFECTIVE surface from the legacy both-surfaces default to the profile's declared supportedApis \u2014 attaching a completions-only profile to a rule that was serving chat traffic narrows the served surface. Scalar by schema \u2014 exactly one profile per rule; arrays are rejected representations. Requires kvExactMode=1 or 3; a profile declaration with Exact disabled is rejected. Snapshot restore has a separate recovery contract: it may preserve an unresolved profile declaration while fencing Exact routing; consult kvexactstatus rather than treating restored storage as a successful fresh admission.",
+              "description": "ID of the ModelPromptProfile this rule binds to. Naming a profile makes the rule STRICT: the profile must be published in the gateway's profile registry, its alias policy must admit the rule's model_name, its pinned tokenizer artifacts must load and digest-match, and a composed KV-exact binding (model-profile@generation + engine-contract@generation) is allocated at create time — admission fails closed while no engine-contract registry is available. Absent = legacy profile-less rule (no binding; documented migration behavior). Immutable after create (delete+recreate to change), with ONE sanctioned exception: the migration attach. A replace-POST that names a profile on a live profile-less rule is admitted and re-runs the full strict bring-up (admission checks run BEFORE any mutation, so a refused attach leaves the rule, binding, and data plane untouched; enforcement reports pending until the data-plane contract installs and is acknowledged). The reverse transitions — dropping the profile or changing it to another — stay refused, as does any kvExactApiMode change during the attach (raw-string equality; an undeclared apiMode must stay undeclared in the attach POST). CAVEAT operators must be shown: attaching changes the rule's EFFECTIVE surface from the legacy both-surfaces default to the profile's declared supportedApis — attaching a completions-only profile to a rule that was serving chat traffic narrows the served surface. Scalar by schema — exactly one profile per rule; arrays are rejected representations. Requires kvExactMode=1 or 3; a profile declaration with Exact disabled is rejected. Snapshot restore has a separate recovery contract: it may preserve an unresolved profile declaration while fencing Exact routing; consult kvexactstatus rather than treating restored storage as a successful fresh admission.",
               "type": "string",
               "x-nullable": false
             },
@@ -41848,6 +42441,15 @@ func init() {
               "format": "int32",
               "default": 0,
               "minimum": 0,
+              "x-nullable": false
+            },
+            "mcp_protocol_version": {
+              "description": "Explicit stateless MCP transport mode. Omitted or empty on create preserves legacy behavior. Omitted replace preserves the existing value; changing it requires delete and recreate. Requires TCP FullProxy (mode=4), round-robin (sel=0) or weighted round-robin (sel=2), and sockMapMode=off. Session affinity, model routing, P/D disaggregation and KV routing are rejected. Configuration readback does not prove request validation or backend delivery.",
+              "type": "string",
+              "enum": [
+                "",
+                "2026-07-28"
+              ],
               "x-nullable": false
             },
             "mode": {
@@ -42119,7 +42721,6 @@ func init() {
                 10
               ]
             },
-            "mcp_protocol_version": {"type": "string", "x-nullable": false, "enum": ["", "2026-07-28"], "description": "Explicit stateless MCP transport mode. Omitted create is legacy; omitted replace preserves. Immutable after create: delete and recreate to change. Requires TCP FullProxy mode=4, sel=0 or 2, sockMapMode=off. No session affinity, model, P/D or KV routing."},
             "session_header_name": {
               "description": "Session-key extraction setting for proxy affinity. Use a header name such as X-Session-ID, cookie:NAME for one cookie, query:NAME for one query parameter, or basic-auth for the Basic Authorization username. RR (sel=0) and persistence (sel=3) paths contain handling; a missing usable key follows their RR or IP-based fallback respectively. This setting is not authentication. GET includes it only for those selectors. The server accepts at most 127 UTF-8 bytes and rejects embedded NUL or invalid UTF-8 before changing rule state. This byte limit reserves the terminator in the 128-byte data-plane field; UI validation must count encoded bytes rather than characters. Cross-mode interaction with L7 HTTP_COOKIE remains unresolved.",
               "type": "string",
@@ -42350,7 +42951,7 @@ func init() {
           }
         },
         "api_key_auth": {
-          "description": "Data-plane credential enforcement declaration for this service. Omission is a state of its own. OMITTED declares nothing: the service is not marked AI-facing, proxying stays byte-identical, and a backend-owned X-Api-Key header passes through untouched. An explicit \"disabled\" declares the service AI-facing without enforcement: no key is validated, but X-Api-Key is the gateway's credential namespace and the header is stripped before dispatch. \"required\" makes the data plane validate the X-Api-Key header against the API-key store before the request reaches a backend, fails closed when the policy cannot be evaluated, and likewise strips the header. \"jwt\" validates an Authorization Bearer JWT against the service's jwt_auth_profile instead; X-Api-Key is not consulted. \"apikey-or-jwt\" accepts either credential with a fixed precedence: a present X-Api-Key decides alone (its rejection is final, with no JWT fallback), otherwise a Bearer token decides, and a request carrying neither is refused. Both JWT modes require jwt_auth_profile to name a configured profile. Reading a service back preserves the declaration exactly: an omitted policy reads back with this field absent, never resolved to a value. On a replace of an existing service, omitting this field leaves the declared policy unchanged \u2014 it never silently turns enforcement off; to clear a declared policy, send \"disabled\" explicitly. Independent of sse_mode and pd_disagg_mode, and independent of the management-plane authentication mode.",
+          "description": "Data-plane credential enforcement declaration for this service. Omission is a state of its own. OMITTED declares nothing: the service is not marked AI-facing, proxying stays byte-identical, and a backend-owned X-Api-Key header passes through untouched. An explicit \"disabled\" declares the service AI-facing without enforcement: no key is validated, but X-Api-Key is the gateway's credential namespace and the header is stripped before dispatch. \"required\" makes the data plane validate the X-Api-Key header against the API-key store before the request reaches a backend, fails closed when the policy cannot be evaluated, and likewise strips the header. \"jwt\" validates an Authorization Bearer JWT against the service's jwt_auth_profile instead; X-Api-Key is not consulted. \"apikey-or-jwt\" accepts either credential with a fixed precedence: a present X-Api-Key decides alone (its rejection is final, with no JWT fallback), otherwise a Bearer token decides, and a request carrying neither is refused. Both JWT modes require jwt_auth_profile to name a configured profile. Reading a service back preserves the declaration exactly: an omitted policy reads back with this field absent, never resolved to a value. On a replace of an existing service, omitting this field leaves the declared policy unchanged — it never silently turns enforcement off; to clear a declared policy, send \"disabled\" explicitly. Independent of sse_mode and pd_disagg_mode, and independent of the management-plane authentication mode.",
           "type": "string",
           "enum": [
             "disabled",
@@ -42508,6 +43109,35 @@ func init() {
           ],
           "x-nullable": false
         },
+        "fc_band_min_share_pct": {
+          "description": "Each band's floor, critical:standard:sheddable, in percent of the service ceiling in force (rounded up to whole units, and following the adaptive ceiling). A floor is a guarantee under contention, not a reservation: it binds only while that band has a waiter, so with no demand in the band the other bands take every unit. When a unit frees, the highest-ranked band that is below its floor and has a runnable waiter takes it; when no band is below its floor, the wake policy chooses. HTTP/2 streams and role legs never wait, so on a service that carries only HTTP/2 a floor never binds. Each 0 to 100, at most 100 together (400 naming fc_band_min_share_pct). 0:0:0 (the default) is no floor. A floor is independent of the wake policy and of the weights. Replace and null semantics as fc_band_weights.",
+          "type": "string",
+          "x-nullable": false
+        },
+        "fc_band_queue_pct": {
+          "description": "The most of the queue depth each band may hold, critical:standard:sheddable, in percent, rounded up to whole waiters and at least one; 0 is the shared depth. It bounds that band's own occupancy of fc_max_queue_depth and is a ceiling, not a reservation: what a band does not use stays open to every other band, and the queue as a whole never holds more than fc_max_queue_depth. A band at its share is refused with 429 admission_capacity (reason queue_full); nobody is evicted to make room for it. At most 100 together when all three are non-zero. 0:0:0 (the default) is no share. Replace and null semantics as fc_band_weights.",
+          "type": "string",
+          "x-nullable": false
+        },
+        "fc_band_wait_ms": {
+          "description": "Each band's wait window, critical:standard:sheddable, in milliseconds, each 0 to 3600000. A band's window is a cap inside the rule's window (fc_max_queue_wait_ms), never above it: a larger value runs at the rule's window, and 0 is the rule's window. A waiter whose window ends is answered 504 admission_queue_timeout. 0:0:0 (the default) resets every band to the queue's window. Replace and null semantics as fc_band_weights.",
+          "type": "string",
+          "x-nullable": false
+        },
+        "fc_band_weights": {
+          "description": "The weighted wake's weights, written critical:standard:sheddable (for example 8:3:1): three whole numbers, each 1 to 62, at most 64 together, or 0:0:0 for none (a zero weight beside non-zero ones is refused, 400). Each is the band's credits per round. Declared under strict they are stored and reported as not in use in fc_effective, so a later switch to weighted finds them. A change of weights starts a new round. Not three whole numbers separated by ':' is refused (400). 0:0:0 resets to none; omitted on a replace keeps the stored value; explicit JSON null is rejected.",
+          "type": "string",
+          "x-nullable": false
+        },
+        "fc_critical_reserve_pct": {
+          "description": "The only true reservation: the percent of the ceiling in force (rounded up to whole units) that no other band may take, even when critical is idle. It holds on HTTP/2 and role legs as well, which never wait. Together with the standard and sheddable entries of fc_band_min_share_pct at most 100 (400 naming fc_critical_reserve_pct); the critical entry of fc_band_min_share_pct is a separate floor, and critical holds the larger of the two. 0 or omitted on create is none. Replace and null semantics as fc_max_outstanding.",
+          "type": "integer",
+          "format": "int32",
+          "default": 0,
+          "maximum": 100,
+          "minimum": 0,
+          "x-nullable": false
+        },
         "fc_decode_max_inflight": {
           "description": "The per-endpoint ceiling on decode legs of disaggregated requests. 0 or omitted leaves the process default (LLB_FC_DECODE_MAX_INFLIGHT) in force; at most 100000. Changeable at runtime by a replace POST (the stored value is kept when omitted, an explicit 0 resets to the process default). Explicit JSON null is rejected. The value in force and its source are read back in fc_effective.",
           "type": "integer",
@@ -42548,6 +43178,48 @@ func init() {
                 "on",
                 "off"
               ]
+            },
+            "band_fallback_reason": {
+              "description": "Why the gate runs band settings other than the configured ones: a combination the API refuses a rule to declare, reached by inheriting the environment (LLB_FC_*) or by a restore replay, runs on the defaults and is logged once at apply time. sockmap_request - sockMapMode request or both on a rule that is not an AI-gateway service: every band knob at its default (the request direction never reaches the gate). zero_weight - weighted with a zero weight: strict. no_queue - shed queue on with no queue depth: off. none - the configuration runs as configured.",
+              "type": "string",
+              "enum": [
+                "none",
+                "sockmap_request",
+                "zero_weight",
+                "no_queue"
+              ]
+            },
+            "bands": {
+              "description": "Each priority band's live counts and the knobs in force (after any fallback). min_share_pct and floor_units are the floor alone; the critical reserve is reported beside the bands.",
+              "type": "object",
+              "properties": {
+                "critical": {
+                  "$ref": "#/definitions/FcBandEffective"
+                },
+                "critical_reserve_pct": {
+                  "description": "The critical reserve in percent of the ceiling in force - units no other band may take, even when critical is idle.",
+                  "type": "integer",
+                  "format": "int32",
+                  "x-omitempty": false
+                },
+                "critical_reserve_units": {
+                  "description": "The reserve in service units against effective_max_outstanding, as the gate enforces it; 0 without a ceiling.",
+                  "type": "integer",
+                  "format": "int32",
+                  "x-omitempty": false
+                },
+                "sheddable": {
+                  "$ref": "#/definitions/FcBandEffective"
+                },
+                "standard": {
+                  "$ref": "#/definitions/FcBandEffective"
+                }
+              }
+            },
+            "bands_configured": {
+              "description": "true when any band knob in force differs from its default.",
+              "type": "boolean",
+              "x-omitempty": false
             },
             "config_source": {
               "description": "Where the objectives and the tenant and key classes this gateway is applying came from. store - the AI key store answered the last read. lkg - the store has not answered since the gateway started and the last-known-good file (aigw-lkg.json under the configuration path) is being served; writes are refused with 503 meanwhile and loxilb_ai_class_config_lkg_intervals_total counts. none - nothing was read (no store configured, or a store that has not answered and no file); every request is standard. The same value on every rule - it is the gateway's, not the rule's.",
@@ -42601,8 +43273,15 @@ func init() {
             "inflight": {
               "description": "Inference requests executing on the pool right now.",
               "type": "integer",
-              "x-omitempty": false,
               "format": "int32"
+            },
+            "llmd_headers": {
+              "description": "Whether refusals carry x-llm-d-request-dropped-reason and x-llm-d-inference-ttl may shorten a wait.",
+              "type": "string",
+              "enum": [
+                "on",
+                "off"
+              ]
             },
             "max_outstanding": {
               "description": "Pool-wide ceiling on executing inference requests; 0 is unlimited.",
@@ -42680,11 +43359,67 @@ func init() {
               "type": "boolean",
               "x-omitempty": false
             },
+            "shed_queue": {
+              "description": "As configured: whether a sheddable request at the ceiling waits in its band instead of 429 admission_shed.",
+              "type": "string",
+              "enum": [
+                "on",
+                "off"
+              ]
+            },
+            "shed_queue_effective": {
+              "description": "The shed queue the gate runs.",
+              "type": "string",
+              "enum": [
+                "on",
+                "off"
+              ]
+            },
             "source": {
               "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default).",
               "type": "object",
               "properties": {
                 "adaptive": {
+                  "type": "string",
+                  "enum": [
+                    "rule",
+                    "env",
+                    "default"
+                  ]
+                },
+                "band_min_share_pct": {
+                  "type": "string",
+                  "enum": [
+                    "rule",
+                    "env",
+                    "default"
+                  ]
+                },
+                "band_queue_pct": {
+                  "type": "string",
+                  "enum": [
+                    "rule",
+                    "env",
+                    "default"
+                  ]
+                },
+                "band_wait_ms": {
+                  "type": "string",
+                  "enum": [
+                    "rule",
+                    "env",
+                    "default"
+                  ]
+                },
+                "band_weights": {
+                  "type": "string",
+                  "enum": [
+                    "rule",
+                    "env",
+                    "default"
+                  ]
+                },
+                "critical_reserve_pct": {
                   "type": "string",
                   "enum": [
                     "rule",
@@ -42732,6 +43467,14 @@ func init() {
                     "default"
                   ]
                 },
+                "llmd_headers": {
+                  "type": "string",
+                  "enum": [
+                    "rule",
+                    "env",
+                    "default"
+                  ]
+                },
                 "max_outstanding": {
                   "type": "string",
                   "enum": [
@@ -42772,6 +43515,14 @@ func init() {
                     "default"
                   ]
                 },
+                "shed_queue": {
+                  "type": "string",
+                  "enum": [
+                    "rule",
+                    "env",
+                    "default"
+                  ]
+                },
                 "telemetry_stale_ms": {
                   "type": "string",
                   "enum": [
@@ -42788,7 +43539,23 @@ func init() {
                     "default"
                   ]
                 },
+                "tenant_wake": {
+                  "type": "string",
+                  "enum": [
+                    "rule",
+                    "env",
+                    "default"
+                  ]
+                },
                 "ttft_target_ms": {
+                  "type": "string",
+                  "enum": [
+                    "rule",
+                    "env",
+                    "default"
+                  ]
+                },
+                "wake_policy": {
                   "type": "string",
                   "enum": [
                     "rule",
@@ -42832,8 +43599,23 @@ func init() {
             "tenant_slots": {
               "description": "Tenants the pool tracks by name at once for the tenant share; tenants past it share one budget. Fixed when the pool is created (LLB_FC_TENANT_SLOTS).",
               "type": "integer",
-              "x-omitempty": false,
               "format": "int32"
+            },
+            "tenant_wake": {
+              "description": "The order inside one band, as configured (fifo, or rr across tenants).",
+              "type": "string",
+              "enum": [
+                "fifo",
+                "rr"
+              ]
+            },
+            "tenant_wake_effective": {
+              "description": "The order inside one band the gate runs (fifo, or rr across tenants).",
+              "type": "string",
+              "enum": [
+                "fifo",
+                "rr"
+              ]
             },
             "tenants_active": {
               "description": "Tenants holding a unit or waiting on the pool now, while it holds tenants to a share.",
@@ -42843,8 +43625,23 @@ func init() {
             },
             "ttft_target_ms": {
               "type": "integer",
-              "x-omitempty": false,
               "format": "int32"
+            },
+            "wake_policy": {
+              "description": "The wake policy as configured, by the rule or inherited (source.wake_policy); wake_policy_effective is the one the gate runs. strict - while higher-band demand keeps the ceiling full, a lower band is admitted zero requests; each waiter is refused when its band's wait window ends. weighted - a deficit round robin: while several bands have waiters, each receives its weight's share of wake-ups, exactly over whole rounds (8:3:1 is 8, 3, 1 in every 12); the share is of admissions, not of tokens, GPU time or latency. No band is promoted because it has waited long.",
+              "type": "string",
+              "enum": [
+                "strict",
+                "weighted"
+              ]
+            },
+            "wake_policy_effective": {
+              "description": "The wake policy the gate runs. Differs from wake_policy only when band_fallback_reason is not none.",
+              "type": "string",
+              "enum": [
+                "strict",
+                "weighted"
+              ]
             },
             "warming_endpoints": {
               "description": "Endpoints inside their warm-up window.",
@@ -42854,8 +43651,11 @@ func init() {
             },
             "warmup_ms": {
               "type": "integer",
-              "x-omitempty": false,
               "format": "int32"
+            },
+            "weights_in_use": {
+              "description": "true when wake_policy_effective is weighted and the weights decide the wake; declared weights are stored but not in use otherwise.",
+              "type": "boolean"
             }
           },
           "readOnly": true
@@ -42871,6 +43671,16 @@ func init() {
         },
         "fc_expose_headers": {
           "description": "on puts X-Loxilb-Admission-Inflight, X-Loxilb-Admission-Queued and X-Loxilb-Admission-Limit on the head of every admitted inference response (HTTP/1 and HTTP/2, streamed ones included), the same three a capacity refusal carries: the pool's executing units and waiting requests as the response head goes out, and the service ceiling in force (0 is none). Fields of those names from the backend are replaced. off leaves responses as the backend sent them; inherit, or omitted on create, runs on the process default (LLB_FC_EXPOSE_HEADERS). Refused (400) with sockMapMode both or response, where the gateway never sees the response. Replace and null semantics as fc_mode.",
+          "type": "string",
+          "enum": [
+            "on",
+            "off",
+            "inherit"
+          ],
+          "x-nullable": false
+        },
+        "fc_llmd_headers": {
+          "description": "on: adds x-llm-d-request-dropped-reason to the admission refusals (HTTP/1.1 answers and HTTP/2 stream refusals); lets a valid x-llm-d-inference-ttl on an HTTP/1.1 request (Go duration syntax, positive, held at one day) shorter than the window that applies shorten that request's wait, never extend it, where a wait the client's TTL ended is answered 429 admission_ttl_expired and a wait a window of the rule ended stays 504 admission_queue_timeout; and forwards the gateway's resolved values in x-llm-d-inference-objective (the class the request was admitted as) and x-llm-d-inference-fairness-id (the authenticated tenant, none for a request without one), removing the client's copy of either name and of the deprecated x-gateway-inference-* names, on HTTP/1.1 and HTTP/2 alike (on a chunked HTTP/1.1 request the copies are removed and nothing is written; HTTP/2 streams never wait, so the TTL does not apply to them). off leaves all of it out: the TTL header is ignored and every header is forwarded as sent. inherit, or omitted on create, runs on the process default (LLB_FC_LLMD_HEADERS, else off). Replace and null semantics as fc_mode.",
           "type": "string",
           "enum": [
             "on",
@@ -42926,6 +43736,16 @@ func init() {
           "minimum": 0,
           "x-nullable": false
         },
+        "fc_shed_queue": {
+          "description": "off refuses a sheddable request at the ceiling at once with 429 admission_shed; on lets it wait in its band, and when the queue is full an arriving request of any higher band (standard or critical) evicts the youngest sheddable waiter, which is answered 429 admission_shed. on is refused (400) while the queue depth in force (fc_max_queue_depth, else LLB_FC_MAX_QUEUE_DEPTH) is 0. inherit, or omitted on create, runs on the process default (LLB_FC_SHED_QUEUE, else off). Replace and null semantics as fc_mode.",
+          "type": "string",
+          "enum": [
+            "on",
+            "off",
+            "inherit"
+          ],
+          "x-nullable": false
+        },
         "fc_telemetry_stale_ms": {
           "description": "How long an endpoint's scraped queue depth is trusted by the P/D scorers without a refresh, in milliseconds; an older value is replaced by the candidates' average. 0 or omitted leaves the process default (LLB_FC_TELEMETRY_STALE_MS, else 30000) in force. The scraper stamps whole seconds, so the window is effectively rounded to them. Replace and null semantics as fc_max_outstanding.",
           "type": "integer",
@@ -42944,6 +43764,16 @@ func init() {
           "minimum": 0,
           "x-nullable": false
         },
+        "fc_tenant_wake": {
+          "description": "The order inside one band. fifo wakes the oldest runnable waiter and does not tell tenants apart; rr rotates across the tenants with a runnable waiter in the band, oldest first inside one tenant, each band keeping its own place in the rotation. rr needs no fc_tenant_max_share_pct. inherit, or omitted on create, runs on the process default (LLB_FC_TENANT_WAKE, else fifo). Replace and null semantics as fc_mode.",
+          "type": "string",
+          "enum": [
+            "fifo",
+            "rr",
+            "inherit"
+          ],
+          "x-nullable": false
+        },
         "fc_ttft_target_ms": {
           "description": "With fc_adaptive on: an endpoint whose streamed responses take longer than this from admission to their first data event (an eighth-weighted average, trusted for fc_telemetry_stale_ms) is backpressure. Only streamed responses are measured: a buffered response's first byte comes with the whole completion. 0 or omitted leaves the process default (LLB_FC_TTFT_TARGET_MS, else TTFT unused) in force. Replace and null semantics as fc_max_outstanding.",
           "type": "integer",
@@ -42951,6 +43781,16 @@ func init() {
           "default": 0,
           "maximum": 3600000,
           "minimum": 0,
+          "x-nullable": false
+        },
+        "fc_wake_policy": {
+          "description": "Which priority band a freed service unit wakes when requests of several bands wait (critical, standard, sheddable: the class the request's objective resolved to). Bands act only with fc_mode enforce, below the ceiling every band is admitted at once, and HTTP/2 streams and P/D role legs never queue (for them the band decides the refusal only). strict wakes the highest band with a runnable waiter: while higher-band demand keeps the ceiling full, a lower band is admitted zero requests, and each waiter is refused when its band's wait window ends. weighted is a deficit round robin by fc_band_weights: each band with a runnable waiter gets its weight in credits per round, the highest band with credit left is served first, one wake costs one credit, and a band with no runnable waiter forfeits its turn; over whole rounds the wake-ups split exactly as the weights do (8:3:1 is 8 critical, 3 standard, 1 sheddable in every 12). The share is of admissions, not of tokens or latency, and a floor is served before the round. weighted needs every weight at least 1 (400 otherwise). inherit, or omitted on create, runs on the process default (LLB_FC_WAKE_POLICY, else strict). Refused (400) beside sockMapMode both or request on a rule that is not an AI-gateway service, as is every band knob other than its default. Such a rule that INHERITS weighted (or another band setting it would be refused for declaring) runs every band knob at its default instead, logs one warning at apply time and reads back fc_effective.wake_policy_effective with band_fallback_reason; so does weighted without a weight for every band. A change of policy starts a new round and loses no waiter. Replace and null semantics as fc_mode.",
+          "type": "string",
+          "enum": [
+            "strict",
+            "weighted",
+            "inherit"
+          ],
           "x-nullable": false
         },
         "fc_warmup_ms": {
@@ -43071,7 +43911,7 @@ func init() {
           "x-nullable": false
         },
         "kvExactMode": {
-          "description": "KV-cache exact (Tier 1.5) routing mode. Selects the ENDPOINT TOPOLOGY only \u2014 the serving framework is chosen independently by kvEngineType, and engine support for each mode is bounded by the per-engine capability matrix in the kvEngineType description (NOT every mode works with every engine). 0 = off. 1 = exact routing over a P/D role-partitioned pool: requires pd_disagg_mode=true (rejected otherwise) and endpoints tagged ep_role 1/2; only ep_role=1 (prefill) endpoints are subscribed and scored, and Tier 1.5 sits between Tier 1 (trie) and Tier 2 (min-load) in the P/D ladder. 2 = reserved and rejected; no NATS implementation is available. 3 = single-pool exact routing: requires mode=4 (fullproxy) and pd_disagg_mode=false (both rejected otherwise); ALL endpoints are subscribed and scored. Mode 3 does NOT reproduce the P/D ladder \u2014 there is no Tier-0 P/D session-affinity stage, no Tier-1 P/D trie and no P/D backpressure admission stage on this path; management admission and strict binding enforcement still apply. A Tier-1.5 miss falls back to the rule's own sel selector. vllm/sglang consume ZMQ events; trtllm consumes HTTP-polled events. All enabled exact modes require model_name and a loadable tokenizer. vLLM Exact additionally requires the Gateway process to have been launched with a non-empty LLB_KV_NONE_HASH_SEED of at most 23 bytes, matching the engine's PYTHONHASHSEED: it is a property of the Gateway's deployment, not of this request, so on a Gateway launched without it EVERY vLLM Exact rule is refused and no request body can succeed. Query the Gateway's readiness rather than discovering this by submitting. See kvHashAlgo for what the seed governs. Profile/API-surface constraints apply independently; see kvModelProfile and kvExactApiMode.",
+          "description": "KV-cache exact (Tier 1.5) routing mode. Selects the ENDPOINT TOPOLOGY only — the serving framework is chosen independently by kvEngineType, and engine support for each mode is bounded by the per-engine capability matrix in the kvEngineType description (NOT every mode works with every engine). 0 = off. 1 = exact routing over a P/D role-partitioned pool: requires pd_disagg_mode=true (rejected otherwise) and endpoints tagged ep_role 1/2; only ep_role=1 (prefill) endpoints are subscribed and scored, and Tier 1.5 sits between Tier 1 (trie) and Tier 2 (min-load) in the P/D ladder. 2 = reserved and rejected; no NATS implementation is available. 3 = single-pool exact routing: requires mode=4 (fullproxy) and pd_disagg_mode=false (both rejected otherwise); ALL endpoints are subscribed and scored. Mode 3 does NOT reproduce the P/D ladder — there is no Tier-0 P/D session-affinity stage, no Tier-1 P/D trie and no P/D backpressure admission stage on this path; management admission and strict binding enforcement still apply. A Tier-1.5 miss falls back to the rule's own sel selector. vllm/sglang consume ZMQ events; trtllm consumes HTTP-polled events. All enabled exact modes require model_name and a loadable tokenizer. vLLM Exact additionally requires the Gateway process to have been launched with a non-empty LLB_KV_NONE_HASH_SEED of at most 23 bytes, matching the engine's PYTHONHASHSEED: it is a property of the Gateway's deployment, not of this request, so on a Gateway launched without it EVERY vLLM Exact rule is refused and no request body can succeed. Query the Gateway's readiness rather than discovering this by submitting. See kvHashAlgo for what the seed governs. Profile/API-surface constraints apply independently; see kvModelProfile and kvExactApiMode.",
           "type": "integer",
           "format": "int64",
           "default": 0,
@@ -43091,7 +43931,7 @@ func init() {
           "x-nullable": false
         },
         "kvModelProfile": {
-          "description": "ID of the ModelPromptProfile this rule binds to. Naming a profile makes the rule STRICT: the profile must be published in the gateway's profile registry, its alias policy must admit the rule's model_name, its pinned tokenizer artifacts must load and digest-match, and a composed KV-exact binding (model-profile@generation + engine-contract@generation) is allocated at create time \u2014 admission fails closed while no engine-contract registry is available. Absent = legacy profile-less rule (no binding; documented migration behavior). Immutable after create (delete+recreate to change), with ONE sanctioned exception: the migration attach. A replace-POST that names a profile on a live profile-less rule is admitted and re-runs the full strict bring-up (admission checks run BEFORE any mutation, so a refused attach leaves the rule, binding, and data plane untouched; enforcement reports pending until the data-plane contract installs and is acknowledged). The reverse transitions \u2014 dropping the profile or changing it to another \u2014 stay refused, as does any kvExactApiMode change during the attach (raw-string equality; an undeclared apiMode must stay undeclared in the attach POST). CAVEAT operators must be shown: attaching changes the rule's EFFECTIVE surface from the legacy both-surfaces default to the profile's declared supportedApis \u2014 attaching a completions-only profile to a rule that was serving chat traffic narrows the served surface. Scalar by schema \u2014 exactly one profile per rule; arrays are rejected representations. Requires kvExactMode=1 or 3; a profile declaration with Exact disabled is rejected. Snapshot restore has a separate recovery contract: it may preserve an unresolved profile declaration while fencing Exact routing; consult kvexactstatus rather than treating restored storage as a successful fresh admission.",
+          "description": "ID of the ModelPromptProfile this rule binds to. Naming a profile makes the rule STRICT: the profile must be published in the gateway's profile registry, its alias policy must admit the rule's model_name, its pinned tokenizer artifacts must load and digest-match, and a composed KV-exact binding (model-profile@generation + engine-contract@generation) is allocated at create time — admission fails closed while no engine-contract registry is available. Absent = legacy profile-less rule (no binding; documented migration behavior). Immutable after create (delete+recreate to change), with ONE sanctioned exception: the migration attach. A replace-POST that names a profile on a live profile-less rule is admitted and re-runs the full strict bring-up (admission checks run BEFORE any mutation, so a refused attach leaves the rule, binding, and data plane untouched; enforcement reports pending until the data-plane contract installs and is acknowledged). The reverse transitions — dropping the profile or changing it to another — stay refused, as does any kvExactApiMode change during the attach (raw-string equality; an undeclared apiMode must stay undeclared in the attach POST). CAVEAT operators must be shown: attaching changes the rule's EFFECTIVE surface from the legacy both-surfaces default to the profile's declared supportedApis — attaching a completions-only profile to a rule that was serving chat traffic narrows the served surface. Scalar by schema — exactly one profile per rule; arrays are rejected representations. Requires kvExactMode=1 or 3; a profile declaration with Exact disabled is rejected. Snapshot restore has a separate recovery contract: it may preserve an unresolved profile declaration while fencing Exact routing; consult kvexactstatus rather than treating restored storage as a successful fresh admission.",
           "type": "string",
           "x-nullable": false
         },
@@ -43123,6 +43963,15 @@ func init() {
           "format": "int32",
           "default": 0,
           "minimum": 0,
+          "x-nullable": false
+        },
+        "mcp_protocol_version": {
+          "description": "Explicit stateless MCP transport mode. Omitted or empty on create preserves legacy behavior. Omitted replace preserves the existing value; changing it requires delete and recreate. Requires TCP FullProxy (mode=4), round-robin (sel=0) or weighted round-robin (sel=2), and sockMapMode=off. Session affinity, model routing, P/D disaggregation and KV routing are rejected. Configuration readback does not prove request validation or backend delivery.",
+          "type": "string",
+          "enum": [
+            "",
+            "2026-07-28"
+          ],
           "x-nullable": false
         },
         "mode": {
@@ -43394,7 +44243,6 @@ func init() {
             10
           ]
         },
-        "mcp_protocol_version": {"type": "string", "x-nullable": false, "enum": ["", "2026-07-28"], "description": "Explicit stateless MCP transport mode. Omitted create is legacy; omitted replace preserves. Immutable after create: delete and recreate to change. Requires TCP FullProxy mode=4, sel=0 or 2, sockMapMode=off. No session affinity, model, P/D or KV routing."},
         "session_header_name": {
           "description": "Session-key extraction setting for proxy affinity. Use a header name such as X-Session-ID, cookie:NAME for one cookie, query:NAME for one query parameter, or basic-auth for the Basic Authorization username. RR (sel=0) and persistence (sel=3) paths contain handling; a missing usable key follows their RR or IP-based fallback respectively. This setting is not authentication. GET includes it only for those selectors. The server accepts at most 127 UTF-8 bytes and rejects embedded NUL or invalid UTF-8 before changing rule state. This byte limit reserves the terminator in the 128-byte data-plane field; UI validation must count encoded bytes rather than characters. Cross-mode interaction with L7 HTTP_COOKIE remains unresolved.",
           "type": "string",
@@ -43533,6 +44381,48 @@ func init() {
             "off"
           ]
         },
+        "band_fallback_reason": {
+          "description": "Why the gate runs band settings other than the configured ones: a combination the API refuses a rule to declare, reached by inheriting the environment (LLB_FC_*) or by a restore replay, runs on the defaults and is logged once at apply time. sockmap_request - sockMapMode request or both on a rule that is not an AI-gateway service: every band knob at its default (the request direction never reaches the gate). zero_weight - weighted with a zero weight: strict. no_queue - shed queue on with no queue depth: off. none - the configuration runs as configured.",
+          "type": "string",
+          "enum": [
+            "none",
+            "sockmap_request",
+            "zero_weight",
+            "no_queue"
+          ]
+        },
+        "bands": {
+          "description": "Each priority band's live counts and the knobs in force (after any fallback). min_share_pct and floor_units are the floor alone; the critical reserve is reported beside the bands.",
+          "type": "object",
+          "properties": {
+            "critical": {
+              "$ref": "#/definitions/FcBandEffective"
+            },
+            "critical_reserve_pct": {
+              "description": "The critical reserve in percent of the ceiling in force - units no other band may take, even when critical is idle.",
+              "type": "integer",
+              "format": "int32",
+              "x-omitempty": false
+            },
+            "critical_reserve_units": {
+              "description": "The reserve in service units against effective_max_outstanding, as the gate enforces it; 0 without a ceiling.",
+              "type": "integer",
+              "format": "int32",
+              "x-omitempty": false
+            },
+            "sheddable": {
+              "$ref": "#/definitions/FcBandEffective"
+            },
+            "standard": {
+              "$ref": "#/definitions/FcBandEffective"
+            }
+          }
+        },
+        "bands_configured": {
+          "description": "true when any band knob in force differs from its default.",
+          "type": "boolean",
+          "x-omitempty": false
+        },
         "config_source": {
           "description": "Where the objectives and the tenant and key classes this gateway is applying came from. store - the AI key store answered the last read. lkg - the store has not answered since the gateway started and the last-known-good file (aigw-lkg.json under the configuration path) is being served; writes are refused with 503 meanwhile and loxilb_ai_class_config_lkg_intervals_total counts. none - nothing was read (no store configured, or a store that has not answered and no file); every request is standard. The same value on every rule - it is the gateway's, not the rule's.",
           "type": "string",
@@ -43582,6 +44472,14 @@ func init() {
           "description": "Inference requests executing on the pool right now.",
           "type": "integer",
           "format": "int32"
+        },
+        "llmd_headers": {
+          "description": "Whether refusals carry x-llm-d-request-dropped-reason and x-llm-d-inference-ttl may shorten a wait.",
+          "type": "string",
+          "enum": [
+            "on",
+            "off"
+          ]
         },
         "max_outstanding": {
           "description": "Pool-wide ceiling on executing inference requests; 0 is unlimited.",
@@ -43648,11 +44546,67 @@ func init() {
           "description": "true when reservation_held does not list every bucket holding a reservation - more than 64 hold one, or the service has reserved on more buckets than the gateway tracks for it (4096). reservation_held_claims covers the tracked buckets in either case.",
           "type": "boolean"
         },
+        "shed_queue": {
+          "description": "As configured: whether a sheddable request at the ceiling waits in its band instead of 429 admission_shed.",
+          "type": "string",
+          "enum": [
+            "on",
+            "off"
+          ]
+        },
+        "shed_queue_effective": {
+          "description": "The shed queue the gate runs.",
+          "type": "string",
+          "enum": [
+            "on",
+            "off"
+          ]
+        },
         "source": {
           "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default).",
           "type": "object",
           "properties": {
             "adaptive": {
+              "type": "string",
+              "enum": [
+                "rule",
+                "env",
+                "default"
+              ]
+            },
+            "band_min_share_pct": {
+              "type": "string",
+              "enum": [
+                "rule",
+                "env",
+                "default"
+              ]
+            },
+            "band_queue_pct": {
+              "type": "string",
+              "enum": [
+                "rule",
+                "env",
+                "default"
+              ]
+            },
+            "band_wait_ms": {
+              "type": "string",
+              "enum": [
+                "rule",
+                "env",
+                "default"
+              ]
+            },
+            "band_weights": {
+              "type": "string",
+              "enum": [
+                "rule",
+                "env",
+                "default"
+              ]
+            },
+            "critical_reserve_pct": {
               "type": "string",
               "enum": [
                 "rule",
@@ -43700,6 +44654,14 @@ func init() {
                 "default"
               ]
             },
+            "llmd_headers": {
+              "type": "string",
+              "enum": [
+                "rule",
+                "env",
+                "default"
+              ]
+            },
             "max_outstanding": {
               "type": "string",
               "enum": [
@@ -43740,6 +44702,14 @@ func init() {
                 "default"
               ]
             },
+            "shed_queue": {
+              "type": "string",
+              "enum": [
+                "rule",
+                "env",
+                "default"
+              ]
+            },
             "telemetry_stale_ms": {
               "type": "string",
               "enum": [
@@ -43756,7 +44726,23 @@ func init() {
                 "default"
               ]
             },
+            "tenant_wake": {
+              "type": "string",
+              "enum": [
+                "rule",
+                "env",
+                "default"
+              ]
+            },
             "ttft_target_ms": {
+              "type": "string",
+              "enum": [
+                "rule",
+                "env",
+                "default"
+              ]
+            },
+            "wake_policy": {
               "type": "string",
               "enum": [
                 "rule",
@@ -43800,6 +44786,22 @@ func init() {
           "type": "integer",
           "format": "int32"
         },
+        "tenant_wake": {
+          "description": "The order inside one band, as configured (fifo, or rr across tenants).",
+          "type": "string",
+          "enum": [
+            "fifo",
+            "rr"
+          ]
+        },
+        "tenant_wake_effective": {
+          "description": "The order inside one band the gate runs (fifo, or rr across tenants).",
+          "type": "string",
+          "enum": [
+            "fifo",
+            "rr"
+          ]
+        },
         "tenants_active": {
           "description": "Tenants holding a unit or waiting on the pool now, while it holds tenants to a share.",
           "type": "integer",
@@ -43809,6 +44811,22 @@ func init() {
           "type": "integer",
           "format": "int32"
         },
+        "wake_policy": {
+          "description": "The wake policy as configured, by the rule or inherited (source.wake_policy); wake_policy_effective is the one the gate runs. strict - while higher-band demand keeps the ceiling full, a lower band is admitted zero requests; each waiter is refused when its band's wait window ends. weighted - a deficit round robin: while several bands have waiters, each receives its weight's share of wake-ups, exactly over whole rounds (8:3:1 is 8, 3, 1 in every 12); the share is of admissions, not of tokens, GPU time or latency. No band is promoted because it has waited long.",
+          "type": "string",
+          "enum": [
+            "strict",
+            "weighted"
+          ]
+        },
+        "wake_policy_effective": {
+          "description": "The wake policy the gate runs. Differs from wake_policy only when band_fallback_reason is not none.",
+          "type": "string",
+          "enum": [
+            "strict",
+            "weighted"
+          ]
+        },
         "warming_endpoints": {
           "description": "Endpoints inside their warm-up window.",
           "type": "integer",
@@ -43817,9 +44835,40 @@ func init() {
         "warmup_ms": {
           "type": "integer",
           "format": "int32"
+        },
+        "weights_in_use": {
+          "description": "true when wake_policy_effective is weighted and the weights decide the wake; declared weights are stored but not in use otherwise.",
+          "type": "boolean"
         }
       },
       "readOnly": true
+    },
+    "LoadbalanceEntryServiceArgumentsFcEffectiveBands": {
+      "description": "Each priority band's live counts and the knobs in force (after any fallback). min_share_pct and floor_units are the floor alone; the critical reserve is reported beside the bands.",
+      "type": "object",
+      "properties": {
+        "critical": {
+          "$ref": "#/definitions/FcBandEffective"
+        },
+        "critical_reserve_pct": {
+          "description": "The critical reserve in percent of the ceiling in force - units no other band may take, even when critical is idle.",
+          "type": "integer",
+          "format": "int32",
+          "x-omitempty": false
+        },
+        "critical_reserve_units": {
+          "description": "The reserve in service units against effective_max_outstanding, as the gate enforces it; 0 without a ceiling.",
+          "type": "integer",
+          "format": "int32",
+          "x-omitempty": false
+        },
+        "sheddable": {
+          "$ref": "#/definitions/FcBandEffective"
+        },
+        "standard": {
+          "$ref": "#/definitions/FcBandEffective"
+        }
+      }
     },
     "LoadbalanceEntryServiceArgumentsFcEffectiveReservationHeldItems0": {
       "type": "object",
@@ -43853,6 +44902,46 @@ func init() {
       "type": "object",
       "properties": {
         "adaptive": {
+          "type": "string",
+          "enum": [
+            "rule",
+            "env",
+            "default"
+          ]
+        },
+        "band_min_share_pct": {
+          "type": "string",
+          "enum": [
+            "rule",
+            "env",
+            "default"
+          ]
+        },
+        "band_queue_pct": {
+          "type": "string",
+          "enum": [
+            "rule",
+            "env",
+            "default"
+          ]
+        },
+        "band_wait_ms": {
+          "type": "string",
+          "enum": [
+            "rule",
+            "env",
+            "default"
+          ]
+        },
+        "band_weights": {
+          "type": "string",
+          "enum": [
+            "rule",
+            "env",
+            "default"
+          ]
+        },
+        "critical_reserve_pct": {
           "type": "string",
           "enum": [
             "rule",
@@ -43900,6 +44989,14 @@ func init() {
             "default"
           ]
         },
+        "llmd_headers": {
+          "type": "string",
+          "enum": [
+            "rule",
+            "env",
+            "default"
+          ]
+        },
         "max_outstanding": {
           "type": "string",
           "enum": [
@@ -43940,6 +45037,14 @@ func init() {
             "default"
           ]
         },
+        "shed_queue": {
+          "type": "string",
+          "enum": [
+            "rule",
+            "env",
+            "default"
+          ]
+        },
         "telemetry_stale_ms": {
           "type": "string",
           "enum": [
@@ -43956,7 +45061,23 @@ func init() {
             "default"
           ]
         },
+        "tenant_wake": {
+          "type": "string",
+          "enum": [
+            "rule",
+            "env",
+            "default"
+          ]
+        },
         "ttft_target_ms": {
+          "type": "string",
+          "enum": [
+            "rule",
+            "env",
+            "default"
+          ]
+        },
+        "wake_policy": {
           "type": "string",
           "enum": [
             "rule",
@@ -45012,7 +46133,7 @@ func init() {
       }
     },
     "PIIConfigEntry": {
-      "description": "Stored settings, not scanner-readiness evidence. Requires piidetection and an initialized manager. Omission generally preserves values; empty strings do not clear them. Known gaps are documented on the affected fields below. Numeric int64 settings are narrowed to uint32 without upper bounds, and min_body_size <= max_body_size is not validated. Configuration success does not establish encryption, complete-body inspection, or protection.",
+      "description": "Stored settings, not scanner-readiness evidence. Requires piidetection and an initialized manager. Omission generally preserves values; empty strings do not clear them. Known gaps are documented on the affected fields below. Numeric int64 settings are narrowed to uint32 without upper bounds, and min_body_size \u003c= max_body_size is not validated. Configuration success does not establish encryption, complete-body inspection, or protection.",
       "type": "object",
       "properties": {
         "analyzer_url": {

@@ -460,7 +460,7 @@ release capQh1
 chk Q12 "all four waiting requests reached the backend"  "$FC_Q_DEPTH" "$(wait_receipts capQq $FC_Q_DEPTH 20)"
 chk Q13 "in the order they arrived"                    "capQq-1 capQq-2 capQq-3 capQq-4" "$(order capQq)"
 chk Q14 "queued gauge back to zero"                    0 "$(wait_metric loxilb_ai_admission_queued 0 25 "$(svc $PORT_Q)")"
-chk Q15 "the wait histogram counted four resumes"      4 "$(( $(wait_metric loxilb_ai_admission_queue_wait_seconds_count $((wc0+4)) 25 "$(svc $PORT_Q)") - wc0 ))"
+chk Q15 "the wait histogram: one sample per park, four"  4 "$(( $(wait_metric loxilb_ai_admission_queue_wait_seconds_count $((wc0+4)) 25 "$(svc $PORT_Q)") - wc0 ))"
 release_all; wait
 chk Q16 "the four waiting requests answered 200"       "$FC_Q_DEPTH" "$(count_codes "$DQ" 200 | awk -v h=$FC_MAX_OUT '{print $1 - h}')"
 chk Q17 "admitted decisions moved by $((FC_MAX_OUT+FC_Q_DEPTH))" $((FC_MAX_OUT+FC_Q_DEPTH)) "$(( $(wait_metric loxilb_ai_admission_decisions_total $((adm0+FC_MAX_OUT+FC_Q_DEPTH)) 25 "$(svc $PORT_Q)" 'reason="admitted"') - adm0 ))"

@@ -197,6 +197,7 @@ same requests from another angle, so adding it to the request total (or to its
 | `loxilb_proxy_http_responses_by_status_total` | every HTTP/1.1 response the client received, by class: backend replies and the gateway's own answers alike (HTTP/2 not included) | every HTTP/1.1 request in `requests_total` that got a status, any outcome |
 | `loxilb_ai_netid_requests_total{outcome="denied"}` | refusals of a source with a network-identity binding | part of `{outcome="denied"}` |
 | `loxilb_ai_admission_decisions_total` (capacity_shed, queue_full, queue_timeout, drained, draining, no_healthy_capacity, tenant_share) | capacity-gate decisions | the capacity refusals in `{outcome="denied"}` |
+| `loxilb_ai_fc_band_total` | the capacity gate's decisions by priority band | `shed` and `expired` are part of `{outcome="denied"}`; `cancelled` is part of `{outcome="aborted",cause="client"}`; `admitted` requests end in any outcome |
 | `loxilb_pd_admission_shed_total`, `loxilb_pd_admission_overflow_shed_total` | the P/D in-flight 429 (`pd_overloaded`) | part of `{outcome="denied",status="429"}` |
 | `loxilb_ai_rate_limit_hits_total`, `loxilb_ai_token_quota_denied_total` | rate-limit and quota refusals, by reason | part of `{outcome="denied"}` (see the inequality above) |
 | `loxilb_ai_pd_requests_total` | every P/D request's lifecycle, failures included; `{phase="aborted",status="client"}` is the client leaving at any stage, 1:1 with the P/D requests in `{outcome="aborted",cause="client"}` | the P/D requests in `requests_total` |

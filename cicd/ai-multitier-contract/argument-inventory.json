@@ -3,7 +3,7 @@
   "scope": "LoadbalanceEntry fields and AI KV inventory query parameters; not a test-coverage claim",
   "sourceSha256": {
     "swagger-extras.yml": "7d7d336f949d574ff8d71502def05c4b1cd4a8d53e8716dbcc6f878d3a19c132",
-    "swagger.yml": "032af9fc24b2fc53290ba4c9d1ba811e62c5dd141d3787881fabe7a2fd935359"
+    "swagger.yml": "e741aa0beea22528248a777d60e75a009d1b3966fb37870369998b57a8d2143c"
   },
   "fields": [
     {
@@ -638,6 +638,55 @@
       }
     },
     {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_band_min_share_pct",
+      "required": false,
+      "contract": {
+        "description": "Each band's floor, critical:standard:sheddable, in percent of the service ceiling in force (rounded up to whole units, and following the adaptive ceiling). A floor is a guarantee under contention, not a reservation: it binds only while that band has a waiter, so with no demand in the band the other bands take every unit. When a unit frees, the highest-ranked band that is below its floor and has a runnable waiter takes it; when no band is below its floor, the wake policy chooses. HTTP/2 streams and role legs never wait, so on a service that carries only HTTP/2 a floor never binds. Each 0 to 100, at most 100 together (400 naming fc_band_min_share_pct). 0:0:0 (the default) is no floor. A floor is independent of the wake policy and of the weights. Replace and null semantics as fc_band_weights.",
+        "type": "string",
+        "x-nullable": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_band_queue_pct",
+      "required": false,
+      "contract": {
+        "description": "The most of the queue depth each band may hold, critical:standard:sheddable, in percent, rounded up to whole waiters and at least one; 0 is the shared depth. It bounds that band's own occupancy of fc_max_queue_depth and is a ceiling, not a reservation: what a band does not use stays open to every other band, and the queue as a whole never holds more than fc_max_queue_depth. A band at its share is refused with 429 admission_capacity (reason queue_full); nobody is evicted to make room for it. At most 100 together when all three are non-zero. 0:0:0 (the default) is no share. Replace and null semantics as fc_band_weights.",
+        "type": "string",
+        "x-nullable": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_band_wait_ms",
+      "required": false,
+      "contract": {
+        "description": "Each band's wait window, critical:standard:sheddable, in milliseconds, each 0 to 3600000. A band's window is a cap inside the rule's window (fc_max_queue_wait_ms), never above it: a larger value runs at the rule's window, and 0 is the rule's window. A waiter whose window ends is answered 504 admission_queue_timeout. 0:0:0 (the default) resets every band to the queue's window. Replace and null semantics as fc_band_weights.",
+        "type": "string",
+        "x-nullable": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_band_weights",
+      "required": false,
+      "contract": {
+        "description": "The weighted wake's weights, written critical:standard:sheddable (for example 8:3:1): three whole numbers, each 1 to 62, at most 64 together, or 0:0:0 for none (a zero weight beside non-zero ones is refused, 400). Each is the band's credits per round. Declared under strict they are stored and reported as not in use in fc_effective, so a later switch to weighted finds them. A change of weights starts a new round. Not three whole numbers separated by ':' is refused (400). 0:0:0 resets to none; omitted on a replace keeps the stored value; explicit JSON null is rejected.",
+        "type": "string",
+        "x-nullable": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_critical_reserve_pct",
+      "required": false,
+      "contract": {
+        "default": 0,
+        "description": "The only true reservation: the percent of the ceiling in force (rounded up to whole units) that no other band may take, even when critical is idle. It holds on HTTP/2 and role legs as well, which never wait. Together with the standard and sheddable entries of fc_band_min_share_pct at most 100 (400 naming fc_critical_reserve_pct); the critical entry of fc_band_min_share_pct is a separate floor, and critical holds the larger of the two. 0 or omitted on create is none. Replace and null semantics as fc_max_outstanding.",
+        "format": "int32",
+        "maximum": 100,
+        "minimum": 0,
+        "type": "integer",
+        "x-nullable": false
+      }
+    },
+    {
       "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_decode_max_inflight",
       "required": false,
       "contract": {
@@ -697,6 +746,324 @@
           "off"
         ],
         "type": "string"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/band_fallback_reason",
+      "required": false,
+      "contract": {
+        "description": "Why the gate runs band settings other than the configured ones: a combination the API refuses a rule to declare, reached by inheriting the environment (LLB_FC_*) or by a restore replay, runs on the defaults and is logged once at apply time. sockmap_request - sockMapMode request or both on a rule that is not an AI-gateway service: every band knob at its default (the request direction never reaches the gate). zero_weight - weighted with a zero weight: strict. no_queue - shed queue on with no queue depth: off. none - the configuration runs as configured.",
+        "enum": [
+          "none",
+          "sockmap_request",
+          "zero_weight",
+          "no_queue"
+        ],
+        "type": "string"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/bands",
+      "required": false,
+      "contract": {
+        "description": "Each priority band's live counts and the knobs in force (after any fallback). min_share_pct and floor_units are the floor alone; the critical reserve is reported beside the bands.",
+        "type": "object"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/bands/critical",
+      "required": false,
+      "contract": {
+        "description": "One priority band of a model pool as the capacity gate holds it, read back in fc_effective.bands.",
+        "readOnly": true,
+        "type": "object"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/bands/critical/floor_units",
+      "required": false,
+      "contract": {
+        "description": "The floor in service units against effective_max_outstanding, as the gate enforces it: rounded up in the band's favour but never to the whole ceiling for a share under 100, and clamped so the floors and the reserve never exceed the ceiling; 0 without a ceiling.",
+        "format": "int32",
+        "type": "integer",
+        "x-omitempty": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/bands/critical/inflight",
+      "required": false,
+      "contract": {
+        "description": "Service units the band holds right now.",
+        "format": "int32",
+        "type": "integer",
+        "x-omitempty": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/bands/critical/min_share_pct",
+      "required": false,
+      "contract": {
+        "description": "The band's floor in percent of the ceiling in force: a guarantee under contention, not a reservation; it binds only while that band has a waiter.",
+        "format": "int32",
+        "type": "integer",
+        "x-omitempty": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/bands/critical/queue_pct",
+      "required": false,
+      "contract": {
+        "description": "The most of the queue depth the band may hold, in percent; 0 is the shared depth. A ceiling on the band's own occupancy, not a reservation.",
+        "format": "int32",
+        "type": "integer",
+        "x-omitempty": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/bands/critical/queued",
+      "required": false,
+      "contract": {
+        "description": "Requests of the band waiting right now.",
+        "format": "int32",
+        "type": "integer",
+        "x-omitempty": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/bands/critical/wait_ms",
+      "required": false,
+      "contract": {
+        "description": "The band's configured wait window in milliseconds; 0 is the queue's (queue_wait_ms). A window above queue_wait_ms runs at queue_wait_ms.",
+        "format": "int32",
+        "type": "integer",
+        "x-omitempty": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/bands/critical/weight",
+      "required": false,
+      "contract": {
+        "description": "The band's credits per round under the weighted wake; 0 is not set.",
+        "format": "int32",
+        "type": "integer",
+        "x-omitempty": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/bands/critical/weight_pct",
+      "required": false,
+      "contract": {
+        "description": "The weight's share of the round (the sum of the three weights) in percent, rounded to the nearest; 0 when no weight is set.",
+        "format": "int32",
+        "type": "integer",
+        "x-omitempty": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/bands/critical_reserve_pct",
+      "required": false,
+      "contract": {
+        "description": "The critical reserve in percent of the ceiling in force - units no other band may take, even when critical is idle.",
+        "format": "int32",
+        "type": "integer",
+        "x-omitempty": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/bands/critical_reserve_units",
+      "required": false,
+      "contract": {
+        "description": "The reserve in service units against effective_max_outstanding, as the gate enforces it; 0 without a ceiling.",
+        "format": "int32",
+        "type": "integer",
+        "x-omitempty": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/bands/sheddable",
+      "required": false,
+      "contract": {
+        "description": "One priority band of a model pool as the capacity gate holds it, read back in fc_effective.bands.",
+        "readOnly": true,
+        "type": "object"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/bands/sheddable/floor_units",
+      "required": false,
+      "contract": {
+        "description": "The floor in service units against effective_max_outstanding, as the gate enforces it: rounded up in the band's favour but never to the whole ceiling for a share under 100, and clamped so the floors and the reserve never exceed the ceiling; 0 without a ceiling.",
+        "format": "int32",
+        "type": "integer",
+        "x-omitempty": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/bands/sheddable/inflight",
+      "required": false,
+      "contract": {
+        "description": "Service units the band holds right now.",
+        "format": "int32",
+        "type": "integer",
+        "x-omitempty": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/bands/sheddable/min_share_pct",
+      "required": false,
+      "contract": {
+        "description": "The band's floor in percent of the ceiling in force: a guarantee under contention, not a reservation; it binds only while that band has a waiter.",
+        "format": "int32",
+        "type": "integer",
+        "x-omitempty": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/bands/sheddable/queue_pct",
+      "required": false,
+      "contract": {
+        "description": "The most of the queue depth the band may hold, in percent; 0 is the shared depth. A ceiling on the band's own occupancy, not a reservation.",
+        "format": "int32",
+        "type": "integer",
+        "x-omitempty": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/bands/sheddable/queued",
+      "required": false,
+      "contract": {
+        "description": "Requests of the band waiting right now.",
+        "format": "int32",
+        "type": "integer",
+        "x-omitempty": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/bands/sheddable/wait_ms",
+      "required": false,
+      "contract": {
+        "description": "The band's configured wait window in milliseconds; 0 is the queue's (queue_wait_ms). A window above queue_wait_ms runs at queue_wait_ms.",
+        "format": "int32",
+        "type": "integer",
+        "x-omitempty": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/bands/sheddable/weight",
+      "required": false,
+      "contract": {
+        "description": "The band's credits per round under the weighted wake; 0 is not set.",
+        "format": "int32",
+        "type": "integer",
+        "x-omitempty": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/bands/sheddable/weight_pct",
+      "required": false,
+      "contract": {
+        "description": "The weight's share of the round (the sum of the three weights) in percent, rounded to the nearest; 0 when no weight is set.",
+        "format": "int32",
+        "type": "integer",
+        "x-omitempty": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/bands/standard",
+      "required": false,
+      "contract": {
+        "description": "One priority band of a model pool as the capacity gate holds it, read back in fc_effective.bands.",
+        "readOnly": true,
+        "type": "object"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/bands/standard/floor_units",
+      "required": false,
+      "contract": {
+        "description": "The floor in service units against effective_max_outstanding, as the gate enforces it: rounded up in the band's favour but never to the whole ceiling for a share under 100, and clamped so the floors and the reserve never exceed the ceiling; 0 without a ceiling.",
+        "format": "int32",
+        "type": "integer",
+        "x-omitempty": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/bands/standard/inflight",
+      "required": false,
+      "contract": {
+        "description": "Service units the band holds right now.",
+        "format": "int32",
+        "type": "integer",
+        "x-omitempty": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/bands/standard/min_share_pct",
+      "required": false,
+      "contract": {
+        "description": "The band's floor in percent of the ceiling in force: a guarantee under contention, not a reservation; it binds only while that band has a waiter.",
+        "format": "int32",
+        "type": "integer",
+        "x-omitempty": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/bands/standard/queue_pct",
+      "required": false,
+      "contract": {
+        "description": "The most of the queue depth the band may hold, in percent; 0 is the shared depth. A ceiling on the band's own occupancy, not a reservation.",
+        "format": "int32",
+        "type": "integer",
+        "x-omitempty": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/bands/standard/queued",
+      "required": false,
+      "contract": {
+        "description": "Requests of the band waiting right now.",
+        "format": "int32",
+        "type": "integer",
+        "x-omitempty": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/bands/standard/wait_ms",
+      "required": false,
+      "contract": {
+        "description": "The band's configured wait window in milliseconds; 0 is the queue's (queue_wait_ms). A window above queue_wait_ms runs at queue_wait_ms.",
+        "format": "int32",
+        "type": "integer",
+        "x-omitempty": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/bands/standard/weight",
+      "required": false,
+      "contract": {
+        "description": "The band's credits per round under the weighted wake; 0 is not set.",
+        "format": "int32",
+        "type": "integer",
+        "x-omitempty": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/bands/standard/weight_pct",
+      "required": false,
+      "contract": {
+        "description": "The weight's share of the round (the sum of the three weights) in percent, rounded to the nearest; 0 when no weight is set.",
+        "format": "int32",
+        "type": "integer",
+        "x-omitempty": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/bands_configured",
+      "required": false,
+      "contract": {
+        "description": "true when any band knob in force differs from its default.",
+        "type": "boolean",
+        "x-omitempty": false
       }
     },
     {
@@ -784,6 +1151,18 @@
         "format": "int32",
         "type": "integer",
         "x-omitempty": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/llmd_headers",
+      "required": false,
+      "contract": {
+        "description": "Whether refusals carry x-llm-d-request-dropped-reason and x-llm-d-inference-ttl may shorten a wait.",
+        "enum": [
+          "on",
+          "off"
+        ],
+        "type": "string"
       }
     },
     {
@@ -953,6 +1332,30 @@
       }
     },
     {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/shed_queue",
+      "required": false,
+      "contract": {
+        "description": "As configured: whether a sheddable request at the ceiling waits in its band instead of 429 admission_shed.",
+        "enum": [
+          "on",
+          "off"
+        ],
+        "type": "string"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/shed_queue_effective",
+      "required": false,
+      "contract": {
+        "description": "The shed queue the gate runs.",
+        "enum": [
+          "on",
+          "off"
+        ],
+        "type": "string"
+      }
+    },
+    {
       "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/source",
       "required": false,
       "contract": {
@@ -962,6 +1365,66 @@
     },
     {
       "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/source/adaptive",
+      "required": false,
+      "contract": {
+        "enum": [
+          "rule",
+          "env",
+          "default"
+        ],
+        "type": "string"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/source/band_min_share_pct",
+      "required": false,
+      "contract": {
+        "enum": [
+          "rule",
+          "env",
+          "default"
+        ],
+        "type": "string"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/source/band_queue_pct",
+      "required": false,
+      "contract": {
+        "enum": [
+          "rule",
+          "env",
+          "default"
+        ],
+        "type": "string"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/source/band_wait_ms",
+      "required": false,
+      "contract": {
+        "enum": [
+          "rule",
+          "env",
+          "default"
+        ],
+        "type": "string"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/source/band_weights",
+      "required": false,
+      "contract": {
+        "enum": [
+          "rule",
+          "env",
+          "default"
+        ],
+        "type": "string"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/source/critical_reserve_pct",
       "required": false,
       "contract": {
         "enum": [
@@ -1033,6 +1496,18 @@
       }
     },
     {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/source/llmd_headers",
+      "required": false,
+      "contract": {
+        "enum": [
+          "rule",
+          "env",
+          "default"
+        ],
+        "type": "string"
+      }
+    },
+    {
       "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/source/max_outstanding",
       "required": false,
       "contract": {
@@ -1093,6 +1568,18 @@
       }
     },
     {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/source/shed_queue",
+      "required": false,
+      "contract": {
+        "enum": [
+          "rule",
+          "env",
+          "default"
+        ],
+        "type": "string"
+      }
+    },
+    {
       "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/source/telemetry_stale_ms",
       "required": false,
       "contract": {
@@ -1117,7 +1604,31 @@
       }
     },
     {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/source/tenant_wake",
+      "required": false,
+      "contract": {
+        "enum": [
+          "rule",
+          "env",
+          "default"
+        ],
+        "type": "string"
+      }
+    },
+    {
       "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/source/ttft_target_ms",
+      "required": false,
+      "contract": {
+        "enum": [
+          "rule",
+          "env",
+          "default"
+        ],
+        "type": "string"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/source/wake_policy",
       "required": false,
       "contract": {
         "enum": [
@@ -1190,6 +1701,30 @@
       }
     },
     {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/tenant_wake",
+      "required": false,
+      "contract": {
+        "description": "The order inside one band, as configured (fifo, or rr across tenants).",
+        "enum": [
+          "fifo",
+          "rr"
+        ],
+        "type": "string"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/tenant_wake_effective",
+      "required": false,
+      "contract": {
+        "description": "The order inside one band the gate runs (fifo, or rr across tenants).",
+        "enum": [
+          "fifo",
+          "rr"
+        ],
+        "type": "string"
+      }
+    },
+    {
       "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/tenants_active",
       "required": false,
       "contract": {
@@ -1206,6 +1741,30 @@
         "format": "int32",
         "type": "integer",
         "x-omitempty": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/wake_policy",
+      "required": false,
+      "contract": {
+        "description": "The wake policy as configured, by the rule or inherited (source.wake_policy); wake_policy_effective is the one the gate runs. strict - while higher-band demand keeps the ceiling full, a lower band is admitted zero requests; each waiter is refused when its band's wait window ends. weighted - a deficit round robin: while several bands have waiters, each receives its weight's share of wake-ups, exactly over whole rounds (8:3:1 is 8, 3, 1 in every 12); the share is of admissions, not of tokens, GPU time or latency. No band is promoted because it has waited long.",
+        "enum": [
+          "strict",
+          "weighted"
+        ],
+        "type": "string"
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/wake_policy_effective",
+      "required": false,
+      "contract": {
+        "description": "The wake policy the gate runs. Differs from wake_policy only when band_fallback_reason is not none.",
+        "enum": [
+          "strict",
+          "weighted"
+        ],
+        "type": "string"
       }
     },
     {
@@ -1228,6 +1787,15 @@
       }
     },
     {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_effective/weights_in_use",
+      "required": false,
+      "contract": {
+        "description": "true when wake_policy_effective is weighted and the weights decide the wake; declared weights are stored but not in use otherwise.",
+        "type": "boolean",
+        "x-omitempty": false
+      }
+    },
+    {
       "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_ep_max_inflight",
       "required": false,
       "contract": {
@@ -1245,6 +1813,20 @@
       "required": false,
       "contract": {
         "description": "on puts X-Loxilb-Admission-Inflight, X-Loxilb-Admission-Queued and X-Loxilb-Admission-Limit on the head of every admitted inference response (HTTP/1 and HTTP/2, streamed ones included), the same three a capacity refusal carries: the pool's executing units and waiting requests as the response head goes out, and the service ceiling in force (0 is none). Fields of those names from the backend are replaced. off leaves responses as the backend sent them; inherit, or omitted on create, runs on the process default (LLB_FC_EXPOSE_HEADERS). Refused (400) with sockMapMode both or response, where the gateway never sees the response. Replace and null semantics as fc_mode.",
+        "enum": [
+          "on",
+          "off",
+          "inherit"
+        ],
+        "type": "string",
+        "x-nullable": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_llmd_headers",
+      "required": false,
+      "contract": {
+        "description": "on: adds x-llm-d-request-dropped-reason to the admission refusals (HTTP/1.1 answers and HTTP/2 stream refusals); lets a valid x-llm-d-inference-ttl on an HTTP/1.1 request (Go duration syntax, positive, held at one day) shorter than the window that applies shorten that request's wait, never extend it, where a wait the client's TTL ended is answered 429 admission_ttl_expired and a wait a window of the rule ended stays 504 admission_queue_timeout; and forwards the gateway's resolved values in x-llm-d-inference-objective (the class the request was admitted as) and x-llm-d-inference-fairness-id (the authenticated tenant, none for a request without one), removing the client's copy of either name and of the deprecated x-gateway-inference-* names, on HTTP/1.1 and HTTP/2 alike (on a chunked HTTP/1.1 request the copies are removed and nothing is written; HTTP/2 streams never wait, so the TTL does not apply to them). off leaves all of it out: the TTL header is ignored and every header is forwarded as sent. inherit, or omitted on create, runs on the process default (LLB_FC_LLMD_HEADERS, else off). Replace and null semantics as fc_mode.",
         "enum": [
           "on",
           "off",
@@ -1322,6 +1904,20 @@
       }
     },
     {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_shed_queue",
+      "required": false,
+      "contract": {
+        "description": "off refuses a sheddable request at the ceiling at once with 429 admission_shed; on lets it wait in its band, and when the queue is full an arriving request of any higher band (standard or critical) evicts the youngest sheddable waiter, which is answered 429 admission_shed. on is refused (400) while the queue depth in force (fc_max_queue_depth, else LLB_FC_MAX_QUEUE_DEPTH) is 0. inherit, or omitted on create, runs on the process default (LLB_FC_SHED_QUEUE, else off). Replace and null semantics as fc_mode.",
+        "enum": [
+          "on",
+          "off",
+          "inherit"
+        ],
+        "type": "string",
+        "x-nullable": false
+      }
+    },
+    {
       "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_telemetry_stale_ms",
       "required": false,
       "contract": {
@@ -1348,6 +1944,20 @@
       }
     },
     {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_tenant_wake",
+      "required": false,
+      "contract": {
+        "description": "The order inside one band. fifo wakes the oldest runnable waiter and does not tell tenants apart; rr rotates across the tenants with a runnable waiter in the band, oldest first inside one tenant, each band keeping its own place in the rotation. rr needs no fc_tenant_max_share_pct. inherit, or omitted on create, runs on the process default (LLB_FC_TENANT_WAKE, else fifo). Replace and null semantics as fc_mode.",
+        "enum": [
+          "fifo",
+          "rr",
+          "inherit"
+        ],
+        "type": "string",
+        "x-nullable": false
+      }
+    },
+    {
       "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_ttft_target_ms",
       "required": false,
       "contract": {
@@ -1357,6 +1967,20 @@
         "maximum": 3600000,
         "minimum": 0,
         "type": "integer",
+        "x-nullable": false
+      }
+    },
+    {
+      "id": "swagger.yml#/definitions/LoadbalanceEntry/serviceArguments/fc_wake_policy",
+      "required": false,
+      "contract": {
+        "description": "Which priority band a freed service unit wakes when requests of several bands wait (critical, standard, sheddable: the class the request's objective resolved to). Bands act only with fc_mode enforce, below the ceiling every band is admitted at once, and HTTP/2 streams and P/D role legs never queue (for them the band decides the refusal only). strict wakes the highest band with a runnable waiter: while higher-band demand keeps the ceiling full, a lower band is admitted zero requests, and each waiter is refused when its band's wait window ends. weighted is a deficit round robin by fc_band_weights: each band with a runnable waiter gets its weight in credits per round, the highest band with credit left is served first, one wake costs one credit, and a band with no runnable waiter forfeits its turn; over whole rounds the wake-ups split exactly as the weights do (8:3:1 is 8 critical, 3 standard, 1 sheddable in every 12). The share is of admissions, not of tokens or latency, and a floor is served before the round. weighted needs every weight at least 1 (400 otherwise). inherit, or omitted on create, runs on the process default (LLB_FC_WAKE_POLICY, else strict). Refused (400) beside sockMapMode both or request on a rule that is not an AI-gateway service, as is every band knob other than its default. Such a rule that INHERITS weighted (or another band setting it would be refused for declaring) runs every band knob at its default instead, logs one warning at apply time and reads back fc_effective.wake_policy_effective with band_fallback_reason; so does weighted without a weight for every band. A change of policy starts a new round and loses no waiter. Replace and null semantics as fc_mode.",
+        "enum": [
+          "strict",
+          "weighted",
+          "inherit"
+        ],
+        "type": "string",
         "x-nullable": false
       }
     },

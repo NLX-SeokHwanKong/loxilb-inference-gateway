@@ -317,3 +317,27 @@ func TestObjectiveListSaysTheStoreAnswered(t *testing.T) {
 			got.Source, got.StoreReachable, got.StoreLastRead, before)
 	}
 }
+
+// A file of the current version written before the rule knobs of the
+// priority bands existed carries nothing about them (they live on the
+// load-balancer rules, not here) and is read as it was: the bands add
+// nothing a file must hold.
+func TestClassLKGCurrentVersionWithoutBandContent(t *testing.T) {
+	_, dir := classFixture(t)
+	v2 := `{"version":2,"source_timestamp":"2023-11-14T22:15:00Z",` +
+		`"objectives":[{"name":"realtime","priority":10}],` +
+		`"tenants":{"t1":{"priority_class":"critical"}},"keys":{},` +
+		`"tenant_limits":[{"tenant":"t1","rps":25,"tokens_per_min":120000,"burst_pct":40}],` +
+		`"tenant_model_limits":[],"rate_limit_defaults":[]}`
+	if err := os.WriteFile(filepath.Join(dir, ClassLKGFileName), []byte(v2), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	next := startedFromFile(t, dir)
+	snap := next.Classes()
+	if _, ok := snap.Objectives["realtime"]; !ok || snap.Tenants["t1"].PriorityClass != "critical" {
+		t.Fatalf("the file's classes were not read: %+v", snap)
+	}
+	if rps, _, _, err := next.GetTenantRateLimit("t1"); err != nil || rps != 25 {
+		t.Errorf("the file's limits were not served: %d, %v", rps, err)
+	}
+}

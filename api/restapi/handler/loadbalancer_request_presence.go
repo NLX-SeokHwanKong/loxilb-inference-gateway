@@ -294,6 +294,90 @@ func (p *loadbalancerRequestPresence) validateFcGateFields(
 	return nil
 }
 
+// fcBandKeys are the priority bands' rule fields.
+var fcBandKeys = []string{"fc_wake_policy", "fc_band_weights", "fc_band_min_share_pct",
+	"fc_critical_reserve_pct", "fc_band_wait_ms", "fc_band_queue_pct", "fc_shed_queue",
+	"fc_tenant_wake", "fc_llmd_headers"}
+
+// validateFcBandFields checks the priority bands' rule fields on their own,
+// as validateFcGateFields does: null is refused, each switch is one of its
+// words and each triple is three whole numbers within its range. The rules
+// that span the fields run in the rule layer on the merged declaration.
+func (p *loadbalancerRequestPresence) validateFcBandFields(
+	src *models.LoadbalanceEntryServiceArguments,
+) error {
+	for _, key := range fcBandKeys {
+		if p.svcIsNull(key) {
+			return fmt.Errorf("%s must not be null", key)
+		}
+	}
+	if src == nil {
+		return nil
+	}
+	if _, err := cmn.FcWakePolicyToRule(src.FcWakePolicy); err != nil {
+		return err
+	}
+	if _, err := cmn.FcSwitchToRule("fc_shed_queue", src.FcShedQueue); err != nil {
+		return err
+	}
+	if _, err := cmn.FcTenantWakeToRule(src.FcTenantWake); err != nil {
+		return err
+	}
+	if _, err := cmn.FcSwitchToRule("fc_llmd_headers", src.FcLlmdHeaders); err != nil {
+		return err
+	}
+	for _, t := range []struct {
+		name  string
+		v     string
+		limit uint32
+	}{
+		{"fc_band_weights", src.FcBandWeights, cmn.FcBandWeightMax},
+		{"fc_band_min_share_pct", src.FcBandMinSharePct, cmn.FcBandPctMax},
+		{"fc_band_wait_ms", src.FcBandWaitMs, cmn.FcBandWaitMsMax},
+		{"fc_band_queue_pct", src.FcBandQueuePct, cmn.FcBandPctMax},
+	} {
+		if _, err := cmn.FcBandTripleParse(t.name, t.v, t.limit); err != nil {
+			return err
+		}
+	}
+	if src.FcCriticalReservePct < 0 || src.FcCriticalReservePct > cmn.FcBandPctMax {
+		return fmt.Errorf("fc_critical_reserve_pct must be within 0..%d", cmn.FcBandPctMax)
+	}
+	return nil
+}
+
+// applyFcBand copies the priority bands' rule fields with their presence
+// bits, as applyFcGate does for the rest of the gate.
+func (p *loadbalancerRequestPresence) applyFcBand(
+	dst *cmn.LbServiceArg,
+	src *models.LoadbalanceEntryServiceArguments,
+) {
+	for _, f := range []struct {
+		key     string
+		v       string
+		dst     *string
+		present *bool
+	}{
+		{"fc_wake_policy", src.FcWakePolicy, &dst.FcWakePolicy, &dst.FcWakePolicyPresent},
+		{"fc_band_weights", src.FcBandWeights, &dst.FcBandWeights, &dst.FcBandWeightsPresent},
+		{"fc_band_min_share_pct", src.FcBandMinSharePct, &dst.FcBandMinSharePct, &dst.FcBandMinSharePctPresent},
+		{"fc_band_wait_ms", src.FcBandWaitMs, &dst.FcBandWaitMs, &dst.FcBandWaitMsPresent},
+		{"fc_band_queue_pct", src.FcBandQueuePct, &dst.FcBandQueuePct, &dst.FcBandQueuePctPresent},
+		{"fc_shed_queue", src.FcShedQueue, &dst.FcShedQueue, &dst.FcShedQueuePresent},
+		{"fc_tenant_wake", src.FcTenantWake, &dst.FcTenantWake, &dst.FcTenantWakePresent},
+		{"fc_llmd_headers", src.FcLlmdHeaders, &dst.FcLlmdHeaders, &dst.FcLlmdHeadersPresent},
+	} {
+		if p.svcPresent(f.key) || f.v != "" {
+			*f.dst = f.v
+			*f.present = p.svcPresent(f.key)
+		}
+	}
+	if p.svcPresent("fc_critical_reserve_pct") || src.FcCriticalReservePct != 0 {
+		dst.FcCriticalReservePct = uint32(src.FcCriticalReservePct)
+		dst.FcCriticalReservePctPresent = p.svcPresent("fc_critical_reserve_pct")
+	}
+}
+
 // validateHalfCloseMode checks half_close_mode on its own, as
 // validateFcGateFields does for the gate: null is refused and the value is
 // one of its words (the rule layer checks again for callers without it).

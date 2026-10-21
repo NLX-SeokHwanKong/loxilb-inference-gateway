@@ -170,10 +170,10 @@ typedef struct proxy_metrics_snapshot {
     /* Terminators the graceful-[DONE] sweep wrote for a silent decode engine (the mechanism behind decode/truncated). TAIL-APPEND ONLY — same three-way lockstep. */
     uint64_t pd_terminator_synthesized;
 
-    /* Reaper ends handed to the health thread because the owner worker could not take them (F-13). TAIL-APPEND ONLY — same three-way lockstep. */
+    /* Clients a reaper ended from the health thread because their owner worker could not be handed the end (F-13). TAIL-APPEND ONLY — same three-way lockstep. */
     uint64_t reap_fallback;
 
-    /* Requests with no usable Host at dispatch on a listener whose pools name models (ROUTE-01's second defence). TAIL-APPEND ONLY — same three-way lockstep. */
+    /* Requests that reached dispatch with no usable Host on a listener whose pools name models (ROUTE-01's second defence). TAIL-APPEND ONLY — same three-way lockstep. */
     uint64_t route_host_missing;
 } proxy_metrics_snapshot_t;
 
@@ -229,11 +229,14 @@ int proxy_get_qos_stats(proxy_qos_svc_stat_t *out, int max) {
  * second) and must be updated in the same commit as the other two.
  */
 #define PROXY_FC_ROLES 3
-#define PROXY_FC_REASONS 13
+#define PROXY_FC_REASONS 14
 #define PROXY_FC_POOL_LEN 64
 #define PROXY_FC_QWAIT_BUCKETS 8
 #define PROXY_FC_LIMITS 8
 #define PROXY_FC_ADAPT_LIMITS 3
+#define PROXY_FC_BAND_LIMITS 9
+#define PROXY_FC_BANDS 3
+#define PROXY_FC_BAND_OUTCOMES 5
 
 typedef struct proxy_fc_svc_stat {
     uint32_t xip;
@@ -272,22 +275,46 @@ typedef struct proxy_fc_svc_stat {
     uint8_t  expose_headers;
     uint8_t  src_expose;
     uint32_t tenant_slots;
+    uint32_t band_inflight[PROXY_FC_BANDS];
+    uint32_t band_queued[PROXY_FC_BANDS];
+    uint32_t band_wait_ms[PROXY_FC_BANDS];
+    uint8_t  wake_policy;
+    uint8_t  shed_queue;
+    uint8_t  tenant_wake;
+    uint8_t  llmd_headers;
+    uint8_t  band_weight[PROXY_FC_BANDS];
+    uint8_t  band_min_share_pct[PROXY_FC_BANDS];
+    uint8_t  band_queue_pct[PROXY_FC_BANDS];
+    uint8_t  bands;
+    uint8_t  src_band[PROXY_FC_BAND_LIMITS];
+    uint8_t  band_fallback;
+    uint8_t  wake_policy_cfg;
+    uint8_t  shed_queue_cfg;
+    uint8_t  tenant_wake_cfg;
+    uint8_t  critical_reserve_pct;          /* units no other band may take, % of the ceiling in force */
+    uint8_t  band_pad[4];
+    uint64_t band_outcome[PROXY_FC_BANDS][PROXY_FC_BAND_OUTCOMES];
 } proxy_fc_svc_stat_t;
 /* Pinned to the layout in sockproxy_metrics.h. */
-_Static_assert(sizeof(proxy_fc_svc_stat_t) == 376, "proxy_fc_svc_stat_t size");
+_Static_assert(sizeof(proxy_fc_svc_stat_t) == 568, "proxy_fc_svc_stat_t size");
 _Static_assert(offsetof(proxy_fc_svc_stat_t, decisions) == 40, "decisions offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, pool) == 144, "pool offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, queued) == 208, "queued offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, qwait_bucket) == 224, "qwait_bucket offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, qwait_count) == 296, "qwait_count offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, telemetry_stale_ms) == 304, "telemetry_stale_ms offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, src) == 308, "src offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, effective_max_outstanding) == 320, "effective_max_outstanding offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, adaptive) == 332, "adaptive offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, warming_eps) == 338, "warming_eps offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, adapt_down) == 344, "adapt_down offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, tenants_active) == 360, "tenants_active offset");
-_Static_assert(offsetof(proxy_fc_svc_stat_t, tenant_slots) == 368, "tenant_slots offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, pool) == 152, "pool offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, queued) == 216, "queued offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, qwait_bucket) == 232, "qwait_bucket offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, qwait_count) == 304, "qwait_count offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, telemetry_stale_ms) == 312, "telemetry_stale_ms offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, src) == 316, "src offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, effective_max_outstanding) == 328, "effective_max_outstanding offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, adaptive) == 340, "adaptive offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, warming_eps) == 346, "warming_eps offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, adapt_down) == 352, "adapt_down offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, tenants_active) == 368, "tenants_active offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, tenant_slots) == 376, "tenant_slots offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, band_inflight) == 380, "band_inflight offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, wake_policy) == 416, "wake_policy offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, src_band) == 430, "src_band offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, band_fallback) == 439, "band_fallback offset");
+_Static_assert(offsetof(proxy_fc_svc_stat_t, band_outcome) == 448, "band_outcome offset");
 
 __attribute__((weak))
 int proxy_get_fc_stats(proxy_fc_svc_stat_t *out, int max) {
