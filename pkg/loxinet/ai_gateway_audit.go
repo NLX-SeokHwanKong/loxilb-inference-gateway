@@ -538,21 +538,19 @@ func aiTokenQuotaCode(errorCode string) bool {
 // from a client that walked away. Every end code (prom.AIEndCodes, the
 // codes of an answer the client did not get whole) has its reason here:
 // the client's three are client_abort, a cut by a cap or a reaper is a
-// timeout, and the engine dying or the rule's listener going ended the
-// backend connection under the answer.
-//
-// listener_closed is backend_conn as the closest available reason, not the
-// true one: the cause is the gateway (the metric reads cause="gateway"), and
-// no backend failed. The vocabulary is closed; a gateway_shutdown reason is
-// the follow-up for its next revision.
+// timeout, the engine dying ended the backend connection under the answer,
+// and the rule's listener going away is the gateway's own doing,
+// gateway_shutdown (the metric reads cause="gateway"; no backend failed).
 func aiCompleteReason(status int, errorCode string) audit.Reason {
 	switch errorCode {
 	case "client_abort", "client_stall", "client_abort_before_answer":
 		return audit.ReasonClientAbort
 	case "timeout", "max_stream_duration_exceeded", "pd_decode_stream_timeout", "pd_idle_timeout":
 		return audit.ReasonTimeout
-	case "backend_conn", "backend_died", "listener_closed":
+	case "backend_conn", "backend_died":
 		return audit.ReasonBackendConn
+	case "listener_closed":
+		return audit.ReasonGatewayShutdown
 	case "backend_tls":
 		return audit.ReasonBackendTLS
 	case "upstream_error":

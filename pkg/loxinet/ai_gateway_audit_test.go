@@ -279,6 +279,14 @@ func TestAICompleteReasonCoversEveryEndCode(t *testing.T) {
 			t.Errorf("aiCompleteReason(200, %q) = %q, want %q", code, r, w)
 		}
 	}
+	// The gateway's own cut, its listener going away, is its own reason: no
+	// backend failed, and a SIEM rule on backend_conn must not count it.
+	if r := aiCompleteReason(200, "listener_closed"); r != audit.ReasonGatewayShutdown {
+		t.Errorf("aiCompleteReason(200, listener_closed) = %q, want %q", r, audit.ReasonGatewayShutdown)
+	}
+	if !audit.ValidReason(audit.ReasonGatewayShutdown) {
+		t.Error("gateway_shutdown is not in the vocabulary")
+	}
 }
 
 // A completion record has nowhere to put a prompt or a response, and this
