@@ -545,7 +545,7 @@ var (
 	aiPDRequestsTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "loxilb_ai_pd_requests_total",
-			Help: "Total P/D disaggregation requests by model, phase, and status.",
+			Help: "Total P/D disaggregation requests by model, phase, and status. phase=\"complete\",status=\"success\" is a decode answer the engine ended at the HTTP level (its last chunk, its Content-Length satisfied, or its EOF on an unframed answer) and the client received whole: HTTP completion, not semantic completion of the stream. The gateway does not require a finish_reason, a usage object or the SSE [DONE] event, and a stream the engine ended cleanly without them is a success here; a stream the gateway ended is decode/truncated, one the engine broke is decode/error.",
 		},
 		[]string{"model", "phase", "status"},
 	)

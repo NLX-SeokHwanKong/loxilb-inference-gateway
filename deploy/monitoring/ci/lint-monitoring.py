@@ -354,6 +354,8 @@ def lazy_increase_violation(expr, activation):
 # "All" also matches the empty label (a refusal before the key resolved),
 # which an alternation of discovered values never did.
 FILTER_LABELS = (("model", "$model"), ("tenant", "$tenant"))
+# What a panel says when one of the two selections does not reach it.
+SCOPE_MARK = {"model": "(all models)", "tenant": "(all tenants)"}
 SELECTOR_TOKEN = re.compile(r"((?:loxilb|doca|aictrl)_[a-z0-9_]+)(\{[^}]*\})?")
 
 
@@ -376,7 +378,8 @@ def filter_violations(panel, tvars, exporter):
     if not wanted:
         return []
     msgs = []
-    filterable = known = False
+    known = False
+    reach = {lab: False for lab, _ in wanted}
     for t in panel.get("targets") or []:
         for m in SELECTOR_TOKEN.finditer(t.get("expr") or ""):
             labels = family_labels(m.group(1), exporter)
@@ -386,16 +389,31 @@ def filter_violations(panel, tvars, exporter):
             selector = m.group(2) or ""
             for lab, var in wanted:
                 if lab in labels:
-                    filterable = True
+                    reach[lab] = True
                     if var not in selector:
                         msgs.append(f"selects {m.group(1)} without {var}, so "
                                     f"the {lab} filter does not reach it")
+    filterable = any(reach.values())
     title = panel.get("title") or ""
     if known and not filterable and "(global)" not in title:
         msgs.append("queries no family the dashboard's filters reach; say "
                     "(global) in its title")
     if filterable and "(global)" in title:
         msgs.append("says (global) but the dashboard's filters reach it")
+    # A panel one filter reaches and the other does not (a model-only
+    # family: the stream gauge, the P/D lifecycle, timing, fallback, tier and
+    # session families) shows every tenant's value whatever the tenant
+    # picker says, and read beside a tenant selection it passes B's stream
+    # off as A's (QA 2026-10-21). Its title says which selection does not
+    # reach it, and a panel the selection reaches never says it.
+    for lab, _ in wanted:
+        mark = SCOPE_MARK[lab]
+        if filterable and not reach[lab] and mark not in title:
+            msgs.append(f"queries no family with a {lab} label, so the "
+                        f"{lab} filter does not reach it; say {mark} in its "
+                        f"title")
+        if reach[lab] and mark in title:
+            msgs.append(f"says {mark} but the {lab} filter reaches it")
     return sorted(set(msgs))
 
 
@@ -688,6 +706,64 @@ def lint_scrape_cluster(mon_dir, rep):
                                   f"'{ext.group(1)}'")
 
 
+# MON-04: the first event of a series is an increase. A counter series exists
+# from its first increment, so the first scrape of it already reads 1 and
+# rate() and increase() see no 0 -> 1 step: the first error of a new (model,
+# tenant) pair, or of a fresh process, was invisible to every rate panel and
+# alert while the raw counter read 1 (QA 2026-10-21). Seeding cannot reach
+# it: the series a first error creates is born with it. The exporter stamps
+# every counter with its creation time and the protobuf exposition carries
+# the stamp (the text formats do not); under
+# --enable-feature=created-timestamp-zero-ingestion Prometheus writes a 0 at
+# that instant before the series' first sample. So the loxilb scrape job
+# prefers PrometheusProto, and the compose file starts Prometheus with the
+# flag. Either one missing returns the first event to invisibility, silently.
+CT_FLAG = "--enable-feature=created-timestamp-zero-ingestion"
+
+
+def loxilb_job_text(text):
+    """The loxilb scrape job's block of prometheus.yml with its comment lines
+    removed, or None when the job is not there."""
+    m = re.search(r"^\s*- job_name:\s*loxilb\s*$", text, re.M)
+    if not m:
+        return None
+    nxt = re.search(r"^\s*- job_name:", text[m.end():], re.M)
+    job = text[m.end(): m.end() + nxt.start()] if nxt else text[m.end():]
+    return "\n".join(l for l in job.splitlines() if not l.lstrip().startswith("#"))
+
+
+def lint_first_event_contract(mon_dir, rep):
+    path = os.path.join(mon_dir, "prometheus", "prometheus.yml")
+    try:
+        text = open(path, encoding="utf-8").read()
+    except OSError:
+        return
+    job = loxilb_job_text(text)
+    if job is None:
+        rep.err("prometheus.yml", "the loxilb scrape job not found")
+    else:
+        m = re.search(r"^\s*scrape_protocols:\s*\[\s*([A-Za-z0-9.]+)", job, re.M)
+        if not m or m.group(1) != "PrometheusProto":
+            rep.err("prometheus.yml", "the loxilb scrape job must list "
+                                      "PrometheusProto first in "
+                                      "scrape_protocols: the created "
+                                      "timestamps that make a series' first "
+                                      "event an increase travel in the "
+                                      "protobuf exposition only (MON-04)")
+    path = os.path.join(mon_dir, "docker-compose.yml")
+    try:
+        text = open(path, encoding="utf-8").read()
+    except OSError:
+        return
+    live = "\n".join(l for l in text.splitlines()
+                     if not l.lstrip().startswith("#"))
+    if CT_FLAG not in live:
+        rep.err("docker-compose.yml", f"the prometheus service must start "
+                                      f"with {CT_FLAG}: without it the "
+                                      f"first event of a series is invisible "
+                                      f"to rate() and increase() (MON-04)")
+
+
 # The MCP module ships its own copy of the alert rules (it is released on its
 # own), which drifted from the default package's: an alert removed from one
 # lived on in the other, and a description fixed in one stayed wrong in the
@@ -739,6 +815,7 @@ def main():
     lint_rules(mon_dir, exporter, title_to_panels, rep, activation)
     lint_mcp_rules_copy(repo_root, mon_dir, rep)
     lint_scrape_cluster(mon_dir, rep)
+    lint_first_event_contract(mon_dir, rep)
 
     promtool = find_promtool(args.promtool)
     if promtool:

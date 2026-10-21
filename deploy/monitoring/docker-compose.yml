@@ -26,6 +26,16 @@ services:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus
       - --storage.tsdb.retention.time=15d
+      # The first event of a series is an increase (MON-04): the exporter
+      # stamps every counter with its creation time, the loxilb scrape job
+      # reads the protobuf exposition that carries it (prometheus.yml), and
+      # this flag makes Prometheus write a 0 at that instant before the
+      # series' first sample. Without it the first error of a new (model,
+      # tenant) pair, or of a fresh process, is invisible to rate() and
+      # increase(): the raw counter reads 1 while every rate panel and alert
+      # reads 0 or No data. Experimental in Prometheus 2.53 (since 2.50);
+      # lint-monitoring.py fails this file without it.
+      - --enable-feature=created-timestamp-zero-ingestion
       # Prometheus has no authentication of its own; bind it to loopback so
       # only same-host consumers (Grafana on the host network, the sweep and
       # drill tooling) can reach it. To expose it beyond this host, front it
