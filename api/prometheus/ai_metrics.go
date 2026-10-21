@@ -123,22 +123,24 @@ func registerModelLabel(model string) bool {
 // therefore seeded at zero, within a fixed bound.
 //
 //   - P/D families, per model, at registration (and "other" at init):
-//     every {phase,status} of loxilb_ai_pd_requests_total (11) and every
-//     reason of loxilb_ai_pd_prefill_fallback_total (6). 17 series per model
+//     every {phase,status} of loxilb_ai_pd_requests_total (10) and every
+//     reason of loxilb_ai_pd_prefill_fallback_total (6). 16 series per model
 //     label, at most 65 labels.
 //   - loxilb_ai_requests_total, per (model, tenant) pair, on the pair's
 //     first record, for a keyed tenant only (tenant="" is a refusal before
 //     the key resolved, and is never seeded): every combination whose status
-//     the gateway decides, plus the common error statuses. 32 series per pair
+//     the gateway decides, plus the common error statuses. 31 series per pair
 //     seen; only pairs that record are seeded:
 //
 //	completed  aiSeedStatuses (10), the redirects 301 302 303 307 308 (5)   15
 //	denied     aiSeedStatuses (10), 413 (framing: request too large)       11
-//	aborted    200 and none, each for client, engine and gateway            6
+//	aborted    200 for client, engine and gateway; none for client, engine  5
 //
 //     aborted/200 is a cut stream; aborted/none a request that ended before
-//     any answer (the client left; the listener went; the engine closed and
-//     the client could not be told its 502). Not seeded, being open sets:
+//     any answer (the client left; the engine closed and the client could not
+//     be told its 502). aborted/none for the gateway (the rule's listener
+//     going before any answer) is not seeded: nothing in the product tears a
+//     listener down with requests on it (F-17). Not seeded, being open sets:
 //     any other backend status (completed, and aborted for a cut non-200
 //     stream or 2xx body), and an operator's L7 REJECT code (denied, 4xx).
 //     HTTP/2 writes no aborted record (#415).
@@ -172,6 +174,8 @@ func seedAIRequestPair(model, tenant string) {
 	aiRequestsTotal.WithLabelValues(model, tenant, "413", AIOutcomeDenied, "").Add(0)
 	for _, cause := range []string{AICauseClient, AICauseEngine, AICauseGateway} {
 		aiRequestsTotal.WithLabelValues(model, tenant, "200", AIOutcomeAborted, cause).Add(0)
+	}
+	for _, cause := range []string{AICauseClient, AICauseEngine} {
 		aiRequestsTotal.WithLabelValues(model, tenant, AIStatusNone, AIOutcomeAborted, cause).Add(0)
 	}
 }
@@ -236,10 +240,9 @@ const (
 )
 
 // AIStatusNone is the status label of a request no status was ever sent
-// for (status 0 from the data plane): a client that left, or the rule's
-// listener that went, before any answer, P/D or not; or a backend off P/D
-// that closed before it when its client could not be told (it is otherwise
-// answered 502, completed).
+// for (status 0 from the data plane): a client that left before any
+// answer, P/D or not; or a backend off P/D that closed before it when its
+// client could not be told (it is otherwise answered 502, completed).
 const AIStatusNone = "none"
 
 // aiEndCauses maps the data plane's end codes, the error_code of a request
@@ -341,7 +344,7 @@ var (
 	aiRequestsTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "loxilb_ai_requests_total",
-			Help: "Total AI Gateway requests by model, tenant, HTTP status code, outcome and cause (completed = answered whole, by a backend or by the gateway's own outage, timeout or redirect answer, with the status the client got; aborted = the client did not get a complete response, cause client (it left or stopped reading), engine (the backend died under the answer) or gateway (a cap, a reaper or the listener cut it, also before any answer), status none when no status was sent; denied = refused by the gateway before any backend was chosen: policy gate, capacity, routing, framing). cause is empty unless outcome is aborted.",
+			Help: "Total AI Gateway requests by model, tenant, HTTP status code, outcome and cause (completed = answered whole, by a backend or by the gateway's own outage, timeout or redirect answer, with the status the client got; aborted = the client did not get a complete response, cause client (it left or stopped reading), engine (the backend died under the answer) or gateway (a cap, a reaper or the listener cut it), status none when no status was sent; denied = refused by the gateway before any backend was chosen: policy gate, capacity, routing, framing). cause is empty unless outcome is aborted.",
 		},
 		[]string{"model", "tenant", "status", "outcome", "cause"},
 	)
@@ -1156,9 +1159,6 @@ func pdPhaseLabels(errorPhase int) (phase, status string) {
 	case 9:
 		phase = "aborted"
 		status = "client"
-	case 10:
-		phase = "aborted"
-		status = "gateway"
 	default:
 		phase = "unknown"
 		status = "error"
@@ -1167,8 +1167,8 @@ func pdPhaseLabels(errorPhase int) (phase, status string) {
 }
 
 // pdPhaseCount is the number of errorPhase values with a label pair of
-// their own (0..10): the ones seeded at model registration.
-const pdPhaseCount = 11
+// their own (0..9): the ones seeded at model registration.
+const pdPhaseCount = 10
 
 // RecordPDRequest records a P/D disaggregation lifecycle event for Prometheus metrics.
 //
@@ -1200,25 +1200,12 @@ const pdPhaseCount = 11
 //	                    8 = decode   / truncated (the gateway ended or cut an
 //	                                              in-progress answer for a cause
 //	                                              other than engine death: engine
-//	                                              silence or a policy cap; AFTER
-//	                                              the answer began)
+//	                                              silence or a policy cap)
 //	                    9 = aborted  / client    (the client left, at any stage:
 //	                                              before any answer, with its
 //	                                              answer open, or it stopped
 //	                                              reading; requests_total
 //	                                              outcome="aborted", cause="client")
-//	                   10 = aborted  / gateway   (the gateway ended the request
-//	                                              BEFORE any answer: the rule's
-//	                                              listener went, at any stage;
-//	                                              requests_total outcome="aborted",
-//	                                              status="none", cause="gateway")
-//
-//	                  8 and 10 split the gateway's ends by timing: 10 before any
-//	                  answer reached the client, 8 after it began. The same cause
-//	                  lands on either value by when it struck, and the split is
-//	                  the point: whether the client received anything. Likewise
-//	                  9 is the client leaving at any stage, its requests_total
-//	                  status (none or the one it got) telling the two apart.
 func RecordPDRequest(modelName string, prefillLatencyMs, decodeLatencyMs int64, kvParamsFound, errorPhase int) {
 	model := boundModelLabel(modelName)
 

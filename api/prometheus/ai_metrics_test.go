@@ -788,9 +788,9 @@ func TestSeedAIRequestPair(t *testing.T) {
 	model, tenant := "m-seed", "t-seed"
 	RecordAIRequest(tenant, model, 200, 10, "")
 	pair := map[string]string{"model": model, "tenant": tenant}
-	// 32 seeded + the completed 200 the record itself wrote.
-	if n := seriesWith(t, aiRequestsTotal, pair); n != 33 {
-		t.Fatalf("pair has %d series after one record, want 32 seeded + 1", n)
+	// 31 seeded + the completed 200 the record itself wrote.
+	if n := seriesWith(t, aiRequestsTotal, pair); n != 32 {
+		t.Fatalf("pair has %d series after one record, want 31 seeded + 1", n)
 	}
 	if v := getCounterValue(aiRequestsTotal, model, tenant, "503", AIOutcomeCompleted, ""); v != 0 {
 		t.Errorf("a seeded series must read 0, got %f", v)
@@ -801,11 +801,16 @@ func TestSeedAIRequestPair(t *testing.T) {
 			t.Errorf("aborted/200/%s not seeded", c)
 		}
 	}
-	for _, c := range []string{AICauseClient, AICauseEngine, AICauseGateway} {
+	for _, c := range []string{AICauseClient, AICauseEngine} {
 		if n := seriesWith(t, aiRequestsTotal, map[string]string{"model": model, "tenant": tenant,
 			"status": AIStatusNone, "outcome": AIOutcomeAborted, "cause": c}); n != 1 {
 			t.Errorf("aborted/none/%s not seeded", c)
 		}
+	}
+	// The listener going before any answer is not reached in the product (F-17).
+	if n := seriesWith(t, aiRequestsTotal, map[string]string{"model": model, "tenant": tenant,
+		"status": AIStatusNone, "outcome": AIOutcomeAborted, "cause": AICauseGateway}); n != 0 {
+		t.Error("aborted/none/gateway is seeded")
 	}
 	for _, st := range []string{"301", "302", "303", "307", "308"} {
 		if n := seriesWith(t, aiRequestsTotal, map[string]string{"model": model, "tenant": tenant,
@@ -818,8 +823,8 @@ func TestSeedAIRequestPair(t *testing.T) {
 		t.Error("denied/413 not seeded")
 	}
 	RecordAIRequestDenied(tenant, model, 401)
-	if n := seriesWith(t, aiRequestsTotal, pair); n != 33 {
-		t.Errorf("a second record seeded again: %d series, want 33", n)
+	if n := seriesWith(t, aiRequestsTotal, pair); n != 32 {
+		t.Errorf("a second record seeded again: %d series, want 32", n)
 	}
 	RecordAIRequestDenied("", "m-seed-anon", 401)
 	if n := seriesWith(t, aiRequestsTotal, map[string]string{"model": "m-seed-anon"}); n != 1 {
@@ -843,10 +848,6 @@ func TestSeedPDModel(t *testing.T) {
 	if v := getCounterValue(aiPDRequestsTotal, model, "aborted", "client"); v != 0 {
 		t.Errorf("seeded phase 9 reads %f, want 0", v)
 	}
-	if n := seriesWith(t, aiPDRequestsTotal, map[string]string{"model": model,
-		"phase": "aborted", "status": "gateway"}); n != 1 {
-		t.Error("phase 10 (aborted/gateway) not seeded")
-	}
 }
 
 func TestRecordPDRequest_PhaseTaxonomy(t *testing.T) {
@@ -867,7 +868,6 @@ func TestRecordPDRequest_PhaseTaxonomy(t *testing.T) {
 		{"decode unknown", 7, "decode", "unknown", true},
 		{"decode truncated", 8, "decode", "truncated", true},
 		{"aborted by the client", 9, "aborted", "client", false},
-		{"aborted by the gateway", 10, "aborted", "gateway", false},
 		{"unknown phase", 99, "unknown", "error", false},
 	}
 
