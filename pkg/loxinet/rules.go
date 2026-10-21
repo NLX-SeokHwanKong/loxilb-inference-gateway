@@ -1791,6 +1791,31 @@ func (R *RuleH) registerOpaqueID(r *ruleEnt) {
 	R.opaqueID[r.id] = r
 }
 
+// rebindOpaqueID moves a live rule to the opaque id a replace supplied, when
+// that id differs from the one the rule carries: a controller that starts
+// sending deterministic ids, or re-sends after a restart restored the rule
+// under the id the snapshot kept. Only the id index and the rule's own id
+// change - nothing the data plane holds is touched - so the caller may answer
+// success without a rule re-create. Reports whether a rebinding happened; an
+// empty or identical id is a no-op. An id bound to another rule is refused
+// (resolveOpaqueID) and the rule keeps its id.
+//
+// WR-05 CONCURRENCY CONTRACT: reads and writes R.opaqueID; the CALLER holds the
+// rule-table lock, as for registerOpaqueID.
+func (R *RuleH) rebindOpaqueID(eRule *ruleEnt, supplied string) (bool, error) {
+	if supplied == "" || supplied == eRule.id {
+		return false, nil
+	}
+	if _, err := R.resolveOpaqueID(supplied, eRule); err != nil {
+		return false, err
+	}
+	R.unregisterOpaqueID(eRule)
+	eRule.id = supplied
+	R.registerOpaqueID(eRule)
+	eRule.lastUpdated = time.Now()
+	return true, nil
+}
+
 // unregisterOpaqueID - Octavia : remove a rule's id from the opaque-id index on delete.
 //
 // WR-05 CONCURRENCY CONTRACT: writes R.opaqueID (a plain map, no internal sync). The CALLER
@@ -4775,6 +4800,21 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 		}
 
 		if !ruleChg {
+			// An id-only replace: nothing the data plane holds differs, only the
+			// stable opaque id the client wants the rule known by. Rebind it in
+			// place and answer success. Refusing it as "exists" would leave
+			// GET /config/loadbalancer/id/{id} answering 404 for a rule that is
+			// there, with a delete and re-create - and the connections it drops -
+			// as the only way to the new id.
+			rebound, idErr := R.rebindOpaqueID(eRule, serv.Id)
+			if idErr != nil {
+				return RuleExistsErr, idErr
+			}
+			if rebound {
+				tk.LogIt(tk.LogInfo, "lb-rule %s:%d-%s id rebound to %s, nothing else changed\n",
+					serv.ServIP, serv.ServPort, serv.Proto, serv.Id)
+				return 0, nil
+			}
 			return RuleExistsErr, errors.New("lbrule-exists error")
 		}
 
@@ -5021,13 +5061,8 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 		// keep the opaque id stable (set from a supplied id when
 		// present — same-rule no-op), resolve the effective admin_state, and bump the
 		// in-memory lastUpdated timestamp.
-		if serv.Id != "" && serv.Id != eRule.id {
-			if _, idErr := R.resolveOpaqueID(serv.Id, eRule); idErr != nil {
-				return RuleExistsErr, idErr
-			}
-			R.unregisterOpaqueID(eRule)
-			eRule.id = serv.Id
-			R.registerOpaqueID(eRule)
+		if _, idErr := R.rebindOpaqueID(eRule, serv.Id); idErr != nil {
+			return RuleExistsErr, idErr
 		}
 		// only an EXPLICIT admin_state in the
 		// request mutates the effective flag. A nil/absent AdminStateUp (a member-only

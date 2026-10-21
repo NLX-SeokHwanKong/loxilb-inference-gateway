@@ -5569,7 +5569,7 @@ func init() {
               "type": "boolean"
             },
             "id": {
-              "description": "Opaque LB identifier, supplied by the client or minted as UUIDv4 when absent. Collisions with another rule are rejected. The update path can replace an ID when another change is applied; do not assume immutable identity or automatic L7 reference migration.",
+              "description": "Opaque LB identifier, supplied by the client or minted as UUIDv4 when absent. An id already bound to another rule is rejected (lbrule-id conflict). A replace that differs from the stored rule in this field alone rebinds the id to the existing rule in place, without touching the data plane, and answers success; a replace that changes other fields carries the new id along. Do not assume immutable identity or automatic L7 reference migration.",
               "type": "string"
             },
             "inactiveTimeOut": {
@@ -41749,7 +41749,7 @@ func init() {
               "type": "boolean"
             },
             "id": {
-              "description": "Opaque LB identifier, supplied by the client or minted as UUIDv4 when absent. Collisions with another rule are rejected. The update path can replace an ID when another change is applied; do not assume immutable identity or automatic L7 reference migration.",
+              "description": "Opaque LB identifier, supplied by the client or minted as UUIDv4 when absent. An id already bound to another rule is rejected (lbrule-id conflict). A replace that differs from the stored rule in this field alone rebinds the id to the existing rule in place, without touching the data plane, and answers success; a replace that changes other fields carries the new id along. Do not assume immutable identity or automatic L7 reference migration.",
               "type": "string"
             },
             "inactiveTimeOut": {
@@ -43024,7 +43024,7 @@ func init() {
           "type": "boolean"
         },
         "id": {
-          "description": "Opaque LB identifier, supplied by the client or minted as UUIDv4 when absent. Collisions with another rule are rejected. The update path can replace an ID when another change is applied; do not assume immutable identity or automatic L7 reference migration.",
+          "description": "Opaque LB identifier, supplied by the client or minted as UUIDv4 when absent. An id already bound to another rule is rejected (lbrule-id conflict). A replace that differs from the stored rule in this field alone rebinds the id to the existing rule in place, without touching the data plane, and answers success; a replace that changes other fields carries the new id along. Do not assume immutable identity or automatic L7 reference migration.",
           "type": "string"
         },
         "inactiveTimeOut": {

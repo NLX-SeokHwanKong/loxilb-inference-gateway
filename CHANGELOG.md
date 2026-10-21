@@ -150,6 +150,14 @@ binary behaves exactly like upstream loxilb.
 
 ### Changed
 
+- **A rule replace that differs from the stored rule only in `id` rebinds
+  the id in place and answers success** instead of 409 `lbrule-exists`. The
+  data plane is not touched and the rule keeps its connections; the new id
+  resolves on `GET /config/loadbalancer/id/{id}` and the old one no longer
+  does. This is what a controller needs when it starts sending deterministic
+  ids for rules it installed earlier under minted ones, or when a restart
+  restored a rule under the id the snapshot kept. An id bound to another rule
+  is still refused (`lbrule-id conflict`).
 - **A fullproxy rule whose `api_key_auth` or `jwt_auth_profile` differs from
   the rules already on its listener (address, port, protocol) is refused with
   400** instead of being accepted with a warning. The admission gate reads the
