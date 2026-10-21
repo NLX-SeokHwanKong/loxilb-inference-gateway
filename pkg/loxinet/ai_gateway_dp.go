@@ -1582,8 +1582,9 @@ func llb_ai_stream_end(tenantID *C.char, modelName *C.char) C.int {
 //	tenantID:      tenant identifier from the validated API key (NUL-terminated)
 //	modelName:     effective model name extracted from X-Model header or JSON body
 //	statusCode:    HTTP response status code (200, 401, 403, 429, 500, …);
-//	               0 when none was sent (a client that left, or a backend
-//	               off P/D that closed, before any answer)
+//	               0 when none was sent (a client that left before any
+//	               answer; or a backend off P/D that closed before it when its
+//	               client could not be told)
 //	latencyMs:     request latency in milliseconds; 0 when unknown
 //	promptTokens, completTokens: usage as the datapath read it; never charged here
 //	streamStart, streamEnd: stream lifecycle flags, tracked by the stream exports
@@ -1779,7 +1780,8 @@ func aiRecordDenyC(d aiDenyRecord) {
 //	errorPhase:       lifecycle outcome; names the leg that failed and how.
 //	                  0=complete/success, 1=prefill/timeout, 2=decode/error,
 //	                  3=decode/timeout, 4=prefill/error, 5=prefill/rejected,
-//	                  6=decode/rejected, 7=decode/unknown, 8=decode/truncated.
+//	                  6=decode/rejected, 7=decode/unknown, 8=decode/truncated,
+//	                  9=aborted/client.
 //	                  See prom.RecordPDRequest for the full contract.
 //
 //export llb_ai_pd_record

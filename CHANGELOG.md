@@ -217,10 +217,16 @@ binary behaves exactly like upstream loxilb.
   (every phase and status, 10) and `loxilb_ai_pd_prefill_fallback_total`
   (every reason, 6) per model label at its registration and for
   `model="other"` at start; `loxilb_ai_requests_total` per (model, tenant)
-  pair at the pair's first record, for a keyed tenant only (the error
-  statuses 400 401 403 404 408 429 500 502 503 504 under `completed` and
-  `denied`, `aborted` 200 for each cause, `aborted` `none` for the client:
-  24 series). `tenant=""` is never seeded.
+  pair at the pair's first record, for a keyed tenant only: every
+  combination whose status the gateway decides, plus the common error
+  statuses. `completed`: 400 401 403 404 408 429 500 502 503 504 and the
+  redirects 301 302 303 307 308 (15); `denied`: the same ten and 413 (11);
+  `aborted`: 200 for `client`, `engine` and `gateway`, `none` for `client`
+  and `engine` (5). 31 series. Open sets are not seeded: other backend
+  statuses, and an L7 REJECT code an operator chose; nor is `aborted`
+  `none` for `gateway`, the rule's listener going before any answer, which
+  nothing in the product does today (a rule delete keeps the listener).
+  `tenant=""` is never seeded.
 - **Every AI Gateway panel obeys the dashboard's model and tenant
   filters.** `$model`, `$tenant` and `$instance` (and `$instance` on the
   L4, L7, overview and security dashboards) have `allValue: ".*"`, so All
@@ -315,23 +321,32 @@ binary behaves exactly like upstream loxilb.
   `loxilb_ai_pd_requests_total{phase="aborted",status="client"}`. A client
   that cancelled or stopped reading with its P/D answer open is recorded
   the same way, with the status it got (Upgrade notes row 27). A listener
-  going away before any answer is still not recorded.
+  going away before any answer has no lifecycle record: nothing in the
+  product tears a listener down with requests on it (a rule delete keeps
+  the listener open and answers 503).
 - **A client that left before any answer on a rule that is not P/D reached
   no record.** It is now recorded once in `loxilb_ai_requests_total`:
   `outcome="aborted"`, `status="none"`, `cause="client"`. No lifecycle
   family pairs with a request off P/D, so that record alone keeps the
   families 1:1 (Upgrade notes row 38). A request still being read, an idle
   keep-alive connection and a half-close hold the gateway ended are not
-  recorded.
+  recorded, nor is any request on a rule whose answers go by the kernel (an
+  `api_key_auth` rule with sockMapMode `response`): no status is
+  seen there, so an answered request cannot be told from one that was not,
+  and those answers are not recorded either.
 - **A P/D client that left at the gate, in the capacity queue or parked
   reached no record.** It is now recorded once in both families, as a
   client leaving in the prefill is: `outcome="aborted"`, `status="none"`,
   `cause="client"` and `{phase="aborted",status="client"}` (row 39). A
   client giving up while parked is the signal that the queue is too long.
-- **A plain backend that closed before any answer reached no record.** It
-  is now `outcome="aborted"`, `cause="engine"`, `status="none"` (row 40),
-  so an engine dying before its first byte no longer vanishes from the
-  metrics. The client on that path still gets the bare close, no 502.
+- **A plain backend that closed before any answer left the client a bare
+  close and reached no record.** The client now gets the gateway's 502
+  `backend_unreachable`, as for a refused connect or a TLS leg failing
+  before its answer, recorded the same way: `outcome="completed"`,
+  `status="502"` (row 40). An engine dying before its first byte no longer
+  vanishes from the metrics, and it counts in the error ratio as any
+  completed 5xx. Only a client that could not be told is recorded
+  `outcome="aborted"`, `status="none"`, `cause="engine"`.
 - **A stream the inline teardown freed stayed on the active-streams
   gauge** (`loxilb_ai_active_streams`) until the process restarted. It is
   ended there now.
@@ -586,16 +601,16 @@ binary behaves exactly like upstream loxilb.
   | 28 | `loxilb_ai_request_duration_seconds` | an aborted request | sampled where the request was recorded (the cut answers of row 23) | not sampled: completed requests only. `loxilb_ai_pd_decode_ttft_seconds` still samples an aborted stream that reached its first event | gateway `e64ce853` |
   | 29 | `LoxilbAIErrorRatio` (alert) | numerator, denominator | every non-2xx completion over completions | completed 5xx plus aborted with cause `engine`/`gateway`, over completed + aborted. **A completed 4xx no longer counts; a cut 200 now does; a client cancel never does.** Revisit any routing, silence or inhibition built on its old firing | gateway `cab041c9` |
   | 30 | `instance:loxilb_ai_5xx_ratio:rate5m` (recording rule) | | completed 5xx over completed | unchanged, **deprecated**: it does not see `aborted`. Use `instance:loxilb_ai_error_ratio:rate5m` (new), the ratio of row 29 per instance | gateway `dd69b7db` |
-  | 31 | `loxilb_ai_pd_requests_total`, `loxilb_ai_pd_prefill_fallback_total`, `loxilb_ai_requests_total` | series present before their first event | from the first event | at 0: per model label at registration (P/D, 16 series), per keyed (model, tenant) pair at its first record (24 series). A query counting series, or using `absent()`, reads differently | gateway `905afa49` |
+  | 31 | `loxilb_ai_pd_requests_total`, `loxilb_ai_pd_prefill_fallback_total`, `loxilb_ai_requests_total` | series present before their first event | from the first event | at 0: per model label at registration (P/D, 16 series), per keyed (model, tenant) pair at its first record (31 series: every gateway-decided combination, see Changed). A query counting series, or using `absent()`, reads differently | gateway `905afa49` |
   | 32 | AI Gateway dashboard | `$model`, `$tenant`, `$instance` All; filters on panels 1, 2, 6, 7, 8, 9, 10, 13, 14, 15, 25, 48, 52, 64, 65 | All omitted `tenant=""`; those panels ignored the picker | All is `.*`; the panels obey it. `$instance` All is `.*` on the L4, L7, overview and security dashboards too | gateway `5f407545` |
   | 33 | panel titles and the alerts' `panel` annotation | the 32 panels no filter reaches | the plain title | the title plus " (global)": AI Gateway "KV subscribers up", "Tier-1.5 hits vs spills vs fallthrough/s", "KV miss reasons/s", "Tier-1.5 hits by endpoint", "Cold fail-open windows", "Policer attachment (datapath truth)", "Shaped throughput by service and direction", "Bucket saturation (delayed / passed)", "Parks/s", "Mean park duration", "Readers parked now", "Bucket level vs burst depth", "KV attestation", "KV event integrity", "P/D endpoint failures", "Policy store / unmetered", "KV event staleness", "KV inventory freshness", "P/D & KV inventory levels", "KV inventory pressure", "P/D robustness events", "P/D stream terminations", "Full-proxy cache", "Payload parser", "Gate mode by pool", "Capacity in flight vs ceiling", "Gate decisions/s by reason", "Gate accounting anomalies", "Queued vs queue depth", "Queue wait p50 / p95", "Adaptive ceiling vs configured", "Accept valve: contexts vs bound". Alerts whose annotation moved: `LoxilbKvWireReject`, `LoxilbKvSubscriberDisconnected`, `LoxilbKvReconnectStorm`, `LoxilbKvZeroHitWatchdog`, `LoxilbTrtllmDrainOwnershipFault`, `LoxilbPdSameEpRetryExhausted`, `LoxilbPdEndpointDied`, `LoxilbPolicyStoreUnavailable`, `LoxilbUnmeteredTraffic` (`loxilb-ai-kv-alerts.yml`); `KvExactEnforcementFault`, `KvExactRuleNotReady`, `KvExactAttestationProbeFailures`, `KvExactEchoChallengeFailures`, `LoxilbAIAdmissionShedding`, `LoxilbAIAdmissionQueueTimeouts`, `LoxilbAIAdmissionQueueNearDepth`, `LoxilbAIAdmissionAdaptiveFrozen`, `LoxilbProxyAcceptValveBlocking`, `LoxilbAIAdmissionAnomaly` (`loxilb-alerts.yml`, both copies). A link or a notification template that matches a panel by title needs the new one | gateway `5f407545` |
   | 34 | every scraped loxilb series | `cluster` | absent (only `external_labels`, on what leaves Prometheus) | `cluster="loxilb-default"` from the scrape job; the `cluster:`/`instance:` recording rules and the KV alerts now carry it. Set the same value per site in both places | gateway `72c5ecdf` |
   | 35 | the alerts and panels of Fixed (lazy families) | first event of a series | not counted by `increase()` | counted: the alerts can fire on the first event of a kind | gateway `0d05de6c` |
   | 36 | `loxilb_ai_pd_prefill_fallback_total{reason="truncated"}`, `loxilb_ai_pd_requests_total` | a prefill 4xx cut at the buffer cap | recomputed on the decode leg; `truncated` fallback, `complete/success` | relayed with its status; `prefill/rejected`, no fallback. `truncated` is a cut 2xx only | ebpf `8d85276` |
   | 37 | `data.ai.complete` audit records | `outcome.reason` of an aborted answer | `ok` | `client_abort` (cancel, stall, leaving before any answer), `timeout` (a cap or a reaper), `backend_conn` (the engine dying; also the listener going away, the closest available reason) | gateway `e64ce853` |
-  | 38 | `loxilb_ai_requests_total` | a client that left before any answer, on a rule that is not P/D (HTTP/1.1) | no record | `outcome="aborted"`, `status="none"`, `cause="client"`, one record; no `loxilb_ai_pd_requests_total` record (no lifecycle family pairs with it). **`status="none"` (row 26) is no longer P/D-only** | ebpf `174fb525` (#119); gateway CI row TP-I |
+  | 38 | `loxilb_ai_requests_total` | a client that left before any answer, on a rule that is not P/D (HTTP/1.1) | no record | `outcome="aborted"`, `status="none"`, `cause="client"`, one record; no `loxilb_ai_pd_requests_total` record (no lifecycle family pairs with it). **`status="none"` (row 26) is no longer P/D-only**. Not on a rule whose answers go by the kernel (sockMapMode `response`): no record there, as for its answers | ebpf `174fb525` (#119), `bcfb6bf`; gateway CI row TP-I |
   | 39 | `loxilb_ai_requests_total`, `loxilb_ai_pd_requests_total` | a P/D client that left at the gate, in the capacity queue or parked (before any prefill) | no record in either | one record in each: `outcome="aborted"`, `status="none"`, `cause="client"` and `{phase="aborted",status="client"}`, as row 27 for a client leaving in the prefill | ebpf `6294e71` (#120); gateway CI row TP-K |
-  | 40 | `loxilb_ai_requests_total` | a backend on a rule that is not P/D that closed before any answer | no record | `outcome="aborted"`, `status="none"`, **`cause="engine"`** (new combination: `status="none"` was the client's only), one record, no lifecycle record | ebpf `0a77af5` (#120); gateway CI row TP-J |
+  | 40 | `loxilb_ai_requests_total`, `loxilb_proxy_http_responses_by_status_total` | a backend on a rule that is not P/D that closed before any answer (HTTP/1.1) | no record; the client got a bare close | the client gets the gateway's 502 `backend_unreachable`: `outcome="completed"`, `status="502"`, one record, no lifecycle record (as a refused connect, row 13, and a TLS leg failing before its answer). Only when the client cannot be told: `outcome="aborted"`, `status="none"`, `cause="engine"` | ebpf `0a77af5` (#120), `b0c647d`; gateway CI row TP-J |
 
 - **`tenant_rate_limits` gains a `burst_pct` column.** The gateway adds it on
   start-up if it is missing, so an existing database needs no manual step and

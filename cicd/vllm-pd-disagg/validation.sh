@@ -4429,10 +4429,11 @@ pi_t=$(p_count_delta loxilb_ai_pd_decode_ttft_seconds) pi_d=$(p_count_delta loxi
 # The held answer goes nowhere; let it finish before the mock is reset.
 sleep $(( P_PG_HOLD_MS / 1000 - P_CANCEL_S ))
 
-# ── PJ: the engine dies before any answer on the same plain rule (#120) ──────────────
-#   The decode mock reads the request and closes with no byte written (drop-next). No
-#   status was ever sent: requests aborted/none cause=engine +1, no lifecycle record.
-#   The client gets the bare close, no 502 (F-18, a relay gap): printed, not asserted.
+# ── PJ: the engine dies before any answer on the same plain rule (#120, F-18) ────────
+#   The decode mock reads the request and closes with no byte written (drop-next). The
+#   gateway answers the client as a refused connect is answered: a 502 backend_unreachable,
+#   recorded completed/502 (as a TLS leg failing before its answer is), no lifecycle
+#   record.
 p_reset
 pj_arm=$(p_mock "$P_DECODE" drop-next)
 echo "  TP-J mock (${P_DECODE}): $pj_arm"
@@ -4455,11 +4456,12 @@ pj_pdd=$(p_delta "$(p_series "$pj_s0" loxilb_ai_pd_requests_total phase status)"
                  "$(p_series "$pj_s1" loxilb_ai_pd_requests_total phase status)")
 pj_rqd=$(p_delta "$(p_series "$pj_s0" loxilb_ai_requests_total outcome status cause)" \
                  "$(p_series "$pj_s1" loxilb_ai_requests_total outcome status cause)")
-echo "  TP-J: client HTTP ${pj_code} (curl rc=${pj_rc}; F-18: a bare close, no 502); recorded within ${pj_waited} s"
+echo "  TP-J: client HTTP ${pj_code} (curl rc=${pj_rc}); recorded within ${pj_waited} s"
 echo "  TP-J loxilb_ai_requests_total{outcome,status,cause} deltas: $(printf '%s' "$pj_rqd" | tr '\n' ' ')"
-[ "$pj_code" = "000" ] && check "TP-J: no status reached the client (HTTP 000)" 0 \
-                       || check "TP-J: no status reached the client (got HTTP ${pj_code})" 1
-p_deltas_are TP-J "loxilb_ai_requests_total{outcome,status,cause}" "$pj_rqd" "aborted,none,engine +1"
+[ "$pj_code" = "502" ] && $dexec l3h1 grep -q backend_unreachable /tmp/phase-p-TP-J.body 2>/dev/null \
+  && check "TP-J: the client got the gateway's 502 backend_unreachable" 0 \
+  || check "TP-J: the client got the gateway's 502 backend_unreachable (got HTTP ${pj_code})" 1
+p_deltas_are TP-J "loxilb_ai_requests_total{outcome,status,cause}" "$pj_rqd" "completed,502,- +1"
 p_deltas_are TP-J "loxilb_ai_pd_requests_total{phase,status}" "$pj_pdd" ""
 p_i_del
 

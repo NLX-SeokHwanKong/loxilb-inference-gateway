@@ -788,9 +788,9 @@ func TestSeedAIRequestPair(t *testing.T) {
 	model, tenant := "m-seed", "t-seed"
 	RecordAIRequest(tenant, model, 200, 10, "")
 	pair := map[string]string{"model": model, "tenant": tenant}
-	// 24 seeded + the completed 200 the record itself wrote.
-	if n := seriesWith(t, aiRequestsTotal, pair); n != 25 {
-		t.Fatalf("pair has %d series after one record, want 24 seeded + 1", n)
+	// 31 seeded + the completed 200 the record itself wrote.
+	if n := seriesWith(t, aiRequestsTotal, pair); n != 32 {
+		t.Fatalf("pair has %d series after one record, want 31 seeded + 1", n)
 	}
 	if v := getCounterValue(aiRequestsTotal, model, tenant, "503", AIOutcomeCompleted, ""); v != 0 {
 		t.Errorf("a seeded series must read 0, got %f", v)
@@ -801,13 +801,30 @@ func TestSeedAIRequestPair(t *testing.T) {
 			t.Errorf("aborted/200/%s not seeded", c)
 		}
 	}
+	for _, c := range []string{AICauseClient, AICauseEngine} {
+		if n := seriesWith(t, aiRequestsTotal, map[string]string{"model": model, "tenant": tenant,
+			"status": AIStatusNone, "outcome": AIOutcomeAborted, "cause": c}); n != 1 {
+			t.Errorf("aborted/none/%s not seeded", c)
+		}
+	}
+	// The listener going before any answer is not reached in the product (F-17).
 	if n := seriesWith(t, aiRequestsTotal, map[string]string{"model": model, "tenant": tenant,
-		"status": AIStatusNone, "outcome": AIOutcomeAborted, "cause": AICauseClient}); n != 1 {
-		t.Error("aborted/none/client not seeded")
+		"status": AIStatusNone, "outcome": AIOutcomeAborted, "cause": AICauseGateway}); n != 0 {
+		t.Error("aborted/none/gateway is seeded")
+	}
+	for _, st := range []string{"301", "302", "303", "307", "308"} {
+		if n := seriesWith(t, aiRequestsTotal, map[string]string{"model": model, "tenant": tenant,
+			"status": st, "outcome": AIOutcomeCompleted}); n != 1 {
+			t.Errorf("completed/%s (redirect) not seeded", st)
+		}
+	}
+	if n := seriesWith(t, aiRequestsTotal, map[string]string{"model": model, "tenant": tenant,
+		"status": "413", "outcome": AIOutcomeDenied}); n != 1 {
+		t.Error("denied/413 not seeded")
 	}
 	RecordAIRequestDenied(tenant, model, 401)
-	if n := seriesWith(t, aiRequestsTotal, pair); n != 25 {
-		t.Errorf("a second record seeded again: %d series, want 25", n)
+	if n := seriesWith(t, aiRequestsTotal, pair); n != 32 {
+		t.Errorf("a second record seeded again: %d series, want 32", n)
 	}
 	RecordAIRequestDenied("", "m-seed-anon", 401)
 	if n := seriesWith(t, aiRequestsTotal, map[string]string{"model": "m-seed-anon"}); n != 1 {

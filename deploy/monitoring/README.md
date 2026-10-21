@@ -113,13 +113,24 @@ its `outcome` label, because the readings answer different questions:
 |---|---|---|
 | `loxilb_ai_requests_total` | offered load | total request rate; capacity |
 | `{outcome="completed"}` | answered whole: by a backend, or by the gateway when no backend could take the request (outage, P/D timeout or leg failure, connect failure) or by a configured redirect | backend behaviour — latency correlation, the 5xx half of the error ratio |
-| `{outcome="aborted"}` | the client did not get a complete response; `cause` says why: `client` (it cancelled, reset or stopped reading), `engine` (the backend died under the answer, or before it off P/D), `gateway` (a duration cap, a reaper or the listener cut it). `status` is what the client got — `200` for a cut stream, `none` when no status was sent (the client left, or off P/D the backend closed, before any answer) | cancellations (`cause="client"`, traffic), and the engine/gateway half of the error ratio |
+| `{outcome="aborted"}` | the client did not get a complete response; `cause` says why: `client` (it cancelled, reset or stopped reading), `engine` (the backend died under the answer), `gateway` (a duration cap, a reaper or the listener cut it). `status` is what the client got — `200` for a cut stream, `none` when no status was sent (the client left before any answer). A backend off P/D that closes before any answer gets the client a 502, counted `completed` | cancellations (`cause="client"`, traffic), and the engine/gateway half of the error ratio |
 | `{outcome="denied"}` | refused by the gateway before any backend was chosen: policy gate, capacity, routing, framing, L7-policy reject, content-security block | denial rate, without consulting a second family |
 
 The three outcomes are mutually exclusive per request, so `sum by (outcome)`
 reproduces the unfiltered total. `cause` is empty except on `aborted`. A
 graceful `[DONE]` the gateway wrote for a silent engine is `completed` (the
 client got a clean end; `loxilb_ai_pd_terminator_synthesized_total` counts it).
+
+**Not counted: answers the kernel carries.** On a rule with a declared
+`api_key_auth` and `sockMapMode: response` (the one acceleration such a rule
+accepts, see `docs/sockmap-acceleration.md`), the kernel carries every answer
+past the proxy and no status is ever seen. Requests on such a rule reach
+**no** `loxilb_ai_requests_total` record: not completed, not aborted, not even
+a client leaving before its answer, because an answered request cannot be told
+from an unanswered one. Their refusals at the gate (`denied`) are still
+counted, since those are written before any backend is chosen. Read a flat
+`requests_total` on such a rule as "not measured", not as "no traffic", and
+measure it at the backend (the engine's own metrics). The daemon logs a warning naming this when it accepts the rule.
 
 The error ratio is
 

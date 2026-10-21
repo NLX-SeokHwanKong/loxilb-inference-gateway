@@ -128,13 +128,29 @@ func registerModelLabel(model string) bool {
 //     label, at most 65 labels.
 //   - loxilb_ai_requests_total, per (model, tenant) pair, on the pair's
 //     first record, for a keyed tenant only (tenant="" is a refusal before
-//     the key resolved, and is never seeded): the error statuses under
-//     completed and denied (20), aborted with status 200 for each cause (3),
-//     and aborted with status none for the client (1). 24 series per pair
-//     seen; only pairs that record are seeded.
+//     the key resolved, and is never seeded): every combination whose status
+//     the gateway decides, plus the common error statuses. 31 series per pair
+//     seen; only pairs that record are seeded:
+//
+//	completed  aiSeedStatuses (10), the redirects 301 302 303 307 308 (5)   15
+//	denied     aiSeedStatuses (10), 413 (framing: request too large)       11
+//	aborted    200 for client, engine and gateway; none for client, engine  5
+//
+//     aborted/200 is a cut stream; aborted/none a request that ended before
+//     any answer (the client left; the engine closed and the client could not
+//     be told its 502). aborted/none for the gateway (the rule's listener
+//     going before any answer) is not seeded: nothing in the product tears a
+//     listener down with requests on it (F-17). Not seeded, being open sets:
+//     any other backend status (completed, and aborted for a cut non-200
+//     stream or 2xx body), and an operator's L7 REJECT code (denied, 4xx).
+//     HTTP/2 writes no aborted record (#415).
 
-// aiSeedStatuses are the statuses seeded under completed and denied.
+// aiSeedStatuses are the error statuses seeded under completed and denied.
 var aiSeedStatuses = []string{"400", "401", "403", "404", "408", "429", "500", "502", "503", "504"}
+
+// aiSeedRedirects are the L7 redirect statuses the gateway answers with
+// (completed): the five an operator may choose, 302 by default.
+var aiSeedRedirects = []string{"301", "302", "303", "307", "308"}
 
 // aiSeededPairs holds the (model, tenant) pairs already seeded.
 var aiSeededPairs sync.Map
@@ -152,10 +168,16 @@ func seedAIRequestPair(model, tenant string) {
 		aiRequestsTotal.WithLabelValues(model, tenant, st, AIOutcomeCompleted, "").Add(0)
 		aiRequestsTotal.WithLabelValues(model, tenant, st, AIOutcomeDenied, "").Add(0)
 	}
+	for _, st := range aiSeedRedirects {
+		aiRequestsTotal.WithLabelValues(model, tenant, st, AIOutcomeCompleted, "").Add(0)
+	}
+	aiRequestsTotal.WithLabelValues(model, tenant, "413", AIOutcomeDenied, "").Add(0)
 	for _, cause := range []string{AICauseClient, AICauseEngine, AICauseGateway} {
 		aiRequestsTotal.WithLabelValues(model, tenant, "200", AIOutcomeAborted, cause).Add(0)
 	}
-	aiRequestsTotal.WithLabelValues(model, tenant, AIStatusNone, AIOutcomeAborted, AICauseClient).Add(0)
+	for _, cause := range []string{AICauseClient, AICauseEngine} {
+		aiRequestsTotal.WithLabelValues(model, tenant, AIStatusNone, AIOutcomeAborted, cause).Add(0)
+	}
 }
 
 // seedPDModel seeds the P/D families for a model label.
@@ -219,7 +241,8 @@ const (
 
 // AIStatusNone is the status label of a request no status was ever sent
 // for (status 0 from the data plane): a client that left before any
-// answer, P/D or not, or a backend off P/D that closed before it.
+// answer, P/D or not; or a backend off P/D that closed before it when its
+// client could not be told (it is otherwise answered 502, completed).
 const AIStatusNone = "none"
 
 // aiEndCauses maps the data plane's end codes, the error_code of a request
@@ -321,7 +344,7 @@ var (
 	aiRequestsTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "loxilb_ai_requests_total",
-			Help: "Total AI Gateway requests by model, tenant, HTTP status code, outcome and cause (completed = answered whole, by a backend or by the gateway's own outage, timeout or redirect answer, with the status the client got; aborted = the client did not get a complete response, cause client (it left or stopped reading), engine (the backend died under the answer, or before it off P/D) or gateway (a cap, a reaper or the listener cut it), status none when no status was sent; denied = refused by the gateway before any backend was chosen: policy gate, capacity, routing, framing). cause is empty unless outcome is aborted.",
+			Help: "Total AI Gateway requests by model, tenant, HTTP status code, outcome and cause (completed = answered whole, by a backend or by the gateway's own outage, timeout or redirect answer, with the status the client got; aborted = the client did not get a complete response, cause client (it left or stopped reading), engine (the backend died under the answer) or gateway (a cap, a reaper or the listener cut it), status none when no status was sent; denied = refused by the gateway before any backend was chosen: policy gate, capacity, routing, framing). cause is empty unless outcome is aborted.",
 		},
 		[]string{"model", "tenant", "status", "outcome", "cause"},
 	)
