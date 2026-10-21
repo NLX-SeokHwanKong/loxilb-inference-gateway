@@ -34,7 +34,10 @@ binary behaves exactly like upstream loxilb.
   `loxilb_ai_fc_band_total{service,band,outcome}` (outcomes `admitted`,
   `queued`, `shed`, `expired`, `cancelled`; fifteen series per service) and the
   reason `shed` in `loxilb_ai_admission_decisions_total`. A pool whose requests
-  are all `standard` admits and wakes as before. See
+  are all `standard` admits and wakes as before. The band counter splits the
+  gate's decisions; it is not a second request count: in
+  `loxilb_ai_requests_total` a shed or expired request is one `denied` request
+  and a cancelled one is `aborted` with cause `client`. See
   `docs/load-balancing/23-ai-admission-flow-control.md`.
 - **Weighted wake and tenant rotation for the priority bands:**
   `fc_wake_policy: weighted` serves the bands as a deficit round robin by
