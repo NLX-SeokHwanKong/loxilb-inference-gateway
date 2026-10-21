@@ -155,7 +155,7 @@ groups:
           summary: "AI rate-limit denials above 10/s for 5m"
           description: "Denials are counted in loxilb_ai_requests_total{outcome=\"denied\"}; this counter carries the reason they were denied, which the request total does not."
           dashboard: "LoxiLB / AI Gateway"
-          panel: "Rate-limit hits/s"
+          panel: "Rate-limit hits/s (all models)"
 
   - name: loxilb-system
     rules:

@@ -36,6 +36,17 @@ scrape_configs:
   - job_name: loxilb
     scheme: http
     metrics_path: /netlox/v1/metrics
+    # The first event of a series (MON-04). A counter series exists from its
+    # first increment, so the first scrape of it already reads 1 and rate()
+    # and increase() see no 0 -> 1 step: the first error of a new (model,
+    # tenant) pair, or of a fresh process, is invisible to every rate panel
+    # and alert. The exporter stamps every counter with its creation time;
+    # the protobuf exposition carries that stamp (the text formats do not),
+    # and with --enable-feature=created-timestamp-zero-ingestion
+    # (docker-compose.yml) Prometheus writes a 0 at that instant before the
+    # first sample, so the first increment IS an increase. Keep
+    # PrometheusProto first; lint-monitoring.py fails this file without it.
+    scrape_protocols: [PrometheusProto, OpenMetricsText1.0.0, OpenMetricsText0.0.1, PrometheusText0.0.4]
     static_configs:
       # loxilb plain REST listener (default :11111). Keep it host-local.
       - targets: ["127.0.0.1:11111"]

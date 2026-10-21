@@ -239,6 +239,27 @@ class DashboardFilters(unittest.TestCase):
             {"instance", "model"}, self.EXP)
         self.assertTrue(any("says (global)" in m for m in msgs), msgs)
 
+    def test_model_only_panel_must_say_all_tenants(self):
+        expr = 'rate(loxilb_ai_pd_requests_total{model=~"$model"}[5m])'
+        msgs = lint.filter_violations(self._panel(expr),
+                                      {"instance", "model", "tenant"}, self.EXP)
+        self.assertTrue(any("say (all tenants)" in m for m in msgs), msgs)
+        self.assertEqual(lint.filter_violations(
+            self._panel(expr, "PD requests/s (all tenants)"),
+            {"instance", "model", "tenant"}, self.EXP), [])
+
+    def test_tenant_reachable_panel_must_not_say_all_tenants(self):
+        msgs = lint.filter_violations(
+            self._panel('rate(loxilb_ai_requests_total{model=~"$model",tenant=~"$tenant"}[5m])',
+                        "Requests (all tenants)"),
+            {"instance", "model", "tenant"}, self.EXP)
+        self.assertTrue(any("says (all tenants)" in m for m in msgs), msgs)
+
+    def test_model_only_panel_needs_no_mark_without_tenant_variable(self):
+        self.assertEqual(lint.filter_violations(
+            self._panel('rate(loxilb_ai_pd_requests_total{model=~"$model"}[5m])'),
+            {"instance", "model"}, self.EXP), [])
+
     def test_all_without_allvalue_goes_red(self):
         d = dashboard_with_expr('rate(loxilb_x_total[5m])')
         d["templating"]["list"].append({"name": "tenant", "includeAll": True, "allValue": None})
@@ -333,6 +354,61 @@ class ScrapeCluster(unittest.TestCase):
     def test_the_shipped_config_passes(self):
         rep = lint.Report()
         lint.lint_scrape_cluster(os.path.join(REPO, "deploy", "monitoring"), rep)
+        self.assertEqual(rep.errors, [])
+
+
+class FirstEventContract(unittest.TestCase):
+    """MON-04: the loxilb job scrapes protobuf (PrometheusProto first) and
+    Prometheus runs with created-timestamp zero ingestion, so a series' first
+    event is an increase."""
+
+    PROM = ("global:\n  scrape_interval: 10s\nscrape_configs:\n"
+            "  - job_name: loxilb\n    metrics_path: /netlox/v1/metrics\n%s"
+            "    static_configs:\n      - targets: [\"127.0.0.1:11111\"]\n"
+            "  - job_name: prometheus\n    static_configs:\n"
+            "      - targets: [\"localhost:9090\"]\n")
+    COMPOSE = ("services:\n  prometheus:\n    image: prom/prometheus:v2.53.4\n"
+               "    command:\n      - --config.file=/etc/prometheus/prometheus.yml\n%s")
+    FLAG = "      - --enable-feature=created-timestamp-zero-ingestion\n"
+    PROTO = "    scrape_protocols: [PrometheusProto, OpenMetricsText1.0.0, PrometheusText0.0.4]\n"
+
+    def _run(self, job_lines, compose_lines):
+        with tempfile.TemporaryDirectory() as td:
+            os.makedirs(os.path.join(td, "prometheus"))
+            with open(os.path.join(td, "prometheus", "prometheus.yml"), "w") as fh:
+                fh.write(self.PROM % job_lines)
+            with open(os.path.join(td, "docker-compose.yml"), "w") as fh:
+                fh.write(self.COMPOSE % compose_lines)
+            rep = lint.Report()
+            lint.lint_first_event_contract(td, rep)
+            return rep.errors
+
+    def test_no_scrape_protocols_goes_red(self):
+        self.assertTrue(any("PrometheusProto first" in e
+                            for e in self._run("", self.FLAG)))
+
+    def test_proto_not_first_goes_red(self):
+        self.assertTrue(any("PrometheusProto first" in e for e in self._run(
+            "    scrape_protocols: [OpenMetricsText1.0.0, PrometheusProto]\n", self.FLAG)))
+
+    def test_commented_out_proto_goes_red(self):
+        self.assertTrue(any("PrometheusProto first" in e for e in self._run(
+            "    # " + self.PROTO.lstrip(), self.FLAG)))
+
+    def test_missing_flag_goes_red(self):
+        self.assertTrue(any("created-timestamp-zero-ingestion" in e
+                            for e in self._run(self.PROTO, "")))
+
+    def test_commented_out_flag_goes_red(self):
+        self.assertTrue(any("created-timestamp-zero-ingestion" in e
+                            for e in self._run(self.PROTO, "      # " + self.FLAG.lstrip())))
+
+    def test_both_pass(self):
+        self.assertEqual(self._run(self.PROTO, self.FLAG), [])
+
+    def test_the_shipped_config_passes(self):
+        rep = lint.Report()
+        lint.lint_first_event_contract(os.path.join(REPO, "deploy", "monitoring"), rep)
         self.assertEqual(rep.errors, [])
 
 
