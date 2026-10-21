@@ -57,7 +57,7 @@ jobs:
       - name: Generated MCP model and embedded contract are reproducible
         run: |
           bash api/check-mcp-generation.sh
-          go run ./api/cmd/sync-swagger -check
+          sudo -E env "PATH=$PATH" go run ./api/cmd/sync-swagger -check
       - name: Modern MCP validator and framing regressions (sanitizers)
         run: make -C loxilb-ebpf/common test_mcp
       - name: Modern MCP API, rules, snapshot and metrics regressions
