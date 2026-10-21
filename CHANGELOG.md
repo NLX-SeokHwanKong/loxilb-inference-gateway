@@ -51,7 +51,10 @@ binary behaves exactly like upstream loxilb.
   MCP gateway, and AI gateway controls.
 - **CI**: `ai-gateway-sanity`, `mcp-sanity`, `l7-proxy-sanity`, and
   `vllm-proxy-sanity` workflows, plus the automated upstream-sync chain
-  (`upstream-sync.yml`, `ebpf-pin-bump.yml`).
+  (`upstream-sync.yml`, `ebpf-pin-bump.yml`). `ebpf-pin-check.yml` fails a
+  pull request, and main, whose `loxilb-ebpf` pin is not a commit on the ebpf
+  fork's main; a pull request pinned to an unmerged ebpf change on purpose
+  carries the `ebpf-temp-pin` label, which turns that into a warning.
 - **Token quotas (tokens-per-minute)** for AI gateway rules: per-tenant and
   per-tenant-and-model budgets enforced from the tokens the serving engine
   reports. Usage is read from the engine's own `usage` block, with

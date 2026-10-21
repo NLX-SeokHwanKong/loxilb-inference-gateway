@@ -1,0 +1,42 @@
+name: eBPF-Pin-Check
+
+# The loxilb-ebpf submodule must be pinned to a commit on the ebpf fork's
+# main (scripts/check-ebpf-pin.sh). A gateway PR that needs an unmerged ebpf
+# change may pin that change's head to run CI against it; it carries the
+# ebpf-temp-pin label while it does, which turns the finding into a warning,
+# and is re-pinned to the ebpf merge commit (label removed) before it merges.
+# Adding or removing the label re-runs this check. On main the check is
+# strict: a temporary pin that got merged shows up red here.
+
+on:
+  pull_request:
+    branches: [ "main" ]
+    types: [ opened, synchronize, reopened, labeled, unlabeled ]
+  push:
+    branches: [ "main" ]
+
+permissions:
+  contents: read
+
+jobs:
+  pin:
+    name: ebpf pin on ebpf main
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Verify the loxilb-ebpf pin
+        env:
+          TEMP_PIN: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ebpf-temp-pin') }}
+        run: |
+          set -o pipefail
+          if [ "$TEMP_PIN" = true ]; then
+            bash scripts/check-ebpf-pin.sh --allow-unmerged | tee pin.out
+            if grep -q '^WARN:' pin.out; then
+              echo "::warning::loxilb-ebpf is pinned to an unmerged commit (ebpf-temp-pin); re-pin to the ebpf merge commit and remove the label before merging"
+            fi
+          else
+            bash scripts/check-ebpf-pin.sh
+          fi
