@@ -11,9 +11,6 @@
 #      denominator only, never fires;
 #   4. a gate denial storm (outcome=denied) is in neither half.
 #
-# Each case also pins the deprecated instance:loxilb_ai_5xx_ratio:rate5m to
-# its old meaning, completed 5xx over completed: it does not see aborted.
-#
 # Run: promtool test rules tests/ai-error-ratio.test.yml
 
 rule_files:
@@ -36,11 +33,6 @@ tests:
         exp_samples:
           - labels: 'instance:loxilb_ai_error_ratio:rate5m{cluster="c1",instance="gw"}'
             value: 0.1
-      - expr: instance:loxilb_ai_5xx_ratio:rate5m
-        eval_time: 15m
-        exp_samples:
-          - labels: 'instance:loxilb_ai_5xx_ratio:rate5m{cluster="c1",instance="gw"}'
-            value: 0
     alert_rule_test:
       - alertname: LoxilbAIErrorRatio
         eval_time: 15m
@@ -65,11 +57,6 @@ tests:
         eval_time: 15m
         exp_samples:
           - labels: 'instance:loxilb_ai_error_ratio:rate5m{cluster="c1",instance="gw"}'
-            value: 0.2
-      - expr: instance:loxilb_ai_5xx_ratio:rate5m
-        eval_time: 15m
-        exp_samples:
-          - labels: 'instance:loxilb_ai_5xx_ratio:rate5m{cluster="c1",instance="gw"}'
             value: 0.2
     alert_rule_test:
       - alertname: LoxilbAIErrorRatio
@@ -99,11 +86,6 @@ tests:
         eval_time: 15m
         exp_samples:
           - labels: 'instance:loxilb_ai_error_ratio:rate5m{cluster="c1",instance="gw"}'
-            value: 0
-      - expr: instance:loxilb_ai_5xx_ratio:rate5m
-        eval_time: 15m
-        exp_samples:
-          - labels: 'instance:loxilb_ai_5xx_ratio:rate5m{cluster="c1",instance="gw"}'
             value: 0
     alert_rule_test:
       - alertname: LoxilbAIErrorRatio

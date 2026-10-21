@@ -155,10 +155,9 @@ error: it belongs in the denominator only. `LoxilbAIErrorRatio` and
 it; `deploy/monitoring/ci/lint-monitoring.py` fails any
 expression that filters some selectors of this family and not others.
 
-`instance:loxilb_ai_5xx_ratio:rate5m` is **deprecated** and keeps its old
-meaning, completed 5xx over completed: it does not see `aborted`, so an answer
-the engine or the gateway cut is in neither half. Move its readers to
-`instance:loxilb_ai_error_ratio:rate5m`; it will be removed in a later release.
+`instance:loxilb_ai_5xx_ratio:rate5m` (completed 5xx over completed, which
+did not see `aborted`) is **removed**; use
+`instance:loxilb_ai_error_ratio:rate5m`.
 
 The counted families are seeded at zero so a window's first error is an
 increase rather than a series appearing: the P/D lifecycle and fallback
