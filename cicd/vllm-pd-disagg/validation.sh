@@ -4581,6 +4581,63 @@ p_listener_row TP-M "$P_URL" "$P_PREFILL" p_del
 p_deltas_are TP-M "loxilb_ai_pd_requests_total{phase,status}" "$P_L_PDD" "aborted,gateway +1"
 p_deltas_are TP-M "loxilb_ai_requests_total{outcome,status,cause}" "$P_L_RQD" "aborted,none,gateway +1"
 
+# ── PN: the listener goes with the P/D answer open (the 8/10 boundary) ───────────────
+#   The P/D rule again (as PA's); a streamed request whose decode engine paces 30
+#   chunks 500 ms apart; the rule is deleted 3 s in, with the client's 200 and some
+#   chunks out: requests aborted/200 cause=gateway +1 and lifecycle decode/truncated +1
+#   (the gateway cut an answer that had begun: 8, not 10), nothing else.
+p_reset
+p_del
+$hexec llb1 curl -s -X POST http://localhost:11111/netlox/v1/config/loadbalancer \
+  -H 'Content-Type: application/json' \
+  -d '{"serviceArguments":{"externalIP":"10.10.10.254","port":'"${P_PORT}"',"protocol":"tcp","sel":0,"mode":4,"host":"10.10.10.254","pd_disagg_mode":true,"monitor":true,"probetype":"http","probeport":8000,"probereq":"/health","probeTimeout":5,"probeRetries":2},"endpoints":[{"endpointIP":"31.31.31.1","targetPort":8000,"weight":1,"ep_role":1,"nixl_port":9001},{"endpointIP":"32.32.32.1","targetPort":8000,"weight":1,"ep_role":2,"nixl_port":9002}]}' \
+  >/dev/null 2>&1
+pn_ready=""
+for _i in $(seq 1 24); do
+  [ "$($dexec l3h1 curl -s -m 20 -o /dev/null -w '%{http_code}' \
+        "http://10.10.10.254:${P_PORT}/v1/completions" -H "Content-Type: application/json" \
+        -d "{\"model\":\"${MODEL}\",\"prompt\":\"pn-ready\",\"max_tokens\":8}" 2>/dev/null)" = "200" ] \
+    && pn_ready=1 && break
+  sleep 5
+done
+[ -n "$pn_ready" ] && check "TP-N: the P/D rule on port ${P_PORT} serves again" 0 \
+                   || check "TP-N: the P/D rule on port ${P_PORT} serves again" 1
+pn_arm=$(p_mock "$P_DECODE" "stream-pace?ms=500&chunks=30")
+[ -n "$pn_arm" ] && check "TP-N: ${P_DECODE} armed with a paced stream" 0 \
+                 || check "TP-N: ${P_DECODE} armed with a paced stream" 1
+pn_s0=$(p_scrape)
+( $dexec l3h1 curl -s --no-buffer -m 30 -o /tmp/phase-p-TP-N.body -w '%{http_code}' "$P_URL" \
+    -H "Content-Type: application/json" \
+    -d "{\"model\":\"${MODEL}\",\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":\"listener-TP-N\"}],\"max_tokens\":8}" \
+    </dev/null > /tmp/phase-p-TP-N.code 2>/dev/null ) &
+pn_pid=$!
+sleep 3
+p_del
+wait "$pn_pid"
+pn_code=$(cat /tmp/phase-p-TP-N.code 2>/dev/null)
+pn_waited=0
+while :; do
+  pn_s1=$(p_scrape)
+  [ $(( $(m_sum "$pn_s1" loxilb_ai_requests_total) - $(m_sum "$pn_s0" loxilb_ai_requests_total) )) -ge 1 ] && break
+  [ "$pn_waited" -ge "$P_CANCEL_WAIT" ] && break
+  sleep 1; pn_waited=$((pn_waited + 1))
+done
+sleep 1; pn_s1=$(p_scrape)
+pn_pdd=$(p_delta "$(p_series "$pn_s0" loxilb_ai_pd_requests_total phase status)" \
+                 "$(p_series "$pn_s1" loxilb_ai_pd_requests_total phase status)")
+pn_rqd=$(p_delta "$(p_series "$pn_s0" loxilb_ai_requests_total outcome status cause)" \
+                 "$(p_series "$pn_s1" loxilb_ai_requests_total outcome status cause)")
+echo "  TP-N: client HTTP ${pn_code}; recorded within ${pn_waited} s"
+echo "  TP-N loxilb_ai_pd_requests_total{phase,status} deltas: $(printf '%s' "$pn_pdd" | tr '\n' ' ')"
+echo "  TP-N loxilb_ai_requests_total{outcome,status,cause} deltas: $(printf '%s' "$pn_rqd" | tr '\n' ' ')"
+[ "$pn_code" = "200" ] && $dexec l3h1 grep -q '^data: {' /tmp/phase-p-TP-N.body 2>/dev/null \
+  && check "TP-N: the client had its 200 and a chunk when the rule went" 0 \
+  || check "TP-N: the client had its 200 and a chunk when the rule went (got HTTP ${pn_code})" 1
+p_deltas_are TP-N "loxilb_ai_pd_requests_total{phase,status}" "$pn_pdd" "decode,truncated +1"
+p_deltas_are TP-N "loxilb_ai_requests_total{outcome,status,cause}" "$pn_rqd" "aborted,200,gateway +1"
+# The rest of the paced stream has nowhere to go; let the engine finish it.
+sleep 12
+
 p_reset
 p_del
 bail_check

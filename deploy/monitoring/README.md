@@ -121,6 +121,17 @@ reproduces the unfiltered total. `cause` is empty except on `aborted`. A
 graceful `[DONE]` the gateway wrote for a silent engine is `completed` (the
 client got a clean end; `loxilb_ai_pd_terminator_synthesized_total` counts it).
 
+**Not counted: answers the kernel carries.** On a rule with a declared
+`api_key_auth` and `sockMapMode: response` (the one acceleration such a rule
+accepts, see `docs/sockmap-acceleration.md`), the kernel carries every answer
+past the proxy and no status is ever seen. Requests on such a rule reach
+**no** `loxilb_ai_requests_total` record: not completed, not aborted, not even
+a client leaving before its answer, because an answered request cannot be told
+from an unanswered one. Their refusals at the gate (`denied`) are still
+counted, since those are written before any backend is chosen. Read a flat
+`requests_total` on such a rule as "not measured", not as "no traffic", and
+measure it at the backend (the engine's own metrics). The daemon logs a warning naming this when it accepts the rule.
+
 The error ratio is
 
 ```promql

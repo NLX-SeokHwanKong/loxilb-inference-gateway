@@ -128,13 +128,27 @@ func registerModelLabel(model string) bool {
 //     label, at most 65 labels.
 //   - loxilb_ai_requests_total, per (model, tenant) pair, on the pair's
 //     first record, for a keyed tenant only (tenant="" is a refusal before
-//     the key resolved, and is never seeded): the error statuses under
-//     completed and denied (20), aborted with status 200 for each cause (3),
-//     and aborted with status none for the client (1). 24 series per pair
-//     seen; only pairs that record are seeded.
+//     the key resolved, and is never seeded): every combination whose status
+//     the gateway decides, plus the common error statuses. 32 series per pair
+//     seen; only pairs that record are seeded:
+//
+//	completed  aiSeedStatuses (10), the redirects 301 302 303 307 308 (5)   15
+//	denied     aiSeedStatuses (10), 413 (framing: request too large)       11
+//	aborted    200 and none, each for client, engine and gateway            6
+//
+//     aborted/200 is a cut stream; aborted/none a request that ended before
+//     any answer (the client left; the listener went; the engine closed and
+//     the client could not be told its 502). Not seeded, being open sets:
+//     any other backend status (completed, and aborted for a cut non-200
+//     stream or 2xx body), and an operator's L7 REJECT code (denied, 4xx).
+//     HTTP/2 writes no aborted record (#415).
 
-// aiSeedStatuses are the statuses seeded under completed and denied.
+// aiSeedStatuses are the error statuses seeded under completed and denied.
 var aiSeedStatuses = []string{"400", "401", "403", "404", "408", "429", "500", "502", "503", "504"}
+
+// aiSeedRedirects are the L7 redirect statuses the gateway answers with
+// (completed): the five an operator may choose, 302 by default.
+var aiSeedRedirects = []string{"301", "302", "303", "307", "308"}
 
 // aiSeededPairs holds the (model, tenant) pairs already seeded.
 var aiSeededPairs sync.Map
@@ -152,10 +166,14 @@ func seedAIRequestPair(model, tenant string) {
 		aiRequestsTotal.WithLabelValues(model, tenant, st, AIOutcomeCompleted, "").Add(0)
 		aiRequestsTotal.WithLabelValues(model, tenant, st, AIOutcomeDenied, "").Add(0)
 	}
+	for _, st := range aiSeedRedirects {
+		aiRequestsTotal.WithLabelValues(model, tenant, st, AIOutcomeCompleted, "").Add(0)
+	}
+	aiRequestsTotal.WithLabelValues(model, tenant, "413", AIOutcomeDenied, "").Add(0)
 	for _, cause := range []string{AICauseClient, AICauseEngine, AICauseGateway} {
 		aiRequestsTotal.WithLabelValues(model, tenant, "200", AIOutcomeAborted, cause).Add(0)
+		aiRequestsTotal.WithLabelValues(model, tenant, AIStatusNone, AIOutcomeAborted, cause).Add(0)
 	}
-	aiRequestsTotal.WithLabelValues(model, tenant, AIStatusNone, AIOutcomeAborted, AICauseClient).Add(0)
 }
 
 // seedPDModel seeds the P/D families for a model label.
@@ -1182,16 +1200,25 @@ const pdPhaseCount = 11
 //	                    8 = decode   / truncated (the gateway ended or cut an
 //	                                              in-progress answer for a cause
 //	                                              other than engine death: engine
-//	                                              silence or a policy cap)
+//	                                              silence or a policy cap; AFTER
+//	                                              the answer began)
 //	                    9 = aborted  / client    (the client left, at any stage:
 //	                                              before any answer, with its
 //	                                              answer open, or it stopped
 //	                                              reading; requests_total
 //	                                              outcome="aborted", cause="client")
-//	                   10 = aborted  / gateway   (the rule's listener went before
-//	                                              any answer, at any stage;
+//	                   10 = aborted  / gateway   (the gateway ended the request
+//	                                              BEFORE any answer: the rule's
+//	                                              listener went, at any stage;
 //	                                              requests_total outcome="aborted",
 //	                                              status="none", cause="gateway")
+//
+//	                  8 and 10 split the gateway's ends by timing: 10 before any
+//	                  answer reached the client, 8 after it began. The same cause
+//	                  lands on either value by when it struck, and the split is
+//	                  the point: whether the client received anything. Likewise
+//	                  9 is the client leaving at any stage, its requests_total
+//	                  status (none or the one it got) telling the two apart.
 func RecordPDRequest(modelName string, prefillLatencyMs, decodeLatencyMs int64, kvParamsFound, errorPhase int) {
 	model := boundModelLabel(modelName)
 
