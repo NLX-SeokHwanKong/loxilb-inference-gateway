@@ -56,6 +56,13 @@ curl -X POST http://127.0.0.1:11111/netlox/v1/config/metrics
 
 - Prometheus: `http://<host>:9090` — Grafana: `http://<host>:3000` (credentials from `.env`).
 - Dashboards are provisioned from `grafana/dashboards/` into the **LoxiLB** folder.
+- A series' first event is an increase: `prometheus.yml` has the loxilb job scrape the
+  protobuf exposition (`scrape_protocols: [PrometheusProto, …]`), which carries each
+  counter's creation time, and `docker-compose.yml` starts Prometheus with
+  `--enable-feature=created-timestamp-zero-ingestion`. Keep both on a Prometheus of your
+  own, or the first error of a new (model, tenant) pair — or of a freshly started
+  gateway — reads 1 in the raw counter and 0 or No data in every rate panel and alert
+  (see "AI request accounting"). `ci/lint-monitoring.py` fails the two files without them.
 
 ## Security notes
 
@@ -160,6 +167,32 @@ keyed (model, tenant) pair at its first record (the error statuses under
 `completed` and `denied`, `aborted` 200 for each cause, and `aborted` `none`
 for the client). `tenant=""` is never seeded.
 
+Seeding cannot reach the very first event of a pair: the series a cold pair's
+first 500 creates is born with that 500, and the first scrape of it already
+reads 1, so `rate()` and `increase()` see no 0 → 1 step while the raw counter
+reads 1 (QA 2026-10-21, MON-04; the same holds for every counter of a freshly
+started process). The exporter stamps every counter with its creation time,
+and the protobuf exposition carries the stamp (the text formats do not):
+`prometheus.yml` has the loxilb job scrape `PrometheusProto`, and
+`docker-compose.yml` starts Prometheus with
+`--enable-feature=created-timestamp-zero-ingestion`, under which Prometheus
+writes a 0 at the creation instant before the series' first sample. The first
+error is then a positive `rate()` and `increase()`, and the AI dashboard's
+error ratio reads it as 100 % of one request. Verified against Prometheus
+v2.53.4 on the testbed: a cold pair's first 500 recorded at 11:19:51.542 was
+stored as 0 at 11:19:51.542 and 1 at the next scrape, `increase(…[3m])` 1.01,
+for an anonymous and for a keyed pair alike. `ci/lint-monitoring.py` fails
+either file without its setting.
+
+What that contract does not cover, said plainly: a Prometheus without the flag,
+or one scraping the text exposition, is back to the series appearing at 1, and
+there the panel **AI 5xx observed (raw counter)** beside the ratio is the
+record of the event — the counter itself, not a rate. The ratio's `No AI
+traffic (5m)` is the no-traffic reading, not a healthy 0. A creation time
+older than the TSDB head's append window (a series that lived long before this
+Prometheus first scraped it) gets no zero, which is the right reading: its
+first event fell in no window this Prometheus had.
+
 Completed responses are recorded at SSE stream completion when streamed and at
 the response headers when not, sharing one per-request dedup guard; an aborted
 one where its answer was cut, by the same guard. An answer
@@ -200,7 +233,7 @@ same requests from another angle, so adding it to the request total (or to its
 | `loxilb_ai_fc_band_total` | the capacity gate's decisions by priority band | `shed` and `expired` are part of `{outcome="denied"}`; `cancelled` is part of `{outcome="aborted",cause="client"}`; `admitted` requests end in any outcome |
 | `loxilb_pd_admission_shed_total`, `loxilb_pd_admission_overflow_shed_total` | the P/D in-flight 429 (`pd_overloaded`) | part of `{outcome="denied",status="429"}` |
 | `loxilb_ai_rate_limit_hits_total`, `loxilb_ai_token_quota_denied_total` | rate-limit and quota refusals, by reason | part of `{outcome="denied"}` (see the inequality above) |
-| `loxilb_ai_pd_requests_total` | every P/D request's lifecycle, failures included; `{phase="aborted",status="client"}` is the client leaving at any stage, 1:1 with the P/D requests in `{outcome="aborted",cause="client"}` | the P/D requests in `requests_total` |
+| `loxilb_ai_pd_requests_total` | every P/D request's lifecycle, failures included; `{phase="aborted",status="client"}` is the client leaving at any stage, 1:1 with the P/D requests in `{outcome="aborted",cause="client"}`; `{phase="complete",status="success"}` is HTTP completion of the decode answer (its last chunk, its Content-Length satisfied, or its EOF on an unframed answer), not semantic completion — `finish_reason`, `usage` and the SSE `[DONE]` event are not required, a stream the engine ended cleanly without them is a success here, one the gateway ended is `decode/truncated`, one the engine broke `decode/error` | the P/D requests in `requests_total` |
 
 The TTFB histogram (`loxilb_proxy_http_ttfb_seconds`) samples backend replies
 only: a gateway's own answer reaches its first byte in microseconds and is not

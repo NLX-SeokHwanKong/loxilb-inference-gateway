@@ -138,7 +138,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "percentunit",
-          "noValue": "No data",
+          "noValue": "No AI traffic (5m)",
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -159,13 +159,13 @@
         },
         "overrides": []
       },
-      "description": "Completed 5xx plus answers the engine or the gateway cut (outcome=aborted, cause engine|gateway), over completed + aborted requests: the ratio of the LoxilbAIErrorRatio alert and of instance:loxilb_ai_error_ratio:rate5m, taken here from the counters because the recorded series carries no model or tenant to filter on. Gate denials are excluded so a rate-limit storm does not read as a backend fault, and a client that cancels or stops reading (cause=client) is traffic, not an error. Shows 0 when traffic is healthy; No data only when there is no AI traffic at all."
+      "description": "Completed 5xx plus answers the engine or the gateway cut (outcome=aborted, cause engine|gateway), over completed + aborted requests: the ratio of the LoxilbAIErrorRatio alert and of instance:loxilb_ai_error_ratio:rate5m, taken here from the counters because the recorded series carries no model or tenant to filter on. Gate denials are excluded so a rate-limit storm does not read as a backend fault, and a client that cancels or stops reading (cause=client) is traffic, not an error. Shows 0 when traffic is healthy; 'No AI traffic (5m)' when no request completed or was cut in the window, which is not a healthy 0. The first error of a new (model, tenant) pair, or of a fresh process, reads here as a positive ratio because Prometheus places a 0 at the series' creation instant (created-timestamp zero ingestion over the protobuf scrape, deploy/monitoring prometheus.yml and docker-compose.yml); on a Prometheus without that, rate() cannot see a series' first increment and the raw counter beside this panel is the record of it."
     },
     {
       "id": 2,
       "type": "stat",
-      "title": "Active SSE streams",
-      "description": "Streams open at the scrape instant (10s sampling). Short streams that start and finish between scrapes are not visible here - 0 is normal when the backend completes streams quickly; see the requests/s panels for volume and the trend panel for history.",
+      "title": "Active SSE streams (all tenants)",
+      "description": "Model-only family (no tenant label): the Tenant selection does not apply and the value covers all tenants, so with one tenant selected this still shows every tenant's traffic for the model. Filter by Model. Streams open at the scrape instant (10s sampling). Short streams that start and finish between scrapes are not visible here - 0 is normal when the backend completes streams quickly; see the requests/s panels for volume and the trend panel for history.",
       "gridPos": {
         "h": 4,
         "w": 4,
@@ -252,6 +252,48 @@
         },
         "overrides": []
       }
+    },
+    {
+      "id": 66,
+      "type": "stat",
+      "title": "AI 5xx observed (raw counter)",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "loxilb-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(loxilb_ai_requests_total{model=~\"$model\",tenant=~\"$tenant\",outcome=\"completed\",status=~\"5..\",instance=~\"$instance\"})"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No data",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "description": "The raw cumulative count of completed 5xx answers since the gateway started: a counter read directly, not a rate, so the first error of a cold (model, tenant) pair reads 1 here from the scrape that sees it, whatever a rate window can recover. Resets with the process. Gate denials are not in it (outcome=denied), nor answers the engine or the gateway cut (those are in the error ratio's numerator as aborted). No data means no completed answer of this selection has been recorded since start."
     },
     {
       "id": 4,
@@ -422,8 +464,8 @@
     {
       "id": 10,
       "type": "timeseries",
-      "title": "Active SSE streams (trend)",
-      "description": "History of the instantaneous gauge (10s samples). Sub-second streams rarely overlap a scrape.",
+      "title": "Active SSE streams trend (all tenants)",
+      "description": "Model-only family (no tenant label): the Tenant selection does not apply and the value covers all tenants, so with one tenant selected this still shows every tenant's traffic for the model. Filter by Model. History of the instantaneous gauge (10s samples). Sub-second streams rarely overlap a scrape.",
       "gridPos": {
         "h": 8,
         "w": 24,
@@ -461,7 +503,7 @@
       "id": 12,
       "type": "row",
       "collapsed": true,
-      "title": "PD disaggregation (only on PD deployments)",
+      "title": "PD disaggregation (only on PD deployments; model-only families, all tenants)",
       "gridPos": {
         "h": 1,
         "w": 24,
@@ -472,7 +514,7 @@
         {
           "id": 13,
           "type": "timeseries",
-          "title": "PD requests/s",
+          "title": "PD requests/s (all tenants)",
           "gridPos": {
             "h": 8,
             "w": 12,
@@ -504,12 +546,13 @@
               "noValue": "No data"
             },
             "overrides": []
-          }
+          },
+          "description": "Model-only family (no tenant label): the Tenant selection does not apply and the value covers all tenants, so with one tenant selected this still shows every tenant's traffic for the model. Filter by Model. phase=\"complete\",status=\"success\" is HTTP completion of the decode answer (its last chunk, Content-Length satisfied, or EOF on an unframed answer), not semantic completion: finish_reason, usage and the SSE [DONE] event are not required. A stream the gateway ended is decode/truncated; one the engine broke is decode/error."
         },
         {
           "id": 14,
           "type": "timeseries",
-          "title": "Prefill duration p95",
+          "title": "Prefill duration p95 (all tenants)",
           "gridPos": {
             "h": 8,
             "w": 12,
@@ -541,13 +584,14 @@
               "noValue": "No data"
             },
             "overrides": []
-          }
+          },
+          "description": "Model-only family (no tenant label): the Tenant selection does not apply and the value covers all tenants, so with one tenant selected this still shows every tenant's traffic for the model. Filter by Model."
         },
         {
           "id": 15,
           "type": "timeseries",
-          "title": "Decode TTFT p95",
-          "description": "Decode dispatch to the first streamed event (the first SSE data object, a role-only delta included). Streamed requests only: a non-streamed P/D request adds no sample. In earlier releases the same family measured the whole decode leg, so its values dropped by design. Compare old values with 'Decode duration p95'.",
+          "title": "Decode TTFT p95 (all tenants)",
+          "description": "Model-only family (no tenant label): the Tenant selection does not apply and the value covers all tenants, so with one tenant selected this still shows every tenant's traffic for the model. Filter by Model. Decode dispatch to the first streamed event (the first SSE data object, a role-only delta included). Streamed requests only: a non-streamed P/D request adds no sample. In earlier releases the same family measured the whole decode leg, so its values dropped by design. Compare old values with 'Decode duration p95'.",
           "gridPos": {
             "h": 8,
             "w": 12,
@@ -584,8 +628,8 @@
         {
           "id": 64,
           "type": "timeseries",
-          "title": "Decode duration p95",
-          "description": "Decode dispatch to the end of the decode response (the whole decode leg), streamed or not. Not sampled for a request a reaper ended.",
+          "title": "Decode duration p95 (all tenants)",
+          "description": "Model-only family (no tenant label): the Tenant selection does not apply and the value covers all tenants, so with one tenant selected this still shows every tenant's traffic for the model. Filter by Model. Decode dispatch to the end of the decode response (the whole decode leg), streamed or not. Not sampled for a request a reaper ended.",
           "gridPos": {
             "h": 8,
             "w": 12,
@@ -622,8 +666,8 @@
         {
           "id": 65,
           "type": "timeseries",
-          "title": "Prefill fallbacks by reason",
-          "description": "Prefills recomputed on the decode leg, by the condition that forced the fallback (origin_5xx, origin_408, origin_429, no_status, truncated, other). A sustained rate means the prefill tier is failing or answering unusably while decode carries the whole cost.",
+          "title": "Prefill fallbacks by reason (all tenants)",
+          "description": "Model-only family (no tenant label): the Tenant selection does not apply and the value covers all tenants, so with one tenant selected this still shows every tenant's traffic for the model. Filter by Model. Prefills recomputed on the decode leg, by the condition that forced the fallback (origin_5xx, origin_408, origin_429, no_status, truncated, other). A sustained rate means the prefill tier is failing or answering unusably while decode carries the whole cost.",
           "gridPos": {
             "h": 8,
             "w": 12,
@@ -820,8 +864,8 @@
         {
           "id": 8,
           "type": "timeseries",
-          "title": "Rate-limit hits/s",
-          "description": "Denials are counted in loxilb_ai_requests_total{outcome=\"denied\"}; this panel carries WHY they were denied, which the request total does not. Requires an AI API key carrying rate_limit_rps (POST /config/ai/apikey); 'No data' without keyed quota configured.",
+          "title": "Rate-limit hits/s (all models)",
+          "description": "Tenant-only family (no model label): the Model selection does not apply and the value covers all models. Filter by Tenant. Denials are counted in loxilb_ai_requests_total{outcome=\"denied\"}; this panel carries WHY they were denied, which the request total does not. Requires an AI API key carrying rate_limit_rps (POST /config/ai/apikey); 'No data' without keyed quota configured.",
           "gridPos": {
             "h": 8,
             "w": 12,
@@ -995,8 +1039,8 @@
         {
           "id": 24,
           "type": "timeseries",
-          "title": "Tenant quota utilisation",
-          "description": "Fraction of the per-tenant tokens-per-minute quota spent and not yet refilled, computed at scrape time. Can exceed 100%: a charge settled after admission puts the bucket in debt, which then decays as it refills.",
+          "title": "Tenant quota utilisation (all models)",
+          "description": "Tenant-only family (no model label): the Model selection does not apply and the value covers all models. Filter by Tenant. Fraction of the per-tenant tokens-per-minute quota spent and not yet refilled, computed at scrape time. Can exceed 100%: a charge settled after admission puts the bucket in debt, which then decays as it refills.",
           "gridPos": {
             "h": 8,
             "w": 12,
@@ -1073,8 +1117,8 @@
         {
           "id": 26,
           "type": "timeseries",
-          "title": "Quota denials/s by tenant",
-          "description": "Requests refused at the gate because the tenant's token quota was exhausted. Denials with utilisation below 100% mean the deny came from the deep-debt path, not the reservation check.",
+          "title": "Quota denials/s by tenant (all models)",
+          "description": "Tenant-only family (no model label): the Model selection does not apply and the value covers all models. Filter by Tenant. Requests refused at the gate because the tenant's token quota was exhausted. Denials with utilisation below 100% mean the deny came from the deep-debt path, not the reservation check.",
           "gridPos": {
             "h": 8,
             "w": 12,
@@ -1159,8 +1203,8 @@
         {
           "id": 29,
           "type": "timeseries",
-          "title": "Quota headroom by tenant",
-          "description": "limit x (1 - utilisation): tokens the tenant may still spend in the current window. Goes negative while the bucket is in post-hoc debt.",
+          "title": "Quota headroom by tenant (all models)",
+          "description": "Tenant-only family (no model label): the Model selection does not apply and the value covers all models. Filter by Tenant. limit x (1 - utilisation): tokens the tenant may still spend in the current window. Goes negative while the bucket is in post-hoc debt.",
           "gridPos": {
             "h": 8,
             "w": 18,
@@ -2240,8 +2284,8 @@
     {
       "id": 48,
       "type": "timeseries",
-      "title": "Session & KV-param routing",
-      "description": "Conversation-affinity and KV-parameter extraction health per model: P/D vs normal session hits, KV params found vs missing on the request path, and full-proxy KV-param buffer overflows (params arriving past the buffered window).",
+      "title": "Session & KV-param routing (all tenants)",
+      "description": "Model-only family (no tenant label): the Tenant selection does not apply and the value covers all tenants, so with one tenant selected this still shows every tenant's traffic for the model. Filter by Model. Conversation-affinity and KV-parameter extraction health per model: P/D vs normal session hits, KV params found vs missing on the request path, and full-proxy KV-param buffer overflows (params arriving past the buffered window).",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -2402,8 +2446,8 @@
     {
       "id": 52,
       "type": "timeseries",
-      "title": "P/D routing tier mix",
-      "description": "Terminal prefill-selection decisions by routing tier: tier0 session stickiness, tier1 prefix trie, tier15 KV-exact, tier2 min-load fallback. Every accepted P/D request lands in exactly one tier, so the stacked rates sum to the accepted selection rate; admission parks/sheds and pre-routing rejections are excluded by design. A tier2-dominated mix on a cache-aware rule means the cache tiers are not engaging.",
+      "title": "P/D routing tier mix (all tenants)",
+      "description": "Model-only family (no tenant label): the Tenant selection does not apply and the value covers all tenants, so with one tenant selected this still shows every tenant's traffic for the model. Filter by Model. Terminal prefill-selection decisions by routing tier: tier0 session stickiness, tier1 prefix trie, tier15 KV-exact, tier2 min-load fallback. Every accepted P/D request lands in exactly one tier, so the stacked rates sum to the accepted selection rate; admission parks/sheds and pre-routing rejections are excluded by design. A tier2-dominated mix on a cache-aware rule means the cache tiers are not engaging.",
       "gridPos": {
         "h": 8,
         "w": 12,

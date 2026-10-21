@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
@@ -829,6 +830,54 @@ func TestSeedAIRequestPair(t *testing.T) {
 	RecordAIRequestDenied("", "m-seed-anon", 401)
 	if n := seriesWith(t, aiRequestsTotal, map[string]string{"model": "m-seed-anon"}); n != 1 {
 		t.Errorf("tenant=\"\" was seeded: %d series, want only the record's own", n)
+	}
+}
+
+// TestAIRequestsTotalCarriesCreatedTimestamp (MON-04, QA 2026-10-21): the
+// first event of a series is visible to rate() and increase() only if
+// Prometheus can place a 0 before the series' first sample, which it does
+// (created-timestamp-zero-ingestion, deploy/monitoring) from the creation
+// time the exporter stamps on every counter child and the protobuf
+// exposition carries. The stamp is the record's own instant: the series a
+// cold pair's first 500 creates is stamped at that 500, and a series seeded
+// alongside it at the same time. A family that drops the stamp (a custom
+// collector, a ConstMetric) would silently return the first event to
+// invisibility: this pins it on the request family.
+func TestAIRequestsTotalCarriesCreatedTimestamp(t *testing.T) {
+	model, tenant := "m-created-ts", "t-created-ts"
+	before := time.Now()
+	RecordAIRequest(tenant, model, 500, 10, "")
+	after := time.Now()
+	ch := make(chan prometheus.Metric, 4096)
+	go func() { aiRequestsTotal.Collect(ch); close(ch) }()
+	seen := 0
+	for m := range ch {
+		var d dto.Metric
+		if err := m.Write(&d); err != nil {
+			t.Fatalf("metric write: %v", err)
+		}
+		labels := map[string]string{}
+		for _, lp := range d.GetLabel() {
+			labels[lp.GetName()] = lp.GetValue()
+		}
+		if labels["model"] != model || labels["tenant"] != tenant {
+			continue
+		}
+		seen++
+		ct := d.GetCounter().GetCreatedTimestamp()
+		if ct == nil {
+			t.Fatalf("series %v carries no created timestamp", labels)
+		}
+		at := ct.AsTime()
+		if at.Before(before.Add(-time.Second)) || at.After(after.Add(time.Second)) {
+			t.Errorf("series %v created at %v, outside the record's instant [%v, %v]",
+				labels, at, before, after)
+		}
+	}
+	// The 31 series seeded with the record, the record's own completed/500
+	// among them (500 is a seeded status): every one stamped.
+	if seen != 31 {
+		t.Errorf("saw %d series of the pair, want 31", seen)
 	}
 }
 

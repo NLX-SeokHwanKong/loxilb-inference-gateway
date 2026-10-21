@@ -226,6 +226,24 @@ binary behaves exactly like upstream loxilb.
 
 ### Changed
 
+- **The AI dashboard's model-only panels say `(all tenants)`** (QA
+  2026-10-21, MON-05). The active-stream gauge and the P/D lifecycle,
+  timing, fallback, tier and session families carry a model label and no
+  tenant label, so the Tenant selection never reached them, and a stream
+  tenant B held read, with A selected, as A's. Their titles end in `(all
+  tenants)` and their descriptions say the selection does not apply;
+  `ci/lint-monitoring.py` requires the mark on a panel the model filter
+  reaches and the tenant filter does not, and forbids it on one the tenant
+  filter reaches. No metric changed: a per-tenant active-stream count would
+  be a new label on the gauge, not a filter.
+- **`loxilb_ai_pd_requests_total{phase="complete",status="success"}` is
+  defined as HTTP completion of the decode answer** (its last chunk, its
+  Content-Length satisfied, or its EOF on an unframed answer), not semantic
+  completion of the stream: a stream the engine ends cleanly without
+  `finish_reason`, `usage` or the SSE `[DONE]` event is a success, one the
+  gateway ended is `decode/truncated`, one the engine broke `decode/error`.
+  The HELP text, the monitoring README and the P/D panel now say so (QA
+  2026-10-21, contract question); the behaviour is unchanged.
 - **A request whose client did not get the whole answer is
   `outcome="aborted"`, with a new `cause` label on
   `loxilb_ai_requests_total`** (this supersedes the Stage 2 behaviour
@@ -378,6 +396,30 @@ binary behaves exactly like upstream loxilb.
 
 ### Fixed
 
+- **A backend status line split across reads reached no class count and no
+  TTFB sample** (QA 2026-10-21, MON-02-EDGE). The client received the whole
+  answer and `loxilb_ai_requests_total` carried its status, but
+  `loxilb_proxy_http_responses_by_status_total` and
+  `loxilb_proxy_http_ttfb_seconds` did not move: the capture sniffed the
+  status line from the first bytes of a backend read, and `HTTP/1.1 200`
+  followed by ` OK` in the next read is no such read. The response framer,
+  which assembles the line whatever the read boundaries, now records the
+  answer too, once per request (loxilb-ebpf-inference-gateway#123).
+- **The first error of a cold (model, tenant) pair, or of a freshly started
+  gateway, was invisible to `rate()` and `increase()`** (QA 2026-10-21,
+  MON-04): the series was born with it, so its first scrape already read 1
+  and no window saw a 0 → 1 step; seeding cannot reach the series the event
+  itself creates. The exporter stamps every counter with its creation time,
+  and `deploy/monitoring` now carries it to Prometheus: the loxilb scrape
+  job reads the protobuf exposition (`scrape_protocols: [PrometheusProto,
+  …]`, the one format that carries the stamp) and Prometheus runs with
+  `--enable-feature=created-timestamp-zero-ingestion`, writing a 0 at the
+  creation instant before the first sample. The first error is a positive
+  increase, and the error ratio reads it as 100 % of one request;
+  `ci/lint-monitoring.py` fails either file without its setting. The AI
+  dashboard reads the counter itself in a new **AI 5xx observed (raw
+  counter)** stat beside the ratio, and the ratio's empty state says `No AI
+  traffic (5m)`, not `No data`.
 - **A P/D client that left before any answer reached no record.** It is
   now recorded once in both families: `loxilb_ai_requests_total`
   `outcome="aborted"`, `status="none"`, `cause="client"`, and
