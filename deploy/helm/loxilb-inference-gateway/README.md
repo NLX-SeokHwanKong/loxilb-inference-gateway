@@ -12,6 +12,10 @@ KV-exact, prefill/decode). The pool's `loxilb.io/*` annotations are the policy.
 
 ## Install
 
+The operator's guide, from prerequisites to troubleshooting, is
+[`docs/HELM-INSTALL.md`](../../../docs/HELM-INSTALL.md); this README is the
+chart's reference.
+
 Prerequisites: Kubernetes >= 1.30, the Gateway API CRDs (v1.5.1, standard
 channel) and the Inference Extension CRDs (v1.6.0). The pre-install hook checks
 them and fails with the install commands when they are missing; set

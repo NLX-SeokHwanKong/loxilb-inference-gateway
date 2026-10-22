@@ -48,6 +48,9 @@ binary behaves exactly like upstream loxilb.
   `cicd/k3d-helm-inference-gwapi` installs the chart with `values-k3d-dev.yaml`,
   re-runs the `k3d-incluster-inference-gwapi` assertions unchanged against it,
   and then upgrades, uninstalls and reinstalls the release.
+  `docs/HELM-INSTALL.md` is the operator's guide: prerequisites, values,
+  install, `helm test`, upgrade, uninstall, authenticated pools and
+  troubleshooting.
 - **Every HTTP/2 client connection logs one line when it ends, naming why**
   (client closed, header deadline, idle timeout, a backend connection ending,
   listener delete, endpoint teardown, the P/D reaper, an error), the backend

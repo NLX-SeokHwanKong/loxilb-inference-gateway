@@ -118,6 +118,7 @@ cleanup.
 Also in this repository:
 
 - [`docs/BUILD.md`](docs/BUILD.md) — build the gateway and its images from source
+- [`docs/HELM-INSTALL.md`](docs/HELM-INSTALL.md) — install the gateway, kube-loxilb and the Gateway API objects on Kubernetes with Helm
 - [`mcp/`](mcp/README.md) — `loxilb-mcp`, a bridge that lets an MCP client operate the gateway
 - [`deploy/monitoring/`](deploy/monitoring/README.md) — the Prometheus and Grafana stack
 - [`cicd/`](cicd/) — runnable scenarios for every feature; most need no GPU
