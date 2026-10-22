@@ -1,0 +1,14 @@
+{
+  "engine": "vllm",
+  "version": "0.31.0",
+  "stock_image": "vllm/vllm-openai@sha256:a4a4c0437bf7240089da5f08aa370c4aee17ae5290f7a3b468825ee26c4c3a6b",
+  "path": "vllm/entrypoints/openai/chat_completion/serving.py",
+  "original_sha256": "532dadea845c77a5a79011027b9989987c3e32467614e993f439f29c924de002",
+  "patched_sha256": "d84b34d4c842c17cb0232751e12b4f8b854a6a01857d2d546c781e50c88062f1",
+  "upstream_fix": {
+    "pull_request": "https://github.com/vllm-project/vllm/pull/40986",
+    "commit": "b0eb87fe4943316781913d99a8ef8413e425decb",
+    "patch_file": "upstream-40986.patch",
+    "patch_sha256": "cee1cd8345b3449e2294d08e64849c82640555d50b539d64b461b73adbb1ed66"
+  }
+}
