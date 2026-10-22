@@ -100,7 +100,11 @@ binary behaves exactly like upstream loxilb.
   (`upstream-sync.yml`, `ebpf-pin-bump.yml`). `ebpf-pin-check.yml` fails a
   pull request, and main, whose `loxilb-ebpf` pin is not a commit on the ebpf
   fork's main; a pull request pinned to an unmerged ebpf change on purpose
-  carries the `ebpf-temp-pin` label, which turns that into a warning.
+  carries the `ebpf-temp-pin` label, which turns that into a warning. Every
+  loxilb the scenario harness spawns gets a REST readiness probe
+  (`[rest-probe]` lines in the job log: time to the first answer, or a dump
+  of the container state and loxilb's output on timeout); it reports and never
+  fails unless `LOXILB_REST_PROBE=fail`.
 - **Token quotas (tokens-per-minute)** for AI gateway rules: per-tenant and
   per-tenant-and-model budgets enforced from the tokens the serving engine
   reports. Usage is read from the engine's own `usage` block, with
