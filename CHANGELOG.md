@@ -320,10 +320,11 @@ binary behaves exactly like upstream loxilb.
   - Audit: `data.ai.complete` for an aborted answer is no longer
     `outcome.reason="ok"`: the client's cancel or stall is
     `client_abort`, a cap or a reaper `timeout`, the engine dying
-    `backend_conn`. A response cut by its listener going away
-    (`listener_closed`) also reads `backend_conn`: the closest available
-    reason, though the cause is the gateway. A `gateway_shutdown` reason
-    is the follow-up for the next revision of the vocabulary.
+    `backend_conn`, and a response cut by its listener going away
+    (`listener_closed`) `gateway_shutdown` — a new value of the
+    vocabulary, the gateway's own cut with no backend at fault. (It read
+    `backend_conn`, the closest available reason, until this value
+    existed.) The vocabulary is add-only; the envelope version stays 1.
 - **The AI error ratio counts what the engine and the gateway cut, not
   what the client cancelled:**
   `(completed 5xx + aborted{cause=~"engine|gateway"}) / (completed + aborted)`.
@@ -822,7 +823,7 @@ binary behaves exactly like upstream loxilb.
   | 34 | every scraped loxilb series | `cluster` | absent (only `external_labels`, on what leaves Prometheus) | `cluster="loxilb-default"` from the scrape job; the `cluster:`/`instance:` recording rules and the KV alerts now carry it. Set the same value per site in both places | gateway `72c5ecdf` |
   | 35 | the alerts and panels of Fixed (lazy families) | first event of a series | not counted by `increase()` | counted: the alerts can fire on the first event of a kind | gateway `0d05de6c` |
   | 36 | `loxilb_ai_pd_prefill_fallback_total{reason="truncated"}`, `loxilb_ai_pd_requests_total` | a prefill 4xx cut at the buffer cap | recomputed on the decode leg; `truncated` fallback, `complete/success` | relayed with its status; `prefill/rejected`, no fallback. `truncated` is a cut 2xx only | ebpf `8d85276` |
-  | 37 | `data.ai.complete` audit records | `outcome.reason` of an aborted answer | `ok` | `client_abort` (cancel, stall, leaving before any answer), `timeout` (a cap or a reaper), `backend_conn` (the engine dying; also the listener going away, the closest available reason) | gateway `e64ce853` |
+  | 37 | `data.ai.complete` audit records | `outcome.reason` of an aborted answer | `ok` | `client_abort` (cancel, stall, leaving before any answer), `timeout` (a cap or a reaper), `backend_conn` (the engine dying), `gateway_shutdown` (the listener going away under the answer; a new vocabulary value — it read `backend_conn` before) | gateway `e64ce853`, this change |
   | 38 | `loxilb_ai_requests_total` | a client that left before any answer, on a rule that is not P/D (HTTP/1.1) | no record | `outcome="aborted"`, `status="none"`, `cause="client"`, one record; no `loxilb_ai_pd_requests_total` record (no lifecycle family pairs with it). **`status="none"` (row 26) is no longer P/D-only**. Not on a rule whose answers go by the kernel (sockMapMode `response`): no record there, as for its answers | ebpf `174fb525` (#119), `bcfb6bf`; gateway CI row TP-I |
   | 39 | `loxilb_ai_requests_total`, `loxilb_ai_pd_requests_total` | a P/D client that left at the gate, in the capacity queue or parked (before any prefill) | no record in either | one record in each: `outcome="aborted"`, `status="none"`, `cause="client"` and `{phase="aborted",status="client"}`, as row 27 for a client leaving in the prefill | ebpf `6294e71` (#120); gateway CI row TP-K |
   | 40 | `loxilb_ai_requests_total`, `loxilb_proxy_http_responses_by_status_total` | a backend on a rule that is not P/D that closed before any answer (HTTP/1.1) | no record; the client got a bare close | the client gets the gateway's 502 `backend_unreachable`: `outcome="completed"`, `status="502"`, one record, no lifecycle record (as a refused connect, row 13, and a TLS leg failing before its answer). Only when the client cannot be told: `outcome="aborted"`, `status="none"`, `cause="engine"` | ebpf `0a77af5` (#120), `b0c647d`; gateway CI row TP-J |

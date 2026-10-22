@@ -93,13 +93,15 @@ const (
 // Reason is the closed vocabulary of outcome.reason. It is the only
 // free-text-shaped field in the envelope and it is not free text: a SIEM
 // rule written against a value here must not break when a log line is
-// reworded.
+// reworded. The vocabulary is add-only, as the envelope is: a value is
+// never renamed or removed, and a new one names a cause no existing value
+// does.
 //
-// backend_conn is also what a response cut by its listener going away (the
-// data plane's listener_closed) reads: the closest available reason, though
-// the cause is the gateway, not a backend. See aiCompleteReason in
-// pkg/loxinet; a gateway_shutdown reason is the follow-up for the next
-// revision of this vocabulary.
+// gateway_shutdown is a response the gateway itself cut, with no backend
+// and no client at fault: its listener went away under the answer (the
+// data plane's listener_closed). Until this value existed such a response
+// read backend_conn, the closest available reason. See aiCompleteReason in
+// pkg/loxinet.
 type Reason string
 
 const (
@@ -117,6 +119,7 @@ const (
 	ReasonClientAbort      Reason = "client_abort"
 	ReasonUpstreamError    Reason = "upstream_error"
 	ReasonAuditUnavailable Reason = "audit_unavailable"
+	ReasonGatewayShutdown  Reason = "gateway_shutdown"
 )
 
 var reasons = map[Reason]struct{}{
@@ -124,7 +127,7 @@ var reasons = map[Reason]struct{}{
 	ReasonAdmission: {}, ReasonRateLimit: {}, ReasonQuota: {},
 	ReasonCircuitBreaker: {}, ReasonBackendTLS: {}, ReasonBackendConn: {},
 	ReasonTimeout: {}, ReasonClientAbort: {}, ReasonUpstreamError: {},
-	ReasonAuditUnavailable: {},
+	ReasonAuditUnavailable: {}, ReasonGatewayShutdown: {},
 }
 
 // ValidReason reports whether r is in the closed vocabulary. The empty
