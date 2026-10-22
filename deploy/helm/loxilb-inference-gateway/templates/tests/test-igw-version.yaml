@@ -13,6 +13,11 @@ metadata:
     app.kubernetes.io/component: test
   annotations:
     "helm.sh/hook": test
+    # The pod stays after the run so `helm test --logs` can read it (a
+    # hook-succeeded policy deletes it first and the log read fails) and so a
+    # failure can be inspected; the next helm test replaces it. Hook resources
+    # are not part of the release, so the pre-delete drain removes test pods
+    # at uninstall.
     "helm.sh/hook-delete-policy": before-hook-creation
 spec:
   restartPolicy: Never

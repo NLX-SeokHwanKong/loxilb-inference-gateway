@@ -1,0 +1,91 @@
+{{- if .Values.hooks.drain.enabled }}
+{{- $d := .Values.hooks.drain }}
+{{- $name := printf "%s-drain" (include "loxilb-inference-gateway.fullname" .) }}
+{{- $root := . }}
+# pre-delete -10: the order an uninstall needs and Helm alone cannot give.
+#
+# Helm deletes the release's objects in one sweep, the InferencePools a moment
+# before the kube-loxilb Deployment, and kube-loxilb ends at once
+# (terminationGracePeriodSeconds 0). The Service it derived from each pool is
+# not a release object and carries no ownerReference, so kube-loxilb has to see
+# the pool go and reconcile; it does not get the chance, and the Service - and
+# on an external gateway the loxilb rule - stay behind. This Job runs while
+# everything is still up: it deletes the chart's HTTPRoutes and then its
+# InferencePools (route -> pool, the order kube-loxilb's own delete path
+# follows), and waits until the derived Services are gone before Helm goes on.
+# It also removes the helm test pods, hook resources Helm does not track. A
+# timeout is reported and does not block the uninstall.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "loxilb-inference-gateway.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-delete
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: {{ add $d.timeoutSeconds 120 }}
+  template:
+    metadata:
+      labels:
+        {{- include "loxilb-inference-gateway.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: drain
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ $name }}
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: drain
+          image: "{{ $d.image.repository }}:{{ $d.image.tag }}"
+          imagePullPolicy: {{ $d.image.pullPolicy }}
+          {{- with $d.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          env:
+            - name: TIMEOUT
+              value: {{ $d.timeoutSeconds | quote }}
+            # namespace/route and namespace/pool of every pool this chart renders
+            - name: ROUTES
+              value: {{ include "loxilb-inference-gateway.drainRoutes" . | quote }}
+            - name: POOLS
+              value: {{ include "loxilb-inference-gateway.drainPools" . | quote }}
+            - name: RELEASE
+              value: {{ .Release.Name | quote }}
+            - name: RELEASE_NS
+              value: {{ .Release.Namespace | quote }}
+          command: ["/bin/sh", "-u", "-c"]
+          args:
+            - |
+              echo "pre-delete drain: routes [$ROUTES] pools [$POOLS]"
+              # helm test pods are hook resources Helm leaves behind
+              kubectl -n "$RELEASE_NS" delete pod -l "app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/component=test" --ignore-not-found --wait=false
+              for r in $ROUTES; do
+                kubectl -n "${r%/*}" delete httproute "${r#*/}" --ignore-not-found --wait=false
+              done
+              for p in $POOLS; do
+                kubectl -n "${p%/*}" delete inferencepool "${p#*/}" --ignore-not-found --wait=false
+              done
+              deadline=$(( $(date +%s) + TIMEOUT ))
+              while :; do
+                left=""
+                for p in $POOLS; do
+                  n=$(kubectl -n "${p%/*}" get svc -l "loxilb.io/inference-pool=${p#*/}" --no-headers 2>/dev/null | awk '{print $1}')
+                  [ -z "$n" ] || left="$left ${p%/*}/$n"
+                done
+                if [ -z "$left" ]; then echo "pre-delete drain: every derived Service is gone"; exit 0; fi
+                if [ "$(date +%s)" -ge "$deadline" ]; then
+                  echo "pre-delete drain: WARNING - still present after ${TIMEOUT}s:$left (kube-loxilb did not reconcile the deletion; delete them by hand)" >&2
+                  exit 0
+                fi
+                echo "pre-delete drain: waiting for$left"
+                sleep 2
+              done
+{{- end }}

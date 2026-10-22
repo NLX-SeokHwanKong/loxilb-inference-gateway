@@ -137,3 +137,26 @@ own fields.
 {{- end -}}
 {{- toJson $out -}}
 {{- end -}}
+
+{{/*
+The HTTPRoutes and InferencePools this chart renders, as "namespace/name"
+words, for the pre-delete drain.
+*/}}
+{{- define "loxilb-inference-gateway.drainRoutes" -}}
+{{- $root := . -}}
+{{- $out := list -}}
+{{- range $p := .Values.inference.pools -}}
+{{- $route := $p.route | default dict -}}
+{{- $out = append $out (printf "%s/%s" (include "loxilb-inference-gateway.poolNamespace" (dict "pool" $p "root" $root)) ($route.name | default (printf "%s-route" $p.name))) -}}
+{{- end -}}
+{{- join " " $out -}}
+{{- end -}}
+
+{{- define "loxilb-inference-gateway.drainPools" -}}
+{{- $root := . -}}
+{{- $out := list -}}
+{{- range $p := .Values.inference.pools -}}
+{{- $out = append $out (printf "%s/%s" (include "loxilb-inference-gateway.poolNamespace" (dict "pool" $p "root" $root)) $p.name) -}}
+{{- end -}}
+{{- join " " $out -}}
+{{- end -}}

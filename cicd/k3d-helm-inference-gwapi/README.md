@@ -8,14 +8,20 @@ fixtures. Cluster, images, mock vLLM servers and the Gateway API / Inference
 Extension CRDs still come from [`common/k8s-inference`](../common/k8s-inference).
 
 `validation.sh` runs `helm test` (the chart's own pods: management REST flavor,
-InferencePool → Service → loxilb rule) and then sources the original scenario's
-`validation.sh` unchanged. The same eight assertions passing is the definition
-of "the chart is equivalent to the testbed". `fixtures/` is a link to the
-original fixtures because checks 5–7 apply a FailClose/FailOpen pool by hand.
+InferencePool → Service → loxilb rule), then sources the original scenario's
+`validation.sh` unchanged — the same eight assertions passing is the definition
+of "the chart is equivalent to the testbed" — and then walks the release through
+its lifecycle: an in-place `helm upgrade` (revision 2, the pre-upgrade hook runs
+again, no pod restarts, the rule and the traffic stay), a `helm uninstall` that
+has to leave nothing but the CRDs (release resources, the gateway objects, the
+Service kube-loxilb derived from the pool, the helm test pods all gone), and a
+`helm install` into the same cluster that brings the rule and the traffic back.
+`fixtures/` is a link to the original fixtures because checks 5–7 apply a
+FailClose/FailOpen pool by hand.
 
 ```bash
 ./config.sh       # cluster, images, mocks, CRDs, client, helm install --wait
-./validation.sh   # helm test + k3d-incluster-inference-gwapi assertions
+./validation.sh   # helm test + k3d-incluster-inference-gwapi assertions + upgrade/uninstall/reinstall
 ./rmconfig.sh     # helm uninstall, then the common teardown
 ```
 

@@ -39,6 +39,28 @@ name (phase 2 renders them) and a gateway with its API-key store configured
 (`--aikey-db-*`): without the store the gateway refuses every verified token
 with 503 `policy_store_unavailable`. NOTES.txt warns on each of these.
 
+The chart is an ordinary Helm chart: `helm install` it directly as above. The
+k3d scenario `cicd/k3d-helm-inference-gwapi` is only a wrapper that brings up a
+cluster, the mock model servers and the CRDs and then runs the same `helm
+install`, `helm test`, `helm upgrade`, `helm uninstall` and `helm install` again.
+
+## Upgrade and uninstall
+
+`helm upgrade` runs the CRD precheck again (pre-upgrade) and applies the changed
+values; a change that touches only the Gateway objects restarts nothing.
+`helm uninstall` first runs a pre-delete drain (`hooks.drain`): it deletes the
+chart's HTTPRoutes and InferencePools while kube-loxilb is still running and
+waits until the Services kube-loxilb derived from them are gone, because Helm
+alone would delete the pools and kube-loxilb in one sweep and leave those
+Services (and, on an external gateway, their rules) behind. Then every release
+resource is removed. Left behind on purpose: the CRDs
+(Helm never deletes `crds/`), loxilb's hostPath directories on the nodes
+(`/etc/loxilb` with the snapshot, `/var/log/loxilb` with the audit trail). The
+`helm test` pods stay after a test run so `helm test --logs` can read them; the
+drain removes them at uninstall. A second `helm install` into
+the same cluster is supported: the precheck finds the CRDs, Helm skips the ones
+in `crds/` that exist, and loxilb replays the snapshot it left on the node.
+
 ## Values
 
 | Key | What it does |

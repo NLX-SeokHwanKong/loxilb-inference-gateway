@@ -142,6 +142,25 @@ inference:
     failureMode: FailOpen
 
 # ---------------------------------------------------------------------------
+# Hooks beyond the CRD precheck.
+# ---------------------------------------------------------------------------
+hooks:
+  # pre-delete (weight -10): delete the chart's HTTPRoutes, then its
+  # InferencePools, and wait until the Services kube-loxilb derived from them
+  # are gone - while kube-loxilb is still running. Helm alone deletes the pools
+  # and the kube-loxilb Deployment in one sweep, and the derived Services (no
+  # ownerReference) would stay behind, with their rules on an external gateway.
+  # A timeout is reported and does not block the uninstall.
+  drain:
+    enabled: true
+    timeoutSeconds: 120
+    image:
+      repository: alpine/k8s
+      tag: 1.34.12
+      pullPolicy: IfNotPresent
+    resources: {}
+
+# ---------------------------------------------------------------------------
 # helm test: templates/tests/ (test-igw-version, test-pool-rule).
 # ---------------------------------------------------------------------------
 tests:

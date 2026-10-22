@@ -44,6 +44,11 @@ inference:
       route:
         name: llm-route
 
+hooks:
+  drain:
+    image:
+      pullPolicy: IfNotPresent
+
 tests:
   curlImage:
     pullPolicy: IfNotPresent

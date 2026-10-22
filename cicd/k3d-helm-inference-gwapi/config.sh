@@ -32,14 +32,13 @@ say "Gateway API $GWAPI_VERSION + Inference Extension $GIE_VERSION CRDs"
 igw_install_gwapi_crds            || exit 1
 say "client container";                   igw_client_up         || exit 1
 
+# The same arguments serve the lifecycle stage of validation.sh (upgrade,
+# uninstall, reinstall), so they are kept in .env. None carries a space.
+HELM_SET_ARGS="--set loxilb-igw.image.repository=$(image_repo "$IGW_IMAGE") --set loxilb-igw.image.tag=$(image_tag "$IGW_IMAGE") --set kube-loxilb.image.repository=$(image_repo "$KLB_IMAGE") --set kube-loxilb.image.tag=$(image_tag "$KLB_IMAGE") --set kube-loxilb.cidrPools.defaultPool=$NODE_IP/32"
 say "helm install $HELM_RELEASE: loxilb-igw + kube-loxilb + gateway objects (VIP $NODE_IP)"
+# shellcheck disable=SC2086  # HELM_SET_ARGS is a list of space-free words
 if ! helm upgrade --install "$HELM_RELEASE" "$CHART" -n "$HELM_NAMESPACE" \
-    -f "$CHART/values-k3d-dev.yaml" \
-    --set "loxilb-igw.image.repository=$(image_repo "$IGW_IMAGE")" \
-    --set "loxilb-igw.image.tag=$(image_tag "$IGW_IMAGE")" \
-    --set "kube-loxilb.image.repository=$(image_repo "$KLB_IMAGE")" \
-    --set "kube-loxilb.image.tag=$(image_tag "$KLB_IMAGE")" \
-    --set "kube-loxilb.cidrPools.defaultPool=$NODE_IP/32" \
+    -f "$CHART/values-k3d-dev.yaml" $HELM_SET_ARGS \
     --wait --timeout 10m; then
   echo "FATAL: helm install failed"
   kubectl get pods -A 2>/dev/null
@@ -57,5 +56,7 @@ igw_env_save "$HERE"
 cat >> "$HERE/.env" <<ENV
 HELM_RELEASE=$HELM_RELEASE
 HELM_NAMESPACE=$HELM_NAMESPACE
+CHART=$CHART
+HELM_SET_ARGS="$HELM_SET_ARGS"
 ENV
 say "testbed up (gateway address $NODE_IP, release $HELM_RELEASE)"

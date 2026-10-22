@@ -42,9 +42,12 @@ binary behaves exactly like upstream loxilb.
   subchart ships that branch's `JWTAuthProfile` CRD and RBAC, and NOTES warns
   when an older kube-loxilb, a missing profile or a gateway without its
   API-key store would leave such a rule unauthenticated or refusing every
-  token. The new scenario
-  `cicd/k3d-helm-inference-gwapi` installs the chart with `values-k3d-dev.yaml`
-  and re-runs the `k3d-incluster-inference-gwapi` assertions unchanged against it.
+  token. A pre-delete drain deletes the chart's HTTPRoutes and InferencePools
+  while kube-loxilb still runs and waits for the Services it derived from them,
+  so `helm uninstall` leaves nothing but the CRDs. The new scenario
+  `cicd/k3d-helm-inference-gwapi` installs the chart with `values-k3d-dev.yaml`,
+  re-runs the `k3d-incluster-inference-gwapi` assertions unchanged against it,
+  and then upgrades, uninstalls and reinstalls the release.
 - **Every HTTP/2 client connection logs one line when it ends, naming why**
   (client closed, header deadline, idle timeout, a backend connection ending,
   listener delete, endpoint teardown, the P/D reaper, an error), the backend
