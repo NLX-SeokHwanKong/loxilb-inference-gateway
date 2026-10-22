@@ -1234,15 +1234,24 @@ echo "  loxilb_ai_pd_prefill_duration_seconds_count total: $TH2_COUNT"
 check "TH2: loxilb_ai_pd_prefill_duration_seconds observed >= 1 sample (got $TH2_COUNT)" \
   $([ "${TH2_COUNT:-0}" -ge 1 ] && echo 0 || echo 1)
 
-# TH3: the decode leg was timed at least once (TTFT).
+# TH3: a streamed decode leg reached its first event at least once (TTFT:
+# dispatch to the first streamed event; this suite streams, so it has samples).
 TH3_COUNT=$(h_count_sum loxilb_ai_pd_decode_ttft_seconds)
 echo "  loxilb_ai_pd_decode_ttft_seconds_count total: $TH3_COUNT"
 check "TH3: loxilb_ai_pd_decode_ttft_seconds observed >= 1 sample (got $TH3_COUNT)" \
   $([ "${TH3_COUNT:-0}" -ge 1 ] && echo 0 || echo 1)
 
-# TH4: error label filter on loxilb_ai_pd_requests_total (use status label, per R7)
-TH4_HAS_ERROR=$(echo "$H_METRICS" | grep -v '^#' | grep 'loxilb_ai_pd_requests_total' | grep -c 'status="error"\|status="timeout"' 2>/dev/null)
-echo "  loxilb_ai_pd_requests_total error/timeout label lines: $TH4_HAS_ERROR"
+# TH3b: the decode leg was timed end to end at least once (duration).
+TH3B_COUNT=$(h_count_sum loxilb_ai_pd_decode_duration_seconds)
+echo "  loxilb_ai_pd_decode_duration_seconds_count total: $TH3B_COUNT"
+check "TH3b: loxilb_ai_pd_decode_duration_seconds observed >= 1 sample (got $TH3B_COUNT)" \
+  $([ "${TH3B_COUNT:-0}" -ge 1 ] && echo 0 || echo 1)
+
+# TH4: error label filter on loxilb_ai_pd_requests_total (use status label, per R7).
+# The family is seeded at 0 for every phase and status, so a series line proves
+# nothing: the count is the sum of the error and timeout values.
+TH4_HAS_ERROR=$(( $(c_label_sum loxilb_ai_pd_requests_total 'status="error"') + $(c_label_sum loxilb_ai_pd_requests_total 'status="timeout"') ))
+echo "  loxilb_ai_pd_requests_total error + timeout count: $TH4_HAS_ERROR"
 if [ "${TH4_HAS_ERROR:-0}" -ge 1 ]; then
   check "TH4: loxilb_ai_pd_requests_total has error/timeout status label entries" 0
 else
@@ -3452,13 +3461,66 @@ n_mode absent >/dev/null 2>&1 || true
 bail_check
 fi  # Phase N
 
+# ── Series by label set (Phases O and P) ─────────────────────────────────────────────
+# A series is matched by the labels it carries, in any order and whatever else it
+# carries, never by where a label sits in the line: the client renders labels in
+# sorted order, so a new label (cause on loxilb_ai_requests_total) moves the others.
+# A label a series lacks reads as empty, so "cause=" selects the series without one.
+# The family name matches exactly (a histogram's _count is its own name).
+M_AWK_PARSE='
+function parse(line,   p, rest, k, v, c) {
+  delete lab
+  p = index(line, "{")
+  if (p == 0) { name = line; sub(/ .*/, "", name); val = line; sub(/^[^ ]* +/, "", val); sub(/ .*/, "", val); return 1 }
+  name = substr(line, 1, p - 1); rest = substr(line, p + 1)
+  while (match(rest, /^[A-Za-z_][A-Za-z0-9_]*="/)) {
+    k = substr(rest, 1, RLENGTH - 2); rest = substr(rest, RLENGTH + 1); v = ""
+    while (rest != "") {
+      c = substr(rest, 1, 1)
+      if (c == "\"") break
+      if (c == "\\") { v = v substr(rest, 1, 2); rest = substr(rest, 3) } else { v = v c; rest = substr(rest, 2) }
+    }
+    lab[k] = v; rest = substr(rest, 2)
+    if (substr(rest, 1, 1) == ",") rest = substr(rest, 2)
+  }
+  if (substr(rest, 1, 1) != "}") return 0
+  val = substr(rest, 2); sub(/^ +/, "", val); sub(/ .*/, "", val)
+  return 1
+}'
+# m_sum <scrape> <family> [label=value ...] — the sum of the family's series that carry
+# every label=value given.
+m_sum() {
+  local s="$1" f="$2"; shift 2
+  printf '%s\n' "$s" | awk -v fam="$f" -v want="$*" "$M_AWK_PARSE"'
+    BEGIN { nw = split(want, w, " ") }
+    index($0, fam) == 1 && parse($0) && name == fam {
+      for (i = 1; i <= nw; i++) { k = w[i]; sub(/=.*/, "", k); if (lab[k] != substr(w[i], length(k) + 2)) next }
+      t += val
+    }
+    END { printf "%d", t + 0 }'
+}
+# m_series <scrape> <family> <label> [label ...] — "<v1>,<v2>,... <sum>" per distinct
+# value tuple of the labels named (an empty or missing value reads "-"), summed over
+# the others, sorted.
+m_series() {
+  local s="$1" f="$2"; shift 2
+  printf '%s\n' "$s" | awk -v fam="$f" -v keys="$*" "$M_AWK_PARSE"'
+    BEGIN { nk = split(keys, kk, " ") }
+    index($0, fam) == 1 && parse($0) && name == fam {
+      t = ""
+      for (i = 1; i <= nk; i++) { v = lab[kk[i]]; if (v == "") v = "-"; t = t (i > 1 ? "," : "") v }
+      sum[t] += val
+    }
+    END { for (t in sum) printf "%s %d\n", t, sum[t] }' | sort
+}
+
 if should_run_phase "O"; then
 echo "#########################################"
 echo "PHASE O — P/D CLIENT-VISIBLE STATUS MATRIX (port 2020, 1P+1D)"
 echo "#########################################"
 #
 # What the client receives from a P/D request, and that every family recording it
-# agrees: the response, loxilb_ai_requests_total{status}, the lifecycle
+# agrees: the response, loxilb_ai_requests_total{outcome,status}, the lifecycle
 # (loxilb_ai_pd_requests_total{phase,status}), the responses-by-status class counter,
 # the TTFB sample count, and whether the decode leg was called at all (the mock's
 # inference_requests). One fault per row through the mock's one-shot
@@ -3502,29 +3564,42 @@ O_PULL_TIMEOUT=20           # two collector pulls
 O_TMP=$(mktemp -d)          # settled / last / prev scrapes (o_settle runs in no subshell)
 
 o_scrape() { $hexec llb1 curl -s http://localhost:11111/netlox/v1/metrics 2>/dev/null | grep -v '^#'; }
-o_sum()    { printf '%s\n' "$1" | grep -E "$2" | awk '{s+=$NF} END{printf "%d", s+0}'; }
+# o_sum <scrape> <spec> — m_sum over a spec "<family> [label=value ...]" (o_re's form).
+o_sum()    { m_sum "$1" $2; }
 
 # The families a row reads. Every row asserts each of them: listed ones to their
 # expectation, the rest flat.
-O_KEYS="req200 req404 req500 d503 k503 pdCS pdPR pdPE pdDR pdDE pdDU c2 c3 c4 c5 ttfb"
+# ttftN: decode TTFT samples; this phase's requests are not streamed, so it never moves.
+# fb5/fb429/fbAll: prefill fallbacks (origin_5xx, origin_429, any reason). The decode
+# duration is not a key: a non-streamed mock answer is timed in whole milliseconds and
+# often rounds to 0 (no sample); Phase H TH3b covers it.
+# ab/pdAC: an aborted request and its lifecycle record (aborted/client). Every row here
+# gets its whole answer, so both stay flat.
+O_KEYS="req200 req404 req500 d503 k503 ab pdCS pdPR pdPE pdDR pdDE pdDU pdAC c2 c3 c4 c5 ttfb ttftN fb5 fb429 fbAll"
 o_re() {
   case "$1" in
-    req200) echo '^loxilb_ai_requests_total\{.*status="200"' ;;
-    req404) echo '^loxilb_ai_requests_total\{.*status="404"' ;;
-    req500) echo '^loxilb_ai_requests_total\{.*status="500"' ;;
-    d503)   echo '^loxilb_ai_requests_total\{.*outcome="denied",status="503"' ;;
-    k503)   echo '^loxilb_ai_requests_total\{.*outcome="completed",status="503"' ;;
-    pdCS)   echo '^loxilb_ai_pd_requests_total\{.*phase="complete",status="success"' ;;
-    pdPR)   echo '^loxilb_ai_pd_requests_total\{.*phase="prefill",status="rejected"' ;;
-    pdPE)   echo '^loxilb_ai_pd_requests_total\{.*phase="prefill",status="error"' ;;
-    pdDR)   echo '^loxilb_ai_pd_requests_total\{.*phase="decode",status="rejected"' ;;
-    pdDE)   echo '^loxilb_ai_pd_requests_total\{.*phase="decode",status="error"' ;;
-    pdDU)   echo '^loxilb_ai_pd_requests_total\{.*phase="decode",status="unknown"' ;;
-    c2|c3|c4|c5) echo "^loxilb_proxy_http_responses_by_status_total\\{status_class=\"${1#c}xx\"" ;;
-    ttfb)   echo '^loxilb_proxy_http_ttfb_seconds_count' ;;
+    req200) echo 'loxilb_ai_requests_total outcome=completed status=200' ;;
+    req404) echo 'loxilb_ai_requests_total outcome=completed status=404' ;;
+    req500) echo 'loxilb_ai_requests_total outcome=completed status=500' ;;
+    d503)   echo 'loxilb_ai_requests_total outcome=denied status=503' ;;
+    k503)   echo 'loxilb_ai_requests_total outcome=completed status=503' ;;
+    ab)     echo 'loxilb_ai_requests_total outcome=aborted' ;;
+    pdCS)   echo 'loxilb_ai_pd_requests_total phase=complete status=success' ;;
+    pdPR)   echo 'loxilb_ai_pd_requests_total phase=prefill status=rejected' ;;
+    pdPE)   echo 'loxilb_ai_pd_requests_total phase=prefill status=error' ;;
+    pdDR)   echo 'loxilb_ai_pd_requests_total phase=decode status=rejected' ;;
+    pdDE)   echo 'loxilb_ai_pd_requests_total phase=decode status=error' ;;
+    pdDU)   echo 'loxilb_ai_pd_requests_total phase=decode status=unknown' ;;
+    pdAC)   echo 'loxilb_ai_pd_requests_total phase=aborted status=client' ;;
+    c2|c3|c4|c5) echo "loxilb_proxy_http_responses_by_status_total status_class=${1#c}xx" ;;
+    ttfb)   echo 'loxilb_proxy_http_ttfb_seconds_count' ;;
+    ttftN)  echo 'loxilb_ai_pd_decode_ttft_seconds_count' ;;
+    fb5)    echo 'loxilb_ai_pd_prefill_fallback_total reason=origin_5xx' ;;
+    fb429)  echo 'loxilb_ai_pd_prefill_fallback_total reason=origin_429' ;;
+    fbAll)  echo 'loxilb_ai_pd_prefill_fallback_total' ;;
   esac
 }
-O_PD_ALL='^loxilb_ai_pd_requests_total\{'
+O_PD_ALL='loxilb_ai_pd_requests_total'
 
 o_mock()   { $dexec "$1" curl -s -m 5 "${O_ADMIN}/$2" 2>/dev/null; }
 o_mpost()  { $dexec "$1" curl -s -m 5 -X POST "${O_ADMIN}/$2" 2>/dev/null; }
@@ -3659,8 +3734,8 @@ echo "  baseline: TTFB sample count $(o_sum "$(o_scrape)" "$(o_re ttfb)") held f
 #     row          arm-ep        st   http role      P D  expect
 o_row normal       -             -    200  -         1 1 "req200=1 pdCS=1 c2=1 ttfb=1"
 o_row prefill404   "$O_PREFILL"  404  404  prefill   1 0 "req404=1 pdPR=1 c4=1 ttfb=1"
-o_row prefill500   "$O_PREFILL"  500  200  -         1 1 "req200=1 pdCS=1 c2=1 ttfb=1"
-o_row prefill429   "$O_PREFILL"  429  200  -         1 1 "req200=1 pdCS=1 c2=1 ttfb=1"
+o_row prefill500   "$O_PREFILL"  500  200  -         1 1 "req200=1 pdCS=1 c2=1 ttfb=1 fb5=1 fbAll=1"
+o_row prefill429   "$O_PREFILL"  429  200  -         1 1 "req200=1 pdCS=1 c2=1 ttfb=1 fb429=1 fbAll=1"
 o_row decode404    "$O_DECODE"   404  404  decode    1 1 "req404=1 pdDR=1 c4=1 ttfb=1"
 o_row decode500    "$O_DECODE"   500  500  decode    1 1 "req500=1 pdDE=1 c5=1 ttfb=1"
 
@@ -3771,8 +3846,8 @@ o_mr_refusal() {
   npd=$(( $(o_sum "$a" "$O_PD_ALL") - $(o_sum "$b" "$O_PD_ALL") ))
   [ "$npd" = "0" ] && check "TO-$row: no lifecycle record (+$npd)" 0 \
                    || check "TO-$row: no lifecycle record (+$npd)" 1
-  [ $(( $(o_sum "$a" '^loxilb_ai_requests_total\{model="other",outcome="denied",status="503"') \
-      - $(o_sum "$b" '^loxilb_ai_requests_total\{model="other",outcome="denied",status="503"') )) = 1 ] \
+  [ $(( $(o_sum "$a" 'loxilb_ai_requests_total model=other outcome=denied status=503') \
+      - $(o_sum "$b" 'loxilb_ai_requests_total model=other outcome=denied status=503') )) = 1 ] \
     && check "TO-$row: the refusal is counted under model=\"other\", not the name it sent" 0 \
     || check "TO-$row: the refusal is counted under model=\"other\", not the name it sent" 1
   o_check_row "$row" "$b" "$a" "d503=1 c5=1"
@@ -3829,6 +3904,650 @@ rm -rf "$O_TMP"
 
 bail_check
 fi  # Phase O
+
+if should_run_phase "P"; then
+echo "#########################################"
+echo "PHASE P — HOW A P/D ANSWER ENDS FOR THE CLIENT (port 2031, 1P+1D, no sse_mode)"
+echo "#########################################"
+#
+# Row 14. A P/D decode answer the engine delimits by closing (no length, no chunked
+# framing) was relayed whole, but after [DONE] the flow reset to NONE, US-H202 detached
+# the client as a reusable keep-alive connection when the engine closed, and the
+# client's connection was never closed: the answer never ended. The fix closes the
+# client, after its cached bytes are flushed, when its answer ran to the engine's EOF.
+# A framed answer (chunked, as vLLM's uvicorn streams, or with a length) keeps the
+# client's connection for its next request, as before.
+#
+# The rule is plain HTTP on port 2031, P/D without sse_mode (the data plane implies it
+# for P/D), added and removed by the phase.
+#   PA  close-delimited stream: 100 chunks 2 s apart, past the generic P/D idle cap
+#       (180 s), from an engine that ends it by closing. The client must get every
+#       chunk and [DONE], no status line in the body, curl rc 0, and its connection
+#       closed within P_END_BOUND s of the stream's end.
+#   PB  chunked stream on a kept client connection: two streamed requests on one curl
+#       connection; both 200 ending in [DONE], the second rides the first's connection.
+#   PC  length-delimited non-streaming answer on a kept client connection: two requests
+#       on one curl connection; both 200, the second rides the first's connection.
+#   PD  chunked stream whose engine drops [DONE] and goes silent; PE  the engine closes
+#       mid-stream. The gateway's graceful-[DONE] sweep ends both; the rows print which
+#       P/D lifecycle outcome the request records (Q2).
+#   PF  a short and a long chunked stream: the TTFTs are about the same, the decode
+#       durations grow with the length (MON-01).
+#   PG  the client leaves during the prefill; PH  during the decode stream (④).
+
+P_PORT=2031
+P_CHUNKS=100
+P_PACE_MS=2000
+P_CAP=180
+P_END_BOUND=10
+P_PREFILL=l3ep1
+P_DECODE=l3ep2
+P_ADMIN="http://127.0.0.1:9000/admin"
+P_URL="http://10.10.10.254:${P_PORT}/v1/chat/completions"
+p_del() {
+  $hexec llb1 curl -s -X DELETE "http://localhost:11111/netlox/v1/config/loadbalancer/hosturl/10.10.10.254/externalipaddress/10.10.10.254/port/${P_PORT}/protocol/tcp" >/dev/null 2>&1
+}
+# p_mock <ep> <knob> — POST an admin knob on one engine mock; prints its JSON reply.
+p_mock() {
+  $dexec "$1" curl -s -m 5 -X POST "${P_ADMIN}/$2" 2>/dev/null
+}
+p_reset() {
+  p_mock "$P_PREFILL" reset >/dev/null; p_mock "$P_DECODE" reset >/dev/null
+}
+# p_pair <tag> <stream:true|false> — two requests on ONE curl connection. Prints
+# "<code1> <connects1> <code2> <connects2> <rc>"; bodies in /tmp/phase-p-<tag>-{1,2}.body.
+p_pair() {
+  local body="{\"model\":\"${MODEL}\",\"stream\":$2,\"messages\":[{\"role\":\"user\",\"content\":\"row14-$1\"}],\"max_tokens\":8}"
+  local out rc
+  out=$($dexec l3h1 curl -s --no-buffer -m 30 -o "/tmp/phase-p-$1-1.body" \
+          -w '%{http_code} %{num_connects} ' "$P_URL" -H "Content-Type: application/json" -d "$body" \
+        --next -s --no-buffer -m 30 -o "/tmp/phase-p-$1-2.body" \
+          -w '%{http_code} %{num_connects} ' "$P_URL" -H "Content-Type: application/json" -d "$body" \
+        </dev/null 2>/dev/null)
+  rc=$?
+  echo "${out}${rc}"
+}
+# p_ends_done <file> — the body's last non-empty line is data: [DONE].
+p_ends_done() {
+  $dexec l3h1 cat "$1" 2>/dev/null | grep -v '^$' | tail -1 | grep -q '^data: \[DONE\]'
+}
+
+p_del
+$hexec llb1 curl -s -X POST http://localhost:11111/netlox/v1/config/loadbalancer \
+  -H 'Content-Type: application/json' \
+  -d '{"serviceArguments":{"externalIP":"10.10.10.254","port":'"${P_PORT}"',"protocol":"tcp","sel":0,"mode":4,"host":"10.10.10.254","pd_disagg_mode":true,"monitor":true,"probetype":"http","probeport":8000,"probereq":"/health","probeTimeout":5,"probeRetries":2},"endpoints":[{"endpointIP":"31.31.31.1","targetPort":8000,"weight":1,"ep_role":1,"nixl_port":9001},{"endpointIP":"32.32.32.1","targetPort":8000,"weight":1,"ep_role":2,"nixl_port":9002}]}' \
+  >/dev/null 2>&1
+p_ready=""
+for _i in $(seq 1 24); do
+  [ "$($dexec l3h1 curl -s -m 20 -o /dev/null -w '%{http_code}' \
+        "http://10.10.10.254:${P_PORT}/v1/completions" -H "Content-Type: application/json" \
+        -d "{\"model\":\"${MODEL}\",\"prompt\":\"row14-ready\",\"max_tokens\":8}" 2>/dev/null)" = "200" ] \
+    && p_ready=1 && break
+  sleep 5
+done
+[ -n "$p_ready" ] && check "TP: the P/D rule without sse_mode on port ${P_PORT} serves" 0 \
+                  || check "TP: the P/D rule without sse_mode on port ${P_PORT} serves" 1
+
+# ── PA: a close-delimited stream ───────────────────────────────────────────────────────
+p_reset
+p_arm=$(p_mock "$P_DECODE" "stream-pace?ms=${P_PACE_MS}&chunks=${P_CHUNKS}")
+echo "  decode mock: $p_arm"
+echo "$p_arm" | grep -q "\"stream_chunks\": ${P_CHUNKS}" \
+  && check "TP-A: the decode mock streams ${P_CHUNKS} chunks ${P_PACE_MS} ms apart, close-delimited" 0 \
+  || check "TP-A: the decode mock streams ${P_CHUNKS} chunks ${P_PACE_MS} ms apart, close-delimited" 1
+
+# The content chunks plus the finish_reason chunk, each followed by one pace.
+P_STREAM_SECS=$(( (P_CHUNKS + 1) * P_PACE_MS / 1000 ))
+echo "  streaming for about ${P_STREAM_SECS} s (the cap is ${P_CAP} s)..."
+# The gateway's own account of the row: its data-plane log from here on.
+P_DPLOG=/var/log/loxilbdp.log
+P_RE_REAP='generic P/D idle reaper|\[REAPER\]|ERR-01|\[ANSWER_STARTED\]|\[SSE_CAP\]'
+p_log0=$($dexec llb1 sh -c "wc -l < ${P_DPLOG}" 2>/dev/null)
+p_log0=${p_log0:-0}
+p_t0=$(date +%s)
+$dexec l3h1 curl -s --no-buffer -m $((P_STREAM_SECS + 60)) \
+  -o /tmp/phase-p-stream.body -w '%{http_code} %{time_total}' "$P_URL" \
+  -H "Content-Type: application/json" \
+  -d "{\"model\":\"${MODEL}\",\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":\"row14\"}],\"max_tokens\":${P_CHUNKS}}" \
+  </dev/null >/tmp/phase-p-curl.out 2>/dev/null &
+p_pid=$!
+# The gateway's sockets after the stream's end: the client's connection on the rule's
+# port must be gone, and with it no leg left open.
+sleep $((P_STREAM_SECS + P_END_BOUND + 3))
+p_ss=$($hexec llb1 ss -tanoi 2>/dev/null)
+echo "  gateway sockets $(( $(date +%s) - p_t0 )) s into the row (port ${P_PORT} / 8000):"
+printf '%s\n' "$p_ss" | grep -A1 -E ":${P_PORT}[[:space:]]|:8000[[:space:]]" | sed 's/^/    /'
+wait "$p_pid"
+p_rc=$?
+p_out=$(cat /tmp/phase-p-curl.out 2>/dev/null)
+p_code=${p_out%% *}
+p_secs=$(printf '%s' "${p_out#* }" | cut -d. -f1)
+p_body=$($dexec l3h1 cat /tmp/phase-p-stream.body 2>/dev/null)
+p_data=$(printf '%s\n' "$p_body" | grep -c '^data: {')
+echo "  HTTP ${p_code} after ${p_secs:-?} s (curl rc=${p_rc}); ${p_data} data chunks; last line: $(printf '%s\n' "$p_body" | grep -v '^$' | tail -1)"
+p_reap=$($dexec llb1 sh -c "tail -n +$((p_log0 + 1)) ${P_DPLOG}" 2>/dev/null | grep -E "$P_RE_REAP")
+echo "  gateway reaper/stream lines during the row: $(printf '%s' "$p_reap" | grep -c .)"
+printf '%s\n' "$p_reap" | grep . | head -20 | sed 's/^/    /'
+# The whole data-plane log for the row, so the real phase path can be read.
+p_all=$($dexec llb1 sh -c "tail -n +$((p_log0 + 1)) ${P_DPLOG}" 2>/dev/null)
+p_all_n=$(printf '%s' "$p_all" | grep -c .)
+echo "  gateway data-plane log during the row (${p_all_n} lines):"
+if [ "$p_all_n" -le 1500 ]; then
+  printf '%s\n' "$p_all" | sed 's/^/    | /'
+else
+  printf '%s\n' "$p_all" | head -750 | sed 's/^/    | /'
+  echo "    | ... $((p_all_n - 1500)) lines elided ..."
+  printf '%s\n' "$p_all" | tail -750 | sed 's/^/    | /'
+fi
+
+[ "$p_code" = "200" ] && check "TP-A: 200" 0 \
+                      || check "TP-A: 200 (got ${p_code})" 1
+# rc 28 is curl's own deadline: everything arrived but the gateway never ended the answer.
+[ "$p_rc" = "0" ] && check "TP-A: the answer ended when the engine closed (curl rc=0)" 0 \
+                  || check "TP-A: the answer ended when the engine closed (curl rc=${p_rc})" 1
+[ "${p_secs:-0}" -le $((P_STREAM_SECS + P_END_BOUND)) ] \
+  && check "TP-A: the client's connection closed within ${P_END_BOUND} s of the stream's end (${p_secs} s, stream ${P_STREAM_SECS} s)" 0 \
+  || check "TP-A: the client's connection closed within ${P_END_BOUND} s of the stream's end (${p_secs:-?} s, stream ${P_STREAM_SECS} s)" 1
+p_open=$(printf '%s\n' "$p_ss" | grep -E "^ESTAB" | grep -cE "10\.10\.10\.254:${P_PORT}[[:space:]]+10\.10\.10\.1:")
+[ "$p_open" = "0" ] && check "TP-A: no client connection left open on the gateway after the stream's end" 0 \
+                    || check "TP-A: no client connection left open on the gateway after the stream's end (${p_open} ESTAB)" 1
+[ "${p_secs:-0}" -gt "$P_CAP" ] \
+  && check "TP-A: it outlived the ${P_CAP} s idle cap (${p_secs} s)" 0 \
+  || check "TP-A: it outlived the ${P_CAP} s idle cap (${p_secs:-?} s)" 1
+if printf '%s' "$p_body" | grep -q 'HTTP/1\.'; then
+  echo "  a status line inside the body:"
+  printf '%s\n' "$p_body" | grep -n -A3 'HTTP/1\.' | head -8 | sed 's/^/    /'
+  check "TP-A: no status line inside the body" 1
+else
+  check "TP-A: no status line inside the body" 0
+fi
+# Flush, then close: the last chunks and [DONE] reached the client before its close.
+[ "$p_data" = "$((P_CHUNKS + 1))" ] \
+  && check "TP-A: every chunk arrived before the close ($p_data)" 0 \
+  || check "TP-A: every chunk arrived before the close ($p_data of $((P_CHUNKS + 1)))" 1
+printf '%s\n' "$p_body" | grep -v '^$' | tail -1 | grep -q '^data: \[DONE\]' \
+  && check "TP-A: it ends with [DONE]" 0 \
+  || check "TP-A: it ends with [DONE]" 1
+# What the client received can look whole even when a reaper acted on the stream;
+# the gateway's log says whether one did.
+printf '%s' "$p_reap" | grep -qE 'generic P/D idle reaper|\[REAPER\]|ERR-01' \
+  && check "TP-A: no P/D reaper acted on the live stream" 1 \
+  || check "TP-A: no P/D reaper acted on the live stream" 0
+
+# ── PB: a chunked stream on a kept client connection ───────────────────────────────────
+# Both engines answer HTTP/1.1 without "close" and the decode engine streams chunked,
+# as vLLM's uvicorn does. The engine still closes its socket after the 0-chunk: the
+# answer was framed, so the client keeps its connection.
+p_reset
+pb_ka=$(p_mock "$P_PREFILL" keepalive-on)$(p_mock "$P_DECODE" keepalive-on)
+pb_ch=$(p_mock "$P_DECODE" stream-chunked-on)
+echo "$pb_ka" | grep -o '"keepalive": true' | wc -l | grep -q '^ *2$' && echo "$pb_ch" | grep -q '"stream_chunked": true' \
+  && check "TP-B: engines answer keep-alive, the decode engine streams chunked (control armed)" 0 \
+  || check "TP-B: engines answer keep-alive, the decode engine streams chunked (control armed)" 1
+read -r pb_c1 pb_n1 pb_c2 pb_n2 pb_rc <<< "$(p_pair chunked true)"
+echo "  pair: request 1 HTTP ${pb_c1} (connects ${pb_n1}), request 2 HTTP ${pb_c2} (connects ${pb_n2}), curl rc=${pb_rc}"
+[ "$pb_c1" = "200" ] && [ "$pb_c2" = "200" ] && [ "$pb_rc" = "0" ] \
+  && check "TP-B: both streams 200, curl rc=0" 0 \
+  || check "TP-B: both streams 200, curl rc=0 (got ${pb_c1}, ${pb_c2}, rc ${pb_rc})" 1
+p_ends_done /tmp/phase-p-chunked-1.body && p_ends_done /tmp/phase-p-chunked-2.body \
+  && check "TP-B: both streams end with [DONE]" 0 \
+  || check "TP-B: both streams end with [DONE]" 1
+[ "$pb_n1" = "1" ] && [ "$pb_n2" = "0" ] \
+  && check "TP-B: the second stream rode the first's connection (connects 1, 0)" 0 \
+  || check "TP-B: the second stream rode the first's connection (connects ${pb_n1}, ${pb_n2})" 1
+
+# ── PC: a length-delimited answer on a kept client connection ──────────────────────────
+p_reset
+pc_ka=$(p_mock "$P_PREFILL" keepalive-on)$(p_mock "$P_DECODE" keepalive-on)
+echo "$pc_ka" | grep -o '"keepalive": true' | wc -l | grep -q '^ *2$' \
+  && check "TP-C: engines answer keep-alive with a Content-Length (control armed)" 0 \
+  || check "TP-C: engines answer keep-alive with a Content-Length (control armed)" 1
+read -r pc_c1 pc_n1 pc_c2 pc_n2 pc_rc <<< "$(p_pair length false)"
+echo "  pair: request 1 HTTP ${pc_c1} (connects ${pc_n1}), request 2 HTTP ${pc_c2} (connects ${pc_n2}), curl rc=${pc_rc}"
+[ "$pc_c1" = "200" ] && [ "$pc_c2" = "200" ] && [ "$pc_rc" = "0" ] \
+  && check "TP-C: both answers 200, curl rc=0" 0 \
+  || check "TP-C: both answers 200, curl rc=0 (got ${pc_c1}, ${pc_c2}, rc ${pc_rc})" 1
+[ "$pc_n1" = "1" ] && [ "$pc_n2" = "0" ] \
+  && check "TP-C: the second request rode the first's connection (connects 1, 0)" 0 \
+  || check "TP-C: the second request rode the first's connection (connects ${pc_n1}, ${pc_n2})" 1
+
+# ── PD / PE: a stream whose engine never sends its terminator (Q2) ─────────────────────
+# The decode engine streams chunked and then never sends "data: [DONE]" or the 0-chunk.
+#   PD  it goes silent with its socket open (a dropped terminator), then closes after
+#       P_HOLD s.
+#   PE  it closes at once after the last content chunk (an engine dying mid-stream).
+# PD: the gateway's graceful-[DONE] sweep ends the client's answer after P_GRACE s of
+# backend silence, with a chunk-framed [DONE] of its own: decode/truncated +1 (the
+# gateway ended the answer; the engine did not die), requests completed/200 +1 with no
+# cause (the client got a clean end), curl rc 0, the body ends with [DONE], and
+# loxilb_ai_pd_terminator_synthesized_total +1.
+# PE: the engine died: decode/error +1, requests aborted/200 cause=engine +1 (the client
+# got a 200 and a cut answer), and the client sees the cut: curl rc 18 and no [DONE].
+# Nothing dresses a dead engine up as a clean end, so the terminator counter stays flat.
+P_HOLD=40
+P_GRACE=25     # PROXY_PD_DECODE_IDLE_CAP_SEC; no rule field sets pd_decode_idle_cap_sec
+p_scrape() { $hexec llb1 curl -s http://localhost:11111/netlox/v1/metrics 2>/dev/null | grep -v '^#'; }
+# p_series <scrape> <family> <label> [label ...] — m_series: "<v1>,<v2>,... <value>" per
+# value tuple, summed over the other labels, matched by label set (any order).
+p_series() { m_series "$@"; }
+# p_delta <before> <after> — "<key> +N" for every series that moved.
+p_delta() {
+  awk 'NR==FNR{b[$1]=$2; next} {d=$2-b[$1]; if (d) printf "%s %+d\n", $1, d}' \
+    <(printf '%s\n' "$1") <(printf '%s\n' "$2")
+}
+# p_q2_row <tag> <mode> <knob>
+p_q2_row() {
+  local tag=$1 mode=$2 knob=$3 arm s0 s1 pd0 pd1 rq0 rq1 pdd rqd log0 out rc code secs body nrec
+  p_reset
+  arm=$(p_mock "$P_DECODE" stream-chunked-on)$(p_mock "$P_DECODE" "$knob")
+  echo "  decode mock: $arm"
+  echo "$arm" | grep -q '"stream_chunked": true' && echo "$arm" | grep -q "\"stream_end_mode\": \"${mode}\"" \
+    && check "${tag}: the decode engine streams chunked and ends by '${mode}', without [DONE] (control armed)" 0 \
+    || check "${tag}: the decode engine streams chunked and ends by '${mode}', without [DONE] (control armed)" 1
+  s0=$(p_scrape)
+  log0=$($dexec llb1 sh -c "wc -l < ${P_DPLOG}" 2>/dev/null); log0=${log0:-0}
+  out=$($dexec l3h1 curl -s --no-buffer -m $((P_HOLD + 30)) -o "/tmp/phase-p-${tag}.body" \
+          -w '%{http_code} %{time_total}' "$P_URL" -H "Content-Type: application/json" \
+          -d "{\"model\":\"${MODEL}\",\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":\"q2-${tag}\"}],\"max_tokens\":8}" \
+        </dev/null 2>/dev/null)
+  rc=$?
+  sleep 2
+  s1=$(p_scrape)
+  code=${out%% *}
+  secs=$(printf '%s' "${out#* }" | cut -d. -f1)
+  body=$($dexec l3h1 cat "/tmp/phase-p-${tag}.body" 2>/dev/null)
+  pd0=$(p_series "$s0" loxilb_ai_pd_requests_total phase status)
+  pd1=$(p_series "$s1" loxilb_ai_pd_requests_total phase status)
+  rq0=$(p_series "$s0" loxilb_ai_requests_total outcome status cause)
+  rq1=$(p_series "$s1" loxilb_ai_requests_total outcome status cause)
+  pdd=$(p_delta "$pd0" "$pd1")
+  rqd=$(p_delta "$rq0" "$rq1")
+  nrec=$(printf '%s\n' "$pdd" | awk '{s+=$2} END{printf "%d", s+0}')
+  echo "  HTTP ${code} after ${secs:-?} s (curl rc=${rc}); $(printf '%s\n' "$body" | grep -c '^data: {') data chunks; last line: $(printf '%s\n' "$body" | grep -v '^$' | tail -1)"
+  echo "  ${tag} Q2 loxilb_ai_pd_requests_total{phase,status} deltas: $(printf '%s' "$pdd" | tr '\n' ' ')"
+  echo "  ${tag} loxilb_ai_requests_total{outcome,status,cause} deltas: $(printf '%s' "$rqd" | tr '\n' ' ')"
+  echo "  ${tag} gateway lines:"
+  $dexec llb1 sh -c "tail -n +$((log0 + 1)) ${P_DPLOG}" 2>/dev/null \
+    | grep -E 'PD_GRACEFUL_DONE|decode backend EOF|ERR-01|generic P/D idle reaper|\[REAPER\]|\[SSE_CAP\]|P/D flow complete' \
+    | head -20 | sed 's/^/    /'
+  [ "$code" = "200" ] && check "${tag}: 200" 0 || check "${tag}: 200 (got ${code})" 1
+  [ "$nrec" = "1" ] && check "${tag}: exactly one P/D lifecycle record" 0 \
+                    || check "${tag}: exactly one P/D lifecycle record (${nrec})" 1
+  P_Q2_BODY=$body P_Q2_RC=$rc P_Q2_SECS=${secs:-0} P_Q2_PDD=$pdd P_Q2_RQD=$rqd P_Q2_S0=$s0
+}
+# p_deltas_are <tag> <what> <deltas> <want> — the deltas, one "<key> +N" per line, are
+# exactly <want> (one "<key> +N" per line): that series moved by N and nothing else did.
+# An empty <want>: nothing moved.
+p_deltas_are() {
+  local got
+  got=$(printf '%s\n' "$3" | sed '/^$/d' | sort | tr '\n' ';')
+  [ "$got" = "$(printf '%s\n' "$4" | sed '/^$/d' | sort | tr '\n' ';')" ] \
+    && check "$1: $2 moved by exactly: ${4:-nothing}" 0 \
+    || check "$1: $2 moved by exactly: ${4:-nothing} (got: ${got:-nothing})" 1
+}
+# p_terminators <before-scrape> — the terminator counter's delta once it has been
+# pulled: it is a C global_stats counter RunSockproxyMetrics pulls every 10 s, so poll
+# for two pulls. Prints the delta.
+p_terminators() {
+  local b a waited=0
+  b=$(printf '%s\n' "$1" | awk '/^loxilb_ai_pd_terminator_synthesized_total /{print $2+0}')
+  while :; do
+    a=$(p_scrape | awk '/^loxilb_ai_pd_terminator_synthesized_total /{print $2+0}')
+    [ $(( ${a:-0} - ${b:-0} )) -ge 1 ] || [ "$waited" -ge 21 ] && break
+    sleep 1; waited=$((waited + 1))
+  done
+  echo $(( ${a:-0} - ${b:-0} ))
+}
+
+p_q2_row TP-D hold "stream-end?mode=hold&sec=${P_HOLD}"
+# The gateway, not the engine, ended this answer: after the sweep's window, before the
+# engine's close.
+[ "$P_Q2_RC" = "0" ] && check "TP-D: the answer ended (curl rc=0)" 0 \
+                     || check "TP-D: the answer ended (curl rc=${P_Q2_RC})" 1
+[ "$P_Q2_SECS" -ge $((P_GRACE - 1)) ] && [ "$P_Q2_SECS" -lt "$P_HOLD" ] \
+  && check "TP-D: ended by the gateway's sweep (${P_Q2_SECS} s: >= ${P_GRACE} s idle, < the engine's ${P_HOLD} s close)" 0 \
+  || check "TP-D: ended by the gateway's sweep (${P_Q2_SECS} s: >= ${P_GRACE} s idle, < the engine's ${P_HOLD} s close)" 1
+printf '%s\n' "$P_Q2_BODY" | grep -v '^$' | tail -1 | grep -q '^data: \[DONE\]' \
+  && check "TP-D: it ends with the [DONE] the gateway wrote" 0 \
+  || check "TP-D: it ends with the [DONE] the gateway wrote" 1
+printf '%s' "$P_Q2_BODY" | grep -q 'HTTP/1\.' \
+  && check "TP-D: no status line inside the body" 1 \
+  || check "TP-D: no status line inside the body" 0
+p_deltas_are TP-D "loxilb_ai_pd_requests_total{phase,status}" "$P_Q2_PDD" "decode,truncated +1"
+p_deltas_are TP-D "loxilb_ai_requests_total{outcome,status,cause}" "$P_Q2_RQD" "completed,200,- +1"
+pd_term=$(p_terminators "$P_Q2_S0")
+[ "$pd_term" = "1" ] && check "TP-D: loxilb_ai_pd_terminator_synthesized_total +1" 0 \
+                     || check "TP-D: loxilb_ai_pd_terminator_synthesized_total +1 (got +${pd_term})" 1
+
+p_q2_row TP-E cut "stream-end?mode=cut"
+# The engine died: the client sees the cut, and nothing writes a terminator for it.
+[ "$P_Q2_RC" = "18" ] && check "TP-E: the client sees the cut (curl rc=18)" 0 \
+                      || check "TP-E: the client sees the cut (curl rc=18, got ${P_Q2_RC})" 1
+printf '%s\n' "$P_Q2_BODY" | grep -q '^data: \[DONE\]' \
+  && check "TP-E: no [DONE] in the body" 1 \
+  || check "TP-E: no [DONE] in the body" 0
+p_deltas_are TP-E "loxilb_ai_pd_requests_total{phase,status}" "$P_Q2_PDD" "decode,error +1"
+p_deltas_are TP-E "loxilb_ai_requests_total{outcome,status,cause}" "$P_Q2_RQD" "aborted,200,engine +1"
+pe_term=$(p_terminators "$P_Q2_S0")
+[ "$pe_term" = "0" ] && check "TP-E: loxilb_ai_pd_terminator_synthesized_total flat" 0 \
+                     || check "TP-E: loxilb_ai_pd_terminator_synthesized_total flat (got +${pe_term})" 1
+
+# ── PF: a short and a long stream (MON-01: what TTFT and duration mean) ────────────────
+# The same engine streams chunked, P_PF_MS ms apart: P_PF_SHORT content chunks, then
+# P_PF_LONG. TTFT is the time to the decode answer's first event, so it is about the
+# same for both; the decode duration runs to the answer's end, so it grows with the
+# length. Before MON-01 the TTFT family recorded the duration. The bounds are ratios,
+# not milliseconds: the long duration is at least P_PF_RATIO times the short one (the
+# streams' own lengths make it about 7), and the two TTFTs differ by less than a
+# quarter of the long duration (before MON-01 they differed by about the whole stream).
+P_PF_MS=200
+P_PF_SHORT=2
+P_PF_LONG=20
+P_PF_RATIO=3
+# p_hist <scrape> <family> — "<count> <sum>" of a histogram, summed over its labels.
+p_hist() {
+  printf '%s\n' "$1" | awk -v f="$2" '
+    index($0, f "_count") == 1 {c += $NF}
+    index($0, f "_sum") == 1   {s += $NF}
+    END {printf "%d %.6f\n", c, s}'
+}
+# p_stream_row <tag> <chunks> — one paced chunked stream; sets P_PF_TTFT and P_PF_DUR
+# (the request's samples, s) and checks that each family took exactly one.
+p_stream_row() {
+  local tag=$1 n=$2 arm s0 s1 out rc code tn0 ts0 tn1 ts1 dn0 ds0 dn1 ds1 pdd tc dc
+  p_reset
+  arm=$(p_mock "$P_DECODE" stream-chunked-on)$(p_mock "$P_DECODE" "stream-pace?ms=${P_PF_MS}&chunks=${n}")
+  echo "$arm" | grep -q '"stream_chunked": true' && echo "$arm" | grep -q "\"stream_chunks\": ${n}}" \
+    && check "${tag}: the decode engine streams ${n} chunks ${P_PF_MS} ms apart, chunked (control armed)" 0 \
+    || check "${tag}: the decode engine streams ${n} chunks ${P_PF_MS} ms apart, chunked (control armed)" 1
+  s0=$(p_scrape)
+  out=$($dexec l3h1 curl -s --no-buffer -m 60 -o "/tmp/phase-p-${tag}.body" \
+          -w '%{http_code} %{time_total}' "$P_URL" -H "Content-Type: application/json" \
+          -d "{\"model\":\"${MODEL}\",\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":\"pf-${tag}\"}],\"max_tokens\":${n}}" \
+        </dev/null 2>/dev/null)
+  rc=$?
+  sleep 2
+  s1=$(p_scrape)
+  code=${out%% *}
+  read -r tn0 ts0 <<< "$(p_hist "$s0" loxilb_ai_pd_decode_ttft_seconds)"
+  read -r tn1 ts1 <<< "$(p_hist "$s1" loxilb_ai_pd_decode_ttft_seconds)"
+  read -r dn0 ds0 <<< "$(p_hist "$s0" loxilb_ai_pd_decode_duration_seconds)"
+  read -r dn1 ds1 <<< "$(p_hist "$s1" loxilb_ai_pd_decode_duration_seconds)"
+  tc=$((tn1 - tn0)) dc=$((dn1 - dn0))
+  P_PF_TTFT=$(awk -v a="$ts0" -v b="$ts1" 'BEGIN{printf "%.6f", b - a}')
+  P_PF_DUR=$(awk -v a="$ds0" -v b="$ds1" 'BEGIN{printf "%.6f", b - a}')
+  pdd=$(p_delta "$(p_series "$s0" loxilb_ai_pd_requests_total phase status)" \
+                "$(p_series "$s1" loxilb_ai_pd_requests_total phase status)")
+  echo "  ${tag}: HTTP ${code} after ${out#* } s (curl rc=${rc}); TTFT samples +${tc} (${P_PF_TTFT} s), duration samples +${dc} (${P_PF_DUR} s)"
+  [ "$code" = "200" ] && [ "$rc" = "0" ] && p_ends_done "/tmp/phase-p-${tag}.body" \
+    && check "${tag}: 200, curl rc=0, ends with [DONE]" 0 \
+    || check "${tag}: 200, curl rc=0, ends with [DONE] (got ${code}, rc ${rc})" 1
+  p_deltas_are "$tag" "loxilb_ai_pd_requests_total{phase,status}" "$pdd" "complete,success +1"
+  [ "$tc" = "1" ] && [ "$dc" = "1" ] \
+    && check "${tag}: one TTFT sample and one decode duration sample" 0 \
+    || check "${tag}: one TTFT sample and one decode duration sample (got +${tc}, +${dc})" 1
+}
+p_stream_row TP-F-short "$P_PF_SHORT"
+pf_ttft_s=$P_PF_TTFT pf_dur_s=$P_PF_DUR
+p_stream_row TP-F-long "$P_PF_LONG"
+pf_ttft_l=$P_PF_TTFT pf_dur_l=$P_PF_DUR
+awk -v s="$pf_dur_s" -v l="$pf_dur_l" -v r="$P_PF_RATIO" 'BEGIN{exit !(s > 0 && l >= r * s)}' \
+  && check "TP-F: the long stream's duration is >= ${P_PF_RATIO}x the short one's (${pf_dur_l} s vs ${pf_dur_s} s)" 0 \
+  || check "TP-F: the long stream's duration is >= ${P_PF_RATIO}x the short one's (${pf_dur_l} s vs ${pf_dur_s} s)" 1
+awk -v a="$pf_ttft_s" -v b="$pf_ttft_l" -v l="$pf_dur_l" 'BEGIN{d = a - b; if (d < 0) d = -d; exit !(l > 0 && d < l / 4)}' \
+  && check "TP-F: the TTFTs differ by < 1/4 of the long duration (${pf_ttft_s} s vs ${pf_ttft_l} s, long ${pf_dur_l} s)" 0 \
+  || check "TP-F: the TTFTs differ by < 1/4 of the long duration (${pf_ttft_s} s vs ${pf_ttft_l} s, long ${pf_dur_l} s)" 1
+
+# ── PG / PH: the client leaves (④: outcome="aborted", cause="client") ─────────────────
+#   PG  during the prefill: the prefill engine holds its answer P_PG_HOLD_MS ms and the
+#       client gives up after P_CANCEL_S s. No status was ever sent: requests
+#       aborted/none cause=client +1, lifecycle aborted/client +1.
+#   PH  during the decode: a paced stream, the client gives up after P_CANCEL_S s with
+#       its 200 and some chunks. requests aborted/200 cause=client +1, lifecycle
+#       aborted/client +1, and one TTFT sample (the stream reached its first event)
+#       but no request duration sample (that histogram observes completed only).
+# Neither is an error: both are traffic, in the error ratio's denominator only.
+# The record is taken at the gateway's teardown of the client's connection, so each
+# row polls for the lifecycle record, for at most P_CANCEL_WAIT s.
+P_CANCEL_S=2
+P_CANCEL_WAIT=15
+P_PG_HOLD_MS=8000
+# p_cancel_row <tag> <knob-ep> <knob> <stream:true|false> [poll-family] — one request
+# the client abandons after P_CANCEL_S s, to P_URL; polls for a record in poll-family
+# (default loxilb_ai_pd_requests_total); sets P_C_CODE, P_C_RC, P_C_PDD, P_C_RQD,
+# P_C_S0, P_C_S1.
+p_cancel_row() {
+  local tag=$1 ep=$2 knob=$3 st=$4 pf=${5:-loxilb_ai_pd_requests_total} arm s0 s1 out waited=0
+  p_reset
+  arm=$(p_mock "$ep" "$knob")
+  echo "  ${tag} mock (${ep}): $arm"
+  [ -n "$arm" ] && check "${tag}: ${ep} armed with ${knob}" 0 || check "${tag}: ${ep} armed with ${knob}" 1
+  s0=$(p_scrape)
+  out=$($dexec l3h1 curl -s --no-buffer -m "$P_CANCEL_S" -o "/tmp/phase-p-${tag}.body" \
+          -w '%{http_code}' "$P_URL" -H "Content-Type: application/json" \
+          -d "{\"model\":\"${MODEL}\",\"stream\":$st,\"messages\":[{\"role\":\"user\",\"content\":\"cancel-${tag}\"}],\"max_tokens\":32}" \
+        </dev/null 2>/dev/null)
+  P_C_RC=$?
+  P_C_CODE=$out
+  while :; do
+    s1=$(p_scrape)
+    [ $(( $(m_sum "$s1" "$pf") - $(m_sum "$s0" "$pf") )) -ge 1 ] && break
+    [ "$waited" -ge "$P_CANCEL_WAIT" ] && break
+    sleep 1; waited=$((waited + 1))
+  done
+  sleep 1; s1=$(p_scrape)
+  P_C_PDD=$(p_delta "$(p_series "$s0" loxilb_ai_pd_requests_total phase status)" \
+                    "$(p_series "$s1" loxilb_ai_pd_requests_total phase status)")
+  P_C_RQD=$(p_delta "$(p_series "$s0" loxilb_ai_requests_total outcome status cause)" \
+                    "$(p_series "$s1" loxilb_ai_requests_total outcome status cause)")
+  P_C_S0=$s0 P_C_S1=$s1
+  echo "  ${tag}: client HTTP ${P_C_CODE} (curl rc=${P_C_RC}); recorded within ${waited} s"
+  echo "  ${tag} loxilb_ai_pd_requests_total{phase,status} deltas: $(printf '%s' "$P_C_PDD" | tr '\n' ' ')"
+  echo "  ${tag} loxilb_ai_requests_total{outcome,status,cause} deltas: $(printf '%s' "$P_C_RQD" | tr '\n' ' ')"
+  # rc 28: curl's own deadline, the client giving up (not the gateway ending it).
+  [ "$P_C_RC" = "28" ] && check "${tag}: the client gave up at ${P_CANCEL_S} s (curl rc=28)" 0 \
+                       || check "${tag}: the client gave up at ${P_CANCEL_S} s (curl rc=28, got ${P_C_RC})" 1
+}
+# p_count_delta <family> — the _count delta of a histogram over the last cancel row.
+p_count_delta() {
+  echo $(( $(m_sum "$P_C_S1" "$1_count") - $(m_sum "$P_C_S0" "$1_count") ))
+}
+
+pg_p0=$($dexec "$P_PREFILL" curl -s -m 5 "${P_ADMIN}/status" 2>/dev/null | python3 -c "import sys,json
+try: print(json.load(sys.stdin).get('inference_requests', -1))
+except Exception: print(-1)")
+p_cancel_row TP-G "$P_PREFILL" "answer-delay?ms=${P_PG_HOLD_MS}" true
+[ "$P_C_CODE" = "000" ] && check "TP-G: no status reached the client (HTTP 000)" 0 \
+                        || check "TP-G: no status reached the client (got HTTP ${P_C_CODE})" 1
+pg_p1=$($dexec "$P_PREFILL" curl -s -m 5 "${P_ADMIN}/status" 2>/dev/null | python3 -c "import sys,json
+try: print(json.load(sys.stdin).get('inference_requests', -1))
+except Exception: print(-1)")
+[ $((pg_p1 - pg_p0)) -ge 1 ] && check "TP-G: the request was in its prefill (prefill engine called +$((pg_p1 - pg_p0)))" 0 \
+                             || check "TP-G: the request was in its prefill (prefill engine called +$((pg_p1 - pg_p0)))" 1
+p_deltas_are TP-G "loxilb_ai_pd_requests_total{phase,status}" "$P_C_PDD" "aborted,client +1"
+p_deltas_are TP-G "loxilb_ai_requests_total{outcome,status,cause}" "$P_C_RQD" "aborted,none,client +1"
+pg_t=$(p_count_delta loxilb_ai_pd_decode_ttft_seconds) pg_d=$(p_count_delta loxilb_ai_request_duration_seconds)
+[ "$pg_t" = "0" ] && [ "$pg_d" = "0" ] \
+  && check "TP-G: no TTFT sample and no request duration sample" 0 \
+  || check "TP-G: no TTFT sample and no request duration sample (got +${pg_t}, +${pg_d})" 1
+# The held prefill answer goes nowhere; let it finish before the next row resets the mock.
+sleep $(( P_PG_HOLD_MS / 1000 - P_CANCEL_S ))
+
+p_cancel_row TP-H "$P_DECODE" "stream-pace?ms=500&chunks=30" true
+[ "$P_C_CODE" = "200" ] && check "TP-H: the client had its 200 when it left" 0 \
+                        || check "TP-H: the client had its 200 when it left (got HTTP ${P_C_CODE})" 1
+$dexec l3h1 cat /tmp/phase-p-TP-H.body 2>/dev/null | grep -q '^data: {' \
+  && check "TP-H: and some of its stream" 0 \
+  || check "TP-H: and some of its stream" 1
+p_deltas_are TP-H "loxilb_ai_pd_requests_total{phase,status}" "$P_C_PDD" "aborted,client +1"
+p_deltas_are TP-H "loxilb_ai_requests_total{outcome,status,cause}" "$P_C_RQD" "aborted,200,client +1"
+ph_t=$(p_count_delta loxilb_ai_pd_decode_ttft_seconds) ph_d=$(p_count_delta loxilb_ai_request_duration_seconds)
+[ "$ph_t" = "1" ] && check "TP-H: one TTFT sample (the stream reached its first event)" 0 \
+                  || check "TP-H: one TTFT sample (the stream reached its first event; got +${ph_t})" 1
+[ "$ph_d" = "0" ] && check "TP-H: no request duration sample (completed only)" 0 \
+                  || check "TP-H: no request duration sample (completed only; got +${ph_d})" 1
+# The rest of the paced stream has nowhere to go; let the engine finish it.
+sleep 14
+
+# ── PI: the client leaves before any answer on a rule that is not P/D (PR-D item 1) ──
+#   A plain AI-gateway rule (sse_mode, no pd_disagg) on port P_I_PORT in front of the
+#   decode mock, which holds its answer P_PG_HOLD_MS ms; the client gives up after
+#   P_CANCEL_S s. No status was ever sent: requests aborted/none cause=client +1, and
+#   no P/D lifecycle record (no lifecycle family pairs with a request off P/D: the
+#   request record alone keeps the families 1:1). No TTFT, no duration sample.
+P_I_PORT=2032
+p_i_del() {
+  $hexec llb1 curl -s -X DELETE "http://localhost:11111/netlox/v1/config/loadbalancer/hosturl/10.10.10.254/externalipaddress/10.10.10.254/port/${P_I_PORT}/protocol/tcp" >/dev/null 2>&1
+}
+p_i_del
+$hexec llb1 curl -s -X POST http://localhost:11111/netlox/v1/config/loadbalancer \
+  -H 'Content-Type: application/json' \
+  -d '{"serviceArguments":{"externalIP":"10.10.10.254","port":'"${P_I_PORT}"',"protocol":"tcp","sel":0,"mode":4,"host":"10.10.10.254","sse_mode":true,"monitor":true,"probetype":"http","probeport":8000,"probereq":"/health","probeTimeout":5,"probeRetries":2},"endpoints":[{"endpointIP":"32.32.32.1","targetPort":8000,"weight":1}]}' \
+  >/dev/null 2>&1
+p_i_ready=""
+for _i in $(seq 1 24); do
+  [ "$($dexec l3h1 curl -s -m 20 -o /dev/null -w '%{http_code}' \
+        "http://10.10.10.254:${P_I_PORT}/v1/chat/completions" -H "Content-Type: application/json" \
+        -d "{\"model\":\"${MODEL}\",\"messages\":[{\"role\":\"user\",\"content\":\"pi-ready\"}],\"max_tokens\":8}" 2>/dev/null)" = "200" ] \
+    && p_i_ready=1 && break
+  sleep 5
+done
+[ -n "$p_i_ready" ] && check "TP-I: the plain AI rule (sse_mode, no P/D) on port ${P_I_PORT} serves" 0 \
+                    || check "TP-I: the plain AI rule (sse_mode, no P/D) on port ${P_I_PORT} serves" 1
+P_URL_PD=$P_URL
+P_URL="http://10.10.10.254:${P_I_PORT}/v1/chat/completions"
+p_cancel_row TP-I "$P_DECODE" "answer-delay?ms=${P_PG_HOLD_MS}" true loxilb_ai_requests_total
+P_URL=$P_URL_PD
+[ "$P_C_CODE" = "000" ] && check "TP-I: no status reached the client (HTTP 000)" 0 \
+                        || check "TP-I: no status reached the client (got HTTP ${P_C_CODE})" 1
+p_deltas_are TP-I "loxilb_ai_requests_total{outcome,status,cause}" "$P_C_RQD" "aborted,none,client +1"
+p_deltas_are TP-I "loxilb_ai_pd_requests_total{phase,status}" "$P_C_PDD" ""
+pi_t=$(p_count_delta loxilb_ai_pd_decode_ttft_seconds) pi_d=$(p_count_delta loxilb_ai_request_duration_seconds)
+[ "$pi_t" = "0" ] && [ "$pi_d" = "0" ] \
+  && check "TP-I: no TTFT sample and no request duration sample" 0 \
+  || check "TP-I: no TTFT sample and no request duration sample (got +${pi_t}, +${pi_d})" 1
+# The held answer goes nowhere; let it finish before the mock is reset.
+sleep $(( P_PG_HOLD_MS / 1000 - P_CANCEL_S ))
+
+# ── PJ: the engine dies before any answer on the same plain rule (#120, F-18) ────────
+#   The decode mock reads the request and closes with no byte written (drop-next). The
+#   gateway answers the client as a refused connect is answered: a 502 backend_unreachable,
+#   recorded completed/502 (as a TLS leg failing before its answer is), no lifecycle
+#   record.
+p_reset
+pj_arm=$(p_mock "$P_DECODE" drop-next)
+echo "  TP-J mock (${P_DECODE}): $pj_arm"
+[ -n "$pj_arm" ] && check "TP-J: ${P_DECODE} armed with drop-next" 0 || check "TP-J: ${P_DECODE} armed with drop-next" 1
+pj_s0=$(p_scrape)
+pj_code=$($dexec l3h1 curl -s --no-buffer -m 10 -o /tmp/phase-p-TP-J.body -w '%{http_code}' \
+            "http://10.10.10.254:${P_I_PORT}/v1/chat/completions" -H "Content-Type: application/json" \
+            -d "{\"model\":\"${MODEL}\",\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":\"drop-TP-J\"}],\"max_tokens\":8}" \
+          </dev/null 2>/dev/null)
+pj_rc=$?
+pj_waited=0
+while :; do
+  pj_s1=$(p_scrape)
+  [ $(( $(m_sum "$pj_s1" loxilb_ai_requests_total) - $(m_sum "$pj_s0" loxilb_ai_requests_total) )) -ge 1 ] && break
+  [ "$pj_waited" -ge "$P_CANCEL_WAIT" ] && break
+  sleep 1; pj_waited=$((pj_waited + 1))
+done
+sleep 1; pj_s1=$(p_scrape)
+pj_pdd=$(p_delta "$(p_series "$pj_s0" loxilb_ai_pd_requests_total phase status)" \
+                 "$(p_series "$pj_s1" loxilb_ai_pd_requests_total phase status)")
+pj_rqd=$(p_delta "$(p_series "$pj_s0" loxilb_ai_requests_total outcome status cause)" \
+                 "$(p_series "$pj_s1" loxilb_ai_requests_total outcome status cause)")
+echo "  TP-J: client HTTP ${pj_code} (curl rc=${pj_rc}); recorded within ${pj_waited} s"
+echo "  TP-J loxilb_ai_requests_total{outcome,status,cause} deltas: $(printf '%s' "$pj_rqd" | tr '\n' ' ')"
+[ "$pj_code" = "502" ] && $dexec l3h1 grep -q backend_unreachable /tmp/phase-p-TP-J.body 2>/dev/null \
+  && check "TP-J: the client got the gateway's 502 backend_unreachable" 0 \
+  || check "TP-J: the client got the gateway's 502 backend_unreachable (got HTTP ${pj_code})" 1
+p_deltas_are TP-J "loxilb_ai_requests_total{outcome,status,cause}" "$pj_rqd" "completed,502,- +1"
+p_deltas_are TP-J "loxilb_ai_pd_requests_total{phase,status}" "$pj_pdd" ""
+p_i_del
+
+# ── PK: a P/D client that leaves while queued at the gate (#120) ─────────────────────
+#   The P/D rule again, now with a capacity of one and a queue of one (fc_* fields, as
+#   cicd/ai-admission sets them). A holder takes the unit while the prefill engine holds
+#   its answer P_PG_HOLD_MS ms; a second request waits in the queue and its client gives
+#   up after P_CANCEL_S s. Over the window, once the holder has its answer: the queued one
+#   is requests aborted/none cause=client +1 and lifecycle aborted/client +1 (the client
+#   left, at the gate: phase 9 pairs with it); the holder is completed/200 and
+#   complete/success. No other series moves.
+p_reset
+p_del
+$hexec llb1 curl -s -X POST http://localhost:11111/netlox/v1/config/loadbalancer \
+  -H 'Content-Type: application/json' \
+  -d '{"serviceArguments":{"externalIP":"10.10.10.254","port":'"${P_PORT}"',"protocol":"tcp","sel":0,"mode":4,"host":"10.10.10.254","pd_disagg_mode":true,"fc_max_outstanding":1,"fc_max_queue_depth":1,"fc_max_queue_wait_ms":30000,"monitor":true,"probetype":"http","probeport":8000,"probereq":"/health","probeTimeout":5,"probeRetries":2},"endpoints":[{"endpointIP":"31.31.31.1","targetPort":8000,"weight":1,"ep_role":1,"nixl_port":9001},{"endpointIP":"32.32.32.1","targetPort":8000,"weight":1,"ep_role":2,"nixl_port":9002}]}' \
+  >/dev/null 2>&1
+pk_ready=""
+for _i in $(seq 1 24); do
+  [ "$($dexec l3h1 curl -s -m 20 -o /dev/null -w '%{http_code}' \
+        "http://10.10.10.254:${P_PORT}/v1/completions" -H "Content-Type: application/json" \
+        -d "{\"model\":\"${MODEL}\",\"prompt\":\"pk-ready\",\"max_tokens\":8}" 2>/dev/null)" = "200" ] \
+    && pk_ready=1 && break
+  sleep 5
+done
+[ -n "$pk_ready" ] && check "TP-K: the P/D rule with capacity 1, queue 1 on port ${P_PORT} serves" 0 \
+                   || check "TP-K: the P/D rule with capacity 1, queue 1 on port ${P_PORT} serves" 1
+pk_arm=$(p_mock "$P_PREFILL" "answer-delay?ms=${P_PG_HOLD_MS}")
+[ -n "$pk_arm" ] && check "TP-K: ${P_PREFILL} armed with answer-delay ${P_PG_HOLD_MS} ms" 0 \
+                 || check "TP-K: ${P_PREFILL} armed with answer-delay ${P_PG_HOLD_MS} ms" 1
+pk_s0=$(p_scrape)
+( $dexec l3h1 curl -s -m 30 -o /tmp/phase-p-TP-K-holder.body -w '%{http_code}' "$P_URL" \
+    -H "Content-Type: application/json" \
+    -d "{\"model\":\"${MODEL}\",\"stream\":false,\"messages\":[{\"role\":\"user\",\"content\":\"pk-holder\"}],\"max_tokens\":8}" \
+    </dev/null > /tmp/phase-p-TP-K-holder.code 2>/dev/null ) &
+pk_holder=$!
+sleep 1
+pk_code=$($dexec l3h1 curl -s -m "$P_CANCEL_S" -o /tmp/phase-p-TP-K.body -w '%{http_code}' "$P_URL" \
+            -H "Content-Type: application/json" \
+            -d "{\"model\":\"${MODEL}\",\"stream\":false,\"messages\":[{\"role\":\"user\",\"content\":\"pk-queued\"}],\"max_tokens\":8}" \
+          </dev/null 2>/dev/null)
+pk_rc=$?
+wait "$pk_holder"
+pk_hcode=$(cat /tmp/phase-p-TP-K-holder.code 2>/dev/null)
+pk_waited=0
+while :; do
+  pk_s1=$(p_scrape)
+  [ $(( $(m_sum "$pk_s1" loxilb_ai_pd_requests_total) - $(m_sum "$pk_s0" loxilb_ai_pd_requests_total) )) -ge 2 ] && break
+  [ "$pk_waited" -ge "$P_CANCEL_WAIT" ] && break
+  sleep 1; pk_waited=$((pk_waited + 1))
+done
+sleep 1; pk_s1=$(p_scrape)
+pk_pdd=$(p_delta "$(p_series "$pk_s0" loxilb_ai_pd_requests_total phase status)" \
+                 "$(p_series "$pk_s1" loxilb_ai_pd_requests_total phase status)")
+pk_rqd=$(p_delta "$(p_series "$pk_s0" loxilb_ai_requests_total outcome status cause)" \
+                 "$(p_series "$pk_s1" loxilb_ai_requests_total outcome status cause)")
+echo "  TP-K: queued client HTTP ${pk_code} (curl rc=${pk_rc}); holder HTTP ${pk_hcode}; recorded within ${pk_waited} s"
+echo "  TP-K loxilb_ai_pd_requests_total{phase,status} deltas: $(printf '%s' "$pk_pdd" | tr '\n' ' ')"
+echo "  TP-K loxilb_ai_requests_total{outcome,status,cause} deltas: $(printf '%s' "$pk_rqd" | tr '\n' ' ')"
+[ "$pk_rc" = "28" ] && [ "$pk_code" = "000" ] \
+  && check "TP-K: the queued client gave up at ${P_CANCEL_S} s with no status (curl rc=28, HTTP 000)" 0 \
+  || check "TP-K: the queued client gave up at ${P_CANCEL_S} s with no status (curl rc=${pk_rc}, HTTP ${pk_code})" 1
+[ "$pk_hcode" = "200" ] && check "TP-K: the holder got its 200" 0 \
+                        || check "TP-K: the holder got its 200 (got HTTP ${pk_hcode})" 1
+p_deltas_are TP-K "loxilb_ai_pd_requests_total{phase,status}" "$pk_pdd" "$(printf 'aborted,client +1\ncomplete,success +1')"
+p_deltas_are TP-K "loxilb_ai_requests_total{outcome,status,cause}" "$pk_rqd" "$(printf 'aborted,none,client +1\ncompleted,200,- +1')"
+
+p_reset
+p_del
+bail_check
+fi  # Phase P
+
+# ── After the suite: the two "expected 0" counters (#118) ─────────────────────────────
+# loxilb_ai_reap_fallback_total: a reaper ended a connection its owner worker could not
+# be handed, and the request it freed has no record. loxilb_ai_route_host_missing_total:
+# a request reached dispatch on a model-pool listener with no usable Host. Both are C
+# counters pulled every 10 s, so read them after one more pull. Present and 0.
+sleep 11
+z_scrape=$($hexec llb1 curl -s http://localhost:11111/netlox/v1/metrics 2>/dev/null | grep -v '^#')
+for z_f in loxilb_ai_reap_fallback_total loxilb_ai_route_host_missing_total; do
+  z_line=$(printf '%s\n' "$z_scrape" | grep -E "^${z_f}( |\\{)")
+  echo "  after the suite: ${z_line:-${z_f} absent}"
+  [ -n "$z_line" ] && [ "$(m_sum "$z_scrape" "$z_f")" = "0" ] \
+    && check "TZ: ${z_f} is exported and reads 0 after the suite" 0 \
+    || check "TZ: ${z_f} is exported and reads 0 after the suite" 1
+done
 
 echo "#########################################"
 echo "Results"

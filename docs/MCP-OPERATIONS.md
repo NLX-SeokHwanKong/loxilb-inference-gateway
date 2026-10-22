@@ -211,7 +211,10 @@ appear as `confirm: ...` errors.
   credentials (`token_env` or `username`/`password_env`) — otherwise metrics
   scraping returns 401. And `ai_traffic_report` restates an accounting caveat
   in every result: `loxilb_ai_requests_total` splits on an `outcome` label
-  (`completed` = answered by a backend, `denied` = refused by the policy gate),
+  (`completed` = answered whole, `aborted` = the client did not get the whole
+  answer, with a `cause` of `client`, `engine` or `gateway`, `denied` =
+  refused by the policy gate; `error_ratio` is completed 5xx plus engine and
+  gateway aborts over completed + aborted),
   `loxilb_ai_rate_limit_hits_total` carries the *reason* a request was denied
   rather than a second count of it, and a gateway old enough to emit no
   `outcome` label excludes denials from the total entirely — cross-check those

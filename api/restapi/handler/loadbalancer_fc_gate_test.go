@@ -331,3 +331,169 @@ func TestFcExposeHeadersCreateCopiesDeclaration(t *testing.T) {
 		})
 	}
 }
+
+// The band knobs reach the rule layer as declared, each with its presence
+// bit; a triple is passed as written, its parsing is the rule layer's.
+func TestFcBandCreateCopiesDeclaration(t *testing.T) {
+	prev := ApiHooks
+	defer func() { ApiHooks = prev }()
+
+	stub := &stubLbAddHook{}
+	ApiHooks = stub
+	ConfigPostLoadbalancer(connectionLimitCreateParams(t, sprintfBody(connectionLimitCreateBody,
+		`,"fc_wake_policy":"weighted","fc_band_weights":"8:3:1","fc_band_min_share_pct":"0:20:0",`+
+			`"fc_critical_reserve_pct":10,"fc_band_wait_ms":"500:2000:0","fc_band_queue_pct":"0:0:0",`+
+			`"fc_shed_queue":"on","fc_tenant_wake":"rr","fc_llmd_headers":"inherit"`)), nil)
+	if stub.captured == nil {
+		t.Fatal("never reached the rule layer")
+	}
+	s := stub.captured.Serv
+	if s.FcWakePolicy != "weighted" || s.FcBandWeights != "8:3:1" || s.FcBandMinSharePct != "0:20:0" ||
+		s.FcCriticalReservePct != 10 || s.FcBandWaitMs != "500:2000:0" || s.FcBandQueuePct != "0:0:0" ||
+		s.FcShedQueue != "on" || s.FcTenantWake != "rr" || s.FcLlmdHeaders != "inherit" {
+		t.Fatalf("reached the rule layer as %+v", s)
+	}
+	if !s.FcWakePolicyPresent || !s.FcBandWeightsPresent || !s.FcBandMinSharePctPresent ||
+		!s.FcCriticalReservePctPresent || !s.FcBandWaitMsPresent || !s.FcBandQueuePctPresent ||
+		!s.FcShedQueuePresent || !s.FcTenantWakePresent || !s.FcLlmdHeadersPresent {
+		t.Fatalf("a declared field lost its presence bit: %+v", s)
+	}
+
+	stub = &stubLbAddHook{}
+	ApiHooks = stub
+	ConfigPostLoadbalancer(connectionLimitCreateParams(t, sprintfBody(connectionLimitCreateBody, ``)), nil)
+	if stub.captured == nil {
+		t.Fatal("never reached the rule layer")
+	}
+	s = stub.captured.Serv
+	if s.FcWakePolicyPresent || s.FcBandWeightsPresent || s.FcBandMinSharePctPresent ||
+		s.FcCriticalReservePctPresent || s.FcBandWaitMsPresent || s.FcBandQueuePctPresent ||
+		s.FcShedQueuePresent || s.FcTenantWakePresent || s.FcLlmdHeadersPresent {
+		t.Fatalf("an omitted field is present: %+v", s)
+	}
+}
+
+// JSON null on any band knob, a switch outside its words, a triple that is
+// not three whole numbers and a value out of its range are refused before
+// any rule hook runs.
+func TestFcBandCreateRefusedBeforeRuleHook(t *testing.T) {
+	prev := ApiHooks
+	defer func() { ApiHooks = prev }()
+
+	cases := []struct{ name, field string }{
+		{"an unknown wake policy", `,"fc_wake_policy":"fair"`},
+		{"an unknown shed queue switch", `,"fc_shed_queue":"yes"`},
+		{"an unknown tenant wake", `,"fc_tenant_wake":"lifo"`},
+		{"an unknown llm-d headers switch", `,"fc_llmd_headers":"yes"`},
+		{"a triple with two values", `,"fc_band_weights":"8:3"`},
+		{"a triple with four values", `,"fc_band_weights":"8:3:1:1"`},
+		{"a triple with an empty value", `,"fc_band_min_share_pct":"0::0"`},
+		{"a triple with a negative value", `,"fc_band_wait_ms":"-1:0:0"`},
+		{"a triple with a sign", `,"fc_band_queue_pct":"+1:0:0"`},
+		{"a triple with a word", `,"fc_band_queue_pct":"a:b:c"`},
+		{"a triple with spaces", `,"fc_band_weights":"8: 3:1"`},
+		{"a triple with commas", `,"fc_band_weights":"8,3,1"`},
+		{"a weight above 62", `,"fc_band_weights":"63:0:0"`},
+		{"a floor above 100", `,"fc_band_min_share_pct":"0:101:0"`},
+		{"a band wait above an hour", `,"fc_band_wait_ms":"0:0:3600001"`},
+		{"a queue share above 100", `,"fc_band_queue_pct":"101:0:0"`},
+		{"a negative critical reserve", `,"fc_critical_reserve_pct":-1`},
+		{"a critical reserve above 100", `,"fc_critical_reserve_pct":101`},
+	}
+	for _, k := range fcBandKeys {
+		cases = append(cases, struct{ name, field string }{"null " + k, `,"` + k + `":null`})
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			stub := &stubLbAddHook{}
+			ApiHooks = stub
+			res := ConfigPostLoadbalancer(connectionLimitCreateParams(t, sprintfBody(connectionLimitCreateBody, c.field)), nil)
+			if stub.captured != nil {
+				t.Fatalf("%s reached the rule layer as %+v", c.name, stub.captured.Serv)
+			}
+			if _, ok := res.(*ResultResponse); ok {
+				t.Fatalf("%s answered success: %T", c.name, res)
+			}
+		})
+	}
+}
+
+// Nothing declared reads every band key absent; a declaration reads back
+// as stored, and fc_effective carries every band with explicit zeros and
+// the source of each band knob.
+func TestFcBandReadBack(t *testing.T) {
+	lb := cmn.LbRuleMod{}
+	lb.Serv.ServIP = "20.20.20.5"
+	lb.Serv.ServPort = 8080
+	lb.Serv.Proto = "tcp"
+
+	wireOf := func() map[string]any {
+		wire, err := json.Marshal(serializeLBRule(lb).ServiceArguments)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := map[string]any{}
+		if err := json.Unmarshal(wire, &m); err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+	m := wireOf()
+	for _, k := range fcBandKeys {
+		if _, ok := m[k]; ok {
+			t.Fatalf("%s present on the wire with nothing declared", k)
+		}
+	}
+
+	lb.Serv.FcWakePolicy = "weighted"
+	lb.Serv.FcBandWeights = "8:3:1"
+	lb.Serv.FcCriticalReservePct = 10
+	lb.Serv.FcEffective = &cmn.FcEffectiveArg{
+		Mode: "enforce", EffectiveMaxOutstanding: 10, WakePolicy: "weighted", WeightsInUse: true,
+		ShedQueue: "off", TenantWake: "fifo", LlmdHeaders: "off", BandsConfigured: true,
+		Bands: cmn.FcBandsArg{Critical: cmn.FcBandArg{MinSharePct: 10, FloorUnits: 1, Weight: 8, WeightPct: 67}},
+		Source: cmn.FcEffectiveSource{WakePolicy: "rule", BandWeights: "rule", CriticalReservePct: "rule",
+			BandMinSharePct: "default", ShedQueue: "env"},
+	}
+	m = wireOf()
+	if m["fc_wake_policy"] != "weighted" || m["fc_band_weights"] != "8:3:1" {
+		t.Fatalf("wire %v / %v", m["fc_wake_policy"], m["fc_band_weights"])
+	}
+	if v, ok := m["fc_critical_reserve_pct"]; !ok || v.(float64) != 10 {
+		t.Fatalf("wire fc_critical_reserve_pct = %v (present %v)", v, ok)
+	}
+	eff, ok := m["fc_effective"].(map[string]any)
+	if !ok {
+		t.Fatalf("fc_effective absent: %v", m["fc_effective"])
+	}
+	if eff["wake_policy"] != "weighted" || eff["weights_in_use"] != true || eff["bands_configured"] != true {
+		t.Fatalf("fc_effective %v", eff)
+	}
+	bands, ok := eff["bands"].(map[string]any)
+	if !ok {
+		t.Fatalf("fc_effective.bands absent: %v", eff["bands"])
+	}
+	for _, name := range []string{"critical", "standard", "sheddable"} {
+		b, ok := bands[name].(map[string]any)
+		if !ok {
+			t.Fatalf("band %s absent: %v", name, bands)
+		}
+		for _, k := range []string{"inflight", "queued", "wait_ms", "queue_pct", "min_share_pct",
+			"floor_units", "weight", "weight_pct"} {
+			if _, ok := b[k]; !ok {
+				t.Fatalf("band %s: %s absent with a zero value", name, k)
+			}
+		}
+	}
+	crit := bands["critical"].(map[string]any)
+	if crit["floor_units"].(float64) != 1 || crit["weight_pct"].(float64) != 67 {
+		t.Fatalf("band critical %v", crit)
+	}
+	src := eff["source"].(map[string]any)
+	for k, w := range map[string]string{"wake_policy": "rule", "band_weights": "rule",
+		"critical_reserve_pct": "rule", "band_min_share_pct": "default", "shed_queue": "env"} {
+		if src[k] != w {
+			t.Fatalf("fc_effective.source.%s = %v, want %s", k, src[k], w)
+		}
+	}
+}

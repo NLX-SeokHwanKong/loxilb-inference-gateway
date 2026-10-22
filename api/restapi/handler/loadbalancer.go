@@ -84,6 +84,9 @@ func ConfigPostLoadbalancer(params operations.PostConfigLoadbalancerParams, prin
 	if err := pres.validateFcGateFields(params.Attr.ServiceArguments); err != nil {
 		return errorResponseWithCode(http.StatusBadRequest, err.Error())
 	}
+	if err := pres.validateFcBandFields(params.Attr.ServiceArguments); err != nil {
+		return errorResponseWithCode(http.StatusBadRequest, err.Error())
+	}
 	if err := pres.validateHalfCloseMode(params.Attr.ServiceArguments); err != nil {
 		return errorResponseWithCode(http.StatusBadRequest, err.Error())
 	}
@@ -189,6 +192,7 @@ func ConfigPostLoadbalancer(params operations.PostConfigLoadbalancerParams, prin
 	// replace can reset a depth to the process default with an explicit 0.
 	pres.applyFcQueue(&lbRules.Serv, params.Attr.ServiceArguments)
 	pres.applyFcGate(&lbRules.Serv, params.Attr.ServiceArguments)
+	pres.applyFcBand(&lbRules.Serv, params.Attr.ServiceArguments)
 
 	// Per-endpoint circuit breaker. Resolved HERE, in exactly one place, so
 	// create and update behave identically. An omitted field on a P/D rule
@@ -757,6 +761,15 @@ func serializeLBRule(lb cmn.LbRuleMod) *models.LoadbalanceEntry {
 	tmpSvc.FcTtftTargetMs = int32(lb.Serv.FcTtftTargetMs)
 	tmpSvc.FcTenantMaxSharePct = int32(lb.Serv.FcTenantMaxSharePct)
 	tmpSvc.FcExposeHeaders = lb.Serv.FcExposeHeaders
+	tmpSvc.FcWakePolicy = lb.Serv.FcWakePolicy
+	tmpSvc.FcBandWeights = lb.Serv.FcBandWeights
+	tmpSvc.FcBandMinSharePct = lb.Serv.FcBandMinSharePct
+	tmpSvc.FcCriticalReservePct = int32(lb.Serv.FcCriticalReservePct)
+	tmpSvc.FcBandWaitMs = lb.Serv.FcBandWaitMs
+	tmpSvc.FcBandQueuePct = lb.Serv.FcBandQueuePct
+	tmpSvc.FcShedQueue = lb.Serv.FcShedQueue
+	tmpSvc.FcTenantWake = lb.Serv.FcTenantWake
+	tmpSvc.FcLlmdHeaders = lb.Serv.FcLlmdHeaders
 	tmpSvc.AiDefaultReservation = lb.Serv.AIDefaultReservation
 	tmpSvc.AiDefaultMaxTokens = int32(lb.Serv.AIDefaultMaxTokens)
 	tmpSvc.AiObjectiveStrict = lb.Serv.AIObjectiveStrict
@@ -784,6 +797,17 @@ func serializeLBRule(lb cmn.LbRuleMod) *models.LoadbalanceEntry {
 			TenantsActive:            int32(eff.TenantsActive),
 			TenantSlots:              int32(eff.TenantSlots),
 			ExposeHeaders:            eff.ExposeHeaders,
+			WakePolicy:               eff.WakePolicy,
+			WakePolicyEffective:      eff.WakePolicyEffective,
+			WeightsInUse:             eff.WeightsInUse,
+			ShedQueue:                eff.ShedQueue,
+			ShedQueueEffective:       eff.ShedQueueEffective,
+			TenantWake:               eff.TenantWake,
+			TenantWakeEffective:      eff.TenantWakeEffective,
+			BandFallbackReason:       eff.BandFallbackReason,
+			LlmdHeaders:              eff.LlmdHeaders,
+			BandsConfigured:          eff.BandsConfigured,
+			Bands:                    fcBandsModel(eff.Bands),
 			DefaultReservation:       eff.DefaultReservation,
 			DefaultMaxTokens:         int32(eff.DefaultMaxTokens),
 			ReservationClampedBurst:  int64(eff.ReservationClampedBurst),
@@ -811,6 +835,15 @@ func serializeLBRule(lb cmn.LbRuleMod) *models.LoadbalanceEntry {
 				ExposeHeaders:      eff.Source.ExposeHeaders,
 				DefaultReservation: eff.Source.DefaultReservation,
 				DefaultMaxTokens:   eff.Source.DefaultMaxTokens,
+				WakePolicy:         eff.Source.WakePolicy,
+				BandWeights:        eff.Source.BandWeights,
+				BandMinSharePct:    eff.Source.BandMinSharePct,
+				CriticalReservePct: eff.Source.CriticalReservePct,
+				BandWaitMs:         eff.Source.BandWaitMs,
+				BandQueuePct:       eff.Source.BandQueuePct,
+				ShedQueue:          eff.Source.ShedQueue,
+				TenantWake:         eff.Source.TenantWake,
+				LlmdHeaders:        eff.Source.LlmdHeaders,
 			},
 		}
 	}

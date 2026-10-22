@@ -1569,7 +1569,8 @@ func llb_ai_stream_end(tenantID *C.char, modelName *C.char) C.int {
 // which counts it under outcome="denied".
 //
 // The two consumers read different halves of the call. The metrics take
-// only the tenant, model, status and latency: the token series are fed
+// only the tenant, model, status, latency and the error code (an end code
+// makes the request outcome="aborted", prom.AIEndCause): the token series are fed
 // from llb_ai_token_quota_consume, whose counts always match the charge,
 // while the counts passed here can lag on split non-streaming bodies, and
 // stream lifecycle is tracked by llb_ai_stream_start/_end. The record
@@ -1580,11 +1581,16 @@ func llb_ai_stream_end(tenantID *C.char, modelName *C.char) C.int {
 //
 //	tenantID:      tenant identifier from the validated API key (NUL-terminated)
 //	modelName:     effective model name extracted from X-Model header or JSON body
-//	statusCode:    HTTP response status code (200, 401, 403, 429, 500, …)
+//	statusCode:    HTTP response status code (200, 401, 403, 429, 500, …);
+//	               0 when none was sent (a client that left before any
+//	               answer; or a backend off P/D that closed before it when its
+//	               client could not be told)
 //	latencyMs:     request latency in milliseconds; 0 when unknown
 //	promptTokens, completTokens: usage as the datapath read it; never charged here
 //	streamStart, streamEnd: stream lifecycle flags, tracked by the stream exports
-//	errorCode:     how the response ended when it ended badly ("" otherwise)
+//	errorCode:     how the response ended when it ended badly ("" otherwise);
+//	               an end code of sockproxy_end_cause.h when the client did
+//	               not get the whole answer
 //	requestID:     correlation key shared with the settle and deny records
 //	userID, keyID: identity resolved at admission
 //	svcIdent:      "VIP:port" of the rule ("" when unknown)
@@ -1613,8 +1619,9 @@ func llb_ai_record_request(tenantID *C.char, modelName *C.char, statusCode C.int
 	tenantIDStr := C.GoString(tenantID)
 	modelNameStr := C.GoString(modelName)
 	netIdentityStr := C.GoString(netIdentity)
+	errorCodeStr := C.GoString(errorCode)
 
-	prom.RecordAIRequest(tenantIDStr, modelNameStr, int(statusCode), int64(latencyMs))
+	prom.RecordAIRequest(tenantIDStr, modelNameStr, int(statusCode), int64(latencyMs), errorCodeStr)
 	if netIdentityStr != "" {
 		prom.RecordNetIDRequest(netIdentityStr, tenantIDStr, netIDCompleteOutcome(int(authSrc)))
 	}
@@ -1634,7 +1641,7 @@ func llb_ai_record_request(tenantID *C.char, modelName *C.char, statusCode C.int
 		TokensIn:   int64(promptTokens),
 		TokensOut:  int64(completTokens),
 		IsStream:   isStream != 0,
-		ErrorCode:  C.GoString(errorCode),
+		ErrorCode:  errorCodeStr,
 		WorkerID:   int(producerID),
 
 		ClientIP:    C.GoString(clientIP),
@@ -1767,12 +1774,14 @@ func aiRecordDenyC(d aiDenyRecord) {
 //
 //	modelName:        effective model name (NUL-terminated)
 //	prefillLatencyMs: prefill phase duration in milliseconds; 0 when unknown
-//	decodeLatencyMs:  decode phase TTFT in milliseconds; 0 when unknown
+//	decodeLatencyMs:  the decode leg, dispatch to the end of its response, in
+//	                  milliseconds; 0 when unknown or not sampled
 //	kvParamsFound:    1 when kv_transfer_params was found, 0 otherwise
 //	errorPhase:       lifecycle outcome; names the leg that failed and how.
 //	                  0=complete/success, 1=prefill/timeout, 2=decode/error,
 //	                  3=decode/timeout, 4=prefill/error, 5=prefill/rejected,
-//	                  6=decode/rejected, 7=decode/unknown.
+//	                  6=decode/rejected, 7=decode/unknown, 8=decode/truncated,
+//	                  9=aborted/client.
 //	                  See prom.RecordPDRequest for the full contract.
 //
 //export llb_ai_pd_record
@@ -1780,6 +1789,27 @@ func llb_ai_pd_record(modelName *C.char, prefillLatencyMs C.int64_t, decodeLaten
 	defer cgoRecover("llb_ai_pd_record")
 	modelNameStr := C.GoString(modelName)
 	prom.RecordPDRequest(modelNameStr, int64(prefillLatencyMs), int64(decodeLatencyMs), int(kvParamsFound), int(errorPhase))
+}
+
+// llb_ai_pd_record_extra records the rest of one P/D lifecycle record.
+//
+// C sockproxy calls this right after llb_ai_pd_record, for the same request
+// and the same completion event, every time (sp_pd_record): one record crosses
+// as two calls.
+//
+// Parameters:
+//
+//	modelName:      the same effective model name as llb_ai_pd_record's
+//	decodeTtftUs:   decode dispatch to the first streamed event, in
+//	                microseconds; 0 when the answer streamed no event
+//	fallbackReason: why the prefill was recomputed on the decode leg; 0 when
+//	                it was not. 1=origin_5xx, 2=origin_408, 3=origin_429,
+//	                4=no_status, 5=truncated, 6=other.
+//
+//export llb_ai_pd_record_extra
+func llb_ai_pd_record_extra(modelName *C.char, decodeTtftUs C.int64_t, fallbackReason C.int) {
+	defer cgoRecover("llb_ai_pd_record_extra")
+	prom.RecordPDRecordExtra(C.GoString(modelName), int64(decodeTtftUs), int(fallbackReason))
 }
 
 // llb_ai_pd_session_hit records a P/D Tier-0 session-stickiness cache hit.

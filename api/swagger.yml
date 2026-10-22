@@ -10540,6 +10540,64 @@ definitions:
         type: array
         items:
           $ref: '#/definitions/L7Policy'
+  FcBandEffective:
+    type: object
+    readOnly: true
+    description: >-
+      One priority band of a model pool as the capacity gate holds it, read
+      back in fc_effective.bands.
+    properties:
+      inflight:
+        type: integer
+        x-omitempty: false
+        format: int32
+        description: Service units the band holds right now.
+      queued:
+        type: integer
+        x-omitempty: false
+        format: int32
+        description: Requests of the band waiting right now.
+      wait_ms:
+        type: integer
+        x-omitempty: false
+        format: int32
+        description: >-
+          The band's configured wait window in milliseconds; 0 is the queue's
+          (queue_wait_ms). A window above queue_wait_ms runs at queue_wait_ms.
+      queue_pct:
+        type: integer
+        x-omitempty: false
+        format: int32
+        description: >-
+          The most of the queue depth the band may hold, in percent; 0 is the
+          shared depth. A ceiling on the band's own occupancy, not a
+          reservation.
+      min_share_pct:
+        type: integer
+        x-omitempty: false
+        format: int32
+        description: >-
+          The band's floor in percent of the ceiling in force: a guarantee under
+          contention, not a reservation; it binds only while that band has a waiter.
+      floor_units:
+        type: integer
+        x-omitempty: false
+        format: int32
+        description: >-
+          The floor in service units against effective_max_outstanding, as the gate
+          enforces it: rounded up in the band's favour but never to the whole
+          ceiling for a share under 100, and clamped so the floors and the reserve
+          never exceed the ceiling; 0 without a ceiling.
+      weight:
+        type: integer
+        x-omitempty: false
+        format: int32
+        description: The band's credits per round under the weighted wake; 0 is not set.
+      weight_pct:
+        type: integer
+        x-omitempty: false
+        format: int32
+        description: The weight's share of the round (the sum of the three weights) in percent, rounded to the nearest; 0 when no weight is set.
   LoadbalanceEntry:
     type: object
     description: >-
@@ -10859,7 +10917,8 @@ definitions:
             default: false
             description: >-
               Enable detection of text/event-stream responses and the associated
-              streaming idle-timeout protection. This flag controls Gateway SSE
+              streaming idle-timeout protection. A rule with pd_disagg_mode always
+              has it, whether or not sse_mode is set. This flag controls Gateway SSE
               handling, not whether the backend implements an OpenAI API. Active
               detected streams remain subject to max_stream_duration_sec and
               the system stream cap; enabling SSE does not make them unbounded.
@@ -11236,6 +11295,162 @@ definitions:
               (LLB_FC_EXPOSE_HEADERS). Refused (400) with sockMapMode both or
               response, where the gateway never sees the response. Replace and
               null semantics as fc_mode.
+          fc_wake_policy:
+            type: string
+            x-nullable: false
+            enum: ["strict", "weighted", "inherit"]
+            description: >-
+              Which priority band a freed service unit wakes when requests of
+              several bands wait (critical, standard, sheddable: the class the
+              request's objective resolved to). Bands act only with fc_mode
+              enforce, below the ceiling every band is admitted at once, and
+              HTTP/2 streams and P/D role legs never queue (for them the band
+              decides the refusal only). strict wakes the highest band with a
+              runnable waiter: while higher-band demand keeps the ceiling full,
+              a lower band is admitted zero requests, and each waiter is refused
+              when its band's wait window ends. weighted is a deficit round
+              robin by fc_band_weights: each band with a runnable waiter gets
+              its weight in credits per round, the highest band with credit left
+              is served first, one wake costs one credit, and a band with no
+              runnable waiter forfeits its turn; over whole rounds the wake-ups
+              split exactly as the weights do (8:3:1 is 8 critical, 3 standard,
+              1 sheddable in every 12). The share is of admissions, not of
+              tokens or latency, and a floor is served before the round. weighted
+              needs every weight at least 1 (400 otherwise). inherit, or omitted on create,
+              runs on the process default (LLB_FC_WAKE_POLICY, else strict).
+              Refused (400) beside sockMapMode both or request on a rule that is
+              not an AI-gateway service, as is every band knob other than its
+              default. Such a rule that INHERITS weighted (or another band
+              setting it would be refused for declaring) runs every band knob
+              at its default instead, logs one warning at apply time and reads
+              back fc_effective.wake_policy_effective with
+              band_fallback_reason; so does weighted without a weight for
+              every band. A change of policy starts a new round and loses no
+              waiter. Replace and null semantics as fc_mode.
+          fc_band_weights:
+            type: string
+            x-nullable: false
+            description: >-
+              The weighted wake's weights, written critical:standard:sheddable
+              (for example 8:3:1): three whole numbers, each 1 to 62, at most 64
+              together, or 0:0:0 for none (a zero weight beside non-zero ones
+              is refused, 400). Each is the band's credits per round. Declared
+              under strict they are stored and reported as not in use in
+              fc_effective, so a later switch to weighted finds them. A change
+              of weights starts a new round. Not
+              three whole numbers separated by ':' is refused (400). 0:0:0
+              resets to none; omitted on a replace keeps the stored value;
+              explicit JSON null is rejected.
+          fc_band_min_share_pct:
+            type: string
+            x-nullable: false
+            description: >-
+              Each band's floor, critical:standard:sheddable, in percent of
+              the service ceiling in force (rounded up to whole units, and
+              following the adaptive ceiling). A floor is a guarantee under
+              contention, not a reservation: it binds only while that band has a
+              waiter, so with no demand in the band the other bands take every
+              unit. When a unit frees, the highest-ranked band that is below its
+              floor and has a runnable waiter takes it; when no band is below its
+              floor, the wake policy chooses. HTTP/2 streams and role legs never
+              wait, so on a service that carries only HTTP/2 a floor never binds.
+              Each 0 to 100, at most 100 together (400 naming
+              fc_band_min_share_pct). 0:0:0 (the default) is no floor. A floor
+              is independent of the wake policy and of the weights. Replace and
+              null semantics as fc_band_weights.
+          fc_critical_reserve_pct:
+            type: integer
+            format: int32
+            x-nullable: false
+            minimum: 0
+            maximum: 100
+            default: 0
+            description: >-
+              The only true reservation: the percent of the ceiling in force
+              (rounded up to whole units) that no other band may take, even when
+              critical is idle. It holds on HTTP/2 and role legs as well, which
+              never wait. Together with the standard and sheddable entries of
+              fc_band_min_share_pct at most 100 (400 naming
+              fc_critical_reserve_pct); the critical entry of
+              fc_band_min_share_pct is a separate floor, and critical holds the
+              larger of the two. 0 or omitted on create is none. Replace and
+              null semantics as fc_max_outstanding.
+          fc_band_wait_ms:
+            type: string
+            x-nullable: false
+            description: >-
+              Each band's wait window, critical:standard:sheddable, in
+              milliseconds, each 0 to 3600000. A band's window is a cap inside
+              the rule's window (fc_max_queue_wait_ms), never above it: a
+              larger value runs at the rule's window, and 0 is the rule's
+              window. A waiter whose window ends is answered 504
+              admission_queue_timeout. 0:0:0 (the default) resets every band to
+              the queue's window. Replace and null semantics as
+              fc_band_weights.
+          fc_band_queue_pct:
+            type: string
+            x-nullable: false
+            description: >-
+              The most of the queue depth each band may hold,
+              critical:standard:sheddable, in percent, rounded up to whole
+              waiters and at least one; 0 is the shared depth. It bounds that
+              band's own occupancy of fc_max_queue_depth and is a ceiling, not
+              a reservation: what a band does not use stays open to every other
+              band, and the queue as a whole never holds more than
+              fc_max_queue_depth. A band at its share is refused with 429
+              admission_capacity (reason queue_full); nobody is evicted to make
+              room for it. At most 100 together when all three are non-zero.
+              0:0:0 (the default) is no share. Replace and null semantics as
+              fc_band_weights.
+          fc_shed_queue:
+            type: string
+            x-nullable: false
+            enum: ["on", "off", "inherit"]
+            description: >-
+              off refuses a sheddable request at the ceiling at once with 429
+              admission_shed; on lets it wait in its band, and when the queue is
+              full an arriving request of any higher band (standard or critical)
+              evicts the youngest sheddable waiter, which is answered 429
+              admission_shed. on is refused (400)
+              while the queue depth in force (fc_max_queue_depth, else
+              LLB_FC_MAX_QUEUE_DEPTH) is 0. inherit, or omitted on create, runs
+              on the process default (LLB_FC_SHED_QUEUE, else off). Replace and
+              null semantics as fc_mode.
+          fc_tenant_wake:
+            type: string
+            x-nullable: false
+            enum: ["fifo", "rr", "inherit"]
+            description: >-
+              The order inside one band. fifo wakes the oldest runnable waiter
+              and does not tell tenants apart; rr rotates across the tenants
+              with a runnable waiter in the band, oldest first inside one
+              tenant, each band keeping its own place in the rotation. rr needs
+              no fc_tenant_max_share_pct. inherit, or omitted on create, runs
+              on the process default (LLB_FC_TENANT_WAKE, else fifo). Replace and
+              null semantics as fc_mode.
+          fc_llmd_headers:
+            type: string
+            x-nullable: false
+            enum: ["on", "off", "inherit"]
+            description: >-
+              on: adds x-llm-d-request-dropped-reason to the admission refusals
+              (HTTP/1.1 answers and HTTP/2 stream refusals); lets a valid
+              x-llm-d-inference-ttl on an HTTP/1.1 request (Go duration syntax,
+              positive, held at one day) shorter than the window that applies
+              shorten that request's wait, never extend it, where a wait the
+              client's TTL ended is answered 429 admission_ttl_expired and a
+              wait a window of the rule ended stays 504
+              admission_queue_timeout; and forwards the gateway's resolved
+              values in x-llm-d-inference-objective (the class the request was
+              admitted as) and x-llm-d-inference-fairness-id (the authenticated
+              tenant, none for a request without one), removing the client's
+              copy of either name and of the deprecated x-gateway-inference-*
+              names, on HTTP/1.1 and HTTP/2 alike (on a chunked HTTP/1.1 request
+              the copies are removed and nothing is written; HTTP/2 streams
+              never wait, so the TTL does not apply to them). off leaves all of it out: the TTL header is ignored and
+              every header is forwarded as sent. inherit, or omitted on create,
+              runs on the process default (LLB_FC_LLMD_HEADERS, else off).
+              Replace and null semantics as fc_mode.
           ai_default_reservation:
             type: string
             x-nullable: false
@@ -11432,6 +11647,94 @@ definitions:
                 type: string
                 enum: ["on", "off"]
                 description: Whether admitted responses carry the admission headers.
+              wake_policy:
+                type: string
+                enum: ["strict", "weighted"]
+                description: >-
+                  The wake policy as configured, by the rule or inherited
+                  (source.wake_policy); wake_policy_effective is the one the
+                  gate runs. strict - while higher-band demand
+                  keeps the ceiling full, a lower band is admitted zero requests;
+                  each waiter is refused when its band's wait window ends.
+                  weighted - a deficit round robin: while several bands have
+                  waiters, each receives its weight's share of wake-ups, exactly
+                  over whole rounds (8:3:1 is 8, 3, 1 in every 12); the share is
+                  of admissions, not of tokens, GPU time or latency. No band is
+                  promoted because it has waited long.
+              wake_policy_effective:
+                type: string
+                enum: ["strict", "weighted"]
+                description: >-
+                  The wake policy the gate runs. Differs from wake_policy only
+                  when band_fallback_reason is not none.
+              weights_in_use:
+                type: boolean
+                x-omitempty: false
+                description: true when wake_policy_effective is weighted and the weights decide the wake; declared weights are stored but not in use otherwise.
+              shed_queue:
+                type: string
+                enum: ["on", "off"]
+                description: >-
+                  As configured: whether a sheddable request at the ceiling
+                  waits in its band instead of 429 admission_shed.
+              shed_queue_effective:
+                type: string
+                enum: ["on", "off"]
+                description: The shed queue the gate runs.
+              tenant_wake:
+                type: string
+                enum: ["fifo", "rr"]
+                description: The order inside one band, as configured (fifo, or rr across tenants).
+              tenant_wake_effective:
+                type: string
+                enum: ["fifo", "rr"]
+                description: The order inside one band the gate runs (fifo, or rr across tenants).
+              band_fallback_reason:
+                type: string
+                enum: ["none", "sockmap_request", "zero_weight", "no_queue"]
+                description: >-
+                  Why the gate runs band settings other than the configured
+                  ones: a combination the API refuses a rule to declare,
+                  reached by inheriting the environment (LLB_FC_*) or by a
+                  restore replay, runs on the defaults and is logged once at
+                  apply time. sockmap_request - sockMapMode request or both on
+                  a rule that is not an AI-gateway service: every band knob at
+                  its default (the request direction never reaches the gate).
+                  zero_weight - weighted with a zero weight: strict.
+                  no_queue - shed queue on with no queue depth: off. none -
+                  the configuration runs as configured.
+              llmd_headers:
+                type: string
+                enum: ["on", "off"]
+                description: Whether refusals carry x-llm-d-request-dropped-reason and x-llm-d-inference-ttl may shorten a wait.
+              bands_configured:
+                type: boolean
+                x-omitempty: false
+                description: true when any band knob in force differs from its default.
+              bands:
+                type: object
+                description: >-
+                  Each priority band's live counts and the knobs in force
+                  (after any fallback). min_share_pct and floor_units are the
+                  floor alone; the critical reserve is reported beside the
+                  bands.
+                properties:
+                  critical_reserve_pct:
+                    type: integer
+                    x-omitempty: false
+                    format: int32
+                    description: The critical reserve in percent of the ceiling in force - units no other band may take, even when critical is idle.
+                  critical_reserve_units:
+                    type: integer
+                    x-omitempty: false
+                    format: int32
+                    description: The reserve in service units against effective_max_outstanding, as the gate enforces it; 0 without a ceiling.
+                  critical:
+                    $ref: '#/definitions/FcBandEffective'
+                  standard:
+                    $ref: '#/definitions/FcBandEffective'
+                  sheddable:
+                    $ref: '#/definitions/FcBandEffective'
               default_reservation:
                 type: string
                 enum: ["on", "off"]
@@ -11568,6 +11871,33 @@ definitions:
                     type: string
                     enum: [rule, env, default]
                   default_max_tokens:
+                    type: string
+                    enum: [rule, env, default]
+                  wake_policy:
+                    type: string
+                    enum: [rule, env, default]
+                  band_weights:
+                    type: string
+                    enum: [rule, env, default]
+                  band_min_share_pct:
+                    type: string
+                    enum: [rule, env, default]
+                  critical_reserve_pct:
+                    type: string
+                    enum: [rule, env, default]
+                  band_wait_ms:
+                    type: string
+                    enum: [rule, env, default]
+                  band_queue_pct:
+                    type: string
+                    enum: [rule, env, default]
+                  shed_queue:
+                    type: string
+                    enum: [rule, env, default]
+                  tenant_wake:
+                    type: string
+                    enum: [rule, env, default]
+                  llmd_headers:
                     type: string
                     enum: [rule, env, default]
           kvExactMode:

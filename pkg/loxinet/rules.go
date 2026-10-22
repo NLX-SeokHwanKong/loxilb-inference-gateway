@@ -1263,8 +1263,12 @@ func (R *RuleH) GetLBRule() ([]cmn.LbRuleMod, error) {
 		ret.Serv.AIObjectiveStrict = data.aiObjectiveStrict
 		// The capacity gate's resolved state on the pool, for AI-gateway or
 		// modern MCP services: what the data plane holds, not what was posted.
-		// A read model beside configuration, never replayed into a POST.
-		if (data.aiGwMode() || data.mcpProtocolVersion != "") && mh.dpEbpf != nil {
+		// A read model beside configuration, never replayed into a POST. A
+		// rule whose request direction sockmap carries is read back too:
+		// its gate may run band settings other than the ones it inherits
+		// (fc_cfg_band_guard), and the read-back is where that shows.
+		sockMapReq, _ := sockMapDirs(data.sockMapMode)
+		if (data.aiGwMode() || data.mcpProtocolVersion != "" || sockMapReq) && mh.dpEbpf != nil {
 			if eff, ok := mh.dpEbpf.DpFcStateGet(data.tuples.l3Dst.addr.IP,
 				data.tuples.l4Dst.valMin, uint8(data.tuples.l4Prot.val),
 				data.tuples.path, data.tuples.pathPrefix, data.tuples.modelName); ok {
@@ -4626,6 +4630,10 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 	if err := fcExposeSockMapErr(&serv, nextFcCfg, sockMapCode); err != nil {
 		return RuleArgsErr, err
 	}
+	if err := fcBandSockMapErr(&serv, nextFcCfg, sockMapCode,
+		aiGwModeFor(serv.SSEMode, serv.PDDisaggMode, nextApiKeyAuth)); err != nil {
+		return RuleArgsErr, err
+	}
 	if err := netidRuleSockMapErr(mh.NetIdentity, aiServiceIdent(sNetAddr.IP, serv.ServPort),
 		aiGwModeFor(serv.SSEMode, serv.PDDisaggMode, nextApiKeyAuth), sockMapCode); err != nil {
 		return RuleArgsErr, err
@@ -7217,6 +7225,17 @@ func (r *ruleEnt) LB2DP(work DpWorkT) int {
 	nWork.FcTtftTargetMs = r.fcCfg.ttftTargetMs
 	nWork.FcTenantSharePct = uint8(r.fcCfg.tenantSharePct)
 	nWork.FcExposeHeaders = r.fcCfg.exposeHeaders
+	nWork.FcWakePolicy = r.fcCfg.wakePolicy
+	nWork.FcShedQueue = r.fcCfg.shedQueue
+	nWork.FcTenantWake = r.fcCfg.tenantWake
+	nWork.FcLlmdHeaders = r.fcCfg.llmdHeaders
+	nWork.FcCriticalReservePct = uint8(r.fcCfg.criticalReservePct)
+	for b := 0; b < cmn.FcBands; b++ {
+		nWork.FcBandWeight[b] = uint8(r.fcCfg.bandWeight[b])
+		nWork.FcBandMinSharePct[b] = uint8(r.fcCfg.bandMinSharePct[b])
+		nWork.FcBandQueuePct[b] = uint8(r.fcCfg.bandQueuePct[b])
+		nWork.FcBandWaitMs[b] = r.fcCfg.bandWaitMs[b]
+	}
 	nWork.HalfCloseMode = r.halfCloseDpMode()
 	nWork.AIDefaultTokens = r.aiDefaultResv.tokensInForce()
 	nWork.AIObjectiveStrict = r.aiObjectiveStrict

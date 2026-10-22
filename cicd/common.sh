@@ -133,6 +133,64 @@ pull_dockers() {
   docker pull ewindisch/quagga
 }
 
+## REST readiness probe for a loxilb container (issue #423).
+##
+## On hosted ubuntu-24.04 runners the first `loxicmd` of a scenario sometimes
+## times out against a loxilb spawned 17-27 s earlier, and the logs cannot tell
+## a slow start from a loxilb that died or hung. After spawning a loxilb this
+## polls GET /netlox/v1/version from inside the container and prints one
+## `[rest-probe]` line with the time to the first answer. If nothing answers
+## within the deadline it prints the container state, the loxilb process list
+## and the tails of /tmp/loxilb.err and /tmp/loxilb.out.
+##
+##   LOXILB_REST_PROBE       log  (default) wait, report, never fail
+##                           fail wait, report, exit 1 on timeout
+##                           off  skip the probe
+##   LOXILB_REST_PROBE_SECS  deadline in seconds (default 60)
+##
+## The URL follows the loxilb flags in extra_opts: --port N and --tls.
+## arg1 - loxilb instance name; arg2 - epoch seconds of its spawn
+probe_loxilb_rest() {
+  local name="$1" t0="$2" mode="${LOXILB_REST_PROBE:-log}"
+  local deadline="${LOXILB_REST_PROBE_SECS:-60}"
+  local port=11111 scheme=http curl_tls="" url now elapsed
+  [[ "$mode" == "off" ]] && return 0
+  if [[ "$extra_opts" =~ (^|[[:space:]])--port[=[:space:]]+([0-9]+) ]]; then
+    port="${BASH_REMATCH[2]}"
+  fi
+  case " $extra_opts " in
+    *" --tls "*|*" --tls="*) scheme=https; curl_tls="-k" ;;
+  esac
+  url="$scheme://127.0.0.1:$port/netlox/v1/version"
+  while :; do
+    if $dexec "$name" curl -sf -m 2 $curl_tls -o /dev/null "$url" 2>/dev/null; then
+      now=$(date +%s); elapsed=$(( now - t0 ))
+      echo "[rest-probe] name=$name ready=1 after=${elapsed}s url=$url image=$lxdocker kernel=$(uname -r)"
+      return 0
+    fi
+    now=$(date +%s); elapsed=$(( now - t0 ))
+    if (( elapsed >= deadline )); then
+      break
+    fi
+    sleep 1
+  done
+  echo "[rest-probe] name=$name ready=0 after=${elapsed}s url=$url image=$lxdocker kernel=$(uname -r) mode=$mode"
+  echo "[rest-probe] --- docker ps ($name)"
+  docker ps -a --filter "name=^/${name}\$" --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}' 2>&1 || true
+  echo "[rest-probe] --- processes and listeners in $name"
+  $dexec "$name" bash -c 'pgrep -a loxilb || echo "no loxilb process"; (ss -ltnp 2>/dev/null || netstat -ltnp 2>/dev/null) | head -n 20' 2>&1 || true
+  echo "[rest-probe] --- /tmp/loxilb.err (tail) in $name"
+  $dexec "$name" tail -n 40 /tmp/loxilb.err 2>&1 || true
+  echo "[rest-probe] --- /tmp/loxilb.out (tail) in $name"
+  $dexec "$name" tail -n 20 /tmp/loxilb.out 2>&1 || true
+  echo "[rest-probe] --- end of dump ($name)"
+  if [[ "$mode" == "fail" ]]; then
+    echo "FATAL: loxilb REST API of $name never answered within ${deadline}s"
+    exit 1
+  fi
+  return 0
+}
+
 ## Creates a docker host
 ## arg1 - "loxilb"|"host"
 ## arg2 - instance-name
@@ -231,9 +289,11 @@ spawn_docker_host() {
       sudo mkdir -p /etc/shared/$dname/
       docker run -u root --cap-add SYS_ADMIN   --restart unless-stopped --privileged -dt $docker_extra_opts --entrypoint /bin/bash $bgp_conf -v /dev/log:/dev/log -v /etc/shared/$dname:/etc/shared $loxilb_config --name $dname $lxdocker
       get_llb_peerIP $dname
+      loxilb_spawn_t0=$(date +%s)
       docker exec -d $dname bash -c "/root/loxilb-io/loxilb/loxilb $bgp_opts $cluster_opts $ka_opts $prom_opts $extra_opts > /tmp/loxilb.out 2> /tmp/loxilb.err"
     else
       docker run -u root --cap-add SYS_ADMIN   --restart unless-stopped --privileged -dt $docker_extra_opts --entrypoint /bin/bash $bgp_conf -v /dev/log:/dev/log -v `pwd`/cert:/opt/loxilb/cert/ $loxilb_config --name $dname $lxdocker $bgp_opts
+      loxilb_spawn_t0=$(date +%s)
       docker exec -d $dname bash -c "/root/loxilb-io/loxilb/loxilb $bgp_opts $cluster_opts $prom_opts $extra_opts > /tmp/loxilb.out 2> /tmp/loxilb.err"
     fi
   elif [[ "$dtype" == "host" ]]; then
@@ -289,6 +349,9 @@ spawn_docker_host() {
   #$hexec $dname sysctl net.ipv4.conf.all.arp_accept=1 2>&1 >> /dev/null
   if [ -f /proc/sys/net/ipv4/conf/eth0/arp_ignore ]; then
     $hexec $dname sysctl net.ipv4.conf.eth0.arp_ignore=2 2>&1 >> /dev/null
+  fi
+  if [[ "$dtype" == "loxilb" ]]; then
+    probe_loxilb_rest "$dname" "$loxilb_spawn_t0"
   fi
 }
 

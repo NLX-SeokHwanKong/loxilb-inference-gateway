@@ -184,7 +184,23 @@ typedef struct proxy_metrics_snapshot {
     // Pools allocated and not yet freed, and pools freed (sockproxy_pool.h). TAIL-APPEND ONLY — same three-way lockstep.
     uint64_t pools_live;
     uint64_t pools_freed_total;
+
+    // Terminators the graceful-[DONE] sweep wrote for a silent decode engine (the mechanism behind decode/truncated). TAIL-APPEND ONLY — same three-way lockstep.
+    uint64_t pd_terminator_synthesized;
+
+    // Clients a reaper ended from the health thread because their owner worker could not be handed the end (F-13). TAIL-APPEND ONLY — same three-way lockstep.
+    uint64_t reap_fallback;
+
+    // Requests that reached dispatch with no usable Host on a listener whose pools name models (ROUTE-01's second defence). TAIL-APPEND ONLY — same three-way lockstep.
+    uint64_t route_host_missing;
+
+    // P/D admission units held now, and clients parked on a prefill endpoint's queue. TAIL-APPEND ONLY — same three-way lockstep.
+    uint64_t pd_prefill_inflight;
+    uint64_t pd_decode_inflight;
+    uint64_t pd_parked_connections;
 } proxy_metrics_snapshot_t;
+_Static_assert(sizeof(proxy_metrics_snapshot_t) == 6096,
+               "proxy_metrics_snapshot_t: keep the C, Go and stub mirrors aligned");
 
 // C function from sockproxy.c
 extern proxy_metrics_snapshot_t proxy_get_metrics(void);
@@ -842,6 +858,30 @@ var (
 			Help: "TRT-LLM P/D: the context response finished the request in one step (finish_reason neither length nor not_finished) — the buffered response was relayed to the client and the generation leg skipped. A success outcome, not an error; a sustained high rate means prompts are completing within the context token cap.",
 		},
 	)
+
+	// Metric #40: terminators the gateway synthesised (Counter)
+	pdTerminatorSynthesizedTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "loxilb_ai_pd_terminator_synthesized_total",
+			Help: "P/D streams the gateway ended by writing the SSE [DONE] terminator the decode engine never sent (the graceful-[DONE] sweep, after the engine went silent). The mechanism behind part of loxilb_ai_pd_requests_total{phase=\"decode\",status=\"truncated\"}: the rest of that series is answers the gateway cut with an error (stream timeout, idle cap, duration cap).",
+		},
+	)
+
+	// Metric #41: reaper ends the owner worker could not take (Counter)
+	reapFallbackTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "loxilb_ai_reap_fallback_total",
+			Help: "Connections a reaper (a P/D timeout, the idle cap, the duration cap, a stalled client) ended from the health thread because the connection's owner worker could not be handed the end (no owner, or its wake failed). The request such an end frees has no request record. Expected 0; a non-zero rate means requests are missing from loxilb_ai_requests_total.",
+		},
+	)
+
+	// Metric #42: requests with no Host on a model-routed listener (Counter)
+	routeHostMissingTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "loxilb_ai_route_host_missing_total",
+			Help: "Requests that reached dispatch with no usable Host on a listener whose pools name models. Routed to the pool of the model the request named, or refused (503 model_unavailable / no_route); never sent to another model's pool. Expected 0: a non-zero rate means a path lost the Host.",
+		},
+	)
 )
 
 // pdKvT15MissReasonLabels enumerates the canonical guard reasons used by the
@@ -1121,6 +1161,13 @@ func poolFromC(m *C.proxy_metrics_snapshot_t) poolSnapshot {
 	return poolSnapshot{live: uint64(m.pools_live), freed: uint64(m.pools_freed_total)}
 }
 
+// pdOccupancyFromC copies the P/D occupancy out of a snapshot; the rest is in
+// sockproxy_pd_occupancy_metrics.go.
+func pdOccupancyFromC(m *C.proxy_metrics_snapshot_t) pdOccupancySnapshot {
+	return pdOccupancySnapshot{prefill: uint64(m.pd_prefill_inflight),
+		decode: uint64(m.pd_decode_inflight), parked: uint64(m.pd_parked_connections)}
+}
+
 // holdFromC copies the half-close hold state out of a snapshot; the rest is
 // in halfclose_hold_metrics.go.
 func holdFromC(m *C.proxy_metrics_snapshot_t) holdSnapshot {
@@ -1263,6 +1310,7 @@ func RunSockproxyMetrics(ctx context.Context) {
 		updateStreamAbandonStore(streamAbandonFromC(&current))
 		// Pools live and freed → poolCollector.
 		updatePoolStore(poolFromC(&current))
+		updatePdOccupancyStore(pdOccupancyFromC(&current))
 		updateHoldStore(holdFromC(&current))
 
 		// 3c. P/D buffer overflow counter
@@ -1406,6 +1454,18 @@ func RunSockproxyMetrics(ctx context.Context) {
 		if current.pd_trt_ctx_early_exit >= prevSockproxyMetrics.pd_trt_ctx_early_exit {
 			delta := current.pd_trt_ctx_early_exit - prevSockproxyMetrics.pd_trt_ctx_early_exit
 			pdTrtCtxEarlyExitTotal.Add(float64(delta))
+		}
+		if current.pd_terminator_synthesized >= prevSockproxyMetrics.pd_terminator_synthesized {
+			delta := current.pd_terminator_synthesized - prevSockproxyMetrics.pd_terminator_synthesized
+			pdTerminatorSynthesizedTotal.Add(float64(delta))
+		}
+		if current.reap_fallback >= prevSockproxyMetrics.reap_fallback {
+			delta := current.reap_fallback - prevSockproxyMetrics.reap_fallback
+			reapFallbackTotal.Add(float64(delta))
+		}
+		if current.route_host_missing >= prevSockproxyMetrics.route_host_missing {
+			delta := current.route_host_missing - prevSockproxyMetrics.route_host_missing
+			routeHostMissingTotal.Add(float64(delta))
 		}
 
 		// 3h. Tier-1 byte shaper and the AI admission gate: republish the

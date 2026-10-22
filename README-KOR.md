@@ -135,7 +135,7 @@ docker run -u root --cap-add SYS_ADMIN --restart unless-stopped --privileged \
 | `kvEngineType` | `"vllm"`(기본값) 또는 `"sglang"` — block-hash 계약을 선택(생성 후 불변) |
 | `kvDpRankCount` | SGLang 데이터 병렬 랭크(= `--dp-size`); 랭크 *N*은 `kvZmqPort`+*N*에서 게시 |
 | `kvWarmupSec` | KV-exact 선택이 동작하기 전의 유예 기간 |
-| `sse_mode` | `true` = SSE 인식 스트리밍(스트림이 유휴 타임아웃을 견디고 `[DONE]` 감지); AI 게이트웨이 키/제한 적용도 활성화 |
+| `sse_mode` | `true` = SSE 인식 스트리밍(스트림이 유휴 타임아웃을 견디고 `[DONE]` 감지); AI 게이트웨이 키/제한 적용도 활성화. `pd_disagg_mode` 규칙에서는 설정과 무관하게 항상 켜짐 |
 | `max_stream_duration_sec` | 스트림당 하드 wall-clock 상한(폭주 방지) |
 | `backend_keepalive_interval_sec` | 긴 스트림 동안 백엔드로의 TCP keepalive |
 | `session_header_name` | 헤더 기반 스티키니스 — MCP는 `"mcp-session-id"`, 채팅은 `"X-Conversation-Id"` |

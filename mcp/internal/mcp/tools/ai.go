@@ -39,12 +39,23 @@ import (
 // api/prometheus. Absent on gateways older than the label.
 const (
 	outcomeCompleted = "completed"
+	outcomeAborted   = "aborted"
 	outcomeDenied    = "denied"
 )
 
+// Values of the cause label of an aborted request. client is traffic (a
+// cancel, a stall); engine and gateway are errors.
+const (
+	causeEngine  = "engine"
+	causeGateway = "gateway"
+)
+
 const trafficReportCaveat = "accounting caveat: read loxilb_ai_requests_total by its outcome " +
-	"label - outcome=\"completed\" is backend-answered traffic, outcome=\"denied\" is requests the " +
-	"policy gate refused, and unfiltered is offered load. loxilb_ai_rate_limit_hits_total is not a " +
+	"label - outcome=\"completed\" is traffic answered whole, outcome=\"aborted\" is requests whose " +
+	"client did not get the whole answer (cause client = it cancelled or stopped reading, traffic; " +
+	"engine or gateway = an error), outcome=\"denied\" is requests the policy gate refused, and " +
+	"unfiltered is offered load. error_ratio is (completed 5xx + aborted engine/gateway) / " +
+	"(completed + aborted). loxilb_ai_rate_limit_hits_total is not a " +
 	"second copy of the denials: it carries WHY they were denied. The bridge reaches gateways of " +
 	"any age, so absence of the outcome label means an older build in which the total excludes " +
 	"denials altogether, and one older still counts only SSE-terminated streams; when the label " +
@@ -1041,19 +1052,27 @@ type latencySummary struct {
 type trafficReportOut struct {
 	Target string `json:"target"`
 	// Requests: cumulative loxilb_ai_requests_total broken down by
-	// model/tenant/status/outcome, plus the derived non-2xx ratio.
+	// model/tenant/status/outcome/cause, plus the derived error ratio.
 	//
 	// RequestsTotal is offered load, so it includes the requests the policy
-	// gate refused. ErrorRatio deliberately does NOT: it is non-2xx over
-	// backend-answered traffic, because a denial is non-2xx by construction and
-	// folding denials in would make a rate-limit storm read as a backend fault
-	// -- to an operator, and to an agent acting on this report. RequestsDenied
-	// carries that half separately.
+	// gate refused. ErrorRatio deliberately does NOT: it is (completed 5xx +
+	// aborted by the engine or the gateway) over completed + aborted, because a
+	// denial is non-2xx by construction and folding denials in would make a
+	// rate-limit storm read as a backend fault -- to an operator, and to an
+	// agent acting on this report. RequestsDenied carries that half
+	// separately. An aborted request is not completed: RequestsAborted counts
+	// it, RequestsAbortedErrors the engine and gateway causes among them; a
+	// client cause (a cancel) is in the denominator only. RequestsNon2xx stays
+	// non-2xx over completed traffic, for gateways read before the aborted
+	// outcome existed.
 	RequestsByModelTenantStatus []map[string]any `json:"requests_by_model_tenant_status,omitempty"`
 	RequestsTotal               float64          `json:"requests_total"`
 	RequestsCompleted           float64          `json:"requests_completed"`
+	RequestsAborted             float64          `json:"requests_aborted"`
+	RequestsAbortedErrors       float64          `json:"requests_aborted_errors"`
 	RequestsDenied              float64          `json:"requests_denied"`
 	RequestsNon2xx              float64          `json:"requests_non_2xx"`
+	Requests5xx                 float64          `json:"requests_5xx"`
 	ErrorRatio                  float64          `json:"error_ratio"`
 	RateLimitDrops              []map[string]any `json:"rate_limit_drops,omitempty"`
 	RateLimitDropsTotal         float64          `json:"rate_limit_drops_total"`
@@ -1062,6 +1081,8 @@ type trafficReportOut struct {
 	RequestDuration             *latencySummary  `json:"request_duration,omitempty"`
 	ProxyTTFB                   *latencySummary  `json:"proxy_ttfb,omitempty"`
 	PDDecodeTTFT                *latencySummary  `json:"pd_decode_ttft,omitempty"`
+	PDDecodeDuration            *latencySummary  `json:"pd_decode_duration,omitempty"`
+	PDPrefillFallback           []map[string]any `json:"pd_prefill_fallback,omitempty"`
 	KVParamsFound               float64          `json:"kv_params_found"`
 	KVParamsMissing             float64          `json:"kv_params_missing"`
 	PDSessionHits               float64          `json:"pd_session_hits"`
@@ -1111,22 +1132,36 @@ func (d *Deps) aiTrafficReport() sdk.ToolHandlerFor[trafficReportIn, trafficRepo
 				if outcome == "" {
 					outcome = outcomeCompleted
 				}
-				if outcome == outcomeDenied {
+				cause := s.Labels["cause"]
+				switch outcome {
+				case outcomeDenied:
 					out.RequestsDenied += s.Value
-				} else {
+				case outcomeAborted:
+					out.RequestsAborted += s.Value
+					if cause == causeEngine || cause == causeGateway {
+						out.RequestsAbortedErrors += s.Value
+					}
+				default:
 					out.RequestsCompleted += s.Value
 					if !strings.HasPrefix(status, "2") {
 						out.RequestsNon2xx += s.Value
 					}
+					if strings.HasPrefix(status, "5") {
+						out.Requests5xx += s.Value
+					}
 				}
-				out.RequestsByModelTenantStatus = append(out.RequestsByModelTenantStatus, map[string]any{
+				row := map[string]any{
 					"model": clean(s.Labels["model"]), "tenant": clean(s.Labels["tenant"]),
 					"status": clean(status), "outcome": clean(outcome), "count": s.Value,
-				})
+				}
+				if cause != "" {
+					row["cause"] = clean(cause)
+				}
+				out.RequestsByModelTenantStatus = append(out.RequestsByModelTenantStatus, row)
 			}
-			// Over completed traffic only -- see the field comments above.
-			if out.RequestsCompleted > 0 {
-				out.ErrorRatio = out.RequestsNon2xx / out.RequestsCompleted
+			// Over completed + aborted traffic only -- see the field comments above.
+			if served := out.RequestsCompleted + out.RequestsAborted; served > 0 {
+				out.ErrorRatio = (out.Requests5xx + out.RequestsAbortedErrors) / served
 			}
 		}
 		if f, ok := byName["loxilb_ai_rate_limit_hits_total"]; ok {
@@ -1155,7 +1190,18 @@ func (d *Deps) aiTrafficReport() sdk.ToolHandlerFor[trafficReportIn, trafficRepo
 		}
 		out.RequestDuration = summarizeHistogram(byName["loxilb_ai_request_duration_seconds"])
 		out.ProxyTTFB = summarizeHistogram(byName["loxilb_proxy_http_ttfb_seconds"])
+		// TTFT is dispatch to the first streamed event (streamed requests
+		// only); the whole decode leg is the duration family.
 		out.PDDecodeTTFT = summarizeHistogram(byName["loxilb_ai_pd_decode_ttft_seconds"])
+		out.PDDecodeDuration = summarizeHistogram(byName["loxilb_ai_pd_decode_duration_seconds"])
+		if f, ok := byName["loxilb_ai_pd_prefill_fallback_total"]; ok {
+			for _, s := range f.Samples {
+				out.PDPrefillFallback = append(out.PDPrefillFallback, map[string]any{
+					"model": clean(s.Labels["model"]), "reason": clean(s.Labels["reason"]),
+					"count": s.Value,
+				})
+			}
+		}
 		out.KVParamsFound = sumFamily(byName["loxilb_ai_pd_kv_params_found_total"])
 		out.KVParamsMissing = sumFamily(byName["loxilb_ai_pd_kv_params_missing_total"])
 		out.PDSessionHits = sumFamily(byName["loxilb_ai_pd_session_hits_total"])

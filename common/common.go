@@ -1246,6 +1246,60 @@ type LbServiceArg struct {
 	FcExposeHeaders string `json:"fc_expose_headers,omitempty"`
 	// FcExposeHeadersPresent is the presence bit for replace semantics.
 	FcExposeHeadersPresent bool `json:"-"`
+	// FcWakePolicy - which waiting priority band a freed unit wakes:
+	// "strict" (the highest band with a runnable waiter) or "weighted"
+	// (FcBandWeights shares of the wake-ups). Empty (or "inherit" on input)
+	// runs on LLB_FC_WAKE_POLICY, else strict.
+	FcWakePolicy string `json:"fc_wake_policy,omitempty"`
+	// FcWakePolicyPresent is the presence bit for replace semantics.
+	FcWakePolicyPresent bool `json:"-"`
+	// FcBandWeights - the weighted wake's weights, "c:s:b" (critical,
+	// standard, sheddable), each 1..62, at most 64 together. Empty or
+	// "0:0:0" is none; a zero beside non-zero weights is refused.
+	FcBandWeights string `json:"fc_band_weights,omitempty"`
+	// FcBandWeightsPresent is the presence bit for replace semantics.
+	FcBandWeightsPresent bool `json:"-"`
+	// FcBandMinSharePct - each band's floor, "c:s:b", in percent of the
+	// service ceiling in force, at most 100 together. A floor is a guarantee
+	// under contention, not a reservation: it binds only while that band has
+	// a waiter. Empty or "0:0:0" is no floor.
+	FcBandMinSharePct string `json:"fc_band_min_share_pct,omitempty"`
+	// FcBandMinSharePctPresent is the presence bit for replace semantics.
+	FcBandMinSharePctPresent bool `json:"-"`
+	// FcCriticalReservePct - the only true reservation: the percent of the
+	// ceiling in force that no other band may take, even when critical is
+	// idle. With the standard and sheddable floors, at most 100. 0 is none.
+	FcCriticalReservePct uint32 `json:"fc_critical_reserve_pct,omitempty"`
+	// FcCriticalReservePctPresent is the presence bit for replace semantics.
+	FcCriticalReservePctPresent bool `json:"-"`
+	// FcBandWaitMs - each band's wait window, "c:s:b", in milliseconds,
+	// each at most 3600000; 0 is FcMaxQueueWaitMs.
+	FcBandWaitMs string `json:"fc_band_wait_ms,omitempty"`
+	// FcBandWaitMsPresent is the presence bit for replace semantics.
+	FcBandWaitMsPresent bool `json:"-"`
+	// FcBandQueuePct - the most of the queue depth each band may hold,
+	// "c:s:b", in percent; 0 is the shared depth.
+	FcBandQueuePct string `json:"fc_band_queue_pct,omitempty"`
+	// FcBandQueuePctPresent is the presence bit for replace semantics.
+	FcBandQueuePctPresent bool `json:"-"`
+	// FcShedQueue - "on" lets a sheddable request at the ceiling wait in
+	// its band instead of 429 admission_shed. Empty (or "inherit" on input)
+	// runs on LLB_FC_SHED_QUEUE, else off.
+	FcShedQueue string `json:"fc_shed_queue,omitempty"`
+	// FcShedQueuePresent is the presence bit for replace semantics.
+	FcShedQueuePresent bool `json:"-"`
+	// FcTenantWake - the order inside one band: "fifo" (the oldest
+	// runnable entry) or "rr" (rotate across tenants). Empty (or "inherit"
+	// on input) runs on LLB_FC_TENANT_WAKE, else fifo.
+	FcTenantWake string `json:"fc_tenant_wake,omitempty"`
+	// FcTenantWakePresent is the presence bit for replace semantics.
+	FcTenantWakePresent bool `json:"-"`
+	// FcLlmdHeaders - "on" adds x-llm-d-request-dropped-reason to refusals
+	// and lets x-llm-d-inference-ttl shorten a request's wait. Empty (or
+	// "inherit" on input) runs on LLB_FC_LLMD_HEADERS, else off.
+	FcLlmdHeaders string `json:"fc_llmd_headers,omitempty"`
+	// FcLlmdHeadersPresent is the presence bit for replace semantics.
+	FcLlmdHeadersPresent bool `json:"-"`
 	// FcEffective - the capacity gate's resolved state on the rule's pool,
 	// read from the data plane for GET only. Never persisted, never read
 	// on input.
@@ -1790,6 +1844,28 @@ type FcEffectiveArg struct {
 	// ExposeHeaders is "on" when admitted responses carry the admission
 	// headers, else "off".
 	ExposeHeaders string `json:"expose_headers"`
+	// The priority bands. WakePolicy ("strict" or "weighted"), ShedQueue
+	// ("on" or "off") and TenantWake ("fifo" or "rr") are as configured,
+	// by the rule or inherited; the *Effective fields are what the gate
+	// runs. They differ only when BandFallbackReason is not "none": a
+	// combination the API refuses a rule to declare, reached by
+	// inheritance, runs on the defaults ("sockmap_request": every band knob,
+	// "zero_weight": strict, "no_queue": shed queue off). WeightsInUse is
+	// false unless the effective wake is weighted. LlmdHeaders is "on" or
+	// "off". BandsConfigured is true when any band knob in force differs
+	// from its default. Bands holds each band's live counts and the knobs
+	// in force.
+	WakePolicy          string     `json:"wake_policy"`
+	WakePolicyEffective string     `json:"wake_policy_effective"`
+	WeightsInUse        bool       `json:"weights_in_use"`
+	ShedQueue           string     `json:"shed_queue"`
+	ShedQueueEffective  string     `json:"shed_queue_effective"`
+	TenantWake          string     `json:"tenant_wake"`
+	TenantWakeEffective string     `json:"tenant_wake_effective"`
+	BandFallbackReason  string     `json:"band_fallback_reason"`
+	LlmdHeaders         string     `json:"llmd_headers"`
+	BandsConfigured     bool       `json:"bands_configured"`
+	Bands               FcBandsArg `json:"bands"`
 	// DefaultReservation is "on" when a request without max_tokens reserves
 	// a default for its completion, else "off"; DefaultMaxTokens is that
 	// default in tokens (0 while off). Both are what the gate runs the
@@ -1858,6 +1934,36 @@ type FcResvHeldArg struct {
 	Tokens uint64 `json:"tokens"`
 }
 
+// FcBandArg - one priority band of a pool, as the data plane holds it:
+// the service units it executes and the requests it has waiting right now,
+// its wait window (0: the queue's), its share of the queue depth (0: the
+// shared depth), its floor in percent of the ceiling in force and in units
+// against that ceiling (a guarantee under contention, binding while the band
+// has a waiter; the units are clamped so the claims fit the ceiling), and its wake weight with the weight's share of the
+// round in percent (0 when no weight is set).
+type FcBandArg struct {
+	Inflight    uint32 `json:"inflight"`
+	Queued      uint32 `json:"queued"`
+	WaitMs      uint32 `json:"wait_ms"`
+	QueuePct    uint32 `json:"queue_pct"`
+	MinSharePct uint32 `json:"min_share_pct"`
+	FloorUnits  uint32 `json:"floor_units"`
+	Weight      uint32 `json:"weight"`
+	WeightPct   uint32 `json:"weight_pct"`
+}
+
+// FcBandsArg - the three priority bands of a pool, by name.
+type FcBandsArg struct {
+	// CriticalReservePct and CriticalReserveUnits - the reserve in percent of
+	// the ceiling in force and in units against it: units no other band may
+	// take, even when critical is idle.
+	CriticalReservePct   uint32    `json:"critical_reserve_pct"`
+	CriticalReserveUnits uint32    `json:"critical_reserve_units"`
+	Critical             FcBandArg `json:"critical"`
+	Standard             FcBandArg `json:"standard"`
+	Sheddable            FcBandArg `json:"sheddable"`
+}
+
 // FcEffectiveSource - the origin of each value in FcEffectiveArg.
 type FcEffectiveSource struct {
 	Mode               string `json:"mode"`
@@ -1875,6 +1981,15 @@ type FcEffectiveSource struct {
 	ExposeHeaders      string `json:"expose_headers"`
 	DefaultReservation string `json:"default_reservation"`
 	DefaultMaxTokens   string `json:"default_max_tokens"`
+	WakePolicy         string `json:"wake_policy"`
+	BandWeights        string `json:"band_weights"`
+	BandMinSharePct    string `json:"band_min_share_pct"`
+	CriticalReservePct string `json:"critical_reserve_pct"`
+	BandWaitMs         string `json:"band_wait_ms"`
+	BandQueuePct       string `json:"band_queue_pct"`
+	ShedQueue          string `json:"shed_queue"`
+	TenantWake         string `json:"tenant_wake"`
+	LlmdHeaders        string `json:"llmd_headers"`
 }
 
 // LbRuleMod - Info related to a load-balancer entry
