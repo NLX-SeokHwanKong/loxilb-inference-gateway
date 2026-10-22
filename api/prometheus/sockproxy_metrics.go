@@ -193,7 +193,14 @@ typedef struct proxy_metrics_snapshot {
 
     // Requests that reached dispatch with no usable Host on a listener whose pools name models (ROUTE-01's second defence). TAIL-APPEND ONLY — same three-way lockstep.
     uint64_t route_host_missing;
+
+    // P/D admission units held now, and clients parked on a prefill endpoint's queue. TAIL-APPEND ONLY — same three-way lockstep.
+    uint64_t pd_prefill_inflight;
+    uint64_t pd_decode_inflight;
+    uint64_t pd_parked_connections;
 } proxy_metrics_snapshot_t;
+_Static_assert(sizeof(proxy_metrics_snapshot_t) == 6096,
+               "proxy_metrics_snapshot_t: keep the C, Go and stub mirrors aligned");
 
 // C function from sockproxy.c
 extern proxy_metrics_snapshot_t proxy_get_metrics(void);
@@ -1154,6 +1161,13 @@ func poolFromC(m *C.proxy_metrics_snapshot_t) poolSnapshot {
 	return poolSnapshot{live: uint64(m.pools_live), freed: uint64(m.pools_freed_total)}
 }
 
+// pdOccupancyFromC copies the P/D occupancy out of a snapshot; the rest is in
+// sockproxy_pd_occupancy_metrics.go.
+func pdOccupancyFromC(m *C.proxy_metrics_snapshot_t) pdOccupancySnapshot {
+	return pdOccupancySnapshot{prefill: uint64(m.pd_prefill_inflight),
+		decode: uint64(m.pd_decode_inflight), parked: uint64(m.pd_parked_connections)}
+}
+
 // holdFromC copies the half-close hold state out of a snapshot; the rest is
 // in halfclose_hold_metrics.go.
 func holdFromC(m *C.proxy_metrics_snapshot_t) holdSnapshot {
@@ -1296,6 +1310,7 @@ func RunSockproxyMetrics(ctx context.Context) {
 		updateStreamAbandonStore(streamAbandonFromC(&current))
 		// Pools live and freed → poolCollector.
 		updatePoolStore(poolFromC(&current))
+		updatePdOccupancyStore(pdOccupancyFromC(&current))
 		updateHoldStore(holdFromC(&current))
 
 		// 3c. P/D buffer overflow counter

@@ -175,7 +175,14 @@ typedef struct proxy_metrics_snapshot {
 
     /* Requests that reached dispatch with no usable Host on a listener whose pools name models (ROUTE-01's second defence). TAIL-APPEND ONLY — same three-way lockstep. */
     uint64_t route_host_missing;
+
+    /* P/D admission units held now, and clients parked on a prefill endpoint's queue. TAIL-APPEND ONLY — same three-way lockstep. */
+    uint64_t pd_prefill_inflight;
+    uint64_t pd_decode_inflight;
+    uint64_t pd_parked_connections;
 } proxy_metrics_snapshot_t;
+_Static_assert(sizeof(proxy_metrics_snapshot_t) == 6096,
+               "proxy_metrics_snapshot_t: keep the C, Go and stub mirrors aligned");
 
 __attribute__((weak))
 proxy_metrics_snapshot_t proxy_get_metrics(void) {
