@@ -82,7 +82,7 @@ it reproduces `cicd/k3d-incluster-inference-gwapi` so that scenario's
 
 ## Layout and phases
 
-Design: `docs/internal/helm/helm-chart-design.md`. This is phase 1 (core).
+This is phase 1 (core).
 Keycloak (JWT profiles), SIEM (audit sink) and PostgreSQL (API-key store)
 subcharts, with the `igw-configure` hook that applies REST-side configuration,
 come next. The subcharts are vendored as directories under `charts/`; do not
