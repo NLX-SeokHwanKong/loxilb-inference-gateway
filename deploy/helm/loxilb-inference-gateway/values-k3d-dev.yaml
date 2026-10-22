@@ -1,0 +1,56 @@
+# k3d development profile: what cicd/k3d-helm-inference-gwapi installs.
+#
+# It reproduces cicd/k3d-incluster-inference-gwapi exactly - the same workload
+# names, loxilb flags and Gateway objects as the testbed manifests and fixtures -
+# so that scenario's validation.sh is the oracle for the chart.
+#
+# Set at install time (config.sh does), because they are only known then:
+#   --set kube-loxilb.cidrPools.defaultPool=<node IP>/32     the VIP is the node IP
+#   --set loxilb-igw.image.repository/tag                     the images imported into k3d
+#   --set kube-loxilb.image.repository/tag                    (kube-loxilb built from source)
+#
+# The Gateway API and Inference Extension CRDs are installed by k3d_common.sh,
+# so the pre-install hook only checks them (crds.installGatewayAPI stays false).
+
+loxilb-igw:
+  fullnameOverride: loxilb-lb
+  image:
+    pullPolicy: IfNotPresent
+  podLabels:
+    app: loxilb-app
+
+kube-loxilb:
+  fullnameOverride: kube-loxilb
+  image:
+    pullPolicy: IfNotPresent
+  verbosity: 4
+
+inference:
+  gateway:
+    namespace: llm
+  pools:
+    - name: vllm-qwen3
+      namespace: llm
+      selector:
+        app: vllm-qwen3
+      targetPort: 8000
+      modelName: qwen3-32b
+      epselect: chwbl
+      # Off, as in the testbed fixture: the SSE assertion passes without it and
+      # the rule stays byte-for-byte the one the manifests produce.
+      sseMode: false
+      auth:
+        mode: none
+      route:
+        name: llm-route
+
+hooks:
+  drain:
+    image:
+      pullPolicy: IfNotPresent
+
+tests:
+  curlImage:
+    pullPolicy: IfNotPresent
+  kubectlImage:
+    pullPolicy: IfNotPresent

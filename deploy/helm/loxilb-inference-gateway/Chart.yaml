@@ -1,0 +1,30 @@
+apiVersion: v2
+name: loxilb-inference-gateway
+description: >-
+  loxilb-inference-gateway as one release: the loxilb data plane (DaemonSet),
+  the kube-loxilb controller, and the Gateway API objects (GatewayClass,
+  Gateway, InferencePool, HTTPRoute) that express the endpoint-selection policy.
+type: application
+version: 0.1.2
+appVersion: latest
+kubeVersion: ">=1.30.0-0"
+home: https://github.com/loxilb-io/loxilb-inference-gateway
+sources:
+  - https://github.com/loxilb-io/loxilb-inference-gateway
+  - https://github.com/loxilb-io/kube-loxilb
+keywords:
+  - loxilb
+  - inference
+  - gateway-api
+  - inferencepool
+  - llm
+# The subcharts are vendored as directories under charts/ (no repository), so
+# `helm dependency update` leaves them alone. They move to
+# oci://ghcr.io/loxilb-io/charts in a later phase.
+dependencies:
+  - name: loxilb-igw
+    version: 0.1.0
+    condition: loxilb-igw.enabled
+  - name: kube-loxilb
+    version: 0.1.1
+    condition: kube-loxilb.enabled

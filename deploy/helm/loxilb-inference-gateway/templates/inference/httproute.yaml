@@ -1,0 +1,41 @@
+{{- $root := . -}}
+{{- $gw := .Values.inference.gateway -}}
+{{- $gwNs := include "loxilb-inference-gateway.gatewayNamespace" . -}}
+{{- range $p := .Values.inference.pools }}
+{{- $route := $p.route | default dict }}
+{{- $ns := include "loxilb-inference-gateway.poolNamespace" (dict "pool" $p "root" $root) }}
+---
+# HTTPRoute for pool {{ $p.name }}: the route is what names the Gateway a pool is
+# served from; kube-loxilb turns the pair into a LoadBalancer Service and a
+# loxilb inference rule on that listener.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ $route.name | default (printf "%s-route" $p.name) }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "loxilb-inference-gateway.labels" $root | nindent 4 }}
+  {{- with $route.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  parentRefs:
+    - name: {{ $gw.name }}
+      {{- if ne $gwNs $ns }}
+      namespace: {{ $gwNs }}
+      {{- end }}
+  {{- with $route.hostnames }}
+  hostnames:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    - backendRefs:
+        - group: inference.networking.k8s.io
+          kind: InferencePool
+          name: {{ $p.name }}
+      {{- with $route.matches }}
+      matches:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

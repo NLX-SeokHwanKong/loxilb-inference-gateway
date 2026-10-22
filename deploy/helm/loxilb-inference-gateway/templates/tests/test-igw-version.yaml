@@ -1,0 +1,52 @@
+{{- if .Values.tests.enabled }}
+{{- $t := .Values.tests }}
+# helm test: the management REST answers, and it is the inference-gateway
+# flavor. An upstream loxilb answers /netlox/v1/version too, but without the
+# AI fields kube-loxilb's --inferenceExtension relies on.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "loxilb-inference-gateway.fullname" . }}-test-igw-version
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "loxilb-inference-gateway.labels" . | nindent 4 }}
+    app.kubernetes.io/component: test
+  annotations:
+    "helm.sh/hook": test
+    # The pod stays after the run so `helm test --logs` can read it (a
+    # hook-succeeded policy deletes it first and the log read fails) and so a
+    # failure can be inspected; the next helm test replaces it. Hook resources
+    # are not part of the release, so the pre-delete drain removes test pods
+    # at uninstall.
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  restartPolicy: Never
+  {{- with .Values.global.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  containers:
+    - name: version
+      image: "{{ $t.curlImage.repository }}:{{ $t.curlImage.tag }}"
+      imagePullPolicy: {{ $t.curlImage.pullPolicy }}
+      env:
+        - name: URL
+          value: {{ printf "%s/netlox/v1/version" (include "loxilb-inference-gateway.loxilbURL" .) | quote }}
+        - name: WANT
+          value: {{ $t.expectProduct | quote }}
+      command: ["/bin/sh", "-eu", "-c"]
+      args:
+        - |
+          echo "GET $URL"
+          body=""
+          for i in $(seq 1 30); do
+            body=$(curl -sf --max-time 5 "$URL") && break
+            echo "  no answer yet ($i/30)"; sleep 2
+          done
+          [ -n "$body" ] || { echo "FAIL: $URL did not answer" >&2; exit 1; }
+          echo "$body"
+          case "$body" in
+            *"\"product\":\"$WANT\""*) echo "OK: product is $WANT" ;;
+            *) echo "FAIL: /netlox/v1/version does not report product $WANT" >&2; exit 1 ;;
+          esac
+{{- end }}

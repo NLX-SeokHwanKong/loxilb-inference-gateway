@@ -20,6 +20,37 @@ binary behaves exactly like upstream loxilb.
 
 ### Added
 
+- **`GET /netlox/v1/version` lists the gateway-only capabilities of the build
+  under `features`** (`api_key_auth`, `jwt_auth_profile`), as stable tokens a
+  controller checks before it sends the matching rule fields. The REST layer
+  ignores fields it does not know, so a build without a token would install a
+  rule without the credential policy the caller asked for and report success;
+  kube-loxilb reads this list to refuse the rule instead. Absent on builds
+  that predate the field.
+- **Helm chart** `deploy/helm/loxilb-inference-gateway`: one release installs
+  the loxilb-igw DaemonSet, the kube-loxilb controller (from
+  `integration/inference-gateway`, with its CRDs) and the Gateway API objects
+  that express the endpoint-selection policy, one InferencePool + HTTPRoute per
+  `inference.pools[]` with `loxilb.io/model-name`, `loxilb.io/epselect`,
+  `loxilb.io/sse-mode` and free-form `loxilb.io/*` annotations. A pre-install
+  hook fails with the install commands when the Gateway API (v1.5.1) or
+  Inference Extension (v1.6.0) CRDs are missing, or applies them with
+  `crds.installGatewayAPI=true`; `helm test` checks the management REST flavor
+  and InferencePool -> Service -> loxilb rule. `inference.pools[].auth` renders
+  `loxilb.io/api-key-auth` / `loxilb.io/jwt-auth-profile`, which kube-loxilb
+  `feat/auth-annotation` (830fa59) carries into the rule; the kube-loxilb
+  subchart ships that branch's `JWTAuthProfile` CRD and RBAC, and NOTES warns
+  when an older kube-loxilb, a missing profile or a gateway without its
+  API-key store would leave such a rule unauthenticated or refusing every
+  token. A pre-delete drain deletes the chart's HTTPRoutes and InferencePools
+  while kube-loxilb still runs and waits for the Services it derived from them,
+  so `helm uninstall` leaves nothing but the CRDs. The new scenario
+  `cicd/k3d-helm-inference-gwapi` installs the chart with `values-k3d-dev.yaml`,
+  re-runs the `k3d-incluster-inference-gwapi` assertions unchanged against it,
+  and then upgrades, uninstalls and reinstalls the release.
+  `docs/HELM-INSTALL.md` is the operator's guide: prerequisites, values,
+  install, `helm test`, upgrade, uninstall, authenticated pools and
+  troubleshooting.
 - **P/D occupancy gauges.** Three new metrics read the P/D load at each
   collection: `loxilb_pd_prefill_inflight` and `loxilb_pd_decode_inflight`
   (the admission units held on prefill and on decode endpoints now) and
@@ -234,6 +265,24 @@ binary behaves exactly like upstream loxilb.
 
 ### Changed
 
+- **A rule replace that differs from the stored rule only in `id` rebinds
+  the id in place and answers success** instead of 409 `lbrule-exists`. The
+  data plane is not touched and the rule keeps its connections; the new id
+  resolves on `GET /config/loadbalancer/id/{id}` and the old one no longer
+  does. This is what a controller needs when it starts sending deterministic
+  ids for rules it installed earlier under minted ones, or when a restart
+  restored a rule under the id the snapshot kept. An id bound to another rule
+  is still refused (`lbrule-id conflict`).
+- **A fullproxy rule whose `api_key_auth` or `jwt_auth_profile` differs from
+  the rules already on its listener (address, port, protocol) is refused with
+  400** instead of being accepted with a warning. The admission gate reads the
+  credential policy once per listener, before a request is matched to a rule
+  by host, path or model, so a rule that declared `jwt` next to a rule that
+  declared nothing was served unauthenticated or not depending on install
+  order. An unset policy and an explicit `disabled` are different values (the
+  latter strips `X-Api-Key`). A configuration restored from a snapshot is kept
+  whole and the disagreement is logged, as for the listener's TLS settings.
+  The refusal names the rule already there and the arguments, never a value.
 - **The AI dashboard's model-only panels say `(all tenants)`** (QA
   2026-10-21, MON-05). The active-stream gauge and the P/D lifecycle,
   timing, fallback, tier and session families carry a model label and no
@@ -404,6 +453,11 @@ binary behaves exactly like upstream loxilb.
 
 ### Fixed
 
+- **A rule whose `id` is already bound to another rule is refused with 400
+  and the reason** (`lbrule-id conflict: id already bound to a different
+  rule`). It was answered 500 `Internal service error` with the wording
+  hidden, which told a controller to retry a request that can only succeed
+  once the other rule gives the id up. Create and replace alike.
 - **A backend status line split across reads reached no class count and no
   TTFB sample** (QA 2026-10-21, MON-02-EDGE). The client received the whole
   answer and `loxilb_ai_requests_total` carried its status, but
@@ -683,6 +737,12 @@ binary behaves exactly like upstream loxilb.
 
 ### Upgrade notes
 
+- **Mixed credential policies on one listener are refused.** A snapshot that
+  holds fullproxy rules with different `api_key_auth` / `jwt_auth_profile` on
+  one address, port and protocol still restores (each disagreement is logged
+  with the rule it disagrees with), but the next create or replace of such a
+  rule is refused with 400 until every rule of the listener declares the same
+  policy. Declare it on each rule, or move the differing rule to its own port.
 - **Metric meanings change for P/D requests and for every answer the gateway
   writes itself.** Dashboards and alerts built on the families below read
   different numbers after the upgrade. Nothing is removed; the panel titles

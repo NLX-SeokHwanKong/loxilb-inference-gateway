@@ -1,0 +1,91 @@
+{{- $igw := index .Values "loxilb-igw" }}
+{{- $klb := index .Values "kube-loxilb" }}
+{{- $gw := .Values.inference.gateway }}
+{{- $gwNs := include "loxilb-inference-gateway.gatewayNamespace" . }}
+{{- $authPools := include "loxilb-inference-gateway.authPools" . -}}
+{{- $hasKeyStore := false -}}
+{{- range (($igw.loxilb | default dict).extraArgs | default list) }}{{ if hasPrefix "--aikey-db-host" (toString .) }}{{ $hasKeyStore = true }}{{ end }}{{ end -}}
+{{- $jwtProfiles := list -}}
+{{- range $p := .Values.inference.pools }}{{ with $p.auth }}{{ if and .jwtAuthProfile (or (eq (.mode | toString) "jwt") (eq (.mode | toString) "apikey-or-jwt")) }}{{ $jwtProfiles = append $jwtProfiles (.jwtAuthProfile | toString) }}{{ end }}{{ end }}{{ end -}}
+{{- $jwtProfiles = $jwtProfiles | uniq -}}
+loxilb-inference-gateway chart {{ .Chart.Version }}: release {{ .Release.Name }} in namespace {{ .Release.Namespace }}
+
+Installed
+{{- if $igw.enabled }}
+  loxilb-igw      DaemonSet, image {{ $igw.image.repository }}:{{ $igw.image.tag }}
+                  discovery Service {{ $igw.discoveryService.name }}{{ if $igw.mgmtService.enabled }}, management Service {{ $igw.mgmtService.name }}:{{ $igw.mgmtService.port }}{{ end }}
+{{- end }}
+{{- if $klb.enabled }}
+  kube-loxilb     Deployment, image {{ $klb.image.repository }}:{{ $klb.image.tag }}{{ if $klb.gatewayAPI }} --gatewayAPI{{ end }}{{ if $klb.inferenceExtension }} --inferenceExtension{{ end }}
+                  VIP pools: {{ include "kube-loxilb.poolDefs" $klb.cidrPools }}{{ with $klb.loxiURL }}, loxilb at {{ join "," . }}{{ else }}, loxilb found through {{ $igw.discoveryService.name }}{{ end }}
+{{- end }}
+{{- if .Values.inference.gatewayClass.create }}
+  GatewayClass    {{ .Values.inference.gatewayClass.name }} (controllerName {{ .Values.inference.gatewayClass.controllerName }})
+{{- end }}
+{{- if $gw.create }}
+  Gateway         {{ $gwNs }}/{{ $gw.name }}, listeners:{{ range $gw.listeners }} {{ .name }}={{ .protocol }}/{{ .port }}{{ end }}
+{{- end }}
+  Pools
+{{- range $p := .Values.inference.pools }}
+{{- $ns := include "loxilb-inference-gateway.poolNamespace" (dict "pool" $p "root" $) }}
+{{- $route := $p.route | default dict }}
+    {{ $ns }}/{{ $p.name }}: pods {{ toJson ($p.selector | default dict) }}:{{ $p.targetPort }}{{ with $p.modelName }}, model {{ . }}{{ end }}{{ with $p.epselect }}, epselect {{ . }}{{ end }}{{ if $p.sseMode }}, sse-mode{{ end }}, route {{ $route.name | default (printf "%s-route" $p.name) }}
+{{- end }}
+
+Each pool becomes a LoadBalancer Service "<pool>-inference" in its namespace,
+then a fullproxy inference rule on every loxilb instance, listening on the
+Gateway address (from kube-loxilb.cidrPools) and the listener port.
+
+Prerequisites (checked by the pre-install hook)
+  Gateway API CRDs {{ .Values.crds.gatewayAPI.version }} ({{ .Values.crds.gatewayAPI.channel }} channel) and Inference Extension CRDs {{ .Values.crds.inferenceExtension.version }}
+  (InferencePool v1 with an optional endpointPickerRef, i.e. >= v1.6.0).
+{{- if not .Values.crds.installGatewayAPI }}
+  If the hook failed because they are missing, install them and retry:
+    kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/{{ .Values.crds.gatewayAPI.version }}/{{ .Values.crds.gatewayAPI.channel }}-install.yaml
+    kubectl apply -k "https://github.com/kubernetes-sigs/gateway-api-inference-extension/config/crd?ref={{ .Values.crds.inferenceExtension.version }}"
+  or set crds.installGatewayAPI=true to have the hook apply them (Kubernetes >= 1.30).
+  A failed hook leaves its pod behind: kubectl -n {{ .Release.Namespace }} logs job/{{ include "loxilb-inference-gateway.fullname" . }}-crd-precheck
+{{- end }}
+{{- if or $authPools .Values.inference.externalEndpointPicker.enabled (and $klb.enabled (eq ($klb.image.tag | toString) "latest")) }}
+
+Warnings
+{{- if $authPools }}
+  ! inference.pools[].auth is set on {{ $authPools }}. kube-loxilb carries
+    loxilb.io/api-key-auth and loxilb.io/jwt-auth-profile into the loxilb rule
+    from feat/auth-annotation (830fa59) on; an OLDER kube-loxilb installs these
+    rules WITHOUT the authentication declared here. The chart cannot tell which
+    kube-loxilb runs: check `kubectl -n {{ .Release.Namespace }} get crd jwtauthprofiles.jwtauthprofile.loxilb.io`
+    is served and the rule reads back with api_key_auth.
+{{- if $jwtProfiles }}
+  ! JWT mode needs a cluster-scoped JWTAuthProfile for each of: {{ join ", " $jwtProfiles }}.
+    kube-loxilb holds the rule (ProfileNotFound) until the profile exists and is
+    programmed on every gateway. This chart version does not render profiles yet
+    (phase 2 does); create them by hand, see charts/kube-loxilb/README.md.
+{{- end }}
+{{- if and $igw.enabled (not $hasKeyStore) }}
+  ! loxilb-igw runs without an API-key store (no --aikey-db-host in
+    loxilb-igw.loxilb.extraArgs). The gateway fails closed on every request
+    that carries an identity but has no store to check it against: a VERIFIED
+    token is refused 503 policy_store_unavailable. JWT-only setups need the
+    store too (phase 2 bundles PostgreSQL; until then point --aikey-db-* at one).
+{{- end }}
+{{- end }}
+{{- if .Values.inference.externalEndpointPicker.enabled }}
+  ! inference.externalEndpointPicker is enabled. loxilb-inference-gateway
+    selects endpoints itself and does not delegate to an Endpoint Picker:
+    kube-loxilb accepts the pool only with failureMode FailOpen and then
+    ignores the picker; FailClose is refused (NotSupportedByParent).
+{{- end }}
+{{- if and $klb.enabled (eq ($klb.image.tag | toString) "latest") }}
+  ! kube-loxilb image tag is "latest". No published tag carries the
+    integration/inference-gateway branch yet, and :latest does not know
+    --inferenceExtension. Build that branch (cicd/common/k8s-inference/k3d_common.sh
+    shows how) and set kube-loxilb.image.repository / tag.
+{{- end }}
+{{- end }}
+
+Verify
+  helm test {{ .Release.Name }} -n {{ .Release.Namespace }} --logs
+  kubectl -n {{ $gwNs }} get gateway,httproute,inferencepool
+  kubectl -n {{ .Release.Namespace }} get ds,deploy,svc -l app.kubernetes.io/instance={{ .Release.Name }}
+  loxilb REST (in-cluster): {{ include "loxilb-inference-gateway.loxilbURL" . }}/netlox/v1/config/loadbalancer/all

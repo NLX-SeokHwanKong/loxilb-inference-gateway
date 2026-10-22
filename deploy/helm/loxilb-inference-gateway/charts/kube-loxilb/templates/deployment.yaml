@@ -1,0 +1,108 @@
+{{- $w := .Values.waitForLoxilb }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kube-loxilb.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kube-loxilb.labels" . | nindent 4 }}
+    app: kube-loxilb-app
+  {{- with .Values.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "kube-loxilb.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "kube-loxilb.selectorLabels" . | nindent 8 }}
+        app: kube-loxilb-app
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      hostNetwork: {{ .Values.hostNetwork }}
+      dnsPolicy: {{ .Values.dnsPolicy }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      serviceAccountName: {{ include "kube-loxilb.serviceAccountName" . }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      {{- with (concat ((.Values.global | default dict).imagePullSecrets | default list) .Values.imagePullSecrets) }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if $w.enabled }}
+      initContainers:
+        # kube-loxilb programs rules as soon as it reconciles; loxilb's REST has
+        # to be there first (the testbed deploys loxilb before kube-loxilb for
+        # the same reason).
+        - name: wait-for-loxilb
+          image: "{{ $w.image.repository }}:{{ $w.image.tag }}"
+          imagePullPolicy: {{ $w.image.pullPolicy }}
+          {{- with $w.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          env:
+            - name: URL
+              value: {{ include "kube-loxilb.waitURL" . | quote }}
+            - name: WANT
+              value: {{ $w.expectProduct | default "" | quote }}
+            - name: TIMEOUT
+              value: {{ $w.timeoutSeconds | quote }}
+          command: ["/bin/sh", "-u", "-c"]
+          args:
+            - |
+              deadline=$(( $(date +%s) + TIMEOUT ))
+              while :; do
+                if body=$(curl -sf --max-time 5 "$URL" 2>/dev/null); then
+                  if [ -z "$WANT" ] || echo "$body" | grep -q "\"product\":\"$WANT\""; then
+                    echo "loxilb is up at $URL: $body"; exit 0
+                  fi
+                  echo "loxilb at $URL answers but is not product $WANT: $body"
+                else
+                  echo "waiting for loxilb REST at $URL"
+                fi
+                if [ "$(date +%s)" -ge "$deadline" ]; then echo "timed out after ${TIMEOUT}s" >&2; exit 1; fi
+                sleep 3
+              done
+      {{- end }}
+      containers:
+        - name: kube-loxilb
+          image: {{ include "kube-loxilb.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - /bin/kube-loxilb
+          args:
+            {{- include "kube-loxilb.args" . | trim | nindent 12 }}
+          {{- with .Values.extraEnv }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}

@@ -1,5 +1,6 @@
-# A pool that insists on an Endpoint Picker. loxilb selects endpoints itself,
-# so this must be refused rather than served by a policy nobody asked for.
+# The same pool with failureMode FailOpen: an unresolved picker then carries
+# nothing, and the rule falls back to loxilb's own endpoint selection, which is
+# the fallback the pool declared.
 apiVersion: inference.networking.k8s.io/v1
 kind: InferencePool
 metadata:

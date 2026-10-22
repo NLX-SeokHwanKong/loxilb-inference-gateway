@@ -1,0 +1,101 @@
+# kube-loxilb (integration/inference-gateway).
+# Source of truth: kube-loxilb manifest/gateway-api/kube-loxilb.yaml; what the
+# testbed's render-kube-loxilb.py rewrote (image, args) is what is templated here.
+
+# Used by the umbrella chart's dependency condition; ignored when installed alone.
+enabled: true
+
+image:
+  repository: ghcr.io/loxilb-io/kube-loxilb
+  # No published tag carries the inference-gateway integration yet: the
+  # :latest image does not know --inferenceExtension. Build feat/auth-annotation
+  # @ 830fa59 or later (it carries the credential-policy annotations and the
+  # JWTAuthProfile manager; cicd/common/k8s-inference/k3d_common.sh shows how)
+  # and point repository/tag at it.
+  tag: latest
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+nameOverride: ""
+# Deployment, ServiceAccount and ClusterRole name. The manifest calls them kube-loxilb.
+fullnameOverride: ""
+
+replicaCount: 1
+
+# --- loxilb connection ---
+# loxilb API URL(s), --loxiURL=a,b. Empty: in-cluster discovery through the
+# EndpointSlices of the Service named loxilb-lb-service (charts/loxilb-igw).
+loxiURL: []
+
+# --- args ---
+gatewayAPI: true            # --gatewayAPI
+inferenceExtension: true    # --inferenceExtension (needs --gatewayAPI)
+# VIP pools, --cidrPools=name=cidr[,name=cidr]. kube-loxilb assigns Gateway and
+# LoadBalancer addresses from them; for fullproxy the address must be bindable
+# on the loxilb node (the node IP itself in the k3d testbed).
+cidrPools:
+  defaultPool: 192.168.80.90/32
+cidr6Pools: {}
+setRoles: "0.0.0.0"         # --setRoles
+# --setLBMode. Unset on purpose: InferencePool rules are forced to fullproxy by
+# kube-loxilb; set 1 (one-arm) etc. only for plain LoadBalancer Services.
+setLBMode: null
+verbosity: 4                # --v
+extraArgs: []               # e.g. ["--monitor", "--setBGP=64512"]
+extraEnv: []
+
+# initContainer: wait until loxilb's management REST answers /netlox/v1/version
+# before kube-loxilb starts programming (the testbed brings loxilb up first for
+# the same reason).
+waitForLoxilb:
+  enabled: true
+  image:
+    repository: curlimages/curl
+    tag: 8.23.0
+    pullPolicy: IfNotPresent
+  # Full URL to poll. Empty: <loxiURL[0]>/netlox/v1/version when loxiURL is set,
+  # else http://<serviceName>.<release namespace>.svc:<port>/netlox/v1/version.
+  url: ""
+  serviceName: loxilb-lb-service
+  port: 11111
+  # Also require this "product" in the answer; empty accepts any loxilb.
+  expectProduct: loxilb-inference-gateway
+  timeoutSeconds: 600
+  resources: {}
+
+rbac:
+  create: true
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+hostNetwork: true
+dnsPolicy: ClusterFirstWithHostNet
+priorityClassName: system-node-critical
+terminationGracePeriodSeconds: 0
+tolerations:
+  # Mark the pod as a critical add-on for rescheduling.
+  - key: CriticalAddonsOnly
+    operator: Exists
+nodeSelector: {}
+affinity: {}
+
+podLabels: {}
+podAnnotations: {}
+annotations: {}
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 50Mi
+  limits:
+    cpu: 100m
+    memory: 50Mi
+
+securityContext:
+  privileged: true
+  capabilities:
+    add:
+      - NET_ADMIN
+      - NET_RAW

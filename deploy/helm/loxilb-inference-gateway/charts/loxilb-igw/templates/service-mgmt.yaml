@@ -1,0 +1,24 @@
+{{- if .Values.mgmtService.enabled }}
+# ClusterIP in front of the management REST, for hook Jobs and helm tests.
+# With several loxilb nodes a call lands on one instance.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.mgmtService.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "loxilb-igw.labels" . | nindent 4 }}
+  {{- with .Values.mgmtService.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.mgmtService.type }}
+  selector:
+    {{- include "loxilb-igw.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: api
+      port: {{ .Values.mgmtService.port }}
+      targetPort: api
+      protocol: TCP
+{{- end }}

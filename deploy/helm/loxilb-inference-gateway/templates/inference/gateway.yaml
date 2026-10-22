@@ -1,0 +1,23 @@
+{{- with .Values.inference.gateway }}
+{{- if .create }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: {{ .name }}
+  namespace: {{ include "loxilb-inference-gateway.gatewayNamespace" $ }}
+  labels:
+    {{- include "loxilb-inference-gateway.labels" $ | nindent 4 }}
+  {{- with .annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  gatewayClassName: {{ $.Values.inference.gatewayClass.name }}
+  {{- with .addresses }}
+  addresses:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  listeners:
+    {{- toYaml (required "inference.gateway.listeners must have at least one listener" .listeners) | nindent 4 }}
+{{- end }}
+{{- end }}
