@@ -4115,15 +4115,30 @@ echo "  pair: request 1 HTTP ${pc_c1} (connects ${pc_n1}), request 2 HTTP ${pc_c
 # The decode engine streams chunked and then never sends "data: [DONE]" or the 0-chunk.
 #   PD  it goes silent with its socket open (a dropped terminator), then closes after
 #       P_HOLD s.
-#   PE  it closes at once after the last content chunk (an engine dying mid-stream).
-# PD: the gateway's graceful-[DONE] sweep ends the client's answer after P_GRACE s of
-# backend silence, with a chunk-framed [DONE] of its own: decode/truncated +1 (the
-# gateway ended the answer; the engine did not die), requests completed/200 +1 with no
-# cause (the client got a clean end), curl rc 0, the body ends with [DONE], and
-# loxilb_ai_pd_terminator_synthesized_total +1.
-# PE: the engine died: decode/error +1, requests aborted/200 cause=engine +1 (the client
-# got a 200 and a cut answer), and the client sees the cut: curl rc 18 and no [DONE].
-# Nothing dresses a dead engine up as a clean end, so the terminator counter stays flat.
+#   PE  it closes at once (an engine dying).
+# Each in two shapes. Finished (PD, PE): the engine has sent its finish chunk
+# (finish_reason "stop"); only the terminator is missing: vLLM's P/D path drops it for
+# a share of streams. Mid-generation (PD-mid, PE-mid, the mock's at=mid): the finish
+# chunk is never sent; the stream ends after a content chunk.
+# The gateway reads the stream's finish evidence (the framer's record of a complete
+# finish event followed by nothing but choice-less events or [DONE]):
+# PD: the graceful-[DONE] sweep ends the client's answer after P_GRACE s of backend
+# silence with a chunk-framed [DONE] of its own; with the evidence the record is
+# complete/success +1 (the generation finished; the gateway only wrote the terminator the
+# engine lost), requests completed/200 +1 with no cause, curl rc 0, the body ends with
+# [DONE], and loxilb_ai_pd_terminator_synthesized_total +1 (the terminator is still the
+# gateway's).
+# PD-mid: the same end, but without the evidence the record is decode/truncated +1 (the
+# gateway ended an answer that had not finished); requests, body and terminator as PD.
+# PE: the engine closed after the finish: the EOF completes the stream at once (well
+# before the sweep's window): complete/success +1, requests completed/200 +1 with no
+# cause, the client gets the gateway's [DONE] (curl rc 0), terminator +1; no death counted.
+# PE-mid: the engine died mid-generation: decode/error +1, requests aborted/200
+# cause=engine +1 (the client got a 200 and a cut answer), and the client sees the cut:
+# curl rc 18 and no [DONE]. Nothing dresses a dead engine up as a clean end, so the
+# terminator counter stays flat.
+# Each row also proves its drive shape from the body the client received: the finished
+# rows carry one finish chunk, the mid rows none.
 P_HOLD=40
 P_GRACE=25     # PROXY_PD_DECODE_IDLE_CAP_SEC; no rule field sets pd_decode_idle_cap_sec
 p_scrape() { $hexec llb1 curl -s http://localhost:11111/netlox/v1/metrics 2>/dev/null | grep -v '^#'; }
@@ -4135,15 +4150,17 @@ p_delta() {
   awk 'NR==FNR{b[$1]=$2; next} {d=$2-b[$1]; if (d) printf "%s %+d\n", $1, d}' \
     <(printf '%s\n' "$1") <(printf '%s\n' "$2")
 }
-# p_q2_row <tag> <mode> <knob>
+# p_q2_row <tag> <mode> <knob> [at]  — at: "" (after the finish chunk) or mid
 p_q2_row() {
-  local tag=$1 mode=$2 knob=$3 arm s0 s1 pd0 pd1 rq0 rq1 pdd rqd log0 out rc code secs body nrec
+  local tag=$1 mode=$2 knob=$3 at=${4:-} arm s0 s1 pd0 pd1 rq0 rq1 pdd rqd log0 out rc code secs body nrec where nfin
+  where="after its finish chunk"; [ "$at" = "mid" ] && where="mid-generation"
   p_reset
   arm=$(p_mock "$P_DECODE" stream-chunked-on)$(p_mock "$P_DECODE" "$knob")
   echo "  decode mock: $arm"
   echo "$arm" | grep -q '"stream_chunked": true' && echo "$arm" | grep -q "\"stream_end_mode\": \"${mode}\"" \
-    && check "${tag}: the decode engine streams chunked and ends by '${mode}', without [DONE] (control armed)" 0 \
-    || check "${tag}: the decode engine streams chunked and ends by '${mode}', without [DONE] (control armed)" 1
+    && echo "$arm" | grep -q "\"stream_end_at\": \"${at}\"" \
+    && check "${tag}: the decode engine streams chunked and ends by '${mode}' ${where}, without [DONE] (control armed)" 0 \
+    || check "${tag}: the decode engine streams chunked and ends by '${mode}' ${where}, without [DONE] (control armed)" 1
   s0=$(p_scrape)
   log0=$($dexec llb1 sh -c "wc -l < ${P_DPLOG}" 2>/dev/null); log0=${log0:-0}
   out=$($dexec l3h1 curl -s --no-buffer -m $((P_HOLD + 30)) -o "/tmp/phase-p-${tag}.body" \
@@ -4173,6 +4190,16 @@ p_q2_row() {
   [ "$code" = "200" ] && check "${tag}: 200" 0 || check "${tag}: 200 (got ${code})" 1
   [ "$nrec" = "1" ] && check "${tag}: exactly one P/D lifecycle record" 0 \
                     || check "${tag}: exactly one P/D lifecycle record (${nrec})" 1
+  # The drive shape, from the body the client received: the finished rows carry one
+  # finish chunk, the mid rows none.
+  nfin=$(printf '%s\n' "$body" | grep -c '"finish_reason": *"stop"')
+  if [ "$at" = "mid" ]; then
+    [ "$nfin" = "0" ] && check "${tag}: the stream ended mid-generation (no finish chunk in the body)" 0 \
+                      || check "${tag}: the stream ended mid-generation (no finish chunk in the body; got ${nfin})" 1
+  else
+    [ "$nfin" = "1" ] && check "${tag}: the stream had finished (one finish chunk in the body)" 0 \
+                      || check "${tag}: the stream had finished (one finish chunk in the body; got ${nfin})" 1
+  fi
   P_Q2_BODY=$body P_Q2_RC=$rc P_Q2_SECS=${secs:-0} P_Q2_PDD=$pdd P_Q2_RQD=$rqd P_Q2_S0=$s0
 }
 # p_deltas_are <tag> <what> <deltas> <want> — the deltas, one "<key> +N" per line, are
@@ -4201,7 +4228,7 @@ p_terminators() {
 
 p_q2_row TP-D hold "stream-end?mode=hold&sec=${P_HOLD}"
 # The gateway, not the engine, ended this answer: after the sweep's window, before the
-# engine's close.
+# engine's close. The generation had finished, so the record is a completion.
 [ "$P_Q2_RC" = "0" ] && check "TP-D: the answer ended (curl rc=0)" 0 \
                      || check "TP-D: the answer ended (curl rc=${P_Q2_RC})" 1
 [ "$P_Q2_SECS" -ge $((P_GRACE - 1)) ] && [ "$P_Q2_SECS" -lt "$P_HOLD" ] \
@@ -4213,24 +4240,61 @@ printf '%s\n' "$P_Q2_BODY" | grep -v '^$' | tail -1 | grep -q '^data: \[DONE\]' 
 printf '%s' "$P_Q2_BODY" | grep -q 'HTTP/1\.' \
   && check "TP-D: no status line inside the body" 1 \
   || check "TP-D: no status line inside the body" 0
-p_deltas_are TP-D "loxilb_ai_pd_requests_total{phase,status}" "$P_Q2_PDD" "decode,truncated +1"
+p_deltas_are TP-D "loxilb_ai_pd_requests_total{phase,status}" "$P_Q2_PDD" "complete,success +1"
 p_deltas_are TP-D "loxilb_ai_requests_total{outcome,status,cause}" "$P_Q2_RQD" "completed,200,- +1"
 pd_term=$(p_terminators "$P_Q2_S0")
-[ "$pd_term" = "1" ] && check "TP-D: loxilb_ai_pd_terminator_synthesized_total +1" 0 \
-                     || check "TP-D: loxilb_ai_pd_terminator_synthesized_total +1 (got +${pd_term})" 1
+[ "$pd_term" = "1" ] && check "TP-D: loxilb_ai_pd_terminator_synthesized_total +1 (the terminator is still the gateway's)" 0 \
+                     || check "TP-D: loxilb_ai_pd_terminator_synthesized_total +1 (the terminator is still the gateway's; got +${pd_term})" 1
+
+p_q2_row TP-D-mid hold "stream-end?mode=hold&sec=${P_HOLD}&at=mid" mid
+# The same end, for an answer that had not finished: the record is a truncation.
+[ "$P_Q2_RC" = "0" ] && check "TP-D-mid: the answer ended (curl rc=0)" 0 \
+                     || check "TP-D-mid: the answer ended (curl rc=${P_Q2_RC})" 1
+[ "$P_Q2_SECS" -ge $((P_GRACE - 1)) ] && [ "$P_Q2_SECS" -lt "$P_HOLD" ] \
+  && check "TP-D-mid: ended by the gateway's sweep (${P_Q2_SECS} s: >= ${P_GRACE} s idle, < the engine's ${P_HOLD} s close)" 0 \
+  || check "TP-D-mid: ended by the gateway's sweep (${P_Q2_SECS} s: >= ${P_GRACE} s idle, < the engine's ${P_HOLD} s close)" 1
+printf '%s\n' "$P_Q2_BODY" | grep -v '^$' | tail -1 | grep -q '^data: \[DONE\]' \
+  && check "TP-D-mid: it ends with the [DONE] the gateway wrote" 0 \
+  || check "TP-D-mid: it ends with the [DONE] the gateway wrote" 1
+printf '%s' "$P_Q2_BODY" | grep -q 'HTTP/1\.' \
+  && check "TP-D-mid: no status line inside the body" 1 \
+  || check "TP-D-mid: no status line inside the body" 0
+p_deltas_are TP-D-mid "loxilb_ai_pd_requests_total{phase,status}" "$P_Q2_PDD" "decode,truncated +1"
+p_deltas_are TP-D-mid "loxilb_ai_requests_total{outcome,status,cause}" "$P_Q2_RQD" "completed,200,- +1"
+pdm_term=$(p_terminators "$P_Q2_S0")
+[ "$pdm_term" = "1" ] && check "TP-D-mid: loxilb_ai_pd_terminator_synthesized_total +1" 0 \
+                      || check "TP-D-mid: loxilb_ai_pd_terminator_synthesized_total +1 (got +${pdm_term})" 1
 
 p_q2_row TP-E cut "stream-end?mode=cut"
-# The engine died: the client sees the cut, and nothing writes a terminator for it.
-[ "$P_Q2_RC" = "18" ] && check "TP-E: the client sees the cut (curl rc=18)" 0 \
-                      || check "TP-E: the client sees the cut (curl rc=18, got ${P_Q2_RC})" 1
-printf '%s\n' "$P_Q2_BODY" | grep -q '^data: \[DONE\]' \
-  && check "TP-E: no [DONE] in the body" 1 \
-  || check "TP-E: no [DONE] in the body" 0
-p_deltas_are TP-E "loxilb_ai_pd_requests_total{phase,status}" "$P_Q2_PDD" "decode,error +1"
-p_deltas_are TP-E "loxilb_ai_requests_total{outcome,status,cause}" "$P_Q2_RQD" "aborted,200,engine +1"
+# The engine closed after the finish: the EOF completes the stream at once, the client
+# gets the gateway's [DONE], and no death is counted.
+[ "$P_Q2_RC" = "0" ] && check "TP-E: the answer ended cleanly (curl rc=0)" 0 \
+                     || check "TP-E: the answer ended cleanly (curl rc=${P_Q2_RC})" 1
+[ "$P_Q2_SECS" -lt "$P_GRACE" ] \
+  && check "TP-E: completed at the engine's EOF (${P_Q2_SECS} s), not by the sweep" 0 \
+  || check "TP-E: completed at the engine's EOF (${P_Q2_SECS} s), not by the sweep" 1
+printf '%s\n' "$P_Q2_BODY" | grep -v '^$' | tail -1 | grep -q '^data: \[DONE\]' \
+  && check "TP-E: it ends with the [DONE] the gateway wrote" 0 \
+  || check "TP-E: it ends with the [DONE] the gateway wrote" 1
+p_deltas_are TP-E "loxilb_ai_pd_requests_total{phase,status}" "$P_Q2_PDD" "complete,success +1"
+p_deltas_are TP-E "loxilb_ai_requests_total{outcome,status,cause}" "$P_Q2_RQD" "completed,200,- +1"
 pe_term=$(p_terminators "$P_Q2_S0")
-[ "$pe_term" = "0" ] && check "TP-E: loxilb_ai_pd_terminator_synthesized_total flat" 0 \
-                     || check "TP-E: loxilb_ai_pd_terminator_synthesized_total flat (got +${pe_term})" 1
+[ "$pe_term" = "1" ] && check "TP-E: loxilb_ai_pd_terminator_synthesized_total +1" 0 \
+                     || check "TP-E: loxilb_ai_pd_terminator_synthesized_total +1 (got +${pe_term})" 1
+
+p_q2_row TP-E-mid cut "stream-end?mode=cut&at=mid" mid
+# The engine died mid-generation: the client sees the cut, and nothing writes a
+# terminator for it.
+[ "$P_Q2_RC" = "18" ] && check "TP-E-mid: the client sees the cut (curl rc=18)" 0 \
+                      || check "TP-E-mid: the client sees the cut (curl rc=18, got ${P_Q2_RC})" 1
+printf '%s\n' "$P_Q2_BODY" | grep -q '^data: \[DONE\]' \
+  && check "TP-E-mid: no [DONE] in the body" 1 \
+  || check "TP-E-mid: no [DONE] in the body" 0
+p_deltas_are TP-E-mid "loxilb_ai_pd_requests_total{phase,status}" "$P_Q2_PDD" "decode,error +1"
+p_deltas_are TP-E-mid "loxilb_ai_requests_total{outcome,status,cause}" "$P_Q2_RQD" "aborted,200,engine +1"
+pem_term=$(p_terminators "$P_Q2_S0")
+[ "$pem_term" = "0" ] && check "TP-E-mid: loxilb_ai_pd_terminator_synthesized_total flat" 0 \
+                      || check "TP-E-mid: loxilb_ai_pd_terminator_synthesized_total flat (got +${pem_term})" 1
 
 # ── PF: a short and a long stream (MON-01: what TTFT and duration mean) ────────────────
 # The same engine streams chunked, P_PF_MS ms apart: P_PF_SHORT content chunks, then

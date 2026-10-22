@@ -298,9 +298,10 @@ binary behaves exactly like upstream loxilb.
   Content-Length satisfied, or its EOF on an unframed answer), not semantic
   completion of the stream: a stream the engine ends cleanly without
   `finish_reason`, `usage` or the SSE `[DONE]` event is a success, one the
-  gateway ended is `decode/truncated`, one the engine broke `decode/error`.
-  The HELP text, the monitoring README and the P/D panel now say so (QA
-  2026-10-21, contract question); the behaviour is unchanged.
+  gateway ended without finish evidence is `decode/truncated` (with it, a
+  completion: see Fixed), one the engine broke `decode/error`. The HELP
+  text, the monitoring README and the P/D panel now say so (QA 2026-10-21,
+  contract question).
 - **A request whose client did not get the whole answer is
   `outcome="aborted"`, with a new `cause` label on
   `loxilb_ai_requests_total`** (this supersedes the Stage 2 behaviour
@@ -599,6 +600,34 @@ binary behaves exactly like upstream loxilb.
   `429 admission_capacity` when another request took the freed capacity unit
   first** — it now waits at the capacity gate, keeping its queue position and
   deadline.
+- **A P/D request's admission unit could be released by another request, and a
+  parked request could be woken out of turn.** The opt-in legacy P/D FIFO now
+  reserves a bounded prefill unit atomically before dispatch, and each request
+  owns its prefill and decode units through connection setup, rollback, retry,
+  cancellation and cleanup, so those paths return only the request's units,
+  also with the cap disabled; a decode routing hint alone cannot release
+  another request's unit. A returned unit wakes the oldest still-registered
+  FIFO entry on its owner with a generation-qualified wake, and a late wake of
+  an earlier request on a kept connection leaves a parked request parked while
+  its own entry is still queued (loxilb-ebpf-inference-gateway#127).
+- **A decode engine that died between admission and the decode dial failed the
+  request on the first connect.** The decode endpoint is chosen at admission
+  and dialled only after the prefill reply. The dial is now retried once on a
+  healthy endpoint before health polling notices, a refused connect counts on
+  that endpoint's breaker, and the request's reservation moves atomically to
+  the endpoint it connected to. There is no retry once anything was written or
+  received on the decode leg (loxilb-ebpf-inference-gateway#128).
+- **A finished P/D decode stream that lost its `[DONE]` was recorded
+  `decode/truncated`, and a decode backend that closed after the finish was
+  counted an engine death.** vLLM's P/D path omits `[DONE]` for a small share
+  of streams under concurrency. The response framer now tracks finish evidence
+  per decode stream: a complete SSE data event that finished every choice,
+  followed only by events with no choice (the usage event) or `[DONE]`. With
+  it, the idle sweep records the stream a completion (the terminator is still
+  the gateway's, counted by `loxilb_ai_pd_terminator_synthesized_total`) and a
+  decode EOF completes the stream instead of recording `decode/error` and a
+  dead endpoint. Without it both paths are unchanged
+  (loxilb-ebpf-inference-gateway#129).
 - **HTTP/2 requests on a busy, healthy client connection occasionally failed
   together with no response (the connection was closed)** — the
   header-completion (slowloris) deadline charged the connection with a header

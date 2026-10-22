@@ -70,13 +70,16 @@ _stream_chunked = False # POST /admin/stream-chunked-on|off. Off: a stream is HT
                         # (the historical shape). On: HTTP/1.1 Transfer-Encoding: chunked,
                         # ended by the 0-chunk, as vLLM's uvicorn streams; "close" only
                         # when keepalive is off. The mock closes its socket either way.
-_stream_end_mode = ""   # POST /admin/stream-end?mode=hold&sec=N|mode=cut: how a decode
-_stream_end_hold = 0    # stream ends instead of "data: [DONE]" (and the 0-chunk). hold:
-                        # the engine goes silent for N s with the socket open, then
-                        # closes (a dropped terminator). cut: it closes at once after
-                        # the last content chunk (an engine dying mid-stream). Both
-                        # leave the gateway's graceful-[DONE] sweep to end the client's
-                        # answer (Q2). "" is the historical ending; /admin/reset restores it.
+_stream_end_mode = ""   # POST /admin/stream-end?mode=hold&sec=N|mode=cut[&at=mid]: how a
+_stream_end_hold = 0    # decode stream ends instead of "data: [DONE]" (and the 0-chunk).
+_stream_end_at = ""     # hold: the engine goes silent for N s with the socket open, then
+                        # closes (a dropped terminator). cut: it closes at once (an
+                        # engine dying). Without at=mid the stream has sent its finish
+                        # chunk (finish_reason "stop") first: the generation finished and
+                        # only the terminator is missing. at=mid: the finish chunk is
+                        # never sent; the stream ends after a content chunk, mid-
+                        # generation. Both leave the gateway to end the client's answer
+                        # (Q2). "" is the historical ending; /admin/reset restores it.
 _drop_next = False      # One-shot: POST /admin/drop-next: the next inference request is
                         # read (and counted) and its connection closed with no byte
                         # written: an engine that dies before its answer. Cleared on
@@ -213,7 +216,10 @@ class MockVLLMHandler(BaseHTTPRequestHandler):
         # A paced stream lets the other requests through while it waits; the
         # historical stream keeps the server to itself, as it always did.
         pace = _stream_pace_ms
-        end_mode, end_hold = _stream_end_mode, _stream_end_hold
+        end_mode, end_hold, end_at = _stream_end_mode, _stream_end_hold, _stream_end_at
+        if end_mode and end_at == "mid" and len(chunks) > 1:
+            # The finish chunk is never sent: the engine ends mid-generation.
+            chunks = chunks[:-1]
         # A hold must not stall the health probes and scrapes for its length either.
         let_go = pace or end_mode == "hold"
         if let_go:
@@ -229,12 +235,14 @@ class MockVLLMHandler(BaseHTTPRequestHandler):
                 put(f"data: {json.dumps(chunk)}\n\n".encode("utf-8"))
                 time.sleep(pace / 1000.0 if pace else 0.05)
 
+            where = "mid-generation" if end_at == "mid" else "after the finish chunk"
             if end_mode == "hold":
-                print(f"[{SERVER_ROLE}] [stream-end] no terminator; silent {end_hold} s, "
-                      f"then close", flush=True)
+                print(f"[{SERVER_ROLE}] [stream-end] no terminator {where}; silent "
+                      f"{end_hold} s, then close", flush=True)
                 time.sleep(end_hold)
             elif end_mode == "cut":
-                print(f"[{SERVER_ROLE}] [stream-end] no terminator; closing now", flush=True)
+                print(f"[{SERVER_ROLE}] [stream-end] no terminator {where}; closing now",
+                      flush=True)
             else:
                 put(b"data: [DONE]\n\n")
                 if chunked:
@@ -586,7 +594,8 @@ class AdminHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         global _health_ok, _fail_next, _fail_next_status, _kv_params_mode, _metrics_mode
         global _keepalive, _fail_next_skip, _stream_pace_ms, _stream_chunks
-        global _stream_chunked, _stream_end_mode, _stream_end_hold, _answer_delay_ms
+        global _stream_chunked, _stream_end_mode, _stream_end_hold, _stream_end_at
+        global _answer_delay_ms
         global _drop_next
         if not self._auth_ok():
             self.send_response(401)
@@ -632,23 +641,29 @@ class AdminHandler(BaseHTTPRequestHandler):
             print(f"[{SERVER_ROLE}] [admin] stream pace = {chunks} chunks every {ms} ms",
                   flush=True)
         elif path == "/admin/stream-end":
-            # ?mode=hold&sec=N (1..600) or ?mode=cut; /admin/reset restores [DONE].
-            mode, sec = "", 0
+            # ?mode=hold&sec=N (1..600) or ?mode=cut, each with an optional &at=mid
+            # (the finish chunk is never sent); /admin/reset restores [DONE].
+            mode, sec, at = "", 0, ""
             for kv in query.split("&") if query else []:
                 k, _, v = kv.partition("=")
                 if k == "mode":
                     mode = v
                 elif k == "sec":
                     sec = int(v) if v.isdigit() else 0
-            if not (mode == "cut" or (mode == "hold" and 0 < sec <= 600)):
+                elif k == "at":
+                    at = v
+            if not (mode == "cut" or (mode == "hold" and 0 < sec <= 600)) or at not in ("", "mid"):
                 self.send_response(400)
                 self.end_headers()
                 return
             _stream_end_mode, _stream_end_hold = mode, (sec if mode == "hold" else 0)
+            _stream_end_at = at
             self._reply_json({"stream_end_mode": _stream_end_mode,
-                              "stream_end_hold": _stream_end_hold})
+                              "stream_end_hold": _stream_end_hold,
+                              "stream_end_at": _stream_end_at})
             print(f"[{SERVER_ROLE}] [admin] stream end = {_stream_end_mode} "
-                  f"{_stream_end_hold} s", flush=True)
+                  f"{_stream_end_hold} s {_stream_end_at or 'after the finish chunk'}",
+                  flush=True)
         elif path == "/admin/answer-delay":
             # ?ms=N, 1..60000; /admin/reset turns it off.
             ms = 0
@@ -701,7 +716,7 @@ class AdminHandler(BaseHTTPRequestHandler):
             _metrics_mode = "absent"
             _stream_pace_ms, _stream_chunks = 0, 0
             _stream_chunked = False
-            _stream_end_mode, _stream_end_hold = "", 0
+            _stream_end_mode, _stream_end_hold, _stream_end_at = "", 0, ""
             _answer_delay_ms = 0
             _drop_next = False
             self._reply_json({"fail_next": False, "fail_next_status": _fail_next_status,
@@ -709,7 +724,8 @@ class AdminHandler(BaseHTTPRequestHandler):
                               "metrics_mode": _metrics_mode, "stream_pace_ms": 0,
                               "stream_chunks": 0, "stream_chunked": False,
                               "stream_end_mode": "", "stream_end_hold": 0,
-                              "answer_delay_ms": 0, "drop_next": False})
+                              "stream_end_at": "", "answer_delay_ms": 0,
+                              "drop_next": False})
             print(f"[{SERVER_ROLE}] [admin] knobs RESET", flush=True)
         elif self.path == "/admin/health-fail":
             _health_ok = False
@@ -753,6 +769,7 @@ class AdminHandler(BaseHTTPRequestHandler):
                 "stream_chunked": _stream_chunked,
                 "stream_end_mode": _stream_end_mode,
                 "stream_end_hold": _stream_end_hold,
+                "stream_end_at": _stream_end_at,
                 "answer_delay_ms": _answer_delay_ms,
                 "role": SERVER_ROLE,
                 "request_count": _request_count,
