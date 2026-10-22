@@ -1,5 +1,7 @@
-# A pool that insists on an Endpoint Picker. loxilb selects endpoints itself,
-# so this must be refused rather than served by a policy nobody asked for.
+# A pool that insists on an Endpoint Picker. kube-loxilb accepts it and leaves
+# the picker to the gateway; the picker Service "some-epp" does not exist, so
+# FailClose keeps every request off the model servers (503) until it does, and
+# a gateway without the "epp" feature gets no rule for the pool at all.
 apiVersion: inference.networking.k8s.io/v1
 kind: InferencePool
 metadata:

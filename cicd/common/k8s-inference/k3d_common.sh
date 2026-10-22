@@ -15,7 +15,7 @@ K8SINF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 IGW_IMAGE="${IGW_IMAGE:-ghcr.io/loxilb-io/loxilb-inference-gateway:latest}"
 KLB_IMAGE="${KLB_IMAGE:-}"       # preset to skip building kube-loxilb from source
 KLB_REPO="${KLB_REPO:-https://github.com/loxilb-io/kube-loxilb.git}"
-KLB_REF="${KLB_REF:-integration/inference-gateway}"
+KLB_REF="${KLB_REF:-feat/auth-annotation}"
 # Gateway API v1.5.1 CRDs carry CEL (isIP()) that needs k8s >= 1.30, and
 # k3s >= 1.33 in turn needs k3d >= 5.7 to boot the node container.
 K3S_IMAGE="${K3S_IMAGE:-rancher/k3s:v1.33.13-k3s2}"

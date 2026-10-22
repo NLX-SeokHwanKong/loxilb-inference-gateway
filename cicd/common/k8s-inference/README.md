@@ -21,7 +21,8 @@ Design decisions (found the hard way — see the scenario READMEs):
 - **k3s >= 1.33, k3d >= 5.7.** Gateway API v1.5.1 CRDs use CEL `isIP()`
   (Kubernetes >= 1.30); older k3d cannot boot that k3s. A private k3d is
   downloaded to `.bin/` when the system one is too old.
-- **kube-loxilb is built from `integration/inference-gateway`** at run time
+- **kube-loxilb is built from `feat/auth-annotation`** at run time (the branch with the
+  inference-gateway integration, the credential-policy annotations and the EPP integration)
   (no published image tag yet). Preset `KLB_IMAGE` to skip the build.
 
 Knobs: `IGW_IMAGE`, `KLB_IMAGE`, `KLB_REPO`, `KLB_REF`, `K3S_IMAGE`,

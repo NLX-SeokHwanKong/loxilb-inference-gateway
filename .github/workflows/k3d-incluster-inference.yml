@@ -1,7 +1,7 @@
 name: K3d-InCluster-Inference-Sanity-CI
 
 # Runs the k3d in-cluster inference-gateway scenarios: loxilb and kube-loxilb
-# (integration/inference-gateway, built from source) as Pods in a single-node
+# (feat/auth-annotation, built from source) as Pods in a single-node
 # k3d cluster, exercised through Service annotations (svc), through Gateway API
 # InferencePool (gwapi), and with the whole stack installed by the Helm chart
 # (helm-gwapi, which re-runs the gwapi assertions). Hosted runners suffice: the
@@ -15,7 +15,7 @@ on:
       klbRef:
         description: 'kube-loxilb git ref to build'
         required: false
-        default: 'integration/inference-gateway'
+        default: 'feat/auth-annotation'
   push:
     branches: [ "main" ]
     paths:
@@ -57,7 +57,7 @@ jobs:
           password: ${{ secrets.GHCR_TOKEN || github.token }}
       - name: Run the scenario
         env:
-          KLB_REF: ${{ github.event.inputs.klbRef || 'integration/inference-gateway' }}
+          KLB_REF: ${{ github.event.inputs.klbRef || 'feat/auth-annotation' }}
         run: |
           cd cicd/${{ matrix.scenario }}
           rc=0
