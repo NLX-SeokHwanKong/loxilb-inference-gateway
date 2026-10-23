@@ -26,7 +26,8 @@ carries real roles.
 | `segmented_send.py` | sends one request in small TCP writes so header values arrive fragmented |
 | `raw_http.py` | hand-framed requests curl cannot send: chunked, mixed-case TE, CL+TE |
 | `config.sh` | Keycloak + key store + topology + profiles + rules + tokens |
-| `validation.sh` | the matrix |
+| `validation.sh` | the matrix, then `validate_cli.sh` |
+| `validate_cli.sh` | the CLI half: a profile created, read and deleted through loxicmd, the REST list as the oracle (`CLI_TESTS`) |
 | `rmconfig.sh` | teardown (leaves the Keycloak image cached) |
 | `keycloak/` | Dockerfile + `build.sh` for the pinned realm-baked Keycloak image |
 

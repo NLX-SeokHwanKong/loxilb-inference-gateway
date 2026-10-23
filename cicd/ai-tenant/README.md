@@ -70,7 +70,17 @@ infrastructure is); it must not run here, and the PR gate requires its result
 on the final image recorded beside this scenario's. Pass and fail are read from the
 admission headers and `fc_effective`, never from timing alone.
 
+`validation-sched.sh` ends with `validate_cli.sh`, the CLI half: the
+packaged loxicmd as the subject under test and REST as the oracle
+(`get lbversion`; the rules, objective, tenant rate limits and API keys of
+`config.sh` re-created through loxicmd and compared field by field; the
+nine band knobs as P10 reads them; the twelve refused combinations of S8;
+`get lb --bands` with waiters in all three bands, kept verbatim in
+`artifacts-cli/c4-bands.txt`; a netidentity binding). It is gated by
+`bands_cli_preflight` (`CLI_TESTS=auto|required|skip`) and folded into the
+verdict.
+
 `rmconfig.sh` removes the topology and checks that nothing it started is
 left: containers, namespaces and helper processes.
 
-Not wired into a GitHub workflow (a release item).
+Run by `run_local_cicd.sh`; not wired into a GitHub workflow (a release item).
