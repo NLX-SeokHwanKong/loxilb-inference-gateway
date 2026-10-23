@@ -22,6 +22,8 @@ name: AI-Gateway-Sanity-CI
 #   ai-tenant-sched   tenant scheduling, bands, release accounting
 #                     (cicd/ai-tenant, REQUIRE_ALL=1), and its CLI
 #                     half on the tree's pinned loxicmd (loxicmd-pin)  ~25 min
+#   ai-pd-admission   P/D bounded admission per endpoint: shed, park,
+#                     overflow (cicd/vllm-pd-admission-cpu)            ~3 min
 # NOTE: cicd/vllm-kvcache-routing-cpu is intentionally NOT gated here. Its
 # strict fixture-driven asserts (exact tokenizer-overlap fallthrough timing)
 # are sensitive to hosted-runner state; that real-vLLM CPU harness is
@@ -404,6 +406,55 @@ jobs:
           path: |
             cicd/ai-tenant/artifacts-sched/
             /tmp/ai-tenant-*.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # The P/D bounded-admission gate per endpoint: shed, park and overflow, with
+  # hanging prefill stubs so requests really overlap (cicd/vllm-pd-admission-cpu,
+  # GPU-free). Its counter families have no other committed coverage. The suite
+  # rebuilds the bed at queue depth 2 partway through and leaves no containers
+  # on success; its evidence (per-phase baselines, probe codes) is in hidden
+  # .adm-* files and in the datapath log inside llb1, which a failed run keeps.
+  ai-pd-admission:
+    name: ai-pd-admission
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    # Dependabot PRs have no submodule token; the private eBPF checkout fails.
+    if: github.actor != 'dependabot[bot]'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.CI_SUBMODULE_TOKEN || github.token }}
+      - uses: ./.github/actions/ai-sanity-setup
+        with:
+          ghcr-token: ${{ secrets.GHCR_TOKEN || github.token }}
+      - name: P/D bounded admission (shed, park, overflow)
+        run: |
+          cd cicd/vllm-pd-admission-cpu/
+          sudo -E ./config.sh
+          sudo -E ./validation.sh
+          ./rmconfig.sh
+          cd -
+      - name: Collect the gateway logs a failed run left in llb1
+        if: failure()
+        run: |
+          mkdir -p cicd/vllm-pd-admission-cpu/artifacts
+          docker cp llb1:/var/log/loxilbdp.log cicd/vllm-pd-admission-cpu/artifacts/ || true
+          docker cp llb1:/tmp/loxilb.err cicd/vllm-pd-admission-cpu/artifacts/ || true
+          docker cp llb1:/tmp/loxilb.out cicd/vllm-pd-admission-cpu/artifacts/ || true
+          docker ps -a > cicd/vllm-pd-admission-cpu/artifacts/docker-ps.txt || true
+      - name: Keep what a failed run left
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-pd-admission-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            cicd/vllm-pd-admission-cpu/artifacts*/
+            cicd/vllm-pd-admission-cpu/.adm-*
+            /tmp/pd-fault/
+            /tmp/ai-*.log
+          include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 14
 
