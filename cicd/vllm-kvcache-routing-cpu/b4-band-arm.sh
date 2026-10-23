@@ -36,6 +36,10 @@ PY_USER_SITE="$(python3 -m site --user-site 2>/dev/null || echo '')"
 EP_B_IP="33.33.33.1"; EP_B_IDX=2
 HOLD_SEC=${B4_HOLD_SEC:-6}
 OUT=${OUT:-$CFGDIR/artifacts-b4}; rm -rf "$OUT"; mkdir -p "$OUT"
+# The candidate tuple this arm is evidence for, beside its results (the
+# full-suite manifest of cicd/ai-tenant matches it against the suite's).
+source ../common/identity.sh
+record_identity "$OUT" llb1 | tee "$OUT/identity.txt"
 code=0
 chk() { if [ "$2" == "$3" ]; then echo "  [PASS] B4 $1 ($3)"; else echo "  [FAIL] B4 $1: want '$2', got '$3'"; code=1; fi; }
 
@@ -178,5 +182,6 @@ req again "$KEY_C" shared-prefix-base; wait
 chk "idle again, the prompt selects EP-B" 1 "$(( $(tier15_hits $EP_B_IDX) - h0 ))"
 api POST /config/loadbalancer -o /dev/null -d "$(rule ', "fc_mode": "inherit", "fc_max_outstanding": 0, "fc_max_queue_depth": 0, "fc_max_queue_wait_ms": 0')"
 
-[ $code -eq 0 ] && echo "SCENARIO-vllm-kvcache-b4-band-arm [OK]" || echo "SCENARIO-vllm-kvcache-b4-band-arm [FAILED]"
+[ $code -eq 0 ] && V="SCENARIO-vllm-kvcache-b4-band-arm [OK]" || V="SCENARIO-vllm-kvcache-b4-band-arm [FAILED]"
+echo "$V" | tee "$OUT/summary.txt"
 exit $code
