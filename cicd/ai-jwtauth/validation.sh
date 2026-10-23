@@ -3802,13 +3802,17 @@ echo "             behind that the next request can trip over."
 echo "             :2068's endpoint is a port nothing listens on, so every"
 echo "             dispatch is refused at connect(). The request was admitted"
 echo "             -- the gate ran and reserved -- and then never reached a"
-echo "             backend, so: no receipt, no completed-request record (no"
-echo "             status was ever seen), and the claim must come back."
+echo "             backend, so: no receipt, and the claim must come back."
+echo "             The 503 the gateway writes for it IS recorded, as every"
+echo "             answer the client received is (F-20): outcome completed,"
+echo "             status 503, nothing charged. A run that records the three"
+echo "             as anything else, or charges them, is a different defect."
 echo "             Three attempts rather than one, because a single stale"
 echo "             session is only dangerous to the request that follows it."
 h2l_tokens "H2-LIFE-007"
 qos_epoch_fresh
 h2l_sample; H2L_REQ0=$H2L_REQ; H2L_TOK0=$H2L_TOK
+H2L_503_0=$(metric_labeled loxilb_ai_requests_total "tenant=\"$H2L_T\"" 'status="503"')
 H2L_CONN_ERR0=$(gw_log_count "connect 31.31.31.1:8099")
 new_nonce; H2L_F1=$(last_nonce)
 new_nonce; H2L_F2=$(last_nonce)
@@ -3848,7 +3852,20 @@ h2_receipt_at l3ep1 "H2-LIFE-007 and the probe reached the backend, so the good 
 qos_epoch_ok "H2-LIFE-007 the failures and the probe stayed inside one quota epoch"
 sleep "$QOS_SETTLE_WAIT"
 h2l_sample
-h2l_delta_ok "H2-LIFE-007 only the probe was recorded and charged;" 1 12 "$H2L_REQ0" "$H2L_TOK0"
+# Four records, not one: the probe's 200 and the three 503s the gateway wrote
+# when connect() failed. An answer the client received is recorded whoever
+# wrote it (F-20, loxilb-ebpf-inference-gateway#125); before it these three
+# left no record. Only the probe is charged: a refusal has no usage.
+h2l_delta_ok "H2-LIFE-007 the probe and the three 503s were recorded, only the probe charged;" 4 12 "$H2L_REQ0" "$H2L_TOK0"
+H2L_503_1=$(metric_labeled loxilb_ai_requests_total "tenant=\"$H2L_T\"" 'status="503"')
+if [ "$H2L_503_0" = "unreadable" ] || [ "$H2L_503_1" = "unreadable" ]; then
+  note_case "H2-LIFE-007"
+  echo "  [FAIL] H2-LIFE-007 - the metric scrape failed; the three extra records cannot be"
+  echo "         told apart from a phantom record"
+  FAIL=$((FAIL + 1))
+else
+  chk_num "H2-LIFE-007 and the three extra records are the gateway's 503s" 3 $((H2L_503_1 - H2L_503_0))
+fi
 
 echo ""
 echo "== H2-LOAD: bounded-load units on an HTTP/2 connection are per STREAM =="
