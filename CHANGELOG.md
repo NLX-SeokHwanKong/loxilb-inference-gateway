@@ -471,6 +471,18 @@ binary behaves exactly like upstream loxilb.
   followed by ` OK` in the next read is no such read. The response framer,
   which assembles the line whatever the read boundaries, now records the
   answer too, once per request (loxilb-ebpf-inference-gateway#123).
+- **A backend's own `100 Continue` took the response record meant for its
+  answer** (F-21, found by the F-20 review). The gateway forwards a client's
+  `Expect: 100-continue` to the backend unless it answered the `100` itself
+  (the streamed path), and the backend's interim line reached the
+  once-per-request capture first: `loxilb_proxy_http_responses_total` moved
+  with no class, `loxilb_proxy_http_ttfb_seconds` sampled the `100`, and the
+  `200` or `5xx` behind it was a latched no-op, never counted by status. The
+  response framer repaired the status in `loxilb_ai_requests_total` after the
+  fact; the trace kept `100`. An interim `1xx` is now no answer to either
+  capture (`101` is: it ends the HTTP/1.1 exchange). The record waits for the
+  final status line and takes it once, class, TTFB and trace status alike
+  (loxilb-ebpf-inference-gateway#130, Upgrade notes row 42).
 - **The first error of a cold (model, tenant) pair, or of a freshly started
   gateway, was invisible to `rate()` and `increase()`** (QA 2026-10-21,
   MON-04): the series was born with it, so its first scrape already read 1
@@ -841,6 +853,7 @@ binary behaves exactly like upstream loxilb.
   | 39 | `loxilb_ai_requests_total`, `loxilb_ai_pd_requests_total` | a P/D client that left at the gate, in the capacity queue or parked (before any prefill) | no record in either | one record in each: `outcome="aborted"`, `status="none"`, `cause="client"` and `{phase="aborted",status="client"}`, as row 27 for a client leaving in the prefill | ebpf `6294e71` (#120); gateway CI row TP-K |
   | 40 | `loxilb_ai_requests_total`, `loxilb_proxy_http_responses_by_status_total` | a backend on a rule that is not P/D that closed before any answer (HTTP/1.1) | no record; the client got a bare close | the client gets the gateway's 502 `backend_unreachable`: `outcome="completed"`, `status="502"`, one record, no lifecycle record (as a refused connect, row 13, and a TLS leg failing before its answer). Only when the client cannot be told: `outcome="aborted"`, `status="none"`, `cause="engine"` | ebpf `0a77af5` (#120), `b0c647d`; gateway CI row TP-J |
   | 41 | `loxilb_ai_requests_total`, `loxilb_proxy_http_responses_by_status_total` | the MCP refusals (400/405/413) on both protocols; the HTTP/2 503s `backend_unreachable` and `mcp_backend_unavailable`; the HTTP/1.1 400 refusing an unparseable or ambiguously framed request before admission | no record (allowlisted as "MCP accounting", F-6/F-7, "before a request exists") | 4xx: `outcome="denied"`, stage `framing`, error `mcp_invalid_request` / `mcp_method_not_allowed` / `mcp_request_too_large` / `bad_request`; 5xx: `outcome="completed"` with the status written. HTTP/1.1 ones also counted by class. Wire bytes unchanged. AI-gateway rules only | ebpf `d348af5` (#125) |
+  | 42 | `loxilb_proxy_http_responses_total`, `loxilb_proxy_http_responses_by_status_total`, `loxilb_proxy_http_ttfb_seconds` | a backend's interim `1xx` (its own `100 Continue` after a forwarded `Expect`, a `103 Early Hints`) ahead of its answer (HTTP/1.1) | the `1xx` took the record: `responses_total` +1 with no class, TTFB sampled at the `1xx`, the final status a no-op (repaired by the framer in `loxilb_ai_requests_total` only); trace status `1xx` | the `1xx` is ignored; the final answer is recorded once: class, TTFB, trace status. `101` is still the answer | ebpf `94bd346` (#130) |
 
 - **`tenant_rate_limits` gains a `burst_pct` column.** The gateway adds it on
   start-up if it is missing, so an existing database needs no manual step and

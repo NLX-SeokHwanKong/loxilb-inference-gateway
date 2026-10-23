@@ -242,7 +242,11 @@ same requests from another angle, so adding it to the request total (or to its
 
 The TTFB histogram (`loxilb_proxy_http_ttfb_seconds`) samples backend replies
 only: a gateway's own answer reaches its first byte in microseconds and is not
-sampled.
+sampled. A backend's interim `1xx` (its own `100 Continue` when the gateway
+forwarded the client's `Expect`, a `103 Early Hints`) is not an answer either:
+neither the TTFB sample nor the responses-by-status class moves on it; the
+final status behind it is what both record. A `101` is the answer, it ends the
+exchange.
 
 The request duration histogram (`loxilb_ai_request_duration_seconds`) observes
 `completed` requests only. An aborted request's latency is the time to its cut,
