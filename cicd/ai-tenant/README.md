@@ -32,8 +32,13 @@ Every step-3 case reads the deltas of `loxilb_ai_fc_band_total` over itself
 (the collector republishes every 10 s, so a case ends with an 11 s settle)
 and asserts both identities of the counter: per band, admitted + shed +
 expired + cancelled equals the band's requests; and the parks (`queued`, all
-bands) equal the parks that ended: resumed (the queue-wait histogram's
-count) + expired + evicted + cancelled.
+bands) equal the queue-wait histogram's count: the histogram takes one sample
+when a park ends, however it ends (resumed, expired, evicted or cancelled), so
+its count is every ended park, not the resumed ones alone. A case that knows
+how many of its parked requests were resumed also asserts queued = resumed
+after a park + expired + evicted + cancelled, from its own request ledger.
+Both hold over a settled window (the case's requests all ended, the collector
+republished); neither is asserted while a park is still open.
 
 Floors and the reserve (P4, S3, S12, S13, P8, X8, H2): a floor
 (`fc_band_min_share_pct`) is a guarantee under contention, not a
