@@ -217,7 +217,7 @@ cl_body() {
 }
 # cl_seen_hdr <nonce> <name>: the header's values as the backend received them
 # (a JSON list), "absent" when it received none under that name.
-cl_seen_hdr() { $hexec tqep1 curl -s -m 3 "http://127.0.0.1:8080/__headers/$1" | jq -c --arg n "$2" '.headers[$n] // "absent"'; }
+cl_seen_hdr() { $hexec tqep1 curl -s -m 3 "http://127.0.0.1:8080/__headers/$1" | jq -r --arg n "$2" '.headers[$n] // "absent"'; }
 # cl_seen <nonce> <field>: the field as the backend's parser read it: its
 # value, "null" for a JSON null (a tier the gateway nulled), "absent" when the
 # key was not in the body (the mock says so itself), "no-receipt" when no

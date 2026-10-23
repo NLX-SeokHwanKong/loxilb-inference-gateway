@@ -97,6 +97,8 @@ fail_capture() {
 }
 chk()  { if [ "$3" == "$4" ]; then pass "$1" "$2 ($4)"; else fail "$1" "$2: want '$3', got '$4'"; fi; }
 has()  { case "$4" in *"$3"*) pass "$1" "$2";; *) fail "$1" "$2: want '$3' in '$(echo "$4" | cut -c1-200)'";; esac; }
+# h2run <tenant> <h2_band.py args...>: streams over the h2c service as that tenant
+h2run() { local t=$1; shift; source ./keys.env; local k; eval k=\$KEY_${t//-/_}; $hexec tqh1 python3 "$(pwd)/lib/h2_band.py" $VIP $PORT_H2 --api-key "$k" "$@"; }
 # gw_restart: kill the gateway and start it again with $(tq_env) (GW_EXTRA_ENV
 # adds to it); the persisted configuration comes back.
 gw_restart() {
@@ -465,7 +467,7 @@ chk X18 "trtllm: an unknown field is refused, as priority was" 400 "$(awk '{prin
 has X18 "trtllm: naming the renamed key" "_gw_prio" "$(cat "$S3"/x18trt-1.body)"
 sleep 1
 chk X18 "six neutralised on one service within 10 s: one info line" 1 "$(( $(gw_log | grep -c "a client-supplied engine priority") - X18L0 ))"
-has X18 "naming the service and the source" "X-Vllm-Priority header" "$(gw_log | grep "a client-supplied engine priority" | tail -1)"
+has X18 "naming the service and the source (the first neutralised request's, the body arm)" "$VIP:$PORT_SCHED: a client-supplied engine priority (body priority)" "$(gw_log | grep "a client-supplied engine priority" | tail -1)"
 # Over h2c (another service, so its own line): the header and the body key
 # on one stream, read back from whichever h2c backend served it.
 h2run t-a --streams 1 --nonce-prefix x18h2 --hdr 'x-vllm-priority: -100' --body-extra '{"priority":-100}' > "$S3/x18h2.out" 2>&1
@@ -497,7 +499,7 @@ cl_one $PORT_SCHED t-a x19run1 "$S3"; wait_receipts x19run1 1 >/dev/null
 cl_body $PORT_SCHED t-a x19w "$S3" "$X19B"
 read X19C X19T < "$S3"/x19w-1.code
 chk X19 "a standard waiter at the rule's 100 ms window: 504 admission_queue_timeout" "504:admission_queue_timeout" "$(cl_errs "$S3" x19w)"
-chk X19 "ended inside [100, 200) ms, not at the next second" yes "$(awk -v t="$X19T" 'BEGIN {print (t >= 0.10 && t < 0.20) ? "yes" : "no"}') (time_total $X19T)"
+chk X19 "ended inside [100, 200) ms, not at the next second (time_total $X19T)" yes "$(awk -v t="$X19T" 'BEGIN {print (t >= 0.10 && t < 0.20) ? "yes" : "no"}')"
 chk X19 "the runner still held, the waiter gone" "1 0" "$(fce .inflight) $(fce .queued)"
 cl_release x19run1; wait_done "$S3" x19run1 1 5
 # A band window: critical capped at 150 ms inside a 1 s rule window.
@@ -507,7 +509,7 @@ cl_one $PORT_SCHED t-a x19run2 "$S3"; wait_receipts x19run2 1 >/dev/null
 cl_body $PORT_SCHED t-crit x19c "$S3" "$X19B"
 read X19CC X19CT < "$S3"/x19c-1.code
 chk X19 "a critical waiter at its band's 150 ms window: 504 admission_queue_timeout" "504:admission_queue_timeout" "$(cl_errs "$S3" x19c)"
-chk X19 "ended inside [150, 250) ms" yes "$(awk -v t="$X19CT" 'BEGIN {print (t >= 0.15 && t < 0.25) ? "yes" : "no"}') (time_total $X19CT)"
+chk X19 "ended inside [150, 250) ms (time_total $X19CT)" yes "$(awk -v t="$X19CT" 'BEGIN {print (t >= 0.15 && t < 0.25) ? "yes" : "no"}')"
 has X19 "answered with its class" "X-Loxilb-Admission-Class: critical" "$(tr -d '\r' < "$S3"/x19c-1.hdr)"
 cl_release x19run2; wait_done "$S3" x19run2 1 5
 chk X19 "nothing held after" "0 0" "$(fce .inflight) $(fce .queued)"
@@ -626,7 +628,6 @@ bt_check X16 1:1:3 1 2
 chk X16 "sheddable: admitted 2, queued 2, shed 1 (the eviction)" "2 2 1 0 0" "$(bt_row sheddable)"
 
 echo "=== P6: over h2c nothing queues, and the shed order holds"
-h2run() { local t=$1; shift; source ./keys.env; local k; eval k=\$KEY_${t//-/_}; $hexec tqh1 python3 "$(pwd)/lib/h2_band.py" $VIP $PORT_H2 --api-key "$k" "$@"; }
 bt_begin $PORT_H2 h2
 h2run t-a --streams 2 --delay-ms 4000 --nonce-prefix p6run > "$S3/p6run.out" 2>&1 &
 H2BG=$!
