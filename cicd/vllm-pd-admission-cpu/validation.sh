@@ -188,9 +188,22 @@ start_holders() {
     sleep 2   # let the last holder reach the backend and bank its active_conns
 }
 
+# A holder is a subshell running `sudo ip netns exec l3h1 curl`, so its PID is sudo's (or
+# the subshell's). Signalling that PID is not enough everywhere: jammy's sudo (1.9.9, the
+# ubuntu-22.04 runner) does not relay a signal sent from the command's own process group,
+# which is where this script's kill comes from, so the curl ran on until the gateway
+# answered it 504 at the prefill timeout, and the holders never left while hung. Newer
+# sudo relays it, which is why a 24.04 host does not show this. Signal the whole tree,
+# leaves first, so the curl itself gets the TERM.
+kill_tree() {
+    local child
+    for child in $(pgrep -P "$1" 2>/dev/null); do kill_tree "${child}"; done
+    kill "$1" >/dev/null 2>&1 || true
+}
+
 stop_holders() {
     local pid
-    for pid in ${HOLDER_PIDS}; do kill "${pid}" >/dev/null 2>&1 || true; done
+    for pid in ${HOLDER_PIDS}; do kill_tree "${pid}"; done
     wait 2>/dev/null || true
     HOLDER_PIDS=""
 }
