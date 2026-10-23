@@ -371,9 +371,11 @@ more is such a request, never a 400 or a 5xx.
 A `service_tier` the gateway read is the gateway's: it is overwritten with `null`, in place and
 at the same length, before the body is forwarded, whether or not it was allowed and whichever
 hint decided. With the key more than once at the top level, the last one is the one read (as
-the engines' JSON parsers read it) and every one is nulled. **Known limit:** a key spelled
-with a JSON escape (`"service\u005ftier"`) is not read and not nulled; the gateway's class is
-not affected by it, but an engine that decodes the escape may still apply the tier.
+the engines' JSON parsers read it) and every one is nulled. Key and value are read decoded,
+as an engine's parser reads them: `"service\u005ftier"` is the key and `"priorit\u0079"` is
+`priority`, read and nulled like the literal spelling, so no spelling of the hint the gateway
+did not read reaches the engine. An escape that is not JSON (a bad `\u`, a lone surrogate)
+spells nothing and is not a hint; the body is not JSON then and the engine refuses it.
 
 The records: a completion, and a refusal made after the class stage ran (an objective
 refusal, a rate limit, a quota, a capacity refusal), carry `priority_class`, `priority`,

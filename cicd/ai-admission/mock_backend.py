@@ -16,6 +16,11 @@ Endpoints:
   GET  /__receipts/<nonce>    requests that arrived carrying that X-Test-Nonce
   GET  /__headers/<nonce>     the llm-d request headers of the last request carrying that
                               nonce, as the backend received them ({"name": ["value", ...]})
+  GET  /__body/<nonce>        what the backend's JSON parser read from the last body
+                              carrying that nonce: its top-level "model" and
+                              "service_tier" ("absent" when the key is not there), so
+                              a scenario can tell a nulled tier from one that was never
+                              sent, in whichever spelling the client wrote the key
   GET  /__peak/<nonce>        the most requests with that nonce executing at
                               once, across every port, plus the per-port peaks
   GET  /__inflight            requests executing right now
@@ -72,6 +77,8 @@ PEAK = {}            # nonce -> most executing at once, every port
 PEAK_PORT = {}       # nonce -> {port: most executing at once on that port}
 ORDER = {}           # nonce -> request ids in arrival order
 SEEN_HDRS = {}       # nonce -> the llm-d headers of its last request
+SEEN_BODY = {}          # nonce -> what the parser read from the last body
+
 RELEASED = set()     # nonces whose holds were released
 RELEASE_ALL = 0      # generation: bumped by /__release_all
 COND = threading.Condition(LOCK)
@@ -116,11 +123,14 @@ class Handler(BaseHTTPRequestHandler):
         if getattr(self, "spoof", False):
             self.send_header("X-Loxilb-Admission-Inflight", "999")
 
-    def _enter(self, nonce):
+    def _enter(self, nonce, body=None):
         global INFLIGHT
         with LOCK:
             if nonce:
                 RECEIPTS[nonce] = RECEIPTS.get(nonce, 0) + 1
+                if body is not None:
+                    SEEN_BODY[nonce] = {"model": body.get("model", "absent"),
+                                        "service_tier": body.get("service_tier", "absent")}
                 ORDER.setdefault(nonce, []).append(
                     self.headers.get("X-Request-Id", ""))
                 SEEN_HDRS[nonce] = {}
@@ -221,6 +231,11 @@ class Handler(BaseHTTPRequestHandler):
             with LOCK:
                 self._send_json({"nonce": n, "headers": SEEN_HDRS.get(n, {})})
             return
+        if path.startswith("/__body/"):
+            n = path[len("/__body/"):]
+            with LOCK:
+                self._send_json({"nonce": n, "body": SEEN_BODY.get(n, {})})
+            return
         if path.startswith("/__peak/"):
             n = path[len("/__peak/"):]
             with LOCK:
@@ -267,7 +282,7 @@ class Handler(BaseHTTPRequestHandler):
         self.spoof = self.headers.get("X-Test-Spoof-Admission", "") == "1"
 
         body = self._body()          # read before anything else: a held
-        self._enter(nonce)           # request has fully arrived
+        self._enter(nonce, body)     # request has fully arrived
         try:
             if hold:
                 self._hold(nonce)

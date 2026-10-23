@@ -29,6 +29,7 @@ X14 implemented the mirror (fc_shed_queue off): nobody is evicted, the arrival i
 X15 implemented more evictions in one second than the evicted list holds (16): every evicted waiter answered 429 within two passes, shed count equal to the evictions
 X16 implemented an evicted keep-alive client keeps its connection: 429 admission_shed with keep-alive, the queue-full 429's headers, and its next request on the same connection is answered 200
 X11 implemented a waiter is not idle: 504 at its queue window, never a reset at the idle bound; a client that leaves frees its place
+X17 implemented an escaped JSON spelling of service_tier is the literal one: the key and the value escaped each lower the class like the literal, every spelling reaches the backend as null, and a nested escaped key is neither read nor touched
 P1 implemented every class admitted below the ceiling, no added queueing
 P2 implemented a late critical request is admitted before older standard waiters
 P3 implemented sheddable at the ceiling: 429 admission_shed, no receipt; with fc_shed_queue it waits
@@ -392,6 +393,35 @@ chk X2 "nothing admitted on its behalf; everything returned" "0 0 0" "$(cl_recei
 bt_end
 bt_check X2 1:1:0 0
 chk X2 "critical: queued 1, cancelled 1" "0 1 0 0 1" "$(bt_row critical)"
+
+echo "=== X17: an escaped JSON spelling of service_tier is the literal one"
+# A standard tenant asks for flex (a lowering: no grant needed) in four
+# spellings. The gateway reads keys and the tier value decoded, as the
+# engine's parser does, so the escaped key and the escaped value decide the
+# class exactly like the literal, and every one is nulled before the body
+# is forwarded: the backend's parser reads null, never "flex". The nested
+# spelling is no top-level key: not a hint, left as sent (the backend reads
+# no top-level service_tier at all).
+# fc_expose_headers on: the class is read from the admitted answer's head
+# (X-Loxilb-Admission-Class rides with the three exposed headers); back to
+# the process default at the end, the shape the next case expects.
+sched_cfg 8 16 30000 "$SCHED_RESET"', "fc_expose_headers": "on"' || fail X17 "pool shape"
+X17B='{"model":"'"$MODEL"'","messages":[{"role":"user","content":"x17"}],"max_tokens":4'
+cl_body $PORT_SCHED t-a x17lit "$S3" "$X17B"',"service_tier":"flex"}'
+cl_body $PORT_SCHED t-a x17key "$S3" "$X17B"',"service\u005ftier":"flex"}'
+cl_body $PORT_SCHED t-a x17val "$S3" "$X17B"',"service_tier":"fle\u0078"}'
+cl_body $PORT_SCHED t-a x17nest "$S3" "$X17B"',"opts":{"service\u005ftier":"flex"}}'
+cl_body $PORT_SCHED t-a x17none "$S3" "$X17B"'}'
+for a in lit key val; do
+  chk X17 "$a: admitted" 200 "$(awk '{print $1}' "$S3"/x17$a-1.code)"
+  has X17 "$a: the class the hint lowered to" "X-Loxilb-Admission-Class: sheddable" "$(tr -d '\r' < "$S3"/x17$a-1.hdr)"
+  chk X17 "$a: the backend's parser read null for service_tier" null "$(cl_seen x17$a service_tier)"
+  chk X17 "$a: and the model untouched" "$MODEL" "$(cl_seen x17$a model)"
+done
+chk X17 "nested: admitted on the tenant's class" "200 standard" "$(awk '{print $1}' "$S3"/x17nest-1.code) $(tr -d '\r' < "$S3"/x17nest-1.hdr | sed -n 's/^X-Loxilb-Admission-Class: //p')"
+chk X17 "nested: no top-level service_tier reached the backend" absent "$(cl_seen x17nest service_tier)"
+chk X17 "no hint: the tenant's class, nothing to null" "200 standard absent" "$(awk '{print $1}' "$S3"/x17none-1.code) $(tr -d '\r' < "$S3"/x17none-1.hdr | sed -n 's/^X-Loxilb-Admission-Class: //p') $(cl_seen x17none service_tier)"
+sched_cfg 8 16 30000 "$SCHED_RESET"', "fc_expose_headers": "inherit"' || fail X17 "pool shape back"
 
 echo "=== X3: a client that leaves while running"
 sched_cfg 2 4 10000 "$SCHED_RESET" || fail X3 "pool shape"
