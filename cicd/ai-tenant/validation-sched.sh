@@ -31,6 +31,7 @@ X16 implemented an evicted keep-alive client keeps its connection: 429 admission
 X11 implemented a waiter is not idle: 504 at its queue window, never a reset at the idle bound; a client that leaves frees its place
 X17 implemented an escaped JSON spelling of service_tier is the literal one: the key and the value escaped each lower the class like the literal, every spelling reaches the backend as null, and a nested escaped key is neither read nor touched
 X18 implemented a client-supplied engine priority does not leave the gateway: X-Vllm-Priority is stripped on H1 and H2, a top-level body priority (the escaped spelling too) is renamed in place to a key no engine reads, a nested one reaches the backend as sent, and one rate-limited info line per service names the source
+X19 implemented a configured queue wait window is the enforced window: a waiter at a 100 ms rule window and one at a 150 ms critical band window are each answered 504 admission_queue_timeout inside their window plus the timer's grain, not at the next second
 P1 implemented every class admitted below the ceiling, no added queueing
 P2 implemented a late critical request is admitted before older standard waiters
 P3 implemented sheddable at the ceiling: 429 admission_shed, no receipt; with fc_shed_queue it waits
@@ -476,6 +477,45 @@ chk X18 "h2: and received no x-vllm-priority" absent "$($hexec tqep1 curl --http
 sleep 1
 chk X18 "h2: one more line, its service's" 2 "$(( $(gw_log | grep -c "a client-supplied engine priority") - X18L0 ))"
 sched_cfg 8 16 30000 "$SCHED_RESET"', "fc_expose_headers": "inherit"' || fail X18 "pool shape back"
+
+echo "=== X19: a configured queue wait window is the enforced window"
+# A waiter's deadline (the rule's fc_max_queue_wait_ms, a band's
+# fc_band_wait_ms) was swept by the health pass at most once a second, so a
+# 100 ms window ended between 775 and 1005 ms (QA 2026-10-23, QA-03). The
+# deadline is now met by a timer armed to the earliest pending deadline, at
+# a 25 ms grain. One held runner fills the pool (ceiling 1); a waiter behind
+# it is answered 504 admission_queue_timeout at its window, read from curl's
+# time_total: first the rule's own window (100 ms), then a critical band's
+# window (150 ms, a cap inside a 1 s rule window). Each oracle's upper bound
+# is the window plus the grain plus the bed's own slack; the old sweep
+# ended both past 775 ms.
+X19B='{"model":"'"$MODEL"'","messages":[{"role":"user","content":"x19"}],"max_tokens":4}'
+sched_cfg 1 4 100 "$SCHED_RESET"', "fc_band_wait_ms": "0:0:0"' || fail X19 "pool shape"
+chk X19 "the rule's window read back" 100 "$(fce .queue_wait_ms)"
+bt_begin $PORT_SCHED
+cl_one $PORT_SCHED t-a x19run1 "$S3"; wait_receipts x19run1 1 >/dev/null
+cl_body $PORT_SCHED t-a x19w "$S3" "$X19B"
+read X19C X19T < "$S3"/x19w-1.code
+chk X19 "a standard waiter at the rule's 100 ms window: 504 admission_queue_timeout" "504:admission_queue_timeout" "$(cl_errs "$S3" x19w)"
+chk X19 "ended inside [100, 200) ms, not at the next second" yes "$(awk -v t="$X19T" 'BEGIN {print (t >= 0.10 && t < 0.20) ? "yes" : "no"}') (time_total $X19T)"
+chk X19 "the runner still held, the waiter gone" "1 0" "$(fce .inflight) $(fce .queued)"
+cl_release x19run1; wait_done "$S3" x19run1 1 5
+# A band window: critical capped at 150 ms inside a 1 s rule window.
+sched_cfg 1 4 1000 "$SCHED_RESET"', "fc_band_wait_ms": "150:0:0"' || fail X19 "band window"
+chk X19 "the critical band's window read back, the rule's beside it" "150 1000" "$(fce .bands.critical.wait_ms) $(fce .queue_wait_ms)"
+cl_one $PORT_SCHED t-a x19run2 "$S3"; wait_receipts x19run2 1 >/dev/null
+cl_body $PORT_SCHED t-crit x19c "$S3" "$X19B"
+read X19CC X19CT < "$S3"/x19c-1.code
+chk X19 "a critical waiter at its band's 150 ms window: 504 admission_queue_timeout" "504:admission_queue_timeout" "$(cl_errs "$S3" x19c)"
+chk X19 "ended inside [150, 250) ms" yes "$(awk -v t="$X19CT" 'BEGIN {print (t >= 0.15 && t < 0.25) ? "yes" : "no"}') (time_total $X19CT)"
+has X19 "answered with its class" "X-Loxilb-Admission-Class: critical" "$(tr -d '\r' < "$S3"/x19c-1.hdr)"
+cl_release x19run2; wait_done "$S3" x19run2 1 5
+chk X19 "nothing held after" "0 0" "$(fce .inflight) $(fce .queued)"
+sched_cfg 8 16 30000 "$SCHED_RESET"', "fc_band_wait_ms": "0:0:0"' || fail X19 "pool shape back"
+bt_end
+bt_check X19 1:3:0 0
+chk X19 "standard: admitted 2 (the runners), expired 1" "2 1 0 1 0" "$(bt_row standard)"
+chk X19 "critical: expired 1" "0 1 0 1 0" "$(bt_row critical)"
 
 echo "=== X3: a client that leaves while running"
 sched_cfg 2 4 10000 "$SCHED_RESET" || fail X3 "pool shape"
