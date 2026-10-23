@@ -7,9 +7,11 @@ set -e
 # CLI_TESTS knob consumed by cli_preflight() in common.sh:
 #   1. Config path — ~18 proxy/mcp/vllm/mtls scenarios drive `loxicmd` as the
 #      load-bearing config path in their config.sh (USE_CLI gate).
-#   2. Dedicated CLI tests — the ai-apikey / ai-model-routing / ai-sse-quota
-#      scenarios run validate_cli.sh (CLI mutation, REST oracle); each is folded
-#      into that scenario's validation.sh exit code.
+#   2. Dedicated CLI tests — the ai-apikey / ai-model-routing / ai-sse-quota /
+#      ai-tenant / ai-jwtauth scenarios run validate_cli.sh (CLI mutation, REST
+#      oracle); each is folded into that scenario's validation exit code. The
+#      feature-specific halves have their own preflight (bands_cli_preflight,
+#      jwtauth_cli_preflight) on the same CLI_TESTS knob.
 #
 # Default CLI_TESTS=auto SKIPS the CLI when the image predates the packaging swap.
 # For a release pre-flight we want the CLI actually validated, so default to
@@ -135,8 +137,21 @@ run_scenario ai-model-conflict -- './config.sh' './validation.sh'
 # hygiene, and the fail-closed postures (HTTP/2, unreachable JWKS). Builds
 # loxilb-aigw-keycloak:26.0-aigw on first use and reuses it afterwards
 # (cicd/ai-jwtauth/keycloak/build.sh); config.sh also pulls postgres:18.6 for
-# the key store the precedence legs need.
+# the key store the precedence legs need. validation.sh ends with
+# validate_cli.sh: a JWT auth profile created, read and deleted through
+# loxicmd with the REST list as the oracle, enforced by CLI_TESTS=required.
 run_scenario ai-jwtauth -- './config.sh' './validation.sh'
+
+# ai-tenant: tenant QoS, the priority bands of the capacity gate — the
+# scheduling, release-accounting, h2c-parity and knob cases of
+# validation-sched.sh (REQUIRE_ALL=1: a declared case that is still pending
+# fails the run, as the PR gate requires), then validate_cli.sh: the same
+# configuration and the band knobs through loxicmd with REST as the oracle,
+# the --bands table read under load, enforced by CLI_TESTS=required. Needs
+# jq, curl and python3 on the host; config.sh pulls postgres:18.6 for the
+# tenant and key store. Allow about an hour: the floor and adaptive-ceiling
+# cases follow the engines' scraped queue depth.
+run_scenario ai-tenant -- './config.sh' 'REQUIRE_ALL=1 ./validation-sched.sh'
 
 # ai-authsep: the authentication-plane regression, container-only (no GPU) —
 # the same four suites the auth-plane-sanity workflow runs. validation.sh is
