@@ -286,6 +286,19 @@ binary behaves exactly like upstream loxilb.
   and that `increase()` on a first event reads about 1.0 to 1.4 by
   extrapolation; the acceptance reading is the raw delta of 1 with a positive
   rate.
+- **A configured queue wait window is the enforced window.** A waiting
+  request's deadline (`fc_max_queue_wait_ms`, a band's `fc_band_wait_ms`, a
+  client's `x-llm-d-inference-ttl`) was swept by the health pass at most
+  once a second, so a 100 ms or 150 ms window ended between 775 and 1005 ms.
+  The deadlines are now met by a timer armed to the earliest pending
+  deadline across the pools, re-armed on every park and after every pass,
+  at 25 ms granularity; with no waiter anywhere it is not armed and no pass
+  runs. The pass reads one word per pool and enters only the queues whose
+  earliest deadline has passed, never a connection list; every expiry still
+  ends the wait through the one compare-and-swap that settles a queued
+  request, and answers as before (`504 admission_queue_timeout`, `429
+  admission_ttl_expired`). No API field changes: the values were always the
+  contract (QA 2026-10-23, QA-03).
 - **A client-supplied engine priority (`X-Vllm-Priority`, body `priority`)
   is no longer forwarded on AI-gateway rules; the tenant band decides
   order.** The band queue decides the admission order, but once admitted an
