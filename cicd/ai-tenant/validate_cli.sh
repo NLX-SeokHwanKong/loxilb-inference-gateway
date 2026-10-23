@@ -162,9 +162,12 @@ LB_IDLE="$(lb_base $PORT_IDLE 8080) --inatimeout=2 --fc-max-outstanding=1 --fc-m
 LB_KNOB="$(lb_base $PORT_KNOB 8080-8081) --inatimeout=60 --fc-max-outstanding=4 --fc-max-queue-depth=8 --fc-max-queue-wait-ms=5000"
 # The full-reset flags: every band knob at the value that clears it.
 BAND_RESET="--fc-wake-policy=inherit --fc-band-weights=0:0:0 --fc-band-min-share-pct=0:0:0 --fc-critical-reserve-pct=0 --fc-band-wait-ms=0:0:0 --fc-band-queue-pct=0:0:0 --fc-shed-queue=inherit --fc-tenant-wake=inherit --fc-llmd-headers=inherit"
-# The same reset as the scenario's curl writes it, with the gate knobs the
-# cases touched (so the curl apply of C1 leaves the rule in config.sh's shape).
-RESET_JSON=', "fc_wake_policy": "inherit", "fc_band_weights": "0:0:0", "fc_band_min_share_pct": "0:0:0", "fc_critical_reserve_pct": 0, "fc_band_wait_ms": "0:0:0", "fc_band_queue_pct": "0:0:0", "fc_shed_queue": "inherit", "fc_tenant_wake": "inherit", "fc_llmd_headers": "inherit", "fc_tenant_max_share_pct": 0, "fc_adaptive": "inherit", "fc_mode": "inherit", "fc_ep_max_inflight": 0'
+# The same reset as the scenario's curl writes it, with every gate knob a
+# case may have left on a rule (P8 and X8 leave fc_telemetry_stale_ms; the
+# knob cases fc_ep_max_inflight, fc_mode, fc_adaptive, fc_expose_headers,
+# fc_prefill_max_inflight), so the curl apply of C1 leaves the rule in
+# config.sh's shape; 0 and inherit read back absent.
+RESET_JSON=', "fc_wake_policy": "inherit", "fc_band_weights": "0:0:0", "fc_band_min_share_pct": "0:0:0", "fc_critical_reserve_pct": 0, "fc_band_wait_ms": "0:0:0", "fc_band_queue_pct": "0:0:0", "fc_shed_queue": "inherit", "fc_tenant_wake": "inherit", "fc_llmd_headers": "inherit", "fc_tenant_max_share_pct": 0, "fc_adaptive": "inherit", "fc_mode": "inherit", "fc_ep_max_inflight": 0, "fc_telemetry_stale_ms": 0, "fc_prefill_max_inflight": 0, "fc_decode_max_inflight": 0, "fc_expose_headers": "inherit"'
 # lb_del <port>: the rule by its full L7 key (host, path, match mode, model)
 lb_del() { cli delete lb $VIP --tcp=$1 --host=$VIP --path-prefix=/ --path-match-mode=prefix --model-name=$MODEL; }
 
