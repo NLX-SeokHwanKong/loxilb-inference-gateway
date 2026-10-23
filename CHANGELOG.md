@@ -265,6 +265,13 @@ binary behaves exactly like upstream loxilb.
 
 ### Changed
 
+- **Request-body keys and the `service_tier` value are compared decoded;
+  escaped spellings of `service_tier`, `model` and `user` are read like their
+  literal spellings.** An escaped model name is now matched by
+  `allowed_models`; an escaped `service_tier` is read and nulled before
+  forwarding. A value with an invalid JSON escape is cut at the escape.
+  KV-prefix hashing still uses the raw bytes (unchanged). (QA 2026-10-23,
+  the JSON train: loxilb-ebpf #131.)
 - **Three AI dashboard titles carry their scope mark first**: `(all tenants)
   Active SSE streams`, its trend panel and the P/D row. At 1600×900 the narrow
   stat clipped to `Active SSE strea…` and the mark was out of sight (QA
