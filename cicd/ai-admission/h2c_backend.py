@@ -14,7 +14,12 @@ Behaviour mirrors hdr_echo.py where it matters to the legs:
                        an x-test-nonce header is counted as a receipt.
   GET /__receipts/N -> the count for nonce N, as a decimal body.
   GET /__headers/N  -> {"headers": {name: [value, ...]}}: the llm-d request headers
-                       of the last request that carried nonce N, as received.
+                       and an x-vllm-priority of the last request that carried
+                       nonce N, as received.
+  GET /__body/N     -> {"body": {...}}: what the JSON parser read from the last
+                       body carrying nonce N: its top-level "model", "service_tier",
+                       "priority", "_gw_prio" and "tools" ("absent" when the key is
+                       not there), as the HTTP/1.1 mock answers it.
 
 A third argument of "no-usage" suppresses the usage object, mirroring
 hdr_echo.py's mode of the same name. usage is optional in the response shape,
@@ -59,6 +64,7 @@ if ERROR_STATUS:
 
 receipts = {}
 seen_hdrs = {}
+seen_body = {}          # nonce -> what the parser read from the last body
 receipts_lock = threading.Lock()
 
 
@@ -128,6 +134,13 @@ def handle_request(peer, stream_id, headers, body):
         respond(peer, stream_id, 200, json.dumps({"nonce": nonce, "headers": seen}).encode())
         return
 
+    if method == "GET" and path.startswith("/__body/"):
+        nonce = path[len("/__body/"):]
+        with receipts_lock:
+            seen = seen_body.get(nonce, {})
+        respond(peer, stream_id, 200, json.dumps({"nonce": nonce, "body": seen}).encode())
+        return
+
     nonce = hdr.get("x-test-nonce", "")
     if nonce:
         with receipts_lock:
@@ -135,10 +148,19 @@ def handle_request(peer, stream_id, headers, body):
             seen = {}
             for name, value in headers:
                 name = (name.decode("utf8", "replace") if isinstance(name, bytes) else name).lower()
-                if name.startswith(("x-llm-d-", "x-gateway-inference-")):
+                if name.startswith(("x-llm-d-", "x-gateway-inference-", "x-vllm-priority")):
                     value = value.decode("utf8", "replace") if isinstance(value, bytes) else value
                     seen.setdefault(name, []).append(value)
             seen_hdrs[nonce] = seen
+            try:
+                parsed = json.loads(body.decode("utf8"))
+            except (ValueError, UnicodeDecodeError):
+                parsed = None
+            if isinstance(parsed, dict):
+                seen_body[nonce] = {k: parsed.get(k, "absent") for k in
+                                    ("model", "service_tier", "priority", "_gw_prio", "tools")}
+            else:
+                seen_body[nonce] = {}
 
     # After the receipt, before the answer — see the module docstring.
     delay_ms = hdr.get("x-test-delay-ms")
