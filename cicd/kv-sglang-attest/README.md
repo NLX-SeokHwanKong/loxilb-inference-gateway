@@ -71,6 +71,10 @@ Expected: `validation.sh` prints `[OK]` per assert and exits 0 with
 
 - external `kill`/`pkill` binaries are DISABLED stubs on the CI host —
   `lib.sh` signals simulator pids with the shell BUILTIN kill only;
+- the simulators run as root (`nohup sudo ... &`) and the suite does not:
+  `sims_stop` runs that builtin kill under `sudo bash -c` and verifies no
+  simulator survives. A plain kill from the step user is refused on the root
+  child and never relayed by jammy sudo, so a bed run as root cannot show it;
 - the challenge prompt tokenizes through `/etc/loxilb/tokenizers/<slug>/`
   — the tokenizer stage is not optional;
 - `LOXILB_KV_ATTEST_PROBE_CADENCE_S=5` keeps ladder retries inside the
