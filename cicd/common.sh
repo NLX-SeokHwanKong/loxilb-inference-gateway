@@ -861,6 +861,29 @@ function bands_cli_preflight() {
   return 1
 }
 
+# jwtauth_cli_preflight <container>
+# The same gate for the JWT auth profile resource of loxicmd-inference-gateway
+# #83 (create jwtauthprofile with its --priority-class cap); semantics as
+# bands_cli_preflight (CLI_TESTS=auto|required|skip).
+function jwtauth_cli_preflight() {
+  local cont="${1:-llb1}"
+  local mode="${CLI_TESTS:-auto}"
+  if [[ "$mode" == "skip" ]]; then
+    echo "  JWT profile CLI preflight: CLI_TESTS=skip -> skipping CLI tests"
+    return 1
+  fi
+  if $dexec "$cont" loxicmd create jwtauthprofile --help 2>&1 | grep -q -- '--priority-class'; then
+    echo "  JWT profile CLI preflight: loxicmd carries the jwtauthprofile resource (CLI_TESTS=$mode) [OK]"
+    return 0
+  fi
+  if [[ "$mode" == "required" ]]; then
+    echo "  JWT profile CLI preflight: CLI_TESTS=required but loxicmd lacks create jwtauthprofile --priority-class [FAIL]"
+    exit 1
+  fi
+  echo "  SKIP: loxicmd lacks create jwtauthprofile (image predates loxicmd #83); set CLI_TESTS=required to enforce"
+  return 1
+}
+
 #Arg1: host name
 #Arg2: --<proto>:<iport>:<oport>
 #Arg3: --endpoints:<ip>:<weight>,..

@@ -4028,6 +4028,20 @@ else
   PASS=$((PASS + 1))
 fi
 
+# The CLI half: loxicmd creates, reads and deletes a JWT auth profile with
+# the REST list as the oracle (validate_cli.sh); gated by jwtauth_cli_preflight
+# (CLI_TESTS), folded into the verdict.
+echo ""
+echo "Running CLI validation (validate_cli.sh)..."
+bash validate_cli.sh
+cli_code=$?
+if [ $cli_code -ne 0 ]; then
+  echo "  [FAIL] CLI half (validate_cli.sh) exit $cli_code"
+  FAIL=$((FAIL + 1))
+else
+  echo "  [PASS] CLI half (validate_cli.sh)"
+fi
+
 echo ""
 if [ $FAIL -ne 0 ]; then
   echo "--- gateway log tail (diagnostics only; no assertion reads it) ---"
