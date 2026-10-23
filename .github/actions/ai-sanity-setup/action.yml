@@ -47,7 +47,9 @@ runs:
       run: sudo python3 -m pip install h2 || sudo python3 -m pip install --break-system-packages h2
     - run: loxilb-ebpf/utils/mkllb_bpffs.sh
       shell: bash
-    - run: sudo -E env "PATH=$PATH" make
+    # The first build of the tree; it carries the product define too, or the
+    # later docker-cp (up to date by then) copies a binary built without it.
+    - run: sudo -E env "PATH=$PATH" make EXTRA_CFLAGS=-DHAVE_SOCKOPS
       shell: bash
     # minica (github.com/jsha/minica) is fetched on demand by the TLS scenarios' config.sh
     - run: sudo -E env "PATH=$PATH" GOBIN=/usr/local/bin go install github.com/jsha/minica@latest
