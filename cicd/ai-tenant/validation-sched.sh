@@ -1084,6 +1084,15 @@ sched_cfg 8 16 30000 "$(fl6_json 0:0:0 inherit inherit 0:0:0 inherit)" || fail S
 # B15 and B15b last: each persists the configuration and restarts the gateway twice.
 for c in P9 B6 B3a B3b B5 X4 X5 H3 B15 B15b; do case_$c; done
 
+# ---- the CLI half: loxicmd as the subject, REST as the oracle --------------------
+# validate_cli.sh re-creates the configuration through loxicmd and drives the
+# band knobs, the refusals, the --bands table under load and a netidentity
+# binding; gated by bands_cli_preflight (CLI_TESTS), folded into the verdict.
+echo ""
+echo "Running CLI validation (validate_cli.sh)..."
+bash validate_cli.sh
+cli_code=$?
+
 # ---- summary --------------------------------------------------------------------
 echo "=== summary"
 nd=0; np=0; npend=0; nf=0; nmiss=0; nelse=0
@@ -1105,7 +1114,8 @@ while read -r id state _; do
   esac
 done <<< "$DECLARED"
 for id in "${!RESULT[@]}"; do grep -q "^$id " <<< "$DECLARED" || { nmiss=$((nmiss + 1)); echo "  $id ran but is not declared"; }; done
-echo "declared=$nd pass=$np fail=$nf pending=$npend elsewhere=$nelse not_executed=$nmiss"
+[ $cli_code -eq 0 ] && echo "  CLI half (validate_cli.sh) PASS" || echo "  CLI half (validate_cli.sh) FAIL"
+echo "declared=$nd pass=$np fail=$nf pending=$npend elsewhere=$nelse not_executed=$nmiss cli=$cli_code"
 [ "${REQUIRE_ALL:-0}" == 1 ] && [ $npend -gt 0 ] && { echo "SCENARIO-ai-tenant-sched [FAILED] $npend pending at REQUIRE_ALL"; exit 1; }
-[ $nf -eq 0 ] && [ $nmiss -eq 0 ] || { echo "SCENARIO-ai-tenant-sched [FAILED]"; exit 1; }
+[ $nf -eq 0 ] && [ $nmiss -eq 0 ] && [ $cli_code -eq 0 ] || { echo "SCENARIO-ai-tenant-sched [FAILED]"; exit 1; }
 echo "SCENARIO-ai-tenant-sched [OK]"
