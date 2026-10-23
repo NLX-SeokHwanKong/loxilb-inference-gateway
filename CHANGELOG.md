@@ -510,18 +510,6 @@ binary behaves exactly like upstream loxilb.
 
 ### Fixed
 
-- **An escaped JSON spelling evaded the tier and model checks and was
-  forwarded as sent.** The gateway compared a body's top-level keys and the
-  `service_tier` value as raw bytes, so a client could write
-  `"service\u005ftier":"priority"` or `"service_tier":"priorit\u0079"`: no
-  hint to the gateway, which neither applied its class rules to it nor
-  nulled it, while the engine's JSON parser decoded it and could apply a
-  tier the gateway's class had not granted. The same client could write
-  `"mod\u0065l"`, which `allowed_models` did not see. Keys and the tier
-  value are now compared decoded, as the engine reads them: every spelling
-  is read, bounded by the class rules, and nulled before the body is
-  forwarded; an escape that is not JSON spells nothing (QA 2026-10-23,
-  tenant/flow-admission L1; the raw-byte limit was documented).
 - **A rule whose `id` is already bound to another rule is refused with 400
   and the reason** (`lbrule-id conflict: id already bound to a different
   rule`). It was answered 500 `Internal service error` with the wording
