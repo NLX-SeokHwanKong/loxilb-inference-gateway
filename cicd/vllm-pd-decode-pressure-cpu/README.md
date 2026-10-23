@@ -28,17 +28,29 @@ connect-time fallback does not re-render it (S6 shows this; it is reported, not 
 | # | Setup (D1 / D2 / D3 = decode mocks) | Expected |
 |---|---|---|
 | S1 | `W=0`, D1 92 % / D2 40 % / D3 40 % | distribution is the shipped one: a third each, pure RR 3-cycle; with `BASELINE_IMAGE` set, per-decode counts equal the untouched baseline binary's |
-| S2 | `W=8`, same usage | D1 receives 0; D2/D3 split by RR |
-| S3 | `W=8`, D1 `/metrics` absent (stale after 30 s) | D1 neutralised to the fleet mean → a third again; zero loss |
-| S4 | `W=8`, all three absent | counts equal S1 (all-unknown == W=0) |
-| S5 | `W=8`, `X-Conversation-Id` pinned to D1, then D1 made the most pressured | keyed requests stay on D1; unkeyed avoid it |
-| S6 | `W=8`, D1 mock killed (connect refused) | 12/12 answered 200 by another decode; `[PD_DECODE_CONNECT]` retry lines appear |
-| S7 | `W=8`, usage family omitted on all decodes (TRT-LLM-like) | unknown, not 0 %: counts equal S1 |
-| S8 | `W=8`, SGLang family (`token_usage`) 0.92 / 0.40 / 0.40 | same as S2 |
-| S9 | `W=8`, env changed in a side process, no restart | no effect (documented getenv-once) |
+| S2 | `W=8`, same usage | D1 receives 0; D2/D3 split by RR; every selection `path="score_kv"`, `kv_fill` 0 |
+| S3 | `W=8`, D1 `/metrics` absent (stale after 30 s) | D1 neutralised to the fleet mean → a third again; zero loss; `kv_fill` == selections, `path="score"`; one `[PD_DEC]` "neutral fill in effect" line |
+| S4 | `W=8`, all three absent | counts equal S1 (all-unknown == W=0); `kv_fill` == selections; no second transition line |
+| S5 | `W=8`, `X-Conversation-Id` pinned to D1, then D1 made the most pressured | keyed requests stay on D1 (`path="hint"`); unkeyed avoid it (`path="score_kv"`); one `[PD_DEC]` "fresh on all candidates again" line |
+| S6 | `W=8`, D1 mock killed (connect refused) | 12/12 answered 200 by another decode; `[PD_DECODE_CONNECT]` retry lines appear; the counters over the drive are printed, not asserted |
+| S7 | `W=8`, usage family omitted on all decodes (TRT-LLM-like) | unknown, not 0 %: counts equal S1; `kv_fill` == selections |
+| S8 | `W=8`, SGLang family (`token_usage`) 0.92 / 0.40 / 0.40 | same as S2, counters included |
+| S9 | `W=8`, env changed in a side process, no restart | no effect (documented getenv-once); still `path="score_kv"` |
 
-The PR-3 counters (`loxilb_ai_pd_decode_selected_total{path}`, `…_kv_fill_total`) are
-asserted by that PR's re-run, not here.
+S1 also asserts the W=0 side of the counters: every selection `path="score"`, nothing on
+`hint`/`score_kv`, `kv_fill` 0, and the `kv_fill` family already present (seeded at zero for
+the model, so the first fill is visible to `increase()`).
+
+## How the counters are read
+
+`loxilb_ai_pd_decode_selected_total{path}` moves once per decode **selection**: here that is
+the admission pick of every request. The vLLM connect-time path (`pd_connect_decode`)
+re-reads the admission choice and records nothing, so a drive of N sequential requests moves
+the family by exactly N, and the S6 fallback re-picks do not show up in it.
+`loxilb_ai_pd_decode_kv_fill_total` counts the scored selections (W>0) in which at least one
+candidate had no fresh reading and took the neutral fill. Both are summed over every model
+label (`series_sum`). The `[PD_DEC]` transition lines are counted in `/var/log/loxilbdp.log`
+inside `llb1`.
 
 ## Mock admin knobs this scenario added to `../vllm-pd-disagg/mock_vllm.py`
 

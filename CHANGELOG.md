@@ -20,6 +20,23 @@ binary behaves exactly like upstream loxilb.
 
 ### Added
 
+- **P/D decode selection is observable: `loxilb_ai_pd_decode_selected_total{path,model}`
+  and `loxilb_ai_pd_decode_kv_fill_total{model}`** (OWNER REVIEW PENDING). Every
+  decode selection — at admission, at the mid-cycle prefill-connect failover
+  and at the SGLang pair retry — counts once under `path` `hint` (the
+  session-pinned decode kept), `score` (the min-load pick; every scored pick
+  with `LLB_PD_DECODE_KV_WEIGHT` unset) or `score_kv` (the weight is set and
+  the KV-pressure term changed the set of best candidates, so the pick is one
+  the plain scorer would not have made). The vLLM connect-time re-read of the
+  admission choice records nothing. `kv_fill` counts the scored selections
+  under the weight in which at least one candidate's KV reading was unknown
+  or stale and took the neutral fill: the indicator that the signal the
+  operator switched on is missing. Both families are seeded at zero per model
+  label, so a first event is visible to `increase()`. With the weight set the
+  data-plane log carries `[PD_DEC]` per-candidate lines at debug level and one
+  info line on each fill/recovery transition of a pool. Documented in
+  docs/load-balancing/10 §3.6 and 11. (loxilb-ebpf recorder and log; gateway
+  registration.)
 - **`GET /netlox/v1/version` lists the gateway-only capabilities of the build
   under `features`** (`api_key_auth`, `jwt_auth_profile`), as stable tokens a
   controller checks before it sends the matching rule fields. The REST layer

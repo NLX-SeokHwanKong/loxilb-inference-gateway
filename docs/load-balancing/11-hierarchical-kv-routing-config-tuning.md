@@ -301,6 +301,9 @@ Inventory snapshot: `GET /netlox/v1/config/ai/kv/inventory`.
 `loxilb_ai_pd_requests_total` · `loxilb_ai_pd_prefill_duration_seconds` ·
 `loxilb_ai_pd_decode_ttft_seconds` · `loxilb_ai_pd_decode_duration_seconds` ·
 `loxilb_ai_pd_prefill_fallback_total` · `loxilb_ai_pd_session_hits_total` ·
+`loxilb_ai_pd_decode_selected_total{path}` (`hint` / `score` / `score_kv`, one per decode
+selection) · `loxilb_ai_pd_decode_kv_fill_total` (scored selections under
+`LLB_PD_DECODE_KV_WEIGHT` where a candidate's KV reading was unknown or stale; doc 10 §3.6) ·
 `loxilb_pd_admission_shed_total` / `loxilb_pd_admission_queued_total`.
 
 **Failover & endpoint death:**

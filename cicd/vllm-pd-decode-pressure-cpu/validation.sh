@@ -96,6 +96,33 @@ series_sum() {
 scrape_ok()   { series_sum loxilb_ai_worker_scrape_total result=ok; }
 scrape_err()  { series_sum loxilb_ai_worker_scrape_total result=http_error; }
 
+# ── the selection counters (PR-3) ─────────────────────────────────────────────────────
+# loxilb_ai_pd_decode_selected_total{path} is incremented once per decode SELECTION — at
+# admission for every request here (hint = the session-pinned decode kept, score = min-load
+# pick, score_kv = the kv term changed the set of best candidates). The vLLM connect-time
+# re-read of the admission choice (pd_connect_decode) records nothing, so a drive of N
+# sequential requests moves the family by exactly N. loxilb_ai_pd_decode_kv_fill_total
+# counts the scored selections (W>0) in which a candidate had no fresh reading and took the
+# neutral fill. Both are read as sums over every model label.
+dec_sel() { series_sum loxilb_ai_pd_decode_selected_total path="$1"; }   # hint|score|score_kv
+kv_fill() { series_sum loxilb_ai_pd_decode_kv_fill_total; }
+snap()    { echo "$(dec_sel hint) $(dec_sel score) $(dec_sel score_kv) $(kv_fill)"; }
+# delta <snap-before> <snap-after> -> "hint=<d> score=<d> score_kv=<d> kv_fill=<d>"
+delta() {
+    awk -v a="$1" -v b="$2" 'BEGIN { split(a, x, " "); split(b, y, " ");
+        printf "hint=%d score=%d score_kv=%d kv_fill=%d", y[1]-x[1], y[2]-x[2], y[3]-x[3], y[4]-x[4] }'
+}
+dget() { echo "$1" | tr ' ' '\n' | sed -n "s/^$2=//p"; }    # dget "<delta>" <name>
+# counters_are "<delta>" <hint> <score> <score_kv> <kv_fill> -> 1 when every delta matches
+counters_are() {
+    [[ "$(dget "$1" hint)" == "$2" && "$(dget "$1" score)" == "$3" &&
+       "$(dget "$1" score_kv)" == "$4" && "$(dget "$1" kv_fill)" == "$5" ]] && echo 1 || echo 0
+}
+# The one-shot [PD_DEC] transition lines in the data-plane log: one when a pool first has to
+# neutralise a candidate's kv term, one when every candidate reports fresh again.
+fill_edges()    { docker exec llb1 grep -c 'PD_DEC\] .*neutral fill' /var/log/loxilbdp.log 2>/dev/null || echo 0; }
+recover_edges() { docker exec llb1 grep -c 'PD_DEC\] .*fresh on all' /var/log/loxilbdp.log 2>/dev/null || echo 0; }
+
 # running_env <VAR> — the knob off the RUNNING container, never off the builder's intent.
 running_env() {
     docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' llb1 2>/dev/null \
@@ -248,8 +275,14 @@ set_mode vllm; pressure_default
 assert "L1: scraper delivered samples after metrics-mode-vllm" "$(wait_scrape 3)"
 
 echo "--- S1: W=0, mixed kv usage (D1 92 / D2 40 / D3 40): the shipped min-load pick"
+c0=$(snap)
 drive s1 "${N_REQ}"
+c1=$(snap); d=$(delta "$c0" "$c1")
 S1_SEQ="${CFGDIR}/.seq-s1"; cp "${CFGDIR}/.dp-s1" "$S1_SEQ"   # survives the W=8 lifecycle for S4/S7
+assert "S1: counters: ${N_REQ} selections on path=score, none on hint/score_kv, no kv_fill (${d})" \
+    "$(counters_are "$d" 0 "$N_REQ" 0 0)"
+assert "S1: kv_fill family is seeded for the model and reads 0 under W=0 (MON-04)" \
+    "$([[ "$(llb_curl "${METRICS}" | grep -c '^loxilb_ai_pd_decode_kv_fill_total{')" -ge 1 && "$(kv_fill)" == 0 ]] && echo 1 || echo 0)"
 assert "S1: ${N_REQ}/${N_REQ} requests 200" "$([[ "$(oks "${CFGDIR}/.dp-s1")" == "$N_REQ" ]] && echo 1 || echo 0)"
 assert "S1: D1 share is a third despite 92 % usage (W=0 ignores the kv term; got $(cnt "${CFGDIR}/.dp-s1" D1))" \
     "$(within_third "$(cnt "${CFGDIR}/.dp-s1" D1)")"
@@ -272,52 +305,75 @@ lifecycle "${KV_W_PRESSURE}"
 echo "--- S2: W=8, D1 92 / D2 40 / D3 40, equal conns -> D1 share ~0"
 set_mode vllm; pressure_default
 assert "S2: scraper delivered samples" "$(wait_scrape 3)"
+c0=$(snap)
 drive s2 "${N_REQ}"
+c1=$(snap); d=$(delta "$c0" "$c1")
 assert "S2: ${N_REQ}/${N_REQ} requests 200" "$([[ "$(oks "${CFGDIR}/.dp-s2")" == "$N_REQ" ]] && echo 1 || echo 0)"
 assert "S2: D1 (92 %) received 0 of ${N_REQ} (got $(cnt "${CFGDIR}/.dp-s2" D1))" \
     "$([[ "$(cnt "${CFGDIR}/.dp-s2" D1)" == 0 ]] && echo 1 || echo 0)"
 d2=$(cnt "${CFGDIR}/.dp-s2" D2); d3=$(cnt "${CFGDIR}/.dp-s2" D3)
 assert "S2: D2 and D3 (40 % each) split the rest by RR (|${d2}-${d3}| <= 2)" \
     "$([[ $(( d2 > d3 ? d2 - d3 : d3 - d2 )) -le 2 ]] && echo 1 || echo 0)"
-echo "  S2: decode_selected_total{path=\"score_kv\"} is PR-3's counter — asserted there, not here"
+assert "S2: counters: every selection is path=score_kv (the kv term dropped D1 from the best set), no kv_fill (${d})" \
+    "$(counters_are "$d" 0 0 "$N_REQ" 0)"
 
 echo "--- S3: W=8, D1 metrics absent -> D1 neutralised to the fleet mean, still receives traffic"
 set_mode absent "$D1"
 e0=$(scrape_err); sleep "${STALE_WAIT}"; e1=$(scrape_err)
 assert "S3: D1 scrapes now fail (http_error ${e0} -> ${e1})" "$([[ $(( e1 - e0 )) -ge 2 ]] && echo 1 || echo 0)"
+c0=$(snap); fe0=$(fill_edges)
 drive s3 "${N_REQ}"
+c1=$(snap); d=$(delta "$c0" "$c1"); fe1=$(fill_edges)
 assert "S3: ${N_REQ}/${N_REQ} requests 200 (zero loss)" "$([[ "$(oks "${CFGDIR}/.dp-s3")" == "$N_REQ" ]] && echo 1 || echo 0)"
 assert "S3: D1 (unknown) is on par with D2/D3: a third of the picks (got $(cnt "${CFGDIR}/.dp-s3" D1), want ${third_lo}..${third_hi})" \
     "$(within_third "$(cnt "${CFGDIR}/.dp-s3" D1)")"
 assert "S3: distribution is a pure 3-cycle (fill == the others' 40 -> ties -> RR)" "$(pure_cycle "${CFGDIR}/.dp-s3")"
-echo "  S3: kv_fill_total is PR-3's counter — asserted there, not here"
+assert "S3: counters: every selection took a fill (kv_fill == selections) and stayed path=score (${d})" \
+    "$(counters_are "$d" 0 "$N_REQ" 0 "$N_REQ")"
+assert "S3: one [PD_DEC] 'neutral fill in effect' line for the whole drive (one-shot transition; ${fe0} -> ${fe1})" \
+    "$([[ $(( fe1 - fe0 )) == 1 ]] && echo 1 || echo 0)"
 
 echo "--- S4: W=8, all decodes absent -> same distribution as S1"
 set_mode absent "$D2" "$D3"
 sleep "${STALE_WAIT}"
+c0=$(snap); fe0=$(fill_edges)
 drive s4 "${N_REQ}"
+c1=$(snap); d=$(delta "$c0" "$c1"); fe1=$(fill_edges)
 assert "S4: ${N_REQ}/${N_REQ} requests 200" "$([[ "$(oks "${CFGDIR}/.dp-s4")" == "$N_REQ" ]] && echo 1 || echo 0)"
 assert "S4: all-unknown == W=0: per-decode counts equal S1's ($(summary "$S1_SEQ") vs $(summary "${CFGDIR}/.dp-s4"))" \
     "$(same_counts "$S1_SEQ" "${CFGDIR}/.dp-s4")"
 assert "S4: distribution is a pure 3-cycle" "$(pure_cycle "${CFGDIR}/.dp-s4")"
+assert "S4: counters: kv_fill == selections, all path=score (${d})" "$(counters_are "$d" 0 "$N_REQ" 0 "$N_REQ")"
+assert "S4: no further 'neutral fill' line while the fill stays in effect (${fe0} -> ${fe1})" \
+    "$([[ "$fe1" == "$fe0" ]] && echo 1 || echo 0)"
 
 echo "--- S5: W=8, session key: the pinned decode is kept regardless of pressure"
 # Pin while the pressure is REVERSED (D1 is the cheapest), then flip it so the pinned EP is
 # the most pressured one: the hint must still win, and unkeyed requests must still avoid D1.
 set_mode vllm; pressure_reversed
 assert "S5: scraper delivered the reversed pressure" "$(wait_scrape 3)"
+re0=$(recover_edges)
+c0=$(snap)
 drive s5pin 1 -H 'X-Conversation-Id: pd-kv-s5'
+c1=$(snap); d=$(delta "$c0" "$c1")
 pinned=$(awk 'NR==1 { print $2 }' "${CFGDIR}/.dp-s5pin")
 assert "S5: the keyed request was pinned to the cheapest decode D1 (got ${pinned})" "$([[ "$pinned" == D1 ]] && echo 1 || echo 0)"
+assert "S5: counters: the first keyed request was a fresh pick, path=score_kv (${d})" "$(counters_are "$d" 0 0 1 0)"
 pressure_default
 assert "S5: scraper delivered the flipped pressure (D1 now 92 %)" "$(wait_scrape 3)"
+c0=$(snap)
 drive s5keyed 10 -H 'X-Conversation-Id: pd-kv-s5'
+c1=$(snap); dk=$(delta "$c0" "$c1")
 drive s5plain 10
+c2=$(snap); dp=$(delta "$c1" "$c2"); re1=$(recover_edges)
 assert "S5: 10/10 keyed requests stayed on the pinned D1 under pressure (got $(cnt "${CFGDIR}/.dp-s5keyed" D1))" \
     "$([[ "$(cnt "${CFGDIR}/.dp-s5keyed" D1)" == 10 ]] && echo 1 || echo 0)"
 assert "S5: 0/10 unkeyed requests reached D1 (got $(cnt "${CFGDIR}/.dp-s5plain" D1))" \
     "$([[ "$(cnt "${CFGDIR}/.dp-s5plain" D1)" == 0 ]] && echo 1 || echo 0)"
-echo "  S5: decode_selected_total{path=\"hint\"} is PR-3's counter — asserted there, not here"
+assert "S5: counters: the 10 keyed selections are path=hint and nothing else moved (${dk})" "$(counters_are "$dk" 10 0 0 0)"
+assert "S5: counters: the 10 unkeyed selections are path=score_kv (${dp})" "$(counters_are "$dp" 0 0 10 0)"
+assert "S5: one [PD_DEC] 'fresh on all candidates again' line once every decode reported (${re0} -> ${re1})" \
+    "$([[ $(( re1 - re0 )) == 1 ]] && echo 1 || echo 0)"
 
 echo "--- S6: W=8, D1 hard-down (connect refused) -> routed to another decode within 2 attempts"
 pressure_flat
@@ -325,8 +381,14 @@ assert "S6: scraper delivered the flat pressure (40/40/40)" "$(wait_scrape 3)"
 dc0=$(docker exec llb1 grep -c 'PD_DECODE_CONNECT' /var/log/loxilbdp.log 2>/dev/null); dc0=${dc0:-0}
 $dexec "$D1" pkill -f 'mock_vllm.py' >/dev/null 2>&1 || true
 sleep 1
+c0=$(snap)
 drive s6 12
+c1=$(snap); d=$(delta "$c0" "$c1")
 dc1=$(docker exec llb1 grep -c 'PD_DECODE_CONNECT' /var/log/loxilbdp.log 2>/dev/null); dc1=${dc1:-0}
+# Observation only: the connect-time fallback is not a selection, so the family moves by the
+# 12 admissions whatever the retries did (score while D1 is still admitted, then score once
+# the probe has demoted it; the fallback's re-pick records nothing).
+echo "  S6: counters over the 12 requests: ${d} (observation; the fallback re-pick is not a selection)"
 assert "S6: 12/12 requests 200 with D1 refusing connections" "$([[ "$(oks "${CFGDIR}/.dp-s6")" == 12 ]] && echo 1 || echo 0)"
 assert "S6: 0/12 answers came from D1 (got $(cnt "${CFGDIR}/.dp-s6" D1))" "$([[ "$(cnt "${CFGDIR}/.dp-s6" D1)" == 0 ]] && echo 1 || echo 0)"
 # Observation, not an assert (product behaviour outside this campaign's file list, F-5):
@@ -350,21 +412,27 @@ echo "--- S7: W=8, usage family omitted on every decode (TRT-LLM-like) -> all un
 set_mode vllm; omit_usage "$D1"; omit_usage "$D2"; omit_usage "$D3"
 assert "S7: scraper delivered samples without the usage family" "$(wait_scrape 3)"
 sleep "${SCRAPE_WAIT}"   # a second period: every decode has been re-sampled as "absent family" at least once
+c0=$(snap)
 drive s7 "${N_REQ}"
+c1=$(snap); d=$(delta "$c0" "$c1")
 assert "S7: ${N_REQ}/${N_REQ} requests 200" "$([[ "$(oks "${CFGDIR}/.dp-s7")" == "$N_REQ" ]] && echo 1 || echo 0)"
 assert "S7: omitted family reads as unknown, not 0 %: per-decode counts equal S1's ($(summary "${CFGDIR}/.dp-s7"))" \
     "$(same_counts "$S1_SEQ" "${CFGDIR}/.dp-s7")"
 assert "S7: distribution is a pure 3-cycle" "$(pure_cycle "${CFGDIR}/.dp-s7")"
+assert "S7: counters: kv_fill == selections, all path=score (${d})" "$(counters_are "$d" 0 "$N_REQ" 0 "$N_REQ")"
 
 echo "--- S8: SGLang family (token_usage) on every decode, D1 92 / D2 40 / D3 40 -> same as S2"
 set_mode sglang "$D1" "$D2" "$D3"; pressure_default
 assert "S8: scraper delivered the SGLang samples" "$(wait_scrape 3)"
+c0=$(snap)
 drive s8 "${N_REQ}"
+c1=$(snap); d=$(delta "$c0" "$c1")
 assert "S8: ${N_REQ}/${N_REQ} requests 200" "$([[ "$(oks "${CFGDIR}/.dp-s8")" == "$N_REQ" ]] && echo 1 || echo 0)"
 assert "S8: D1 (token_usage 0.92) received 0 of ${N_REQ} (got $(cnt "${CFGDIR}/.dp-s8" D1))" \
     "$([[ "$(cnt "${CFGDIR}/.dp-s8" D1)" == 0 ]] && echo 1 || echo 0)"
 d2=$(cnt "${CFGDIR}/.dp-s8" D2); d3=$(cnt "${CFGDIR}/.dp-s8" D3)
 assert "S8: D2 and D3 split the rest by RR (|${d2}-${d3}| <= 2)" "$([[ $(( d2 > d3 ? d2 - d3 : d3 - d2 )) -le 2 ]] && echo 1 || echo 0)"
+assert "S8: counters: every selection is path=score_kv, no kv_fill (${d})" "$(counters_are "$d" 0 0 "$N_REQ" 0)"
 
 echo "--- S9: getenv-once: an environment change without a restart has no effect"
 # The only way to change the knob is to recreate the container (documented in doc 11 §3).
@@ -373,9 +441,12 @@ echo "--- S9: getenv-once: an environment change without a restart has no effect
 docker exec -e LLB_PD_DECODE_KV_WEIGHT=0 llb1 sh -c 'echo "  (exec with LLB_PD_DECODE_KV_WEIGHT=$LLB_PD_DECODE_KV_WEIGHT in a side process)"'
 assert "S9: the running gateway still has LLB_PD_DECODE_KV_WEIGHT=${KV_W_PRESSURE} (got '$(running_env LLB_PD_DECODE_KV_WEIGHT)')" \
     "$([[ "$(running_env LLB_PD_DECODE_KV_WEIGHT)" == "$KV_W_PRESSURE" ]] && echo 1 || echo 0)"
+c0=$(snap)
 drive s9 "${N_REQ}"
+c1=$(snap); d=$(delta "$c0" "$c1")
 assert "S9: distribution unchanged by the env attempt: D1 still 0 of ${N_REQ} (got $(cnt "${CFGDIR}/.dp-s9" D1))" \
     "$([[ "$(cnt "${CFGDIR}/.dp-s9" D1)" == 0 ]] && echo 1 || echo 0)"
+assert "S9: counters: still path=score_kv for every selection (${d})" "$(counters_are "$d" 0 0 "$N_REQ" 0)"
 
 reset_mocks
 
