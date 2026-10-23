@@ -238,8 +238,9 @@ wait_done() {
 # ---- the band counter -----------------------------------------------------------
 metrics_raw() { $hexec tqh1 curl -s --max-time 8 "$API/metrics" 2>/dev/null; }
 # bt_snap <port>: one line of "key=value" for the service: series=<n of
-# loxilb_ai_fc_band_total series>, <band>.<outcome>=<v> for each, qw=<resumed
-# waits>, and d.<reason>=<v> for the gate decisions summed over its pools;
+# loxilb_ai_fc_band_total series>, <band>.<outcome>=<v> for each, qw=<queue-
+# wait histogram count: one sample per park that ended, however it ended>,
+# and d.<reason>=<v> for the gate decisions summed over its pools;
 # and rs=<HTTP/1.1 responses recorded as received by a client>, the
 # gateway-wide responses-by-status counter (it has no service label); rc, rd,
 # ra = loxilb_ai_requests_total completed, denied, aborted, and rac its
