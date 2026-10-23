@@ -838,6 +838,56 @@ function backend_tls_cli_preflight() {
   return 1
 }
 
+# bands_cli_preflight <container>
+# Returns 0 when the packaged loxicmd carries the priority-band surface of
+# loxicmd-inference-gateway #83 (create lb --fc-wake-policy and the objective
+# resource), so a scenario can drive the band knobs through the CLI; returns
+# 1 when the caller should skip that CLI half (auto/skip paths).
+# CLI_TESTS=skip forces the skip; CLI_TESTS=required makes a CLI without the
+# flags a failure (exit 1) instead of a skip.
+function bands_cli_preflight() {
+  local cont="${1:-llb1}"
+  local mode="${CLI_TESTS:-auto}"
+  if [[ "$mode" == "skip" ]]; then
+    echo "  Bands CLI preflight: CLI_TESTS=skip -> skipping CLI tests"
+    return 1
+  fi
+  if $dexec "$cont" loxicmd create lb --help 2>&1 | grep -q -- '--fc-wake-policy' \
+     && $dexec "$cont" loxicmd create objective --help >/dev/null 2>&1; then
+    echo "  Bands CLI preflight: loxicmd carries the band flags and the objective resource (CLI_TESTS=$mode) [OK]"
+    return 0
+  fi
+  if [[ "$mode" == "required" ]]; then
+    echo "  Bands CLI preflight: CLI_TESTS=required but loxicmd lacks --fc-wake-policy / create objective [FAIL]"
+    exit 1
+  fi
+  echo "  SKIP: loxicmd lacks --fc-wake-policy (image predates loxicmd #83); set CLI_TESTS=required to enforce"
+  return 1
+}
+
+# jwtauth_cli_preflight <container>
+# The same gate for the JWT auth profile resource of loxicmd-inference-gateway
+# #83 (create jwtauthprofile with its --priority-class cap); semantics as
+# bands_cli_preflight (CLI_TESTS=auto|required|skip).
+function jwtauth_cli_preflight() {
+  local cont="${1:-llb1}"
+  local mode="${CLI_TESTS:-auto}"
+  if [[ "$mode" == "skip" ]]; then
+    echo "  JWT profile CLI preflight: CLI_TESTS=skip -> skipping CLI tests"
+    return 1
+  fi
+  if $dexec "$cont" loxicmd create jwtauthprofile --help 2>&1 | grep -q -- '--priority-class'; then
+    echo "  JWT profile CLI preflight: loxicmd carries the jwtauthprofile resource (CLI_TESTS=$mode) [OK]"
+    return 0
+  fi
+  if [[ "$mode" == "required" ]]; then
+    echo "  JWT profile CLI preflight: CLI_TESTS=required but loxicmd lacks create jwtauthprofile --priority-class [FAIL]"
+    exit 1
+  fi
+  echo "  SKIP: loxicmd lacks create jwtauthprofile (image predates loxicmd #83); set CLI_TESTS=required to enforce"
+  return 1
+}
+
 #Arg1: host name
 #Arg2: --<proto>:<iport>:<oport>
 #Arg3: --endpoints:<ip>:<weight>,..
