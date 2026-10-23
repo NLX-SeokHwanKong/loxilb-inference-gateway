@@ -69,7 +69,11 @@ runs:
       shell: bash
     - run: docker run -u root --cap-add SYS_ADMIN --restart unless-stopped --privileged -dit -v /dev/log:/dev/log --name loxilb ghcr.io/loxilb-io/loxilb-inference-gateway:latest
       shell: bash
-    - run: pwd && ls && sudo -E env "PATH=$PATH" make docker-cp
+    # Built as the product image is (Dockerfile: EXTRA_CFLAGS="-DHAVE_SOCKOPS"):
+    # without the define a gateway started with --sockmapsupport aborts at
+    # init (llb_setup_kern_sockmap: "requires a build with -DHAVE_SOCKOPS"),
+    # which is how the tenant scheduling suite first failed here.
+    - run: pwd && ls && sudo -E env "PATH=$PATH" make docker-cp EXTRA_CFLAGS=-DHAVE_SOCKOPS
       shell: bash
     - run: docker exec -dit loxilb mkllb_bpffs
       shell: bash
