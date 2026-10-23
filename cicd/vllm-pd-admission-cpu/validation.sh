@@ -188,9 +188,22 @@ start_holders() {
     sleep 2   # let the last holder reach the backend and bank its active_conns
 }
 
+# A holder is a subshell running `sudo ip netns exec l3h1 curl`, so its PID is sudo's (or
+# the subshell's). Signalling that PID is not enough everywhere: jammy's sudo (1.9.9, the
+# ubuntu-22.04 runner) does not relay a signal sent from the command's own process group,
+# which is where this script's kill comes from, so the curl ran on until the gateway
+# answered it 504 at the prefill timeout, and the holders never left while hung. Newer
+# sudo relays it, which is why a 24.04 host does not show this. Signal the whole tree,
+# leaves first, so the curl itself gets the TERM.
+kill_tree() {
+    local child
+    for child in $(pgrep -P "$1" 2>/dev/null); do kill_tree "${child}"; done
+    kill "$1" >/dev/null 2>&1 || true
+}
+
 stop_holders() {
     local pid
-    for pid in ${HOLDER_PIDS}; do kill "${pid}" >/dev/null 2>&1 || true; done
+    for pid in ${HOLDER_PIDS}; do kill_tree "${pid}"; done
     wait 2>/dev/null || true
     HOLDER_PIDS=""
 }
@@ -267,6 +280,7 @@ body_file="${CFGDIR}/.adm-a-body"
 
 faults_on || { echo "FATAL: could not put the prefill EPs behind hanging backends"; exit 1; }
 start_holders
+probe_pids=""
 
 # Probe 1 keeps its BODY as well as its code. The shed receipt leaves through the RESPONSE
 # path and never traverses the metrics pipeline, so counter and receipt agreeing is two
@@ -280,8 +294,14 @@ for i in $(seq 1 ${PROBE_N}); do
         -H 'Content-Type: application/json' \
         -d "{\"model\":\"mock\",\"prompt\":\"probe-a-${i}\",\"max_tokens\":8}" \
         >> "${probe_codes}" 2>/dev/null ) &
+    probe_pids="${probe_pids} $!"
 done
-wait
+# Wait for the PROBES only. A bare `wait` also waits for the holders, which run in the
+# background of this same shell with a 120s budget: it then returns only when the gateway
+# answers them 504 at the rule's prefill timeout (~30s, #337), past the ~19s health
+# demotion, so the fault is held through the window described above and the holders end
+# completed/504 instead of leaving while their prefill hangs.
+wait ${probe_pids}
 
 arm_down
 sleep "${SETTLE}"
@@ -413,6 +433,7 @@ park_rcs="${CFGDIR}/.adm-b-park-rcs"
 
 faults_on || { echo "FATAL: could not put the prefill EPs behind hanging backends"; exit 1; }
 start_holders
+probe_pids=""
 
 for i in $(seq 1 ${PROBE_N}); do
     ( $hexec l3h1 curl -s -o /dev/null --max-time 8 \
@@ -420,6 +441,7 @@ for i in $(seq 1 ${PROBE_N}); do
         -H 'Content-Type: application/json' \
         -d "{\"model\":\"mock\",\"prompt\":\"probe-b-park-${i}\",\"max_tokens\":8}" \
         >/dev/null 2>&1; echo "$?" >> "${park_rcs}" ) &
+    probe_pids="${probe_pids} $!"
 done
 
 # Let all six reach the park branch, then overflow while they are still holding their slots.
@@ -436,7 +458,9 @@ ov_code=$($hexec l3h1 curl -s -o /dev/null --max-time 10 -w '%{http_code}' \
     -H 'Content-Type: application/json' \
     -d '{"model":"mock","prompt":"probe-b-overflow2","max_tokens":8}' 2>/dev/null)
 
-wait
+# The probes only, as in phase A: the holders must still be in flight when arm_down lets
+# them go, or B-left counts PROBE_N where it wants PROBE_N + HOLD_N.
+wait ${probe_pids}
 arm_down
 sleep "${SETTLE}"
 
