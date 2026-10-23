@@ -373,7 +373,7 @@ var (
 	proxyHttpResponsesTotal = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Name: "loxilb_proxy_http_responses_total",
-			Help: "Total HTTP/1.1 responses clients received: backend replies and the gateway's own answers (refusals, outages). Use rate() for RPS calculation.",
+			Help: "Total HTTP responses clients received, HTTP/1.1 and HTTP/2 alike: backend replies and the gateway's own answers (refusals, outages). Use rate() for RPS calculation.",
 		},
 	)
 
@@ -381,7 +381,7 @@ var (
 	proxyHttpResponsesByStatus = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "loxilb_proxy_http_responses_by_status_total",
-			Help: "Total HTTP/1.1 responses clients received by status code class (2xx, 3xx, 4xx, 5xx): backend replies and the gateway's own answers (refusals, outages).",
+			Help: "Total HTTP responses clients received by status code class (2xx, 3xx, 4xx, 5xx), HTTP/1.1 and HTTP/2 alike: backend replies and the gateway's own answers (refusals, outages).",
 		},
 		[]string{"status_class"},
 	)

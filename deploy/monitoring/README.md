@@ -232,7 +232,7 @@ same requests from another angle, so adding it to the request total (or to its
 
 | Family | What it counts | Overlap |
 |---|---|---|
-| `loxilb_proxy_http_responses_by_status_total` | every HTTP/1.1 response the client received, by class: backend replies and the gateway's own answers alike (HTTP/2 not included) | every HTTP/1.1 request in `requests_total` that got a status, any outcome |
+| `loxilb_proxy_http_responses_by_status_total` | every HTTP response the client received, by class, HTTP/1.1 and HTTP/2 alike: backend replies and the gateway's own answers | every request in `requests_total` that got a status, any outcome |
 | `loxilb_ai_netid_requests_total{outcome="denied"}` | refusals of a source with a network-identity binding | part of `{outcome="denied"}` |
 | `loxilb_ai_admission_decisions_total` (capacity_shed, queue_full, queue_timeout, drained, draining, no_healthy_capacity, tenant_share) | capacity-gate decisions | the capacity refusals in `{outcome="denied"}` |
 | `loxilb_ai_fc_band_total` | the capacity gate's decisions by priority band | `shed` and `expired` are part of `{outcome="denied"}`; `cancelled` is part of `{outcome="aborted",cause="client"}`; `admitted` requests end in any outcome |
@@ -241,8 +241,9 @@ same requests from another angle, so adding it to the request total (or to its
 | `loxilb_ai_pd_requests_total` | every P/D request's lifecycle, failures included; `{phase="aborted",status="client"}` is the client leaving at any stage, 1:1 with the P/D requests in `{outcome="aborted",cause="client"}`; `{phase="complete",status="success"}` is HTTP completion of the decode answer (its last chunk, its Content-Length satisfied, or its EOF on an unframed answer), not semantic completion — `finish_reason`, `usage` and the SSE `[DONE]` event are not required, a stream the engine ended cleanly without them is a success here, one the gateway ended is `decode/truncated`, one the engine broke `decode/error` | the P/D requests in `requests_total` |
 
 The TTFB histogram (`loxilb_proxy_http_ttfb_seconds`) samples backend replies
-only: a gateway's own answer reaches its first byte in microseconds and is not
-sampled. A backend's interim `1xx` (its own `100 Continue` when the gateway
+only, on HTTP/1.1 and HTTP/2 alike (an HTTP/2 stream samples at its backend's
+`:status`): a gateway's own answer reaches its first byte in microseconds and
+is not sampled. A backend's interim `1xx` (its own `100 Continue` when the gateway
 forwarded the client's `Expect`, a `103 Early Hints`) is not an answer either:
 neither the TTFB sample nor the responses-by-status class moves on it; the
 final status behind it is what both record. A `101` is the answer, it ends the
