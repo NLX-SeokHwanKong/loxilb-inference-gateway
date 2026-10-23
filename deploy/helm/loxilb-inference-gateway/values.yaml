@@ -4,13 +4,13 @@
 # and the Gateway API inference objects. Keycloak (JWT), SIEM (audit sink) and
 # PostgreSQL (API-key store) arrive as further subcharts in later phases.
 #
-# "EPP" in this chart is not a separate pod. kube-loxilb (integration/inference-gateway)
-# does not delegate to an Endpoint Picker: a pool with endpointPickerRef and
-# failureMode FailClose is refused (NotSupportedByParent), FailOpen is accepted
-# and the picker ignored. The endpoint-selection policy is the InferencePool,
-# its HTTPRoute and the loxilb.io/* annotations rendered from `inference` below;
-# the selector itself is loxilb's epselect (chwbl, gpuaware, wrr-hash), KV-exact
-# and prefill/decode logic.
+# Endpoint selection. By default loxilb selects endpoints itself: the policy is
+# the InferencePool, its HTTPRoute and the loxilb.io/* annotations rendered from
+# `inference` below, and the selector is loxilb's epselect (chwbl, gpuaware,
+# wrr-hash), KV-exact and prefill/decode logic. With
+# inference.externalEndpointPicker the gateway asks an Endpoint Picker (EPP)
+# over ext_proc instead; this chart points the pools at it but does not deploy
+# it (see there).
 
 global:
   # Pull secrets applied to every pod of every subchart.
@@ -25,6 +25,8 @@ loxilb-igw:
   # Everything else: charts/loxilb-igw/values.yaml (image, loxilb.* flags,
   # persistence, trust, mgmtService ...). Helm merges those defaults in here,
   # so the umbrella's hooks and tests see the effective values.
+  # The default image is the interim Endpoint Picker build (see the subchart
+  # values): nxinho/loxilb-epp:epp-cluster8. For main without the picker:
   # image:
   #   repository: ghcr.io/loxilb-io/loxilb-inference-gateway
   #   tag: latest
@@ -131,10 +133,21 @@ inference:
         name: llm-route                  # empty: <pool>-route
         hostnames: []
         matches: []                      # HTTPRouteMatch list; empty: "/" prefix
-  # Slot for the upstream GIE Endpoint Picker. loxilb-inference-gateway selects
-  # endpoints itself and has no ext-proc client, so this stays off: enabling it
-  # only adds endpointPickerRef (FailOpen) to every pool, which kube-loxilb
-  # accepts and ignores. FailClose would be refused.
+  # An Endpoint Picker (e.g. the llm-d Router EPP) for every pool. The chart
+  # does not deploy it: install it yourself so that a Service `name` serving
+  # ext_proc on `port` exists in each pool's namespace. Enabled, every pool
+  # gets endpointPickerRef; kube-loxilb (feat/auth-annotation) resolves it to
+  # the Service's cluster IP and puts it on the rule, and the gateway asks the
+  # picker which pod serves each request.
+  #   FailOpen   no picker reachable: loxilb's own selection (epselect) serves.
+  #   FailClose  no picker reachable: 503 epp_unavailable, nothing reaches the
+  #              model servers; also while the Service does not exist.
+  # Only a gateway listing "epp" in /version features calls the picker (the
+  # default image does). On any other, kube-loxilb sends a FailOpen rule without
+  # the picker and refuses a FailClose one (EndpointPickerUnsupported).
+  # Per-pool `annotations` tune the call: loxilb.io/epp-timeout-ms (default
+  # 3000) and loxilb.io/epp-plaintext: "true" for a picker without TLS. A pool
+  # with a picker cannot also set loxilb.io/pd-disagg.
   externalEndpointPicker:
     enabled: false
     name: ""

@@ -4,7 +4,8 @@
 {{- $label := printf "inference.pools[%d]%s" $i (ternary (printf " (%s)" ($p.name | default "" | toString)) "" (not (empty $p.name))) }}
 ---
 # InferencePool {{ $p.name }}: which pods, on which port. loxilb-inference-gateway
-# selects among them itself; the loxilb.io/* annotations are its policy.
+# selects among them itself, or asks the Endpoint Picker named below; the
+# loxilb.io/* annotations are its policy.
 apiVersion: inference.networking.k8s.io/v1
 kind: InferencePool
 metadata:
@@ -23,8 +24,8 @@ spec:
   targetPorts:
     - number: {{ required (printf "%s.targetPort is required" $label) $p.targetPort }}
   {{- if $epp.enabled }}
-  # loxilb does not delegate to this picker: kube-loxilb accepts FailOpen and
-  # ignores it, and refuses FailClose (NotSupportedByParent).
+  # Not deployed by this chart. kube-loxilb resolves the Service to its cluster
+  # IP for the gateway, which needs "epp" in /version features to call it.
   endpointPickerRef:
     name: {{ required "inference.externalEndpointPicker.name is required when it is enabled" $epp.name }}
     {{- with $epp.port }}
