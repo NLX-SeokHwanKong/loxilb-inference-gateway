@@ -30,6 +30,7 @@ X15 implemented more evictions in one second than the evicted list holds (16): e
 X16 implemented an evicted keep-alive client keeps its connection: 429 admission_shed with keep-alive, the queue-full 429's headers, and its next request on the same connection is answered 200
 X11 implemented a waiter is not idle: 504 at its queue window, never a reset at the idle bound; a client that leaves frees its place
 X17 implemented an escaped JSON spelling of service_tier is the literal one: the key and the value escaped each lower the class like the literal, every spelling reaches the backend as null, and a nested escaped key is neither read nor touched
+X18 implemented a client-supplied engine priority does not leave the gateway: X-Vllm-Priority is stripped on H1 and H2, a top-level body priority (the escaped spelling too) is renamed in place to a key no engine reads, a nested one reaches the backend as sent, and one rate-limited info line per service names the source
 P1 implemented every class admitted below the ceiling, no added queueing
 P2 implemented a late critical request is admitted before older standard waiters
 P3 implemented sheddable at the ceiling: 429 admission_shed, no receipt; with fc_shed_queue it waits
@@ -422,6 +423,59 @@ chk X17 "nested: admitted on the tenant's class" "200 standard" "$(awk '{print $
 chk X17 "nested: no top-level service_tier reached the backend" absent "$(cl_seen x17nest service_tier)"
 chk X17 "no hint: the tenant's class, nothing to null" "200 standard absent" "$(awk '{print $1}' "$S3"/x17none-1.code) $(tr -d '\r' < "$S3"/x17none-1.hdr | sed -n 's/^X-Loxilb-Admission-Class: //p') $(cl_seen x17none service_tier)"
 sched_cfg 8 16 30000 "$SCHED_RESET"', "fc_expose_headers": "inherit"' || fail X17 "pool shape back"
+
+echo "=== X18: a client-supplied engine priority does not leave the gateway"
+# vLLM orders admitted requests by X-Vllm-Priority, then by the body's
+# top-level priority (lower runs earlier); SGLang by the body field. The
+# band decides the order: where the class stage runs the header is stripped
+# (H1 and H2) and the body key is renamed in place to _gw_prio, a key no
+# engine reads (not written as 0: SGLang ranks an absent priority lowest, a
+# 0 would be a mid rank). The escaped spelling is the key, read decoded as
+# in X17; a nested priority is no engine field and reaches the backend as
+# sent. The backend's parser says what it read; the gateway logs one info
+# line per service, rate-limited, whatever the number of clients.
+sched_cfg 8 16 30000 "$SCHED_RESET"', "fc_expose_headers": "on"' || fail X18 "pool shape"
+X18B='{"model":"'"$MODEL"'","messages":[{"role":"user","content":"x18"}],"max_tokens":4'
+X18L0=$(gw_log | grep -c "a client-supplied engine priority")
+cl_body $PORT_SCHED t-a x18body "$S3" "$X18B"',"priority":-100}'
+CL_HDR='X-Vllm-Priority: -100' cl_body $PORT_SCHED t-a x18hdr "$S3" "$X18B"'}'
+CL_HDR='x-vllm-priority: -7' cl_body $PORT_SCHED t-a x18both "$S3" "$X18B"',"priority":-100}'
+cl_body $PORT_SCHED t-a x18nest "$S3" "$X18B"',"tools":[{"priority":-100}]}'
+cl_body $PORT_SCHED t-a x18none "$S3" "$X18B"'}'
+for a in body hdr both nest none; do
+  chk X18 "$a: admitted on the tenant's class" "200 standard" "$(awk '{print $1}' "$S3"/x18$a-1.code) $(tr -d '\r' < "$S3"/x18$a-1.hdr | sed -n 's/^X-Loxilb-Admission-Class: //p')"
+  chk X18 "$a: the backend's parser read no top-level priority" absent "$(cl_seen x18$a priority)"
+  chk X18 "$a: and received no X-Vllm-Priority" absent "$(cl_seen_hdr x18$a x-vllm-priority)"
+done
+chk X18 "body: the value rides under the renamed key" "-100" "$(cl_seen x18body _gw_prio)"
+chk X18 "both: the escaped spelling is renamed too" "-100" "$(cl_seen x18both _gw_prio)"
+chk X18 "hdr, nest, none: no key was invented" "absent absent absent" "$(cl_seen x18hdr _gw_prio) $(cl_seen x18nest _gw_prio) $(cl_seen x18none _gw_prio)"
+chk X18 "nest: the nested field reached the backend as sent" '[{"priority":-100}]' "$(cl_seen x18nest tools)"
+# What an engine does with the renamed key, by its own policy on a top-level
+# field it does not know (the mock answers as the engine named, from the
+# engines' request classes): vLLM allows extra fields, SGLang ignores them,
+# TensorRT-LLM refuses them, as it refused priority before the rename.
+CL_HDR='X-Test-Engine: vllm' cl_body $PORT_SCHED t-a x18vllm "$S3" "$X18B"',"priority":-100}'
+CL_HDR='X-Test-Engine: sglang' cl_body $PORT_SCHED t-a x18sgl "$S3" "$X18B"',"priority":-100}'
+CL_HDR='X-Test-Engine: trtllm' cl_body $PORT_SCHED t-a x18trt "$S3" "$X18B"',"priority":-100}'
+chk X18 "vllm: _gw_prio is an extra field it allows: answered 200" "200 -100" "$(awk '{print $1}' "$S3"/x18vllm-1.code) $(cl_seen x18vllm _gw_prio)"
+chk X18 "sglang: an extra field it ignores: answered 200" "200 -100" "$(awk '{print $1}' "$S3"/x18sgl-1.code) $(cl_seen x18sgl _gw_prio)"
+chk X18 "trtllm: an unknown field is refused, as priority was" 400 "$(awk '{print $1}' "$S3"/x18trt-1.code)"
+has X18 "trtllm: naming the renamed key" "_gw_prio" "$(cat "$S3"/x18trt-1.body)"
+sleep 1
+chk X18 "six neutralised on one service within 10 s: one info line" 1 "$(( $(gw_log | grep -c "a client-supplied engine priority") - X18L0 ))"
+has X18 "naming the service and the source" "X-Vllm-Priority header" "$(gw_log | grep "a client-supplied engine priority" | tail -1)"
+# Over h2c (another service, so its own line): the header and the body key
+# on one stream, read back from whichever h2c backend served it.
+h2run t-a --streams 1 --nonce-prefix x18h2 --hdr 'x-vllm-priority: -100' --body-extra '{"priority":-100}' > "$S3/x18h2.out" 2>&1
+chk X18 "h2: the stream was answered" '{"200":1}' "$(jq -c 'select(.summary) | .summary' "$S3/x18h2.out")"
+X18P=$(for p in 9090 9091; do $hexec tqep1 curl --http2-prior-knowledge -s -m 3 "http://127.0.0.1:$p/__body/x18h2-0" | jq -r --arg p $p 'select(.body | length > 0) | $p'; done | head -1)
+chk X18 "h2: the stream reached an h2c backend" yes "$([ -n "$X18P" ] && echo yes || echo no)"
+chk X18 "h2: its parser read no priority, the value under the renamed key" "absent -100" "$($hexec tqep1 curl --http2-prior-knowledge -s -m 3 "http://127.0.0.1:${X18P:-9090}/__body/x18h2-0" | jq -r '.body | "\(.priority) \(._gw_prio)"')"
+chk X18 "h2: and received no x-vllm-priority" absent "$($hexec tqep1 curl --http2-prior-knowledge -s -m 3 "http://127.0.0.1:${X18P:-9090}/__headers/x18h2-0" | jq -r '.headers["x-vllm-priority"] // "absent"')"
+sleep 1
+chk X18 "h2: one more line, its service's" 2 "$(( $(gw_log | grep -c "a client-supplied engine priority") - X18L0 ))"
+sched_cfg 8 16 30000 "$SCHED_RESET"', "fc_expose_headers": "inherit"' || fail X18 "pool shape back"
 
 echo "=== X3: a client that leaves while running"
 sched_cfg 2 4 10000 "$SCHED_RESET" || fail X3 "pool shape"

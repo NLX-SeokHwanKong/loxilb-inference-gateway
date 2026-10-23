@@ -36,7 +36,10 @@ def main():
     ap.add_argument("--rst", type=int, default=0)
     ap.add_argument("--rst-after-s", type=float, default=0)
     ap.add_argument("--hdr", action="append", default=[], help="name: value, sent on every stream")
+    ap.add_argument("--body-extra", default="{}",
+                    help="a JSON object merged into every stream's body (top-level keys)")
     args = ap.parse_args()
+    body_extra = json.loads(args.body_extra)
 
     timeout = args.delay_ms / 1000.0 + 15.0
     sock = socket.create_connection((args.host, args.port), timeout=timeout)
@@ -49,8 +52,9 @@ def main():
     for i in range(args.streams):
         nonce = "%s-%d" % (args.nonce_prefix, i)
         sid = conn.get_next_available_stream_id()
-        body = json.dumps({"model": args.model, "max_tokens": 4,
-                           "messages": [{"role": "user", "content": nonce}]}).encode()
+        body = dict({"model": args.model, "max_tokens": 4,
+                     "messages": [{"role": "user", "content": nonce}]}, **body_extra)
+        body = json.dumps(body).encode()
         headers = [
             (":method", "POST"), (":path", "/v1/chat/completions"), (":scheme", "http"),
             (":authority", "%s:%d" % (args.host, args.port)),
