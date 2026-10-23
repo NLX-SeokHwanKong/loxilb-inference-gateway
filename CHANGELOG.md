@@ -271,6 +271,19 @@ binary behaves exactly like upstream loxilb.
 
 ### Changed
 
+- **P/D decode selection can weigh a decode endpoint's KV-cache pressure**
+  (OWNER REVIEW PENDING). With `LLB_PD_DECODE_KV_WEIGHT=W` set (default 0 =
+  off), the min-load decode score gains `kv_pct × W / 100`, `kv_pct` being the
+  endpoint's scraped `vllm:kv_cache_usage_perc` (legacy
+  `vllm:gpu_cache_usage_perc`, or `sglang:token_usage`), delivered by the same
+  `/metrics` sample as the queue depth and trusted for the same window. An
+  endpoint whose reading is unknown or stale takes the mean of the fresh
+  readings, so it is neither favoured nor penalised; a pool that reports no
+  usage family behaves exactly as before. A reported 0 % scores 0, not
+  unknown. The session-pinned decode hint, prefill selection, admission and
+  the reservation-token path are unchanged, and with the knob unset the
+  selector runs the shipped code. Documented in docs/load-balancing/10 §3.6,
+  11 §3.2 and 23. (loxilb-ebpf field, bridge and score; gateway scraper sink.)
 - **Request-body keys and the `service_tier` value are compared decoded;
   escaped spellings of `service_tier`, `model` and `user` are read like their
   literal spellings.** An escaped model name is now matched by

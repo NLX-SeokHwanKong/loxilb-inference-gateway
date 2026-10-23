@@ -230,6 +230,17 @@ EP: (1) the Tier-0 session-pinned decode hint if valid (role 2, healthy, CB clos
 counter (`pd_decode_rr`). Decode EPs are **never** KV-selection candidates — they publish no KV
 events and hold no scored inventory.
 
+**KV pressure in the min-load score (opt-in).** With `LLB_PD_DECODE_KV_WEIGHT=W` set (default
+0 = off, see doc 11 §3.2), step (2) also reads each decode EP's scraped KV-cache usage
+(`vllm:kv_cache_usage_perc`, legacy `vllm:gpu_cache_usage_perc`, or `sglang:token_usage`,
+delivered by the same `/metrics` sample as the queue depth) and adds `kv_pct × W / 100` to the
+EP's score. `W` is therefore "how many in-flight requests a decode EP at 100 % KV usage is worth".
+An EP whose reading is unknown (no usage family on its `/metrics`, or never scraped) or stale (the
+queue-depth freshness window, doc 23 "Scraped queue depth") gets the mean of the fresh readings in
+the candidate set, so it is neither favoured nor penalised; when no candidate reports, the term is
+0 for all and the pick is the plain min-load one. A reported 0 % counts as 0, not as unknown. The
+session-pinned hint in step (1) is unaffected. With `W=0` the shipped scorer runs unchanged.
+
 ### 3.7 The admission gate (default-OFF)
 
 Before any tier body runs, the admission gate can exclude prefill EPs at their in-flight cap and,
