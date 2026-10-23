@@ -34,6 +34,11 @@
 # recorded and the run continues, so one run reports every check; the exit
 # code is 1 when any check failed.
 
+# Exit codes: 0 every check passed; 1 a check failed (or CLI_TESTS=required
+# and the preflight refused the CLI); 3 the preflight skipped the half
+# (CLI_TESTS=auto on a loxicmd without the surface, or CLI_TESTS=skip): the
+# caller reports SKIPPED with the preflight's reason, never PASS.
+
 source ../common.sh
 if [ ! -f .state ]; then
   echo "  FATAL: .state missing — run ./config.sh first"; exit 1
@@ -57,7 +62,7 @@ echo "========================================="
 
 # ── Preflight: does the packaged loxicmd carry the profile resource? ─────────
 if ! jwtauth_cli_preflight $GW; then
-  exit 0
+  exit 3
 fi
 
 code=0

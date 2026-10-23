@@ -43,6 +43,11 @@
 # check is recorded and the run continues, so one run reports every check;
 # the exit code is 1 when any check failed.
 #
+# Exit codes: 0 every check passed; 1 a check failed (or CLI_TESTS=required
+# and the preflight refused the CLI); 3 the preflight skipped the half
+# (CLI_TESTS=auto on a loxicmd without the surface, or CLI_TESTS=skip): the
+# caller reports SKIPPED with the preflight's reason, never PASS.
+#
 # Evidence: $CLI_OUT (default ./artifacts-cli): the commands issued, every
 # read-back compared, the --bands table under load.
 
@@ -61,7 +66,7 @@ echo "========================================="
 
 # ── Preflight: does the packaged loxicmd carry the band flags? ───────────────
 if ! bands_cli_preflight $GW; then
-  exit 0
+  exit 3
 fi
 
 code=0

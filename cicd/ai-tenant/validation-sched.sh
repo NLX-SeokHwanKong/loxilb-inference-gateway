@@ -1094,8 +1094,15 @@ for c in P9 B6 B3a B3b B5 X4 X5 H3 B15 B15b; do case_$c; done
 # binding; gated by bands_cli_preflight (CLI_TESTS), folded into the verdict.
 echo ""
 echo "Running CLI validation (validate_cli.sh)..."
-bash validate_cli.sh
-cli_code=$?
+bash validate_cli.sh 2>&1 | tee "$OUT/validate_cli.log"
+cli_code=${PIPESTATUS[0]}
+# 0 pass, 3 skipped by its preflight (the reason is the preflight's line),
+# anything else a failure.
+case $cli_code in
+  0) cli_state=pass ;;
+  3) cli_state=skipped; cli_reason=$(grep -m1 -E 'SKIP: |CLI_TESTS=skip' "$OUT/validate_cli.log" | sed 's/^ *//') ;;
+  *) cli_state=fail ;;
+esac
 
 # ---- summary --------------------------------------------------------------------
 echo "=== summary"
@@ -1121,10 +1128,14 @@ for id in "${!RESULT[@]}"; do grep -q "^$id " <<< "$DECLARED" || { nmiss=$((nmis
 # The inventory and the verdict, in the log and in summary.txt beside the
 # results (the aggregation over several scenarios reads that file). The CLI
 # half's exit code is part of both.
-[ $cli_code -eq 0 ] && echo "  CLI half (validate_cli.sh) PASS" || echo "  CLI half (validate_cli.sh) FAIL"
-SUMMARY="declared=$nd pass=$np fail=$nf pending=$npend elsewhere=$nelse not_executed=$nmiss cli=$cli_code"
+case $cli_state in
+  pass)    echo "  CLI half (validate_cli.sh) PASS" ;;
+  skipped) echo "  CLI half (validate_cli.sh) SKIPPED: $cli_reason" ;;
+  *)       echo "  CLI half (validate_cli.sh) FAIL (exit $cli_code)" ;;
+esac
+SUMMARY="declared=$nd pass=$np fail=$nf pending=$npend elsewhere=$nelse not_executed=$nmiss cli=$cli_state"
 verdict() { echo "$SUMMARY" > "$OUT/summary.txt"; echo "$1" | tee -a "$OUT/summary.txt"; }
 echo "$SUMMARY"
 [ "${REQUIRE_ALL:-0}" == 1 ] && [ $npend -gt 0 ] && { verdict "SCENARIO-ai-tenant-sched [FAILED] $npend pending at REQUIRE_ALL"; exit 1; }
-[ $nf -eq 0 ] && [ $nmiss -eq 0 ] && [ $cli_code -eq 0 ] || { verdict "SCENARIO-ai-tenant-sched [FAILED]"; exit 1; }
+[ $nf -eq 0 ] && [ $nmiss -eq 0 ] && [ $cli_state != fail ] || { verdict "SCENARIO-ai-tenant-sched [FAILED]"; exit 1; }
 verdict "SCENARIO-ai-tenant-sched [OK]"

@@ -4033,14 +4033,18 @@ fi
 # (CLI_TESTS), folded into the verdict.
 echo ""
 echo "Running CLI validation (validate_cli.sh)..."
-bash validate_cli.sh
-cli_code=$?
-if [ $cli_code -ne 0 ]; then
-  echo "  [FAIL] CLI half (validate_cli.sh) exit $cli_code"
-  FAIL=$((FAIL + 1))
-else
-  echo "  [PASS] CLI half (validate_cli.sh)"
-fi
+cli_log=$(mktemp)
+bash validate_cli.sh 2>&1 | tee "$cli_log"
+cli_code=${PIPESTATUS[0]}
+# 0 pass, 3 skipped by its preflight (never counted as a pass), anything
+# else a failure.
+case $cli_code in
+  0) echo "  [PASS] CLI half (validate_cli.sh)" ;;
+  3) echo "  [SKIPPED] CLI half (validate_cli.sh): $(grep -m1 -E 'SKIP: |CLI_TESTS=skip' "$cli_log" | sed 's/^ *//')" ;;
+  *) echo "  [FAIL] CLI half (validate_cli.sh) exit $cli_code"
+     FAIL=$((FAIL + 1)) ;;
+esac
+rm -f "$cli_log"
 
 echo ""
 if [ $FAIL -ne 0 ]; then
