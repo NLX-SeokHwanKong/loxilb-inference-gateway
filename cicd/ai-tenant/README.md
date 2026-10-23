@@ -73,4 +73,4 @@ admission headers and `fc_effective`, never from timing alone.
 `rmconfig.sh` removes the topology and checks that nothing it started is
 left: containers, namespaces and helper processes.
 
-Not wired into a GitHub workflow (a release item).
+Wired into `.github/workflows/ai-gateway-sanity.yml` as the job `ai-tenant-sched` (REQUIRE_ALL=1, its artifacts kept on a failure); B4 stays with the KV scenario, run by hand.
