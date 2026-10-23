@@ -197,7 +197,12 @@ jobs:
       # on demand and reuses it afterwards). Keycloak and PostgreSQL are
       # locally built/pulled containers, so the job stays within this
       # workflow's no-external-service charter.
+      # The image this job builds carries the loxicmd pin, so the CLI half
+      # (validate_cli.sh, folded into validation.sh) is required rather than
+      # auto: a pin regression would otherwise skip it silently.
       - name: JWT bearer admission against a live Keycloak realm
+        env:
+          CLI_TESTS: required
         run: |
           cd cicd/ai-jwtauth/
           ./config.sh
@@ -345,9 +350,13 @@ jobs:
       - uses: ./.github/actions/ai-sanity-setup
         with:
           ghcr-token: ${{ secrets.GHCR_TOKEN || github.token }}
+      # CLI_TESTS=required for the same reason as the JWT job: the CLI half
+      # (validate_cli.sh, folded into validation-sched.sh) must run on the
+      # image this job built, never skip.
       - name: Tenant scheduling, bands and release accounting (PostgreSQL-backed, REQUIRE_ALL)
         env:
           REQUIRE_ALL: "1"
+          CLI_TESTS: required
         run: |
           cd cicd/ai-tenant/
           ./config.sh
