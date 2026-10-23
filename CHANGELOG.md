@@ -286,6 +286,38 @@ binary behaves exactly like upstream loxilb.
   and that `increase()` on a first event reads about 1.0 to 1.4 by
   extrapolation; the acceptance reading is the raw delta of 1 with a positive
   rate.
+- **A configured queue wait window is the enforced window.** A waiting
+  request's deadline (`fc_max_queue_wait_ms`, a band's `fc_band_wait_ms`, a
+  client's `x-llm-d-inference-ttl`) was swept by the health pass at most
+  once a second, so a 100 ms or 150 ms window ended between 775 and 1005 ms.
+  The deadlines are now met by a timer armed to the earliest pending
+  deadline across the pools, re-armed on every park and after every pass,
+  at 25 ms granularity; with no waiter anywhere it is not armed and no pass
+  runs. The pass reads one word per pool and enters only the queues whose
+  earliest deadline has passed, never a connection list; every expiry still
+  ends the wait through the one compare-and-swap that settles a queued
+  request, and answers as before (`504 admission_queue_timeout`, `429
+  admission_ttl_expired`). No API field changes: the values were always the
+  contract (QA 2026-10-23, QA-03).
+- **A client-supplied engine priority (`X-Vllm-Priority`, body `priority`)
+  is no longer forwarded on AI-gateway rules; the tenant band decides
+  order.** The band queue decides the admission order, but once admitted an
+  engine that reorders by its own priority field (vLLM reads the
+  `X-Vllm-Priority` header first, then the body's top-level `priority`;
+  SGLang reads the body field) let a client outrank the band from inside
+  the engine. Where the class stage runs, the header is stripped on HTTP/1.1
+  and HTTP/2, and a top-level body `priority` is renamed in place, at the
+  same length, to `_gw_prio`, a key no engine reads: every engine then sees
+  what it sees for a request that never carried the field (it is not
+  written as 0, which is vLLM's default but a mid rank on SGLang, where an
+  absent priority ranks lowest; an engine that refuses unknown fields
+  refused `priority` already). An operator who sees `_gw_prio` in an
+  engine's request log is looking at the gateway's rename of a client's
+  `priority`, not at a client field. A nested `priority` (inside
+  `messages` or a tool's arguments) is no engine field and is left as
+  sent. One info line per service, at most every 10 s, names the clients
+  that send one. Rules without an AI gateway are unchanged (QA 2026-10-23,
+  QA-01).
 - **A rule replace that differs from the stored rule only in `id` rebinds
   the id in place and answers success** instead of 409 `lbrule-exists`. The
   data plane is not touched and the rule keeps its connections; the new id

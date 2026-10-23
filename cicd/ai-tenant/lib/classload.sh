@@ -201,6 +201,29 @@ cl_fast() {
       "http://$VIP:$port/v1/chat/completions" > "$out/$nonce-1.code" 2>&1
     date +%s.%N > "$out/$nonce-1.end" ) &
 }
+# cl_body <port> <tenant> <nonce> <outdir> <json-body>: one request with the
+# body given (not held, answered at once), waited for; the answer's status,
+# headers and body land beside the others'. What the backend's parser read
+# from that body: cl_seen <nonce> <field>. CL_HDR="Name: value" adds one
+# request header; what the backend received of it: cl_seen_hdr <nonce> <name>.
+cl_body() {
+  local port=$1 tenant=$2 nonce=$3 out=$4 body=$5 key=""
+  [ "$tenant" != - ] && { source ./keys.env; eval key=\$KEY_${tenant//-/_}; }
+  mkdir -p "$out"
+  $hexec tqh1 curl -s -m "${CL_TIMEOUT:-60}" -D "$out/$nonce-1.hdr" -o "$out/$nonce-1.body" \
+      -w '%{http_code} %{time_total}\n' -H 'Content-Type: application/json' \
+      ${key:+-H "X-Api-Key: $key"} -H "X-Test-Nonce: $nonce" ${CL_HDR:+-H "$CL_HDR"} \
+      -d "$body" "http://$VIP:$port/v1/chat/completions" > "$out/$nonce-1.code" 2>&1
+}
+# cl_seen_hdr <nonce> <name>: the header's values as the backend received them
+# (a JSON list), "absent" when it received none under that name.
+cl_seen_hdr() { $hexec tqep1 curl -s -m 3 "http://127.0.0.1:8080/__headers/$1" | jq -r --arg n "$2" '.headers[$n] // "absent"'; }
+# cl_seen <nonce> <field>: the field as the backend's parser read it: its
+# value, "null" for a JSON null (a tier the gateway nulled), "absent" when the
+# key was not in the body (the mock says so itself), "no-receipt" when no
+# request with that nonce reached the backend. (jq's // reads null as
+# missing, which is the one distinction this readback exists for.)
+cl_seen() { $hexec tqep1 curl -s -m 3 "http://127.0.0.1:8080/__body/$1" | jq -r --arg f "$2" '.body as $b | if ($b | length) == 0 then "no-receipt" elif $b[$f] == null then "null" else ($b[$f] | tostring) end'; }
 # cl_order <outdir> <nonce-glob>: the nonces, in the order their answers ended
 cl_order() {
   local f

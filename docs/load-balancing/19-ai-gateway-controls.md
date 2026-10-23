@@ -371,9 +371,28 @@ more is such a request, never a 400 or a 5xx.
 A `service_tier` the gateway read is the gateway's: it is overwritten with `null`, in place and
 at the same length, before the body is forwarded, whether or not it was allowed and whichever
 hint decided. With the key more than once at the top level, the last one is the one read (as
-the engines' JSON parsers read it) and every one is nulled. **Known limit:** a key spelled
-with a JSON escape (`"service\u005ftier"`) is not read and not nulled; the gateway's class is
-not affected by it, but an engine that decodes the escape may still apply the tier.
+the engines' JSON parsers read it) and every one is nulled. Key and value are read decoded,
+as an engine's parser reads them: `"service\u005ftier"` is the key and `"priorit\u0079"` is
+`priority`, read and nulled like the literal spelling, so no spelling of the hint the gateway
+did not read reaches the engine. An escape that is not JSON (a bad `\u`, a lone surrogate)
+spells nothing and is not a hint; the body is not JSON then and the engine refuses it.
+
+A client-supplied engine priority does not leave the gateway either. vLLM orders admitted
+requests by its own priority (the `X-Vllm-Priority` header first, then the body's top-level
+`priority`; lower runs earlier) and SGLang by the body field, so a client could outrank the
+band from inside the engine. Where the class stage runs, the header is stripped on HTTP/1.1
+and HTTP/2, and a top-level body `priority` is renamed in place, at the same length, to
+`_gw_prio`, a key no engine reads (read decoded, like `service_tier`: `"priority"` is
+renamed too). It is renamed, not set to 0: 0 is vLLM's default but a mid rank on SGLang,
+where an absent priority ranks lowest, so every engine sees exactly what it sees for a request
+that never carried the field, and an engine that refuses unknown fields (TensorRT-LLM) refused
+`priority` already. The name is the gateway's signature: an operator who sees `_gw_prio` in an
+engine's request log is looking at a client's `priority` the gateway renamed on the way through,
+never at a field a client wrote. A nested `priority` (inside `messages` or a tool's arguments) is no engine
+field and is left as sent. The gateway logs one info line per service, at most every 10 s,
+naming the source (`X-Vllm-Priority header`, `body priority`), so the clients that send one
+are seen. Rules without an AI gateway are unchanged. Mapping a class to an engine priority is
+not done: the engine orders admitted requests as if none had asked.
 
 The records: a completion, and a refusal made after the class stage ran (an objective
 refusal, a rate limit, a quota, a capacity refusal), carry `priority_class`, `priority`,

@@ -263,7 +263,10 @@ own values.
   wait window is a cap inside the rule's window (`max_queue_wait_ms`), never
   above it; 0 = the rule's window. A value above `fc_max_queue_wait_ms` runs at
   `fc_max_queue_wait_ms`. A waiter whose window ends is answered
-  `504 admission_queue_timeout`. `fc_effective.bands.<band>.wait_ms` reads back
+  `504 admission_queue_timeout` at the window's end: the deadline is met by a
+  timer armed to the earliest pending deadline across the pools (25 ms
+  granularity), not by a periodic pass, so a 100 ms window is a 100 ms
+  window. `fc_effective.bands.<band>.wait_ms` reads back
   the configured value (0 is the rule's window); `queue_wait_ms` is the rule's.
 - **A queue share** (`fc_band_queue_pct`, percent). A band's queue share bounds
   that band's own occupancy of `max_queue_depth`, a ceiling and not a
@@ -297,8 +300,8 @@ forwarded as sent. With it on:
   request's wait; a longer one never extends it. A wait the client's TTL ended is
   answered `429 admission_ttl_expired`; a wait a window of the rule ended stays
   `504 admission_queue_timeout`. A value that is not a duration is ignored. The
-  deadline is checked about once a second, so a TTL is honoured to about a
-  second. The TTL applies to HTTP/1.1 requests; HTTP/2 streams never wait.
+  deadline is met by the queue's timer, so a TTL is honoured within 25 ms. The
+  TTL applies to HTTP/1.1 requests; HTTP/2 streams never wait.
 - **The forwarded identity is the gateway's.** The request the backend receives
   carries `x-llm-d-inference-objective` set to the class the request was
   admitted as (`critical`, `standard` or `sheddable`) and
