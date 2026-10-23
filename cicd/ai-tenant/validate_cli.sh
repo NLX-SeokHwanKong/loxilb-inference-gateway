@@ -25,9 +25,12 @@
 #   C2 P10 via CLI: all nine band knobs on the knob port, read back via REST,
 #      `get lb -o json`, `get lb -o wide` and `--bands`; a replace that omits
 #      them keeps them; the reset values clear them and read back absent.
-#   C3 S8 via CLI: the twelve refused combinations, by flags; the gateway's
-#      400 body as the CLI prints it, the rule unchanged, one exit code for
-#      all twelve.
+#   C3 S8 via CLI: the twelve refused combinations, by flags; every one
+#      refused with the rule unchanged. The nine the gateway refuses relay
+#      its 400 body verbatim under one exit code (6, CONTRACT_MISMATCH); the
+#      three loxicmd refuses itself (a value out of its range, a malformed
+#      triple: docs/COMMANDS.md keeps each value's own range on the CLI side)
+#      exit 2 (INVALID_ARGUMENT) naming the flag, and send nothing.
 #   C4 R1 under load: waiters in all three bands on the scheduling pool;
 #      `get lb --bands` shows the populated table, equal to fc_effective from
 #      REST; the table is kept in the evidence directory.
@@ -280,7 +283,7 @@ check_same "C2 --bands rows after the reset equal fc_effective" "$(rest_band_row
 # ── C3: S8 through the CLI — the twelve refused combinations ────────────────
 echo ""
 echo "C3: the twelve combinations the gateway refuses, by flags (S8)"
-S8_RCS=""
+S8_RCS=""; S8_GW=""; S8_CLI=""
 # s8_cli <label> <field named> <flags...>: refused (non-zero exit), the field
 # named in the CLI's output, the rule unchanged; what the CLI printed is shown
 # verbatim (a gateway 400 body is relayed as received).
@@ -296,6 +299,15 @@ s8_cli() {
   local rest; rest=$(grep -vcE '^(warning|Error):' "$T/stderr"); [ "$rest" -gt 0 ] && echo "      stderr: (+ $rest lines of usage text)"
   [ -s "$T/stdout" ] && sed 's/^/      stdout: /' "$T/stdout"
   S8_RCS="$S8_RCS $CLI_RC"
+  # Who refused: the gateway (its 400 relayed, after the advisory line) or
+  # the CLI itself (nothing sent: no advisory line either).
+  if grep -q '^Error: server returned 400' "$T/stderr"; then
+    S8_GW="$S8_GW $CLI_RC"
+    check_eq "C3 $label: the gateway's 400 reached the CLI after the advisory line (advisory lines)" 1 "$(grep -c '^warning: gateway does not advertise bands' "$T/stderr")"
+  else
+    S8_CLI="$S8_CLI $CLI_RC"
+    check_eq "C3 $label: refused by the CLI itself, nothing sent (advisory lines)" 0 "$(grep -c '^warning: gateway does not advertise' "$T/stderr")"
+  fi
   if [[ $CLI_RC -ne 0 ]]; then ok "C3 $label: refused (exit $CLI_RC)"; else bad "C3 $label: refused" "exit 0"; fi
   case "$CLI_STDERR$CLI_STDOUT" in *"$field"*|*"${field//_/-}"*) ok "C3 $label: names $field";; *) bad "C3 $label: names $field" "neither $field nor --${field//_/-} in the output";; esac
   check_same "C3 $label: the rule unchanged" "$before" "$(tq_rule_get $PORT_KNOB | jq -S -c 'del(.fc_effective)')"
@@ -312,7 +324,11 @@ s8_cli "the reserve and the other two floors past 100 (sheddable)" fc_critical_r
 s8_cli "queue shares past 100" fc_band_queue_pct --fc-band-queue-pct=50:40:20
 s8_cli "a malformed triple" fc_band_wait_ms --fc-band-wait-ms=100:200
 s8_cli "a wait past an hour" fc_band_wait_ms --fc-band-wait-ms=0:3600001:0
-check_eq "C3 one exit code for all twelve (codes:$S8_RCS)" 1 "$(echo $S8_RCS | tr ' ' '\n' | sort -u | wc -l | tr -d ' ')"
+echo "  C3 exit codes:$S8_RCS (gateway 400s:$S8_GW; refused by the CLI:$S8_CLI)"
+check_eq "C3 the gateway refused nine of the twelve" 9 "$(echo $S8_GW | wc -w | tr -d ' ')"
+check_eq "C3 one exit code for every gateway 400: 6 (CONTRACT_MISMATCH)" "6" "$(echo $S8_GW | tr ' ' '\n' | sort -u | tr '\n' ' ' | sed 's/ $//')"
+check_eq "C3 the CLI refused the other three itself" 3 "$(echo $S8_CLI | wc -w | tr -d ' ')"
+check_eq "C3 one exit code for every CLI refusal: 2 (INVALID_ARGUMENT)" "2" "$(echo $S8_CLI | tr ' ' '\n' | sort -u | tr '\n' ' ' | sed 's/ $//')"
 echo "  (and the cross-field refusal beside them)"
 s8_cli "shed queue with no queue" fc_shed_queue --fc-max-queue-depth=0 --fc-shed-queue=on
 check_eq "C3 the knob rule still reads back as the defaults" "- - - - - - - - -" "$(tq_rule_get $PORT_KNOB | knobs9)"
