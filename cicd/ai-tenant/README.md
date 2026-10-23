@@ -72,8 +72,14 @@ that neither ran nor is pending fails the run, and with `REQUIRE_ALL=1`
 (the PR gate) a pending case fails it too. A case declared `elsewhere:<scenario>` is run by that
 scenario (B4: `cicd/vllm-kvcache-routing-cpu/b4-band-arm.sh`, where the KV
 infrastructure is); it must not run here, and the PR gate requires its result
-on the final image recorded beside this scenario's. Pass and fail are read from the
-admission headers and `fc_effective`, never from timing alone.
+on the final image recorded beside this scenario's: `full-suite-manifest.sh
+<suite artifacts> <B4 artifacts>` reads both runs' `identity.json` and
+`summary.txt` and writes one manifest naming the claim the pair supports,
+`full-suite` only when both passed on the same image id and the same gateway
+and eBPF commits, otherwise `scheduling-only` with the reason (B4 missing,
+failed or stale); a B4 that did not run never becomes a PASS. Pass and fail
+are read from the admission headers and `fc_effective`, never from timing
+alone.
 
 `validation-sched.sh` ends with `validate_cli.sh`, the CLI half: the
 packaged loxicmd as the subject under test and REST as the oracle
