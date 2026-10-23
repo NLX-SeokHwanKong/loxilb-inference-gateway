@@ -112,7 +112,9 @@ log_count() { # <marker-regex> -> total matches across llb1's log surfaces
 
 # case_setup <fail-mode> <dp-ranks>: fresh sims + fresh rule.
 case_setup() {
-    sims_stop
+    # A simulator left from the previous case would keep serving its fault
+    # mode in place of this case's: that is this case's failure, not a pass.
+    sims_stop || { echo "  [FAILED] the previous case's simulators are still running"; code=1; }
     sims_start "$1" "$2"
     local r
     r=$(post_rule "$2")
@@ -123,7 +125,7 @@ case_teardown() {
     # A failed delete is a case failure in its own right: the surviving rule
     # would corrupt every later case (the first run's 409 cascade).
     chk "rule delete HTTP 2xx" '^2..$' "$(del_rule)"
-    sims_stop
+    sims_stop || { echo "  [FAILED] simulators still running after the case"; code=1; }
     sleep 2
 }
 
