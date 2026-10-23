@@ -83,4 +83,12 @@ verdict.
 `rmconfig.sh` removes the topology and checks that nothing it started is
 left: containers, namespaces and helper processes.
 
-Run by `run_local_cicd.sh`; not wired into a GitHub workflow (a release item).
+Run by `run_local_cicd.sh`, and wired into `.github/workflows/ai-gateway-sanity.yml`
+as the job `ai-tenant-sched` (REQUIRE_ALL=1). Every run first records the
+candidate tuple it is evidence for (`artifacts-sched/identity.json`: the
+gateway commit, the `loxilb-ebpf` and libbpf gitlinks, the image tag, id and
+digest, the binary's SHA256; one `IDENTITY` line in the log) and ends with its
+inventory and verdict in `artifacts-sched/summary.txt`; the job keeps both on
+every run and everything the suite left on a failure. A green neighbouring
+sanity job is not this suite's result: only this job's summary is. B4 stays
+with the KV scenario, run by hand.

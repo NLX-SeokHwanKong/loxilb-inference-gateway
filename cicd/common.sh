@@ -179,6 +179,10 @@ probe_loxilb_rest() {
   docker ps -a --filter "name=^/${name}\$" --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}' 2>&1 || true
   echo "[rest-probe] --- processes and listeners in $name"
   $dexec "$name" bash -c 'pgrep -a loxilb || echo "no loxilb process"; (ss -ltnp 2>/dev/null || netstat -ltnp 2>/dev/null) | head -n 20' 2>&1 || true
+  # A crashed process says why at the HEAD of its stderr (the signal, the
+  # cgo frame, the first goroutine); the tail is the end of the dump.
+  echo "[rest-probe] --- /tmp/loxilb.err (head) in $name"
+  $dexec "$name" head -n 80 /tmp/loxilb.err 2>&1 || true
   echo "[rest-probe] --- /tmp/loxilb.err (tail) in $name"
   $dexec "$name" tail -n 40 /tmp/loxilb.err 2>&1 || true
   echo "[rest-probe] --- /tmp/loxilb.out (tail) in $name"
