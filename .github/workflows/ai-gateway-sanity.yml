@@ -14,11 +14,14 @@ name: AI-Gateway-Sanity-CI
 # or renamed moves with its job name, never silently out of the gate.
 #   ai-pd-vllm        vLLM P/D disaggregation (mock vLLM)             ~23 min
 #   ai-engine-mocks   SGLang/TRT-LLM P/D, llama.cpp, SGLang KV-cache   ~18 min
-#   ai-auth           API keys, JWT, auth-plane separation, SSE quota  ~21 min
+#   ai-auth           API keys, auth-plane separation, SSE quota
+#   ai-jwtauth        JWT bearer admission (Keycloak) and its CLI half,
+#                     on the tree's pinned loxicmd (loxicmd-pin)
 #   ai-admission      capacity gate, model routing/conflict, endpoint
 #                     health, connectionLimit, rule replace            ~17 min
 #   ai-tenant-sched   tenant scheduling, bands, release accounting
-#                     (cicd/ai-tenant, REQUIRE_ALL=1)                  ~25 min
+#                     (cicd/ai-tenant, REQUIRE_ALL=1), and its CLI
+#                     half on the tree's pinned loxicmd (loxicmd-pin)  ~25 min
 # NOTE: cicd/vllm-kvcache-routing-cpu is intentionally NOT gated here. Its
 # strict fixture-driven asserts (exact tokenizer-overlap fallthrough timing)
 # are sensitive to hosted-runner state; that real-vLLM CPU harness is
@@ -162,7 +165,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-  # AI credential plane: API keys, JWT (Keycloak), authentication plane separation, SSE quota
+  # AI credential plane: API keys, authentication plane separation, SSE quota
   ai-auth:
     name: ai-auth
     runs-on: ubuntu-22.04
@@ -180,31 +183,6 @@ jobs:
       - name: API keys + tenant rate limits (PostgreSQL-backed)
         run: |
           cd cicd/ai-apikey/
-          ./config.sh
-          ./validation.sh
-          ./rmconfig.sh
-          cd -
-      # The bearer (JWT) admission arm against a real Keycloak realm: the token
-      # verdict ladder, apikey-or-jwt precedence, upstream header hygiene, the
-      # HTTP/2 admission legs, the keyless VIP quota arm and the missing-usage
-      # accounting arm. 69 declared case IDs with a Z1/Z2 inventory, so a case
-      # that stops running turns the step red instead of shrinking the count.
-      #
-      # It ran only in the local runner until now, which left the largest AI
-      # regression suite in the tree gating no pull request. Measured cost on
-      # the reference bed: 84s config + 77s validation + 16s cleanup, plus 43s
-      # the first time it builds the pinned Keycloak image (config.sh builds it
-      # on demand and reuses it afterwards). Keycloak and PostgreSQL are
-      # locally built/pulled containers, so the job stays within this
-      # workflow's no-external-service charter.
-      # The image this job builds carries the loxicmd pin, so the CLI half
-      # (validate_cli.sh, folded into validation.sh) is required rather than
-      # auto: a pin regression would otherwise skip it silently.
-      - name: JWT bearer admission against a live Keycloak realm
-        env:
-          CLI_TESTS: required
-        run: |
-          cd cicd/ai-jwtauth/
           ./config.sh
           ./validation.sh
           ./rmconfig.sh
@@ -235,9 +213,63 @@ jobs:
           name: ai-auth-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             cicd/ai-apikey/artifacts*/
-            cicd/ai-jwtauth/artifacts*/
             cicd/ai-authsep/artifacts*/
             cicd/ai-sse-quota/artifacts*/
+            /tmp/ai-*.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # JWT bearer admission against a live Keycloak realm, on its own job so it
+  # alone runs the tree's pinned loxicmd (the setup's loxicmd-pin): every
+  # scenario of ai-auth keeps the published image's CLI.
+  ai-jwtauth:
+    name: ai-jwtauth
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    # Dependabot PRs have no submodule token; the private eBPF checkout fails.
+    if: github.actor != 'dependabot[bot]'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.CI_SUBMODULE_TOKEN || github.token }}
+      - uses: ./.github/actions/ai-sanity-setup
+        with:
+          ghcr-token: ${{ secrets.GHCR_TOKEN || github.token }}
+          loxicmd-pin: "true"
+      # The bearer (JWT) admission arm against a real Keycloak realm: the token
+      # verdict ladder, apikey-or-jwt precedence, upstream header hygiene, the
+      # HTTP/2 admission legs, the keyless VIP quota arm and the missing-usage
+      # accounting arm. 69 declared case IDs with a Z1/Z2 inventory, so a case
+      # that stops running turns the step red instead of shrinking the count.
+      #
+      # It ran only in the local runner until now, which left the largest AI
+      # regression suite in the tree gating no pull request. Measured cost on
+      # the reference bed: 84s config + 77s validation + 16s cleanup, plus 43s
+      # the first time it builds the pinned Keycloak image (config.sh builds it
+      # on demand and reuses it afterwards). Keycloak and PostgreSQL are
+      # locally built/pulled containers, so the job stays within this
+      # workflow's no-external-service charter.
+      # The setup installed the tree's pinned loxicmd (loxicmd-pin), so the
+      # CLI half (validate_cli.sh, folded into validation.sh) is required
+      # rather than auto: a pin regression fails the step instead of
+      # skipping the half.
+      - name: JWT bearer admission against a live Keycloak realm
+        env:
+          CLI_TESTS: required
+        run: |
+          cd cicd/ai-jwtauth/
+          ./config.sh
+          ./validation.sh
+          ./rmconfig.sh
+          cd -
+      - name: Keep what a failed run left (scenario artifacts, mock logs)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-jwtauth-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            cicd/ai-jwtauth/artifacts*/
             /tmp/ai-*.log
           if-no-files-found: ignore
           retention-days: 14
@@ -350,9 +382,10 @@ jobs:
       - uses: ./.github/actions/ai-sanity-setup
         with:
           ghcr-token: ${{ secrets.GHCR_TOKEN || github.token }}
-      # CLI_TESTS=required for the same reason as the JWT job: the CLI half
-      # (validate_cli.sh, folded into validation-sched.sh) must run on the
-      # image this job built, never skip.
+          loxicmd-pin: "true"
+      # CLI_TESTS=required: the setup installed the tree's pinned loxicmd
+      # (loxicmd-pin), so the CLI half (validate_cli.sh, folded into
+      # validation-sched.sh) must run, never skip.
       - name: Tenant scheduling, bands and release accounting (PostgreSQL-backed, REQUIRE_ALL)
         env:
           REQUIRE_ALL: "1"
