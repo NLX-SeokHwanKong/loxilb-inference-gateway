@@ -2,13 +2,22 @@
 
 One release for the inference-gateway stack: the loxilb data plane
 (`charts/loxilb-igw`, a DaemonSet), the kube-loxilb controller
-(`charts/kube-loxilb`, branch `integration/inference-gateway`) and the Gateway
+(`charts/kube-loxilb`, branch `feat/auth-annotation`) and the Gateway
 API objects that express the endpoint-selection policy (`templates/inference/`:
 GatewayClass, Gateway, one InferencePool + HTTPRoute per `inference.pools[]`).
 
-There is no separate Endpoint Picker pod: kube-loxilb does not delegate to one,
-and loxilb selects endpoints itself (`epselect` chwbl / gpuaware / wrr-hash,
-KV-exact, prefill/decode). The pool's `loxilb.io/*` annotations are the policy.
+By default loxilb selects endpoints itself (`epselect` chwbl / gpuaware /
+wrr-hash, KV-exact, prefill/decode), and the pool's `loxilb.io/*` annotations
+are the policy. `inference.externalEndpointPicker` points every pool at an
+Endpoint Picker (EPP) instead, which the gateway asks per request over
+ext_proc. The chart does not deploy the picker; install it beside the release.
+
+The picker client is not in loxilb-inference-gateway `main` yet, so the
+`loxilb-igw` image defaults to the interim build that has it,
+`nxinho/loxilb-epp:epp-cluster8` (fork `inhogog2/loxilb-inference-gateway`,
+branch `codex/epp-phase1`, linux/amd64 only). It does not enforce credential
+policies: kube-loxilb refuses pools with `auth` on it. Override
+`loxilb-igw.image.repository` / `.tag` for another build.
 
 ## Install
 
@@ -24,7 +33,7 @@ them and fails with the install commands when they are missing; set
 ```bash
 helm install igw deploy/helm/loxilb-inference-gateway -n kube-system \
   --set kube-loxilb.cidrPools.defaultPool=<VIP>/32 \
-  --set kube-loxilb.image.repository=<image built from integration/inference-gateway> \
+  --set kube-loxilb.image.repository=<image built from feat/auth-annotation> \
   --set kube-loxilb.image.tag=<tag>
 helm test igw -n kube-system --logs
 ```
@@ -70,8 +79,9 @@ in `crds/` that exist, and loxilb replays the snapshot it left on the node.
 | Key | What it does |
 |---|---|
 | `inference.gatewayClass`, `inference.gateway` | the GatewayClass and Gateway (namespace `llm` by default) |
-| `inference.pools[]` | pod selector + targetPort, `modelName`, `epselect`, `sseMode`, free `annotations`, `auth` (rendered, not yet honoured by kube-loxilb), `route` |
-| `loxilb-igw.*` | image, flags (`loxilb.*`), hostPath persistence for `/etc/loxilb` and the audit dir (its parent is mounted; loxilb creates the 0700 directory itself), optional trust ConfigMap at `/run/integration-ca`, management Service |
+| `inference.pools[]` | pod selector + targetPort, `modelName`, `epselect`, `sseMode`, free `annotations`, `auth`, `route` |
+| `inference.externalEndpointPicker` | `enabled`, the picker Service `name` and `port` (9002), `failureMode` (FailOpen / FailClose) |
+| `loxilb-igw.*` | image (default `nxinho/loxilb-epp:epp-cluster8`), flags (`loxilb.*`), hostPath persistence for `/etc/loxilb` and the audit dir (its parent is mounted; loxilb creates the 0700 directory itself), optional trust ConfigMap at `/run/integration-ca`, management Service |
 | `kube-loxilb.*` | image, `cidrPools`, `setRoles`, `loxiURL` (external loxilb), `extraArgs`, the wait-for-loxilb initContainer |
 | `crds.*` | pre-install check, `installGatewayAPI` |
 | `tests.*` | `helm test` images and the loxilb URL they call |

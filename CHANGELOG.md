@@ -49,8 +49,14 @@ binary behaves exactly like upstream loxilb.
   re-runs the `k3d-incluster-inference-gwapi` assertions unchanged against it,
   and then upgrades, uninstalls and reinstalls the release.
   `docs/HELM-INSTALL.md` is the operator's guide: prerequisites, values,
-  install, `helm test`, upgrade, uninstall, authenticated pools and
-  troubleshooting.
+  install, `helm test`, upgrade, uninstall, authenticated pools, pools with an
+  Endpoint Picker and troubleshooting. `inference.externalEndpointPicker`
+  points every pool at an Endpoint Picker Service the operator deploys;
+  kube-loxilb `feat/auth-annotation` resolves it onto the rule, and the
+  gateway follows the picker with `FailOpen` / `FailClose` as declared. Until
+  the picker client is in `main`, the `loxilb-igw` image defaults to the
+  interim build that has it, `nxinho/loxilb-epp:epp-cluster8` (linux/amd64,
+  no credential features), overridable through `loxilb-igw.image`.
 - **P/D occupancy gauges.** Three new metrics read the P/D load at each
   collection: `loxilb_pd_prefill_inflight` and `loxilb_pd_decode_inflight`
   (the admission units held on prefill and on decode endpoints now) and

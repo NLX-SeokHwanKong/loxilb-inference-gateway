@@ -7,9 +7,16 @@
 enabled: true
 
 image:
-  repository: ghcr.io/loxilb-io/loxilb-inference-gateway
+  # Interim default: the Endpoint Picker (ext_proc) client is not in
+  # loxilb-inference-gateway main yet. This build of the
+  # inhogog2/loxilb-inference-gateway fork (codex/epp-phase1) has it and lists
+  # only "epp" in its /version features, so kube-loxilb refuses pools that
+  # declare a credential policy on it (AuthNotSupported). linux/amd64 only.
+  # Do not use epp-cluster7: it aborts on deleting an L4 rule. Once main has
+  # the client, the default returns to ghcr.io/loxilb-io/loxilb-inference-gateway.
+  repository: nxinho/loxilb-epp
   # Empty: the chart's appVersion.
-  tag: latest
+  tag: epp-cluster8
   pullPolicy: IfNotPresent
 imagePullSecrets: []
 

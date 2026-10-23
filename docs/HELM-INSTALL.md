@@ -23,9 +23,10 @@ namespace the chart was validated in. Model servers live in a namespace called
 | Hooks | Job `igw-loxilb-inference-gateway-crd-precheck` (pre-install, pre-upgrade), Job `igw-loxilb-inference-gateway-drain` (pre-delete) | hook resources are not part of the release and are cleaned up by Helm |
 | Tests | Pods `igw-loxilb-inference-gateway-test-igw-version` and `-test-pool-rule` | run by `helm test`; see §5 |
 
-There is no separate Endpoint Picker pod. loxilb selects endpoints itself; the
-pool's `loxilb.io/*` annotations, rendered from `inference.pools[]`, are the
-policy.
+By default loxilb selects endpoints itself; the pool's `loxilb.io/*`
+annotations, rendered from `inference.pools[]`, are the policy. A pool can
+instead name an Endpoint Picker (EPP) that the gateway asks per request (§9).
+The chart does not deploy the picker: it is a separate install.
 
 ## 2. Prerequisites
 
@@ -75,7 +76,7 @@ first install, never upgraded or deleted by Helm.
 
 | Image | Default | What to do |
 |---|---|---|
-| loxilb-inference-gateway | `ghcr.io/loxilb-io/loxilb-inference-gateway:latest` | use a release tag you have tested, or build your own per [BUILD.md](BUILD.md) |
+| loxilb-inference-gateway | `nxinho/loxilb-epp:epp-cluster8` (interim, see below) | keep it for the Endpoint Picker; otherwise set `ghcr.io/loxilb-io/loxilb-inference-gateway` with a release tag you have tested, or build your own per [BUILD.md](BUILD.md) |
 | kube-loxilb | `ghcr.io/loxilb-io/kube-loxilb:latest` | **must be built**: no published tag carries the inference-gateway integration, and `:latest` does not know `--inferenceExtension` |
 | precheck, drain and `helm test` helpers | `alpine/k8s:1.34.12`, `curlimages/curl:8.23.0` | mirror them in a private registry if your nodes cannot reach Docker Hub (`crds.precheck.image`, `hooks.drain.image`, `tests.curlImage`, `tests.kubectlImage`) |
 
@@ -95,6 +96,21 @@ docker push registry.example.com/kube-loxilb:auth-annotation-830fa59
 Then set `kube-loxilb.image.repository` and `kube-loxilb.image.tag`. NOTES
 warns as long as the tag is `latest`. Pull secrets for every pod of every
 subchart go in `global.imagePullSecrets`.
+
+The gateway image defaults to an interim build because the Endpoint Picker
+client (§9) is not in loxilb-inference-gateway `main` yet. Until it is,
+`nxinho/loxilb-epp:epp-cluster8` is the build that has it: the
+`inhogog2/loxilb-inference-gateway` fork, branch `codex/epp-phase1`. Know its
+limits before you keep it:
+
+- It is published for **linux/amd64 only**.
+- Its `/netlox/v1/version` lists only `epp` under `features`. kube-loxilb
+  therefore refuses pools with `auth` on it (`AuthNotSupported`, §8) rather
+  than serve them unauthenticated. For authenticated pools use a `main` build.
+- Do not use `epp-cluster7`: it aborts when an L4 rule is deleted.
+
+Once `main` has the client, the chart's default returns to
+`ghcr.io/loxilb-io/loxilb-inference-gateway`.
 
 ### 2.4 The VIP
 
@@ -144,8 +160,8 @@ kube-loxilb:
 
 loxilb-igw:
   image:
-    repository: ghcr.io/loxilb-io/loxilb-inference-gateway
-    tag: latest
+    repository: nxinho/loxilb-epp      # the default; see §2.3
+    tag: epp-cluster8
 
 inference:
   gateway:
@@ -183,6 +199,7 @@ inference:
 | `loxilb-igw.mgmtService` | the ClusterIP in front of the management REST that hooks and tests use |
 | `inference.gatewayClass`, `inference.gateway` | the GatewayClass and the Gateway with its listeners |
 | `inference.pools[]` | one InferencePool + HTTPRoute each, see below |
+| `inference.externalEndpointPicker` | an Endpoint Picker for every pool (§9) |
 | `crds.*` | the precheck hook and `installGatewayAPI` |
 | `hooks.drain.*` | the pre-delete drain (§7) |
 | `tests.*` | the `helm test` pods and the loxilb URL they call |
@@ -342,6 +359,10 @@ Four conditions have to hold before such a pool does what it declares. NOTES
 warns about the ones the chart can see; none of them is checked by `helm test`
 in this chart version.
 
+The default gateway image, `nxinho/loxilb-epp:epp-cluster8`, enforces none of
+these: kube-loxilb refuses an authenticated pool on it (`AuthNotSupported`). Set
+`loxilb-igw.image` to a `main` build for this section (§2.3).
+
 1. **kube-loxilb from `feat/auth-annotation` 830fa59 or later.** Older
    integration branches ignore the two annotations and install the rule without
    any policy, with no error anywhere. Check that the CRD it manages is served
@@ -442,7 +463,56 @@ inference:
 After the install, a request without a credential should get 401 and a request
 with a key from the store (or a token from the issuer) should be served.
 
-## 9. Troubleshooting
+## 9. Pools with an Endpoint Picker
+
+An Endpoint Picker (for example the [llm-d Router](https://github.com/llm-d/llm-d-router)
+EPP) chooses the model-server pod for each request from the servers' own
+metrics. With `inference.externalEndpointPicker.enabled=true` every pool
+the chart renders gets an `endpointPickerRef`:
+
+```yaml
+inference:
+  externalEndpointPicker:
+    enabled: true
+    name: vllm-qwen3-epp      # the picker's Service, in each pool's namespace
+    port: 9002                # its ext_proc port
+    failureMode: FailOpen     # or FailClose
+```
+
+What happens to a request:
+
+1. kube-loxilb resolves the Service to its cluster IP and port and puts it on
+   the pool's rule (`eppEndpoint`, `eppFailureMode`). The address is a cluster
+   IP, so the node running loxilb has to reach Service IPs; with kube-proxy or
+   an eBPF replacement on that node it does.
+2. The gateway asks the picker over ext_proc (gRPC, TLS by default, certificate
+   not verified) which pod serves the request, and proxies it there.
+3. When the picker cannot be reached, `failureMode` decides. `FailOpen`:
+   loxilb's own selection (`epselect`) serves the request. `FailClose`: the
+   gateway answers 503 `epp_unavailable` and nothing reaches the model
+   servers.
+
+Four things to know:
+
+- **The chart does not deploy the picker.** Install it beside the release, so
+  that the Service `name` exists in each pool's namespace. Until it does, the
+  pool's `ResolvedRefs` condition is False (`InvalidExtensionRef`): `FailOpen`
+  pools are served by loxilb, and `FailClose` pools answer every request with
+  503.
+- **The gateway needs the picker client.** Only a build that lists `epp` under
+  `features` in `/netlox/v1/version` calls the picker; the default image does
+  (§2.3). On any other build kube-loxilb sends a `FailOpen` rule without the
+  picker, with a warning event, and refuses a `FailClose` one
+  (`EndpointPickerUnsupported`).
+- **Tuning is per pool, through `annotations`.** `loxilb.io/epp-timeout-ms`
+  sets the picker deadline, including the dial (default 3000).
+  `loxilb.io/epp-plaintext: "true"` is for a picker that serves ext_proc
+  without TLS; set it only when the picker does.
+- **Not with prefill/decode.** A pool with a picker cannot also set
+  `loxilb.io/pd-disagg`; kube-loxilb refuses it, because the picker
+  orchestrates prefill and decode itself.
+
+## 10. Troubleshooting
 
 Start with the events kube-loxilb raises on the pool's Service and the
 InferencePool status; most problems surface there with a reason:
@@ -461,6 +531,7 @@ kubectl -n kube-system logs deploy/igw-kube-loxilb
 | `LoxiLBRejected`, `RuleMissing` | the gateway refused the rule, or the rule disappeared from it | read the gateway's answer in the kube-loxilb log; the gateway's own log names the reason |
 | `AuthNotSupported` | the pool declares a policy and a gateway does not enforce it | upgrade the gateway image; the rule is not sent to that peer |
 | `ListenerAuthConflict` | another pool on the same listener declares a different policy | §8, condition 4 |
+| `EndpointPickerUnsupported` | a `FailClose` pool on a gateway without the picker client | use a gateway image that lists `epp` (§2.3, §9) |
 | `ProfileNotFound`, `ProfileNotProgrammed` | the named `JWTAuthProfile` does not exist, or is not on every gateway yet | create it, then check its `PROGRAMMED` column and `status.peers` |
 | `KvExactTokenizerRequired`, `GPUMonitoringDisabled` | the routing mode needs a tokenizer or GPU monitoring that is not armed in loxilb | configure loxilb for that mode or choose another `epselect` |
 
@@ -493,6 +564,11 @@ Other symptoms:
   The VIP is not configured on the loxilb node (§2.4). Only a standby instance
   keeps such a rule, without a listener, until it takes the VIP over; a single
   instance or the master refuses it.
+- **Requests get 503 `epp_unavailable`.** A `FailClose` pool whose picker is
+  not reachable: its Service is missing (`ResolvedRefs` False on the pool), it
+  has no ready pod, or it does not answer within `loxilb.io/epp-timeout-ms`.
+  The gateway's log names the reason; with TLS on one side only, set
+  `loxilb.io/epp-plaintext` to match the picker (§9).
 - **Requests get 503 `policy_store_unavailable`.** The pool declares a policy and
   the gateway has no API-key store (§8, condition 2).
 - **A rule is refused with 400 `… is already on this address, port and protocol
@@ -506,7 +582,7 @@ Other symptoms:
   `docker save --platform`; `cicd/common/k8s-inference/k3d_common.sh` shows the
   working sequence.
 
-## 10. A reference run
+## 11. A reference run
 
 `cicd/k3d-helm-inference-gwapi` does everything above on a k3d cluster: it
 builds kube-loxilb from `feat/auth-annotation`, installs the Gateway API and
