@@ -164,7 +164,7 @@
     {
       "id": 2,
       "type": "stat",
-      "title": "Active SSE streams (all tenants)",
+      "title": "(all tenants) Active SSE streams",
       "description": "Model-only family (no tenant label): the Tenant selection does not apply and the value covers all tenants, so with one tenant selected this still shows every tenant's traffic for the model. Filter by Model. Streams open at the scrape instant (10s sampling). Short streams that start and finish between scrapes are not visible here - 0 is normal when the backend completes streams quickly; see the requests/s panels for volume and the trend panel for history.",
       "gridPos": {
         "h": 4,
@@ -464,7 +464,7 @@
     {
       "id": 10,
       "type": "timeseries",
-      "title": "Active SSE streams trend (all tenants)",
+      "title": "(all tenants) Active SSE streams trend",
       "description": "Model-only family (no tenant label): the Tenant selection does not apply and the value covers all tenants, so with one tenant selected this still shows every tenant's traffic for the model. Filter by Model. History of the instantaneous gauge (10s samples). Sub-second streams rarely overlap a scrape.",
       "gridPos": {
         "h": 8,
@@ -503,7 +503,7 @@
       "id": 12,
       "type": "row",
       "collapsed": true,
-      "title": "PD disaggregation (only on PD deployments; model-only families, all tenants)",
+      "title": "(all tenants) PD disaggregation: only on PD deployments, model-only families",
       "gridPos": {
         "h": 1,
         "w": 24,
