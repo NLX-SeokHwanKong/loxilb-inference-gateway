@@ -47,7 +47,9 @@ runs:
       run: sudo python3 -m pip install h2 || sudo python3 -m pip install --break-system-packages h2
     - run: loxilb-ebpf/utils/mkllb_bpffs.sh
       shell: bash
-    - run: sudo -E env "PATH=$PATH" make
+    # The first build of the tree; it carries the product define too, or the
+    # later docker-cp (up to date by then) copies a binary built without it.
+    - run: sudo -E env "PATH=$PATH" make EXTRA_CFLAGS=-DHAVE_SOCKOPS
       shell: bash
     # minica (github.com/jsha/minica) is fetched on demand by the TLS scenarios' config.sh
     - run: sudo -E env "PATH=$PATH" GOBIN=/usr/local/bin go install github.com/jsha/minica@latest
@@ -69,7 +71,11 @@ runs:
       shell: bash
     - run: docker run -u root --cap-add SYS_ADMIN --restart unless-stopped --privileged -dit -v /dev/log:/dev/log --name loxilb ghcr.io/loxilb-io/loxilb-inference-gateway:latest
       shell: bash
-    - run: pwd && ls && sudo -E env "PATH=$PATH" make docker-cp
+    # Built as the product image is (Dockerfile: EXTRA_CFLAGS="-DHAVE_SOCKOPS"):
+    # without the define a gateway started with --sockmapsupport aborts at
+    # init (llb_setup_kern_sockmap: "requires a build with -DHAVE_SOCKOPS"),
+    # which is how the tenant scheduling suite first failed here.
+    - run: pwd && ls && sudo -E env "PATH=$PATH" make docker-cp EXTRA_CFLAGS=-DHAVE_SOCKOPS
       shell: bash
     - run: docker exec -dit loxilb mkllb_bpffs
       shell: bash
