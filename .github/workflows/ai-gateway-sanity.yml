@@ -321,12 +321,15 @@ jobs:
   # priority bands, floors and the reserve, weighted and strict wakes, tenant
   # rotation, shed and eviction, the TTL header, h2c parity, release
   # accounting (both identities of loxilb_ai_fc_band_total), the band knobs'
-  # API and their persistence, DB outage and recovery, and X17, the escaped
-  # JSON spellings of service_tier. Every case is declared with an inventory
-  # (declared = executed + pending + elsewhere): a case that stops running
-  # turns the step red, and REQUIRE_ALL=1 (the PR gate) fails a pending one.
-  # B4 is declared elsewhere (cicd/vllm-kvcache-routing-cpu, run by hand);
-  # this job is the scheduling-only result and its summary says so.
+  # API and their persistence, DB outage and recovery. Every case is declared
+  # with an inventory (declared = executed + pending + elsewhere): a case that
+  # stops running turns the step red, and REQUIRE_ALL=1 (the PR gate) fails a
+  # pending one. B4 is declared elsewhere (cicd/vllm-kvcache-routing-cpu, run
+  # by hand); this job is the scheduling-only result and its summary says so.
+  # The run records the candidate tuple it is evidence for (gateway commit,
+  # eBPF and libbpf gitlinks, image id and digest, binary SHA256) in
+  # artifacts-sched/identity.json and its inventory in summary.txt; both are
+  # kept as artifacts on every run, and a failed run keeps everything it left.
   # Measured on the reference bed: about 22 minutes end to end.
   ai-tenant-sched:
     name: ai-tenant-sched
@@ -351,8 +354,8 @@ jobs:
           ./validation-sched.sh
           ./rmconfig.sh
           cd -
-      - name: Keep what a failed run left (every rule with its fc_effective, the gateway logs, the per-request answers)
-        if: failure()
+      - name: Keep the run's identity, inventory and results (every rule with its fc_effective, the gateway logs, the per-request answers)
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ai-tenant-sched-${{ github.run_id }}-${{ github.run_attempt }}
