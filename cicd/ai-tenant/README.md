@@ -81,15 +81,25 @@ failed or stale); a B4 that did not run never becomes a PASS. Pass and fail
 are read from the admission headers and `fc_effective`, never from timing
 alone.
 
+`validation-sched.sh` ends with `validate_cli.sh`, the CLI half: the
+packaged loxicmd as the subject under test and REST as the oracle
+(`get lbversion`; the rules, objective, tenant rate limits and API keys of
+`config.sh` re-created through loxicmd and compared field by field; the
+nine band knobs as P10 reads them; the twelve refused combinations of S8;
+`get lb --bands` with waiters in all three bands, kept verbatim in
+`artifacts-cli/c4-bands.txt`; a netidentity binding). It is gated by
+`bands_cli_preflight` (`CLI_TESTS=auto|required|skip`) and folded into the
+verdict.
+
 `rmconfig.sh` removes the topology and checks that nothing it started is
 left: containers, namespaces and helper processes.
 
-Wired into `.github/workflows/ai-gateway-sanity.yml` as the job `ai-tenant-sched`
-(REQUIRE_ALL=1). Every run first records the candidate tuple it is evidence for
-(`artifacts-sched/identity.json`: the gateway commit, the `loxilb-ebpf` and
-libbpf gitlinks, the image tag, id and digest, the binary's SHA256; one
-`IDENTITY` line in the log) and ends with its inventory and verdict in
-`artifacts-sched/summary.txt`; the job keeps both on every run and everything
-the suite left on a failure. A green neighbouring sanity job is not this
-suite's result: only this job's summary is. B4 stays with the KV scenario, run
-by hand.
+Run by `run_local_cicd.sh`, and wired into `.github/workflows/ai-gateway-sanity.yml`
+as the job `ai-tenant-sched` (REQUIRE_ALL=1). Every run first records the
+candidate tuple it is evidence for (`artifacts-sched/identity.json`: the
+gateway commit, the `loxilb-ebpf` and libbpf gitlinks, the image tag, id and
+digest, the binary's SHA256; one `IDENTITY` line in the log) and ends with its
+inventory and verdict in `artifacts-sched/summary.txt`; the job keeps both on
+every run and everything the suite left on a failure. A green neighbouring
+sanity job is not this suite's result: only this job's summary is. B4 stays
+with the KV scenario, run by hand.
