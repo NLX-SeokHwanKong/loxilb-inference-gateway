@@ -56,6 +56,12 @@ curl -X POST http://127.0.0.1:11111/netlox/v1/config/metrics
 
 - Prometheus: `http://<host>:9090` — Grafana: `http://<host>:3000` (credentials from `.env`).
 - Dashboards are provisioned from `grafana/dashboards/` into the **LoxiLB** folder.
+- The AI dashboard's **Model** and **Tenant** variables list the label values of
+  `loxilb_ai_requests_total`, so a model or tenant becomes selectable only after its first
+  request has completed; until then the selection falls back to All, where its traffic
+  already shows. A `(all tenants)` or `(all models)` mark in a panel title names the
+  selection that panel does not apply (its family carries no such label); the narrow panels
+  carry the mark first so it stays visible in a small layout.
 - A series' first event is an increase: `prometheus.yml` has the loxilb job scrape the
   protobuf exposition (`scrape_protocols: [PrometheusProto, …]`), which carries each
   counter's creation time, and `docker-compose.yml` starts Prometheus with
@@ -180,8 +186,11 @@ error is then a positive `rate()` and `increase()`, and the AI dashboard's
 error ratio reads it as 100 % of one request. Verified against Prometheus
 v2.53.4 on the testbed: a cold pair's first 500 recorded at 11:19:51.542 was
 stored as 0 at 11:19:51.542 and 1 at the next scrape, `increase(…[3m])` 1.01,
-for an anonymous and for a keyed pair alike. `ci/lint-monitoring.py` fails
-either file without its setting.
+for an anonymous and for a keyed pair alike. The acceptance reading is the raw
+counter's delta of exactly 1 with a positive `rate()` and `increase()`;
+`increase()` extrapolates to the edges of its window, so one event reads about
+1.0 to 1.4 (QA measured 1.14 to 1.31), not exactly 1. `ci/lint-monitoring.py`
+fails either file without its setting.
 
 What that contract does not cover, said plainly: a Prometheus without the flag,
 or one scraping the text exposition, is back to the series appearing at 1, and

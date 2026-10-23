@@ -265,6 +265,14 @@ binary behaves exactly like upstream loxilb.
 
 ### Changed
 
+- **Three AI dashboard titles carry their scope mark first**: `(all tenants)
+  Active SSE streams`, its trend panel and the P/D row. At 1600×900 the narrow
+  stat clipped to `Active SSE strea…` and the mark was out of sight (QA
+  2026-10-21, MON-05). The monitoring README now also says that the **Model**
+  and **Tenant** variables list a value only after its first completed request,
+  and that `increase()` on a first event reads about 1.0 to 1.4 by
+  extrapolation; the acceptance reading is the raw delta of 1 with a positive
+  rate.
 - **A rule replace that differs from the stored rule only in `id` rebinds
   the id in place and answers success** instead of 409 `lbrule-exists`. The
   data plane is not touched and the rule keeps its connections; the new id
