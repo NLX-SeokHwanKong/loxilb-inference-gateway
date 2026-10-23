@@ -19,8 +19,9 @@
 #   A10 evidence state: strict rules are never READY (or silently legacy)
 #       without attestation; legacy rules say LEGACY_ACTIVE_UNATTESTED.
 #   W   contract-word enforcement: a bindable VIP earns a full ACK
-#       (enforcement.lastAckAt); an unbindable VIP surfaces an honest fault
-#       instead of pretending enforcement.
+#       (enforcement.lastAckAt); an unbindable VIP is refused at create with
+#       a classified 400 naming externalIP (#362) and leaves zero state, so
+#       nothing can pretend enforcement on it.
 #   R*  refusal matrix: every rejected POST answers a CLASSIFIED 400 (never
 #       an internal 500 hiding the refusal) and provably leaves ZERO state:
 #       no rule, no kv-exact status entry, no new kv metrics series, no
@@ -206,18 +207,22 @@ chk "W contract ACK observed on :8080 (lastAckAt)" '^20' "$ack"
 # an explicit false, never disappear from the wire.
 chk "W fence lifted after full ACK (goFenced=false)" '^false$' "$(jfield "$(kvstatus 8080 "$MODEL_A")" '.kvExactStatusAttr[0].enforcement.goFenced')"
 
-# Unbindable VIP (99.99.99.9 is on no llb1 interface): admission accepts the
-# rule (bindability is a data-plane property) but enforcement must surface
-# the fault honestly — never a fake ACK.
+# Unbindable VIP (99.99.99.9 is on no llb1 interface). Since #362 a full-proxy
+# rule whose listener cannot be bound is taken back out and the create is
+# refused: on a gateway that is not a cluster standby, a VIP it does not hold
+# is the caller's to correct, a classified 400 that names externalIP. That is
+# the honest answer this leg exists for — no rule survives to claim an ACK —
+# so the leg asserts the refusal and that it left nothing behind.
 r=$(post_rule 8085 "$MODEL_A" "$PROF_A" "completions" "vllm" "" "$EPS_PD" "99.99.99.9")
-chk "W unbindable-VIP POST -> 200 (admission is control-plane)" '^200\|' "$r"
-sleep 3
+chk "W unbindable-VIP POST -> 400 (never admitted, never an internal 500)" '^400\|' "$r"
+chk "W unbindable-VIP refusal names externalIP and the address" 'externalIP 99\.99\.99\.9 is not an address of this gateway' "$r"
 stf=$($hexec llb1 curl -s -m 5 "${LBBASE}/externalipaddress/99.99.99.9/port/8085/protocol/tcp/kvexactstatus")
-fack=$(jfield "$stf" '.kvExactStatusAttr[0].enforcement.lastAckAt')
-ffault=$(jfield "$stf" '.kvExactStatusAttr[0].enforcement.fault')
-chk "W unbindable VIP: no ACK claimed" '^(|null)$' "$fack"
-chk "W unbindable VIP: fault surfaced (got '$ffault')" '^ok$' "$([[ -n "$ffault" && "$ffault" != "null" ]] && echo ok || echo "bad:$ffault")"
-chk "W unbindable VIP: fence still engaged (goFenced=true)" '^true$' "$(jfield "$stf" '.kvExactStatusAttr[0].enforcement.goFenced')"
+chk "W unbindable VIP: no ACK claimed" '^(|null)$' "$(jfield "$stf" '.kvExactStatusAttr[0].enforcement.lastAckAt')"
+chk "W unbindable VIP: zero kv-exact status" '^(0|)$' "$(echo "$stf" | jq '.kvExactStatusAttr | length' 2>/dev/null)"
+chk "W unbindable VIP: zero rules on 99.99.99.9:8085" '^0$' \
+    "$($hexec llb1 curl -s -m 5 "${LBBASE}/all" | jq '[.lbAttr[]? | select(.serviceArguments.externalIP=="99.99.99.9" and .serviceArguments.port==8085)] | length')"
+chk "W unbindable VIP: zero kv metric series for 99.99.99.9" '^0$' \
+    "$($hexec llb1 curl -s -m 5 "$METRICS" | grep "^loxilb_kv" | grep -c "99\.99\.99\.9")"
 
 #################################################################################
 echo "=== A3: immutability — kvModelProfile / kvExactApiMode replace-only ==="

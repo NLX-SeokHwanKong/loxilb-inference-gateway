@@ -16,7 +16,7 @@ resolve real profiles and real compiled engine contracts.
 | A6  | Same VIP:port serves two models as two Rules | R2 model outside the profile's alias policy refuses |
 | A4  | Engine family selects the adapter + hash contract (vllm/sha256_cbor, sglang/sha256_sglang) | R4/R5 llamacpp / trtllm exact refuse typed; R6 cross-engine hash algo refuses |
 | A10 | Strict rules are never READY (or silently legacy) unattested; legacy rules say `LEGACY_ACTIVE_UNATTESTED` | — (state vocabulary is closed) |
-| W   | Bindable VIP earns a full contract-word ACK (`enforcement.lastAckAt`); unbindable VIP surfaces an honest fault, never a fake ACK | the two W legs are each other's twin |
+| W   | Bindable VIP earns a full contract-word ACK (`enforcement.lastAckAt`); an unbindable VIP is refused at create with a classified 400 naming `externalIP` (#362) and leaves zero state, so nothing can claim a fake ACK | the two W legs are each other's twin |
 | A3  | `kvModelProfile` / `kvExactApiMode` are replace-only (409), read-back unchanged | A1 admits the same body with the original profile |
 | A5  | binding identity/generation: endpoint-set replace keeps `ruleIdentity`+`bindingGen` stable; delete+recreate mints a new `ruleIdentity` with a fresh gen space (protection = identity+gen pair) | — (compares identity + generation directly) |
 | R1–R8 | Every refusal answers a CLASSIFIED 400 carrying the refusal wording (never an internal 500 with a correlation ref) and leaves ZERO state: no rule, no kv-exact status entry, no kv metric series for the port | A1/A2 admit the single-input-away green bodies |
