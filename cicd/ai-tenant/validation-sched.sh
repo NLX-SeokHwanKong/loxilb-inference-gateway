@@ -8,6 +8,10 @@ echo SCENARIO-ai-tenant-sched
 
 OUT=${OUT:-$(pwd)/artifacts-sched}
 rm -rf "$OUT"; mkdir -p "$OUT"
+# The candidate tuple this run is evidence for (image, source, eBPF, binary):
+# identity.json beside the results, one line in the log.
+source ../common/identity.sh
+record_identity "$OUT" tqllb | tee "$OUT/identity.txt"
 source ./lib/topo-b.sh
 source ./lib/cases-b.sh
 
@@ -1105,7 +1109,11 @@ while read -r id state _; do
   esac
 done <<< "$DECLARED"
 for id in "${!RESULT[@]}"; do grep -q "^$id " <<< "$DECLARED" || { nmiss=$((nmiss + 1)); echo "  $id ran but is not declared"; }; done
-echo "declared=$nd pass=$np fail=$nf pending=$npend elsewhere=$nelse not_executed=$nmiss"
-[ "${REQUIRE_ALL:-0}" == 1 ] && [ $npend -gt 0 ] && { echo "SCENARIO-ai-tenant-sched [FAILED] $npend pending at REQUIRE_ALL"; exit 1; }
-[ $nf -eq 0 ] && [ $nmiss -eq 0 ] || { echo "SCENARIO-ai-tenant-sched [FAILED]"; exit 1; }
-echo "SCENARIO-ai-tenant-sched [OK]"
+# The inventory and the verdict, in the log and in summary.txt beside the
+# results (the aggregation over several scenarios reads that file).
+SUMMARY="declared=$nd pass=$np fail=$nf pending=$npend elsewhere=$nelse not_executed=$nmiss"
+verdict() { echo "$SUMMARY" > "$OUT/summary.txt"; echo "$1" | tee -a "$OUT/summary.txt"; }
+echo "$SUMMARY"
+[ "${REQUIRE_ALL:-0}" == 1 ] && [ $npend -gt 0 ] && { verdict "SCENARIO-ai-tenant-sched [FAILED] $npend pending at REQUIRE_ALL"; exit 1; }
+[ $nf -eq 0 ] && [ $nmiss -eq 0 ] || { verdict "SCENARIO-ai-tenant-sched [FAILED]"; exit 1; }
+verdict "SCENARIO-ai-tenant-sched [OK]"
