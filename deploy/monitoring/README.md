@@ -201,7 +201,13 @@ backend's own 5xx would. Refusals are recorded once each, by the deny record
 the data plane takes whatever stage refused, labelled with the status the
 client received — note this is not derivable from the reason: the rate-limit
 stage answers **503**, not 429, when it finds a keyed identity with no policy
-store behind it.
+store behind it. The MCP framing refusals (400, 405, 413, as
+`mcp_invalid_request`, `mcp_method_not_allowed`, `mcp_request_too_large`) and
+the 400 that refuses an unparseable or ambiguously framed request before
+admission (`bad_request`) are refusals like any other, on both protocols; the
+503 an MCP route writes when no backend can take the request is an outage
+completion. The population is AI-gateway connections: an MCP service that is
+not an AI-gateway rule records nothing in this family.
 
 The model label of a routing or framing refusal is never a new label: the
 model it names may be one nobody serves, so it reads its own name only when a

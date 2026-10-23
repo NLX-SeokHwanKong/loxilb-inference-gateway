@@ -486,6 +486,19 @@ binary behaves exactly like upstream loxilb.
   dashboard reads the counter itself in a new **AI 5xx observed (raw
   counter)** stat beside the ratio, and the ratio's empty state says `No AI
   traffic (5m)`, not `No data`.
+- **MCP refusals, the HTTP/2 outage answers and the request-smuggling 400
+  reached no `loxilb_ai_requests_total` record.** On HTTP/2 the MCP 413s
+  (operand, headers, body too large) and the MCP gate's 400/405/413, and the
+  503s written when no backend could take the stream (`backend_unreachable`,
+  `mcp_backend_unavailable`); on HTTP/1.1 the MCP refusals and the 400 that
+  refuses an unparseable or ambiguously framed request before admission. Each
+  is now recorded by what its status means: a 4xx as `outcome="denied"` at
+  the framing stage (`mcp_invalid_request`, `mcp_method_not_allowed`,
+  `mcp_request_too_large`, `bad_request`), a 5xx as `outcome="completed"`
+  with the status written, so an MCP outage moves the error ratio as any
+  other. The HTTP/1.1 ones also take the responses-by-status class count.
+  Wire bytes are unchanged. AI-gateway rules only: an MCP service that is not
+  one still records nothing (Upgrade notes row 41).
 - **A P/D client that left before any answer reached no record.** It is
   now recorded once in both families: `loxilb_ai_requests_total`
   `outcome="aborted"`, `status="none"`, `cause="client"`, and
@@ -827,6 +840,7 @@ binary behaves exactly like upstream loxilb.
   | 38 | `loxilb_ai_requests_total` | a client that left before any answer, on a rule that is not P/D (HTTP/1.1) | no record | `outcome="aborted"`, `status="none"`, `cause="client"`, one record; no `loxilb_ai_pd_requests_total` record (no lifecycle family pairs with it). **`status="none"` (row 26) is no longer P/D-only**. Not on a rule whose answers go by the kernel (sockMapMode `response`): no record there, as for its answers | ebpf `174fb525` (#119), `bcfb6bf`; gateway CI row TP-I |
   | 39 | `loxilb_ai_requests_total`, `loxilb_ai_pd_requests_total` | a P/D client that left at the gate, in the capacity queue or parked (before any prefill) | no record in either | one record in each: `outcome="aborted"`, `status="none"`, `cause="client"` and `{phase="aborted",status="client"}`, as row 27 for a client leaving in the prefill | ebpf `6294e71` (#120); gateway CI row TP-K |
   | 40 | `loxilb_ai_requests_total`, `loxilb_proxy_http_responses_by_status_total` | a backend on a rule that is not P/D that closed before any answer (HTTP/1.1) | no record; the client got a bare close | the client gets the gateway's 502 `backend_unreachable`: `outcome="completed"`, `status="502"`, one record, no lifecycle record (as a refused connect, row 13, and a TLS leg failing before its answer). Only when the client cannot be told: `outcome="aborted"`, `status="none"`, `cause="engine"` | ebpf `0a77af5` (#120), `b0c647d`; gateway CI row TP-J |
+  | 41 | `loxilb_ai_requests_total`, `loxilb_proxy_http_responses_by_status_total` | the MCP refusals (400/405/413) on both protocols; the HTTP/2 503s `backend_unreachable` and `mcp_backend_unavailable`; the HTTP/1.1 400 refusing an unparseable or ambiguously framed request before admission | no record (allowlisted as "MCP accounting", F-6/F-7, "before a request exists") | 4xx: `outcome="denied"`, stage `framing`, error `mcp_invalid_request` / `mcp_method_not_allowed` / `mcp_request_too_large` / `bad_request`; 5xx: `outcome="completed"` with the status written. HTTP/1.1 ones also counted by class. Wire bytes unchanged. AI-gateway rules only | ebpf `d348af5` (#125) |
 
 - **`tenant_rate_limits` gains a `burst_pct` column.** The gateway adds it on
   start-up if it is missing, so an existing database needs no manual step and
