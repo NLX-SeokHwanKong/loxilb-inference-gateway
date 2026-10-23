@@ -92,7 +92,13 @@ nine band knobs as P10 reads them; the twelve refused combinations of S8;
 verdict.
 
 `rmconfig.sh` removes the topology and checks that nothing it started is
-left: containers, namespaces and helper processes.
+left: containers, namespaces, helper processes and the PostgreSQL store's
+data volume. The store (`tenantq-pg-ai-tenant`, started with `--rm`) and its
+anonymous volume are this scenario's own: `config.sh` records the volume's
+name in `.pg-volume`, `rmconfig.sh` removes the container with `-v` and fails
+the cleanup if that volume is still present. A `docker rm -f` without `-v`
+leaves such a volume behind even on a `--rm` container (one per run). No
+other volume, container or image on the host is this scenario's to remove.
 
 Run by `run_local_cicd.sh`, and wired into `.github/workflows/ai-gateway-sanity.yml`
 as the job `ai-tenant-sched` (REQUIRE_ALL=1). Every run first records the

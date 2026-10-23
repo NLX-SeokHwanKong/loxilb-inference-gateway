@@ -10,7 +10,7 @@ mkdir -p cert
 echo "#########################################"
 echo "PostgreSQL for the tenant and key store"
 echo "#########################################"
-docker rm -f "$PG_NAME" >/dev/null 2>&1
+docker rm -f -v "$PG_NAME" >/dev/null 2>&1
 for i in $(seq 1 30); do docker inspect "$PG_NAME" >/dev/null 2>&1 || break; sleep 1; done
 docker run --rm -d --name "$PG_NAME" -e POSTGRES_USER="$PG_OWNER" -e POSTGRES_PASSWORD="$PG_OWNER_PW" \
   -e POSTGRES_DB="$PG_DB" postgres:18.6 >/dev/null || { echo "FATAL: PostgreSQL did not start"; exit 1; }
@@ -18,6 +18,10 @@ for i in $(seq 1 60); do
   docker exec "$PG_NAME" pg_isready -h 127.0.0.1 -U "$PG_OWNER" -d "$PG_DB" >/dev/null 2>&1 && break
   sleep 1
 done
+# The store's anonymous data volume is this scenario's own: its name is kept
+# for rmconfig.sh, which removes it with the container and checks it is gone
+# (a `docker rm -f` without -v leaves it behind even on a --rm container).
+docker inspect -f '{{range .Mounts}}{{if eq .Type "volume"}}{{.Name}}{{end}}{{end}}' "$PG_NAME" > .pg-volume
 docker cp ../../scripts/aigw-db-bootstrap.sql "$PG_NAME:/tmp/aigw-db-bootstrap.sql"
 docker exec -e AIGW_DB_PASSWORD="$DP_PW" -e AIGW_MGMT_DB_PASSWORD="$MGMT_PW" \
   "$PG_NAME" psql -h 127.0.0.1 -U "$PG_OWNER" -d "$PG_DB" -q -f /tmp/aigw-db-bootstrap.sql || {
