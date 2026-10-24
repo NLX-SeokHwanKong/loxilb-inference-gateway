@@ -123,9 +123,11 @@ func registerModelLabel(model string) bool {
 // therefore seeded at zero, within a fixed bound.
 //
 //   - P/D families, per model, at registration (and "other" at init):
-//     every {phase,status} of loxilb_ai_pd_requests_total (10) and every
-//     reason of loxilb_ai_pd_prefill_fallback_total (6). 16 series per model
-//     label, at most 65 labels.
+//     every {phase,status} of loxilb_ai_pd_requests_total (10), every
+//     reason of loxilb_ai_pd_prefill_fallback_total (6), every path of
+//     loxilb_ai_pd_decode_selected_total (3) and
+//     loxilb_ai_pd_decode_kv_fill_total (1). 20 series per model label, at
+//     most 65 labels.
 //   - loxilb_ai_requests_total, per (model, tenant) pair, on the pair's
 //     first record, for a keyed tenant only (tenant="" is a refusal before
 //     the key resolved, and is never seeded): every combination whose status
@@ -189,6 +191,10 @@ func seedPDModel(model string) {
 	for _, reason := range pdFallbackReasons {
 		aiPDPrefillFallbackTotal.WithLabelValues(model, reason).Add(0)
 	}
+	for _, path := range pdDecodePathLabels {
+		aiPDDecodeSelectedTotal.WithLabelValues(path, model).Add(0)
+	}
+	aiPDDecodeKVFillTotal.WithLabelValues(model).Add(0)
 }
 
 func init() {
@@ -590,6 +596,43 @@ var (
 			Help: "Total P/D prefill selections by terminal routing tier (tier0 session, tier1 prefix trie, tier15 KV-exact, tier2 min-load).",
 		},
 		[]string{"tier", "model"},
+	)
+
+	// aiPDDecodeSelectedTotal counts terminal P/D decode selections per model
+	// by the path that produced the endpoint: hint (the session-pinned decode
+	// EP was kept), score (the min-load scorer picked; with
+	// LLB_PD_DECODE_KV_WEIGHT unset, every scored pick) or score_kv (the
+	// weight is set and the KV-pressure term changed the set of minimum-score
+	// candidates, so the pick is one the shipped scorer would not have made).
+	// One increment per successful pd_select_decode (admission, mid-cycle
+	// prefill-connect failover, SGLang pair retry); the vLLM connect-time
+	// re-read of the admission choice records nothing. Admission outcomes
+	// (parked, no-capacity) and a selector that found no decode EP increment
+	// nothing, so per window: decode selections == sum over the three paths.
+	// Seeded at zero per model label (seedPDModel).
+	aiPDDecodeSelectedTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "loxilb_ai_pd_decode_selected_total",
+			Help: "Total P/D decode selections by path (hint = session-pinned decode kept, score = min-load pick, score_kv = the KV-pressure term changed the min-load candidate set).",
+		},
+		[]string{"path", "model"},
+	)
+
+	// aiPDDecodeKVFillTotal counts, per model, the scored decode selections
+	// made with LLB_PD_DECODE_KV_WEIGHT set in which at least one candidate
+	// had no fresh KV-usage reading (never reported, no usage family on its
+	// /metrics, or older than the telemetry window) and took the neutral
+	// fill instead. It is the "signal is broken" indicator for the weight:
+	// a pool whose every selection lands here is being scored without the
+	// signal the operator switched on. A subset of
+	// loxilb_ai_pd_decode_selected_total{path=~"score|score_kv"}. Seeded at
+	// zero per model label.
+	aiPDDecodeKVFillTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "loxilb_ai_pd_decode_kv_fill_total",
+			Help: "Total P/D decode selections scored with LLB_PD_DECODE_KV_WEIGHT set in which at least one candidate's KV-usage reading was unknown or stale and took the neutral fill.",
+		},
+		[]string{"model"},
 	)
 
 	// aiNormalSessionHitsTotal counts normal-mode session-stickiness cache hits per model.
@@ -1318,6 +1361,40 @@ func RecordPDTierSelected(modelName string, tier int) {
 		return
 	}
 	aiPDTierSelectedTotal.WithLabelValues(tierLabel, boundModelLabel(modelName)).Inc()
+}
+
+// Path encodings of llb_ai_pd_decode_selected, as the C selector passes them
+// (PD_DEC_PATH_* in loxilb-ebpf common/sockproxy_pd.c).
+const (
+	pdDecodePathHint    = 0
+	pdDecodePathScore   = 1
+	pdDecodePathScoreKV = 2
+)
+
+// pdDecodePathLabels is the closed path enum of
+// loxilb_ai_pd_decode_selected_total, by C encoding.
+var pdDecodePathLabels = map[int]string{
+	pdDecodePathHint:    "hint",
+	pdDecodePathScore:   "score",
+	pdDecodePathScoreKV: "score_kv",
+}
+
+// RecordPDDecodeSelected increments loxilb_ai_pd_decode_selected_total for
+// the path that terminally selected the decode endpoint and, when kvFill is
+// set, loxilb_ai_pd_decode_kv_fill_total for the same model. Called by
+// llb_ai_pd_decode_selected once per successful pd_select_decode. Any path
+// value outside the enum records nothing in either family, so the label
+// stays closed whatever the caller sends.
+func RecordPDDecodeSelected(modelName string, path int, kvFill bool) {
+	pathLabel, ok := pdDecodePathLabels[path]
+	if !ok {
+		return
+	}
+	model := boundModelLabel(modelName)
+	aiPDDecodeSelectedTotal.WithLabelValues(pathLabel, model).Inc()
+	if kvFill {
+		aiPDDecodeKVFillTotal.WithLabelValues(model).Inc()
+	}
 }
 
 // RecordNormalSessionHit increments the loxilb_ai_normal_session_hits_total counter

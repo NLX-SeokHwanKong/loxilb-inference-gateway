@@ -20,10 +20,10 @@
 // The poll loop, in-flight dedup, LastUpdate stamping, and the narrow
 // 3-series lineparser (incl. the num_gpu_blocks label tolerance)
 // moved verbatim to pkg/aimetrics so the CGO_ENABLED=0 global AI controller
-// can reuse them. What stays here is exactly the loxilb-side Sink: the two
-// cgo bridge calls (queue depth + advertised KV capacity) and the Go-side
-// WorkerMetrics bookkeeping. Behavior-identical for loxilb: same series,
-// same cgo sinks, same staleness stamping.
+// can reuse them. What stays here is exactly the loxilb-side Sink: the three
+// cgo bridge calls (queue depth + advertised KV capacity + decode KV-cache
+// pressure) and the Go-side WorkerMetrics bookkeeping. Behavior-identical for
+// loxilb: same series, same cgo sinks, same staleness stamping.
 //
 // Two-decoder split (locked): this shim consumes the NARROW lineparser via
 // aimetrics.Poller — it must never switch to the controller-only
@@ -37,6 +37,8 @@ extern void llb_ai_update_ep_queue_depth(uint32_t service_ip, uint16_t service_p
                                          int ep_index, uint32_t queued_requests);
 extern void llb_ai_update_ep_capacity(uint32_t service_ip, uint16_t service_port,
                                       int ep_index, uint32_t num_gpu_blocks);
+extern void llb_ai_update_ep_kv_usage(uint32_t service_ip, uint16_t service_port,
+                                      int ep_index, uint32_t kv_usage_pct);
 */
 import "C"
 
@@ -149,10 +151,50 @@ func (s *VllmScraper) Stop() {
 }
 
 // vllmScraperSink is the loxinet-side aimetrics.Sink: it performs exactly
-// the two pre-extraction cgo bridge calls per sample, plus the Go-side
-// WorkerMetrics bookkeeping. It is invoked from per-EP scrape goroutines;
-// the cgo bridge writers are atomics on the C side.
+// the two pre-extraction cgo bridge calls per sample plus the decode
+// KV-pressure call, and the Go-side WorkerMetrics bookkeeping. It is invoked
+// from per-EP scrape goroutines; the cgo bridge writers are atomics on the C
+// side.
 type vllmScraperSink VllmScraper
+
+// pdKvUsageUnknown is the cgo contract's "not reported" value for
+// llb_ai_update_ep_kv_usage (PD_KV_USAGE_UNKNOWN in sockproxy.h). The C bridge
+// stores it as the zero-filled "unknown" encoding, so an EP whose /metrics
+// carries no usage family scores neutral in decode selection, exactly like an
+// EP the scraper has never reached.
+const pdKvUsageUnknown = 0xFF
+
+// pdKvUsagePct derives the decode KV-pressure argument of the bridge from a
+// parsed sample. Presence, not value, tells "0 % reported" from "unknown": the
+// lineparser leaves GPUCacheUsagePerc at 0 when no usage family was scraped,
+// and only a family that was actually seen is a key of Raw. Present: the mean
+// ratio as a whole percentage, truncated like WorkerMetrics.KVCacheUsagePerc
+// and clamped to 0..100. Absent: pdKvUsageUnknown.
+func pdKvUsagePct(smp aimetrics.WorkerSample) uint32 {
+	_, kv := smp.Raw[aimetrics.FamilyKVCacheUsagePerc]
+	_, gpu := smp.Raw[aimetrics.FamilyGPUCacheUsagePerc]
+	_, tok := smp.Raw[aimetrics.FamilySGLangTokenUsage]
+	if !kv && !gpu && !tok {
+		return pdKvUsageUnknown
+	}
+	pct := smp.GPUCacheUsagePerc * 100
+	if !(pct > 0) { // also NaN
+		return 0
+	}
+	if pct >= 100 {
+		return 100
+	}
+	return uint32(pct)
+}
+
+// kvUsageBridge is the seam between the sink and the cgo bridge: production
+// code calls C.llb_ai_update_ep_kv_usage; the unit test swaps in a recorder so
+// the arguments (service key, EP index, percentage or 0xFF) can be asserted
+// without a proxy table on the C side.
+var kvUsageBridge = func(serviceIP uint32, svcPortNet uint16, epIdx int, pct uint32) {
+	C.llb_ai_update_ep_kv_usage(C.uint32_t(serviceIP), C.uint16_t(svcPortNet),
+		C.int(epIdx), C.uint32_t(pct))
+}
 
 // OnSample implements aimetrics.Sink.
 func (k *vllmScraperSink) OnSample(epIdx int, smp aimetrics.WorkerSample) {
@@ -193,6 +235,15 @@ func (k *vllmScraperSink) OnSample(epIdx int, smp aimetrics.WorkerSample) {
 	// at read time (V5 — never divide-by-zero in the cap math).
 	C.llb_ai_update_ep_capacity(C.uint32_t(k.serviceIP), C.uint16_t(svcPortNet),
 		C.int(epIdx), C.uint32_t(smp.NumGPUBlocks))
+
+	// A3 (P/D decode selection): this EP's KV-cache pressure, read by
+	// pd_select_decode_excluding when LLB_PD_DECODE_KV_WEIGHT is set. Called
+	// after the queue-depth bridge on purpose: that call owns the
+	// last_update_ts stamp, so this value is exactly as fresh as the queue
+	// depth beside it and one staleness guard covers both. 0xFF tells the C
+	// side the sample carried no usage family (stored as "unknown", which
+	// scores neutral), as opposed to a reported 0 %, which scores 0.
+	kvUsageBridge(k.serviceIP, svcPortNet, epIdx, pdKvUsagePct(smp))
 }
 
 // OnScrapeResult implements the optional aimetrics.ResultSink, exporting the
