@@ -1837,6 +1837,21 @@ func llb_ai_pd_tier_selected(modelName *C.char, tier C.int) {
 	prom.RecordPDTierSelected(modelNameStr, int(tier))
 }
 
+// llb_ai_pd_decode_selected records one terminal P/D decode selection.
+//
+// C sockproxy calls this exactly once per successful pd_select_decode
+// (admission, mid-cycle prefill-connect failover, SGLang pair retry) with the
+// path that produced the endpoint (0=hint, 1=score, 2=score_kv) and whether a
+// scored candidate took the neutral KV fill. The vLLM connect-time re-read of
+// the admission choice does not call it.
+//
+//export llb_ai_pd_decode_selected
+func llb_ai_pd_decode_selected(modelName *C.char, path C.int, kvFill C.int) {
+	defer cgoRecover("llb_ai_pd_decode_selected")
+	modelNameStr := C.GoString(modelName)
+	prom.RecordPDDecodeSelected(modelNameStr, int(path), kvFill != 0)
+}
+
 // llb_ai_normal_session_hit records a normal-mode session-stickiness cache hit.
 //
 // C sockproxy calls this when PRIORITY 0 (learned conv_map lookup) succeeds in
