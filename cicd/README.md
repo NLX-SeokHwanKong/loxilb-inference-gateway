@@ -21,7 +21,10 @@ loxicmd-inference-gateway CLI as the subject under test, with the REST API
 as the oracle, and fold its exit code into the scenario's verdict. Each is
 gated by the `CLI_TESTS` knob of `common.sh`: `auto` (the default) skips the
 half when the image's loxicmd lacks the surface, `required` fails it
-instead, `skip` skips it; `run_local_cicd.sh` runs with `required`.
+instead, `skip` skips it; `run_local_cicd.sh` runs with `required`. In CI
+every AI sanity job runs the loxicmd the Dockerfile pins (`ARG LOXICMD_TAG`):
+the shared setup (`.github/actions/ai-sanity-setup`) builds it and installs it
+over the published image's by default (`loxicmd-pin`, opt out with `"false"`).
 
 | scenario | preflight | what the CLI half covers |
 | --- | --- | --- |
