@@ -327,6 +327,16 @@ effectively rounded to them. The window in force is
 
 The same window decides what the adaptive ceiling below may act on.
 
+The scrape that delivers the queue depth also delivers the endpoint's
+KV-cache usage (`vllm:kv_cache_usage_perc`, `vllm:gpu_cache_usage_perc` or
+`sglang:token_usage`). The gateway stores it beside the queue depth under the
+same freshness stamp, so the window above governs it too, and it keeps "not
+reported" apart from "0 %": an endpoint whose `/metrics` carries no usage
+family is unknown, never empty. Today only P/D decode selection reads it, when
+`LLB_PD_DECODE_KV_WEIGHT` is set (doc 10 §3.6). It is the shared signal the
+flow-control plan's E-11(c) will read; that work adds a reader, not a second
+store or scrape.
+
 ## The adaptive service ceiling
 
 With `fc_adaptive` `on` (or `LLB_FC_ADAPTIVE=on` and the rule declaring

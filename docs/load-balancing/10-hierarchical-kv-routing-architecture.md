@@ -230,6 +230,33 @@ EP: (1) the Tier-0 session-pinned decode hint if valid (role 2, healthy, CB clos
 counter (`pd_decode_rr`). Decode EPs are **never** KV-selection candidates — they publish no KV
 events and hold no scored inventory.
 
+**KV pressure in the min-load score (opt-in).** With `LLB_PD_DECODE_KV_WEIGHT=W` set (default
+0 = off, see doc 11 §3.2), step (2) also reads each decode EP's scraped KV-cache usage
+(`vllm:kv_cache_usage_perc`, legacy `vllm:gpu_cache_usage_perc`, or `sglang:token_usage`,
+delivered by the same `/metrics` sample as the queue depth) and adds `kv_pct × W / 100` to the
+EP's score. `W` is therefore "how many in-flight requests a decode EP at 100 % KV usage is worth".
+An EP whose reading is unknown (no usage family on its `/metrics`, or never scraped) or stale (the
+queue-depth freshness window, doc 23 "Scraped queue depth") gets the mean of the fresh readings in
+the candidate set, so it is neither favoured nor penalised; when no candidate reports, the term is
+0 for all and the pick is the plain min-load one. A reported 0 % counts as 0, not as unknown. The
+session-pinned hint in step (1) is unaffected. With `W=0` the shipped scorer runs unchanged.
+
+**Observing the decode pick.** Every decode selection increments
+`loxilb_ai_pd_decode_selected_total{path,model}`: `hint` when step (1) kept the session-pinned
+EP, `score` when step (2) picked (with `W=0`, every scored pick), `score_kv` when `W>0` and the
+kv term changed the set of minimum-score candidates, i.e. the pick is one the plain min-load
+scorer would not have made (a different RR draw within the same set is still `score`).
+`loxilb_ai_pd_decode_kv_fill_total{model}` counts the scored selections under `W>0` in which at
+least one candidate had no fresh reading and took the neutral mean: it is the indicator that
+the signal the operator switched on is missing or stale on part of the pool (a pool whose every
+selection lands there is being scored without it). Both count once per selection, at admission,
+at the mid-cycle prefill-connect failover and at the SGLang pair retry; the vLLM connect-time
+re-read of the admission choice (`pd_connect_decode`) records nothing, so per window the
+selections equal the sum over the three paths. With `W>0` the data-plane log carries, at debug
+level, one `[PD_DEC]` line per candidate (`conns`, `queued`, `kv=<pct>(ep|fill)`, `score`) and
+one for the winner, and at info level one line when a pool first has to neutralise a candidate
+(`neutral fill … in effect`) and one when every candidate reports fresh again.
+
 ### 3.7 The admission gate (default-OFF)
 
 Before any tier body runs, the admission gate can exclude prefill EPs at their in-flight cap and,
