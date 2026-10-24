@@ -20,23 +20,10 @@ binary behaves exactly like upstream loxilb.
 
 ### Added
 
-- **P/D decode selection is observable: `loxilb_ai_pd_decode_selected_total{path,model}`
-  and `loxilb_ai_pd_decode_kv_fill_total{model}`** (OWNER REVIEW PENDING). Every
-  decode selection — at admission, at the mid-cycle prefill-connect failover
-  and at the SGLang pair retry — counts once under `path` `hint` (the
-  session-pinned decode kept), `score` (the min-load pick; every scored pick
-  with `LLB_PD_DECODE_KV_WEIGHT` unset) or `score_kv` (the weight is set and
-  the KV-pressure term changed the set of best candidates, so the pick is one
-  the plain scorer would not have made). The vLLM connect-time re-read of the
-  admission choice records nothing. `kv_fill` counts the scored selections
-  under the weight in which at least one candidate's KV reading was unknown
-  or stale and took the neutral fill: the indicator that the signal the
-  operator switched on is missing. Both families are seeded at zero per model
-  label, so a first event is visible to `increase()`. With the weight set the
-  data-plane log carries `[PD_DEC]` per-candidate lines at debug level and one
-  info line on each fill/recovery transition of a pool. Documented in
-  docs/load-balancing/10 §3.6 and 11. (loxilb-ebpf recorder and log; gateway
-  registration.)
+- **P/D decode selection counters: `loxilb_ai_pd_decode_selected_total{path=hint|score|score_kv,model}`
+  and `loxilb_ai_pd_decode_kv_fill_total{model}`** (OWNER REVIEW PENDING). Both
+  are seeded per model so a first event shows in `increase()`. `kv_fill` rising
+  means the pool is being scored without a fresh KV reading. (docs 10 §3.6, 11)
 - **`GET /netlox/v1/version` lists the gateway-only capabilities of the build
   under `features`** (`api_key_auth`, `jwt_auth_profile`), as stable tokens a
   controller checks before it sends the matching rule fields. The REST layer
@@ -288,19 +275,12 @@ binary behaves exactly like upstream loxilb.
 
 ### Changed
 
-- **P/D decode selection can weigh a decode endpoint's KV-cache pressure**
-  (OWNER REVIEW PENDING). With `LLB_PD_DECODE_KV_WEIGHT=W` set (default 0 =
-  off), the min-load decode score gains `kv_pct × W / 100`, `kv_pct` being the
-  endpoint's scraped `vllm:kv_cache_usage_perc` (legacy
-  `vllm:gpu_cache_usage_perc`, or `sglang:token_usage`), delivered by the same
-  `/metrics` sample as the queue depth and trusted for the same window. An
-  endpoint whose reading is unknown or stale takes the mean of the fresh
-  readings, so it is neither favoured nor penalised; a pool that reports no
-  usage family behaves exactly as before. A reported 0 % scores 0, not
-  unknown. The session-pinned decode hint, prefill selection, admission and
-  the reservation-token path are unchanged, and with the knob unset the
-  selector runs the shipped code. Documented in docs/load-balancing/10 §3.6,
-  11 §3.2 and 23. (loxilb-ebpf field, bridge and score; gateway scraper sink.)
+- **With `LLB_PD_DECODE_KV_WEIGHT=W` (default 0 = off), the P/D decode min-load
+  score adds the endpoint's scraped KV-cache usage (`vllm:kv_cache_usage_perc` /
+  `sglang:token_usage`) × W/100** (OWNER REVIEW PENDING). Unknown or stale
+  readings take the fleet mean; pools that report no usage family behave as
+  before. Session-pinned decode, prefill selection and admission are unchanged.
+  (docs 10 §3.6, 11)
 - **Request-body keys and the `service_tier` value are compared decoded;
   escaped spellings of `service_tier`, `model` and `user` are read like their
   literal spellings.** An escaped model name is now matched by
