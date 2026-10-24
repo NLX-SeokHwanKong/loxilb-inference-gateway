@@ -1118,11 +1118,11 @@ else
     partition_healed "QOS-HA-013 g: the partition is lifted"
 
     # Wait for the CHANNEL, on the channel's own series, before asking the
-    # far node anything. peer_up goes to 1 in exactly one place — after a
-    # RateLimiterSync batch returned without error — so a 1 here is a push
-    # that completed since the heal, which is the mechanism the assertion
-    # below is about. Waiting on a clock instead would make the case a race
-    # between the reconnect and the debt's 60-second drain.
+    # far node anything. Waiting on a clock instead would make the case a
+    # race between the reconnect and the debt's 60-second drain. peer_up is
+    # "the last sockproxy sync push to this peer succeeded" (its help text):
+    # the session channel sets it as well as the quota push, so it recovers
+    # first and is waited on first; the quota push itself is waited on below.
     PU="unreadable"
     for _ in $(seq 1 25); do
       PU=$(metric "$MASTER" loxilb_sockproxy_sync_peer_up)
@@ -1136,6 +1136,20 @@ else
       bad "QOS-HA-013 h: peer_up recovers on $MASTER after the heal" \
           "peer_up=$PU; the series that reported the outage never reports the recovery, so it cannot be used to clear an alert"
     fi
+
+    # peer_up alone does not prove the backlog crossed: after a heal it
+    # reads 1 at once, set by whichever channel got through first, and the
+    # one question below used to be asked inside that gap (1 run in 10 saw
+    # it). An A-P master pushes a full snapshot every 200 ms, so wait —
+    # reading, never driving — for two RateLimiterSync pushes completed
+    # after this point with peer_up still 1, bounded at 10 s.
+    RL_HEAL=$(metric "$MASTER" loxilb_sockproxy_sync_push_latency_seconds_count 'rpc="RateLimiterSync"')
+    for _ in $(seq 1 20); do
+      sleep 0.5
+      RL_NOW=$(metric "$MASTER" loxilb_sockproxy_sync_push_latency_seconds_count 'rpc="RateLimiterSync"')
+      PU=$(metric "$MASTER" loxilb_sockproxy_sync_peer_up)
+      awk -v a="$RL_NOW" -v b="$RL_HEAL" -v u="$PU" 'BEGIN{exit !(a >= b + 2 && u > 0)}' 2>/dev/null && break
+    done
 
     # Now the invariant, and it is asked EXACTLY ONCE.
     #
