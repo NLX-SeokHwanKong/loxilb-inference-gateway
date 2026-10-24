@@ -227,6 +227,8 @@ def run_positive():
                 str(ev.get("extra_keys")))
             chk("lora_id is null on plain events", ev.get("lora_id") is None)
             chk("event type is BlockStored", ev.get("type") == "BlockStored")
+            chk("block_size is the engine block size the simulator was started with",
+                ev.get("block_size") == BLOCK_SIZE, str(ev.get("block_size")))
             chk("block_hashes match the independent reference chain",
                 ev.get("block_hashes") == ref_hashes,
                 f"got {ev.get('block_hashes')} want {ref_hashes}")
