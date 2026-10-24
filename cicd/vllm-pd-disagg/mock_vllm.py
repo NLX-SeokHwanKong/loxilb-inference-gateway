@@ -105,7 +105,7 @@ _kv_params_mode = "on"  # "on" | "off" | "oversize" — shape of kv_transfer_par
                         #               prefill response that simply has no params
                         #   oversize -> the value exceeds PD_KV_PARAMS_MAX_LEN (64KB), which
                         #               is the only way to reach the extractor's overflow arm
-_metrics_mode = "absent"  # "absent" | "vllm" | "garbage" — what GET /metrics answers.
+_metrics_mode = "absent"  # "absent" | "vllm" | "garbage" | "sglang" — what GET /metrics answers.
                           # Default "absent" is byte-identical to the historical
                           # behaviour (the path falls through to 404), so every
                           # scenario that docker-cp's this file is unaffected and
@@ -122,6 +122,20 @@ _metrics_mode = "absent"  # "absent" | "vllm" | "garbage" — what GET /metrics 
                           #   garbage -> 200 + nothing recognized    -> result="unparseable"
                           # The fourth outcome, result="unreachable", needs the listener
                           # gone and so cannot be a mode here.
+                          #   sglang  -> 200 + the SGLang family names (num_queue_reqs,
+                          #              token_usage) the parser maps to the same two signals;
+                          #              added for the P/D decode-pressure scenario, whose S8
+                          #              case tests the gateway-side parser on that family.
+_kv_usage_pct = None      # None = the historical static body (kv_cache_usage_perc 0.25 in mode
+                          # "vllm", token_usage 0.25 in mode "sglang"). A number 0..100, set by
+                          # POST /admin/metrics-kv-usage/<pct>, gives THIS mock its own KV-cache
+                          # pressure so a decode-selection case can shape each decode EP
+                          # differently. /admin/reset restores None.
+_kv_usage_omit = False    # POST /admin/metrics-kv-usage-omit: serve the queue-depth family and
+                          # the cache config but NO usage family — the shape of an engine that
+                          # does not export KV pressure (TRT-LLM-like). The gateway must read
+                          # "unknown" here, never "0 %". Cleared by /admin/reset or by setting a
+                          # value with /admin/metrics-kv-usage/<pct>.
 
 # The narrow 3-series set pkg/aimetrics/lineparser.go recognizes. Served verbatim in
 # mode "vllm": the parser reports "found" on the FIRST recognized family, so all three
@@ -147,6 +161,50 @@ _GARBAGE_METRICS_BODY = """# HELP some_other_exporter_up Nothing this gateway pa
 # TYPE some_other_exporter_up gauge
 some_other_exporter_up 1.0
 """
+
+
+def _kv_usage_ratio_text():
+    """The usage ratio the two bodies below emit: the historical 0.25 unless an
+    admin call set this mock's percentage (0.92 for 92, 0.4 for 40)."""
+    pct = 25.0 if _kv_usage_pct is None else float(_kv_usage_pct)
+    return f"{pct / 100.0:g}"
+
+
+def _vllm_metrics_body():
+    """Mode "vllm". With no admin knob touched this is _VLLM_METRICS_BODY byte for
+    byte, so every scenario that only switches the mode sees the historical body.
+    With /admin/metrics-kv-usage/<pct> the usage line carries that value; with
+    /admin/metrics-kv-usage-omit the usage family is absent and the other two
+    families stay, which is how the gateway tells "not reported" from "0 %"."""
+    if _kv_usage_pct is None and not _kv_usage_omit:
+        return _VLLM_METRICS_BODY
+    usage = "" if _kv_usage_omit else (
+        "# HELP vllm:kv_cache_usage_perc KV-cache usage as a fraction.\n"
+        "# TYPE vllm:kv_cache_usage_perc gauge\n"
+        f"vllm:kv_cache_usage_perc {_kv_usage_ratio_text()}\n")
+    return (
+        "# HELP vllm:num_requests_waiting Number of requests waiting to be processed.\n"
+        "# TYPE vllm:num_requests_waiting gauge\n"
+        "vllm:num_requests_waiting 3.0\n"
+        + usage +
+        "# HELP vllm:cache_config_info Cache configuration.\n"
+        "# TYPE vllm:cache_config_info gauge\n"
+        'vllm:cache_config_info{num_gpu_blocks="2048",block_size="16"} 1.0\n')
+
+
+def _sglang_metrics_body():
+    """Mode "sglang": the SGLang family names for the same two signals
+    (pkg/aimetrics/lineparser.go maps sglang:num_queue_reqs to the queue depth and
+    sglang:token_usage to the KV-cache usage). Same knobs as the vLLM body."""
+    usage = "" if _kv_usage_omit else (
+        "# HELP sglang:token_usage The token usage\n"
+        "# TYPE sglang:token_usage gauge\n"
+        f"sglang:token_usage {_kv_usage_ratio_text()}\n")
+    return (
+        "# HELP sglang:num_queue_reqs The number of requests in the waiting queue\n"
+        "# TYPE sglang:num_queue_reqs gauge\n"
+        "sglang:num_queue_reqs 3.0\n"
+        + usage)
 
 # Identity of this server instance, echoed as the X-Served-By response header so
 # a test can attribute a proxied response to the endpoint that produced it. In
@@ -287,7 +345,9 @@ class MockVLLMHandler(BaseHTTPRequestHandler):
         unknown paths, and so switching modes cannot change anything else.
         """
         if _metrics_mode == "vllm":
-            body = _VLLM_METRICS_BODY.encode()
+            body = _vllm_metrics_body().encode()
+        elif _metrics_mode == "sglang":
+            body = _sglang_metrics_body().encode()
         elif _metrics_mode == "garbage":
             body = _GARBAGE_METRICS_BODY.encode()
         else:
@@ -597,6 +657,7 @@ class AdminHandler(BaseHTTPRequestHandler):
         global _stream_chunked, _stream_end_mode, _stream_end_hold, _stream_end_at
         global _answer_delay_ms
         global _drop_next
+        global _kv_usage_pct, _kv_usage_omit
         if not self._auth_ok():
             self.send_response(401)
             self.end_headers()
@@ -699,7 +760,7 @@ class AdminHandler(BaseHTTPRequestHandler):
             self._reply_json({"kv_params_mode": _kv_params_mode})
             print(f"[{SERVER_ROLE}] [admin] kv-params mode = {_kv_params_mode}", flush=True)
         elif self.path in ("/admin/metrics-mode-absent", "/admin/metrics-mode-vllm",
-                           "/admin/metrics-mode-garbage"):
+                           "/admin/metrics-mode-garbage", "/admin/metrics-mode-sglang"):
             # What GET /metrics answers, and so which scrape OUTCOME the gateway
             # records for this endpoint. The print is the arm's receipt that the
             # knob actually moved: a control that silently failed to switch would
@@ -707,7 +768,34 @@ class AdminHandler(BaseHTTPRequestHandler):
             _metrics_mode = self.path.rsplit("-", 1)[1]
             self._reply_json({"metrics_mode": _metrics_mode})
             print(f"[{SERVER_ROLE}] [admin] metrics mode = {_metrics_mode}", flush=True)
+        elif path.startswith("/admin/metrics-kv-usage/"):
+            # This mock's KV-cache usage in percent, 0..100 (a float is accepted so a
+            # case can place a value just below or above a threshold). Clears "omit".
+            # 400 on anything else, so a typo cannot pass as a 0 % reading.
+            raw = path[len("/admin/metrics-kv-usage/"):]
+            try:
+                pct = float(raw)
+            except ValueError:
+                pct = -1.0
+            if not 0.0 <= pct <= 100.0:
+                self.send_response(400)
+                self.end_headers()
+                return
+            _kv_usage_pct = pct
+            _kv_usage_omit = False
+            self._reply_json({"kv_usage_pct": _kv_usage_pct, "kv_usage_omit": False,
+                              "metrics_mode": _metrics_mode})
+            print(f"[{SERVER_ROLE}] [admin] metrics kv usage = {_kv_usage_pct} %", flush=True)
+        elif path == "/admin/metrics-kv-usage-omit":
+            # Keep queue depth and cache config, drop the usage family: the gateway
+            # must store "unknown" for this EP, not 0 %.
+            _kv_usage_omit = True
+            self._reply_json({"kv_usage_pct": _kv_usage_pct, "kv_usage_omit": True,
+                              "metrics_mode": _metrics_mode})
+            print(f"[{SERVER_ROLE}] [admin] metrics kv usage OMITTED", flush=True)
         elif self.path == "/admin/reset":
+            _kv_usage_pct = None
+            _kv_usage_omit = False
             _fail_next = False
             _fail_next_status = 500
             _fail_next_skip = 0
@@ -725,7 +813,8 @@ class AdminHandler(BaseHTTPRequestHandler):
                               "stream_chunks": 0, "stream_chunked": False,
                               "stream_end_mode": "", "stream_end_hold": 0,
                               "stream_end_at": "", "answer_delay_ms": 0,
-                              "drop_next": False})
+                              "drop_next": False, "kv_usage_pct": None,
+                              "kv_usage_omit": False})
             print(f"[{SERVER_ROLE}] [admin] knobs RESET", flush=True)
         elif self.path == "/admin/health-fail":
             _health_ok = False
@@ -771,6 +860,8 @@ class AdminHandler(BaseHTTPRequestHandler):
                 "stream_end_hold": _stream_end_hold,
                 "stream_end_at": _stream_end_at,
                 "answer_delay_ms": _answer_delay_ms,
+                "kv_usage_pct": _kv_usage_pct,
+                "kv_usage_omit": _kv_usage_omit,
                 "role": SERVER_ROLE,
                 "request_count": _request_count,
             }).encode()

@@ -20,6 +20,10 @@ binary behaves exactly like upstream loxilb.
 
 ### Added
 
+- **P/D decode selection counters: `loxilb_ai_pd_decode_selected_total{path=hint|score|score_kv,model}`
+  and `loxilb_ai_pd_decode_kv_fill_total{model}`** (OWNER REVIEW PENDING). Both
+  are seeded per model so a first event shows in `increase()`. `kv_fill` rising
+  means the pool is being scored without a fresh KV reading. (docs 10 §3.6, 11)
 - **`GET /netlox/v1/version` lists the gateway-only capabilities of the build
   under `features`** (`api_key_auth`, `jwt_auth_profile`), as stable tokens a
   controller checks before it sends the matching rule fields. The REST layer
@@ -271,6 +275,12 @@ binary behaves exactly like upstream loxilb.
 
 ### Changed
 
+- **With `LLB_PD_DECODE_KV_WEIGHT=W` (default 0 = off), the P/D decode min-load
+  score adds the endpoint's scraped KV-cache usage (`vllm:kv_cache_usage_perc` /
+  `sglang:token_usage`) × W/100** (OWNER REVIEW PENDING). Unknown or stale
+  readings take the fleet mean; pools that report no usage family behave as
+  before. Session-pinned decode, prefill selection and admission are unchanged.
+  (docs 10 §3.6, 11)
 - **Request-body keys and the `service_tier` value are compared decoded;
   escaped spellings of `service_tier`, `model` and `user` are read like their
   literal spellings.** An escaped model name is now matched by
