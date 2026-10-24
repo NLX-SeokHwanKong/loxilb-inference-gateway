@@ -71,9 +71,44 @@ sim_pids() {
         fi
     done
 }
-# NOTE: bare builtin kill — `sudo kill` execs the DISABLED /bin/kill stub
-# (this exact no-op slipped through once: sudo'd "builtin" is no builtin).
-sims_signal() { local s="$1" p; for p in $(sim_pids); do kill "-${s}" "$p" 2>/dev/null; done; }
+# NOTE: builtin kill — `sudo kill` execs the DISABLED /bin/kill stub (this
+# exact no-op slipped through once: sudo'd "builtin" is no builtin). The
+# simulators run as root (config.sh: nohup sudo ...) while the suite runs as
+# the invoking user (the hosted runner's step user): a user's builtin kill is
+# refused on the root python, and jammy sudo 1.9.9 relays nothing. So the
+# builtin runs in a root bash, and the result is checked rather than
+# assumed: after STOP every simulator pid is stopped (T), after CONT none is.
+# The pids are the sudo wrappers and their python; a wrapper that resumes
+# acts on its child's stop and can leave it stopped again, so a pid not yet
+# in the wanted state is signalled again until all settle (~5 s), and the
+# settled states are what the check reads.
+# As root (the bed) every signal lands, so a bed run cannot show this.
+# Same class as kv-sglang-attest's sims_stop (#447).
+sims_signal() {
+    local s="$1" pids st p ps redo
+    pids=$(sim_pids | tr '\n' ' ')
+    redo="$pids"
+    for _ in $(seq 1 10); do
+        [[ -n "${redo// /}" ]] && sudo bash -c "for p in ${redo}; do kill -${s} \$p 2>/dev/null; done"
+        sleep 0.5
+        redo=""; st=""
+        for p in $pids; do
+            ps=$(awk '{print $3}' "/proc/$p/stat" 2>/dev/null)
+            st+=$ps
+            if [[ "$s" == STOP ]]; then
+                [[ "$ps" == T ]] || redo+="$p "
+            elif [[ "$ps" == T ]]; then
+                redo+="$p "
+            fi
+        done
+        [[ -z "$redo" ]] && break
+    done
+    if [[ "$s" == STOP ]]; then
+        chk "sims_signal STOP: every simulator pid is stopped (${pids% })" '^T+$' "$st"
+    else
+        chk "sims_signal ${s}: no simulator pid is left stopped (${pids% })" '^[^T]+$' "$st"
+    fi
+}
 
 # post_strict <node> <vip> <eps> -> "HTTPCODE|body". The SAME strict body
 # shape goes to old and new nodes — the version skew in what each build

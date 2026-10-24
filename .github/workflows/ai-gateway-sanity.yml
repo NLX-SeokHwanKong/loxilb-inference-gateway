@@ -24,6 +24,9 @@ name: AI-Gateway-Sanity-CI
 #                     half on the tree's pinned loxicmd (loxicmd-pin)  ~25 min
 #   ai-pd-admission   P/D bounded admission per endpoint: shed, park,
 #                     overflow (cicd/vllm-pd-admission-cpu)            ~3 min
+#   ai-kv-strict      strict KV admission: profile/engine contract
+#                     refusals (cicd/kv-profile-admission) and SGLang
+#                     attestation rungs (cicd/kv-sglang-attest)        ~4 min
 # NOTE: cicd/vllm-kvcache-routing-cpu is intentionally NOT gated here. Its
 # strict fixture-driven asserts (exact tokenizer-overlap fallthrough timing)
 # are sensitive to hosted-runner state; that real-vLLM CPU harness is
@@ -41,6 +44,8 @@ on:
       - 'cicd/trtllm-**'
       - 'cicd/llamacpp-**'
       - 'cicd/ai-**'
+      - 'cicd/kv-profile-admission/**'
+      - 'cicd/kv-sglang-attest/**'
       - 'cicd/tcplbconnlimit/**'
       - 'cicd/lbreplace/**'
       - 'cicd/common/**'
@@ -59,6 +64,8 @@ on:
       - 'cicd/trtllm-**'
       - 'cicd/llamacpp-**'
       - 'cicd/ai-**'
+      - 'cicd/kv-profile-admission/**'
+      - 'cicd/kv-sglang-attest/**'
       - 'cicd/tcplbconnlimit/**'
       - 'cicd/lbreplace/**'
       - 'cicd/common/**'
@@ -455,6 +462,64 @@ jobs:
             /tmp/pd-fault/
             /tmp/ai-*.log
           include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # Strict KV admission, GPU-free. kv-profile-admission holds the admission
+  # contract (profile/engine/hash refusals, replace-only fields, binding
+  # identity); kv-sglang-attest earns the attestation rungs through the SGLang
+  # simulator in cicd/common/kv_hash, whose self-test gates config.sh. Both
+  # suites call sudo themselves, so the step runs them as the runner user.
+  ai-kv-strict:
+    name: ai-kv-strict
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    # Dependabot PRs have no submodule token; the private eBPF checkout fails.
+    if: github.actor != 'dependabot[bot]'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.CI_SUBMODULE_TOKEN || github.token }}
+      - uses: ./.github/actions/ai-sanity-setup
+        with:
+          ghcr-token: ${{ secrets.GHCR_TOKEN || github.token }}
+      - name: Strict KV profile admission (refusals, replace-only, binding identity)
+        env:
+          LOXILB_DOCKER_IMAGE: ghcr.io/loxilb-io/loxilb-inference-gateway:latest
+        run: |
+          cd cicd/kv-profile-admission/
+          ./config.sh
+          ./validation.sh
+          ./rmconfig.sh
+          cd -
+      - name: SGLang KV attestation rungs (simulator self-test, then T1-T9)
+        env:
+          LOXILB_DOCKER_IMAGE: ghcr.io/loxilb-io/loxilb-inference-gateway:latest
+        run: |
+          cd cicd/kv-sglang-attest/
+          ./config.sh
+          ./validation.sh
+          ./rmconfig.sh
+          cd -
+      - name: Collect the gateway logs a failed run left in llb1
+        if: failure()
+        run: |
+          mkdir -p /tmp/ai-kv-strict
+          docker cp llb1:/var/log/loxilbdp.log /tmp/ai-kv-strict/ || true
+          docker cp llb1:/tmp/loxilb.err /tmp/ai-kv-strict/ || true
+          docker cp llb1:/tmp/loxilb.out /tmp/ai-kv-strict/ || true
+          docker ps -a > /tmp/ai-kv-strict/docker-ps.txt || true
+      - name: Keep what a failed run left
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-kv-strict-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            /tmp/ai-kv-strict/
+            /tmp/kvsgl-sim-*
+            /tmp/kvpa-*.json
+            /tmp/kvsgl-*.json
           if-no-files-found: ignore
           retention-days: 14
 

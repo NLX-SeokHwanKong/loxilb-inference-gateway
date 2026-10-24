@@ -49,6 +49,16 @@ TOKENIZER = os.path.join(
 PROBE_DIR = os.path.join(
     _HERE, "fixtures", "probefixtures", "qwen3-06b-completions-v1")
 MODEL = "Qwen/Qwen3-0.6B"
+
+# The probe-fixture dir holds both surfaces of the profile. The simulator
+# serves the completions surface only (/v1/tokenize reads "prompt"); the six
+# chat-shape fixtures ("messages") were banked after it (c8c12d64). The
+# gateway probes a rule only with the fixtures of the surfaces it declares
+# (kvFixturesForRule), so a completions rule never sends them. Both sets are
+# pinned by name: a new or renamed fixture of either kind fails the self-test.
+COMPLETIONS_FIXTURES = ("basic-ascii", "multiline-punct", "unicode-mix")
+CHAT_FIXTURES = ("chat-assistant-think", "chat-multi-turn", "chat-system-user",
+                 "chat-unicode-mix", "chat-user-only", "chat-whitespace-edges")
 BLOCK_SIZE = 16
 ALGO = "sha256_cbor"
 SEED = "0"
@@ -140,17 +150,21 @@ def reference_blocks(prompt: str):
 
 
 def probe_fixtures():
-    out = []
+    """-> (completions fixtures to check byte-exact, names of skipped chat fixtures)"""
+    out, skipped = [], []
     for name in sorted(os.listdir(PROBE_DIR)):
         if not name.endswith(".request.json"):
             continue
         base = name[: -len(".request.json")]
         with open(os.path.join(PROBE_DIR, name)) as f:
             req = json.load(f)
+        if "messages" in req:
+            skipped.append(base)
+            continue
         with open(os.path.join(PROBE_DIR, base + ".expect.json")) as f:
             exp = json.load(f)
         out.append((base, req, exp))
-    return out
+    return out, skipped
 
 
 def run_positive():
@@ -165,8 +179,16 @@ def run_positive():
         chk("GET /v1/models serves the model", st == 200 and served == [MODEL],
             str(body))
 
-        fixtures = probe_fixtures()
+        fixtures, skipped = probe_fixtures()
+        print(f"skipped {len(skipped)} chat fixtures (simulator serves the "
+              "completions surface only; the gateway probes a completions rule "
+              "with kvFixturesForRule's subset)")
+        chk("skipped set is exactly the known chat fixtures",
+            skipped == sorted(CHAT_FIXTURES), f"skipped {skipped}")
         chk("committed probe fixtures present (3 pairs)", len(fixtures) == 3,
+            str([f[0] for f in fixtures]))
+        chk("completions fixtures checked byte-exact are exactly the 3 known pairs",
+            [f[0] for f in fixtures] == sorted(COMPLETIONS_FIXTURES),
             str([f[0] for f in fixtures]))
         for base, req, exp in fixtures:
             st, body = http_json("POST", sim.url("/tokenize"),
@@ -205,6 +227,8 @@ def run_positive():
                 str(ev.get("extra_keys")))
             chk("lora_id is null on plain events", ev.get("lora_id") is None)
             chk("event type is BlockStored", ev.get("type") == "BlockStored")
+            chk("block_size is the engine block size the simulator was started with",
+                ev.get("block_size") == BLOCK_SIZE, str(ev.get("block_size")))
             chk("block_hashes match the independent reference chain",
                 ev.get("block_hashes") == ref_hashes,
                 f"got {ev.get('block_hashes')} want {ref_hashes}")
@@ -219,7 +243,7 @@ def run_tokenize_drift():
     print("=== red twin: --fail tokenize-drift ===")
     sim = Sim(fail="tokenize-drift")
     try:
-        _base, req, exp = probe_fixtures()[0]
+        _base, req, exp = probe_fixtures()[0][0]
         st, body = http_json("POST", sim.url("/tokenize"),
                              {"model": req["model"], "prompt": req["prompt"]})
         got = body.get("tokens", [])
