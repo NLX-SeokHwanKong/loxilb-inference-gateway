@@ -62,11 +62,16 @@ CHAT_FIXTURES = ("chat-assistant-think", "chat-multi-turn", "chat-system-user",
 BLOCK_SIZE = 16
 ALGO = "sha256_cbor"
 SEED = "0"
-# Long enough for >= 2 full blocks of 16 under the Qwen3 tokenizer.
+# 38 tokens under the Qwen3 tokenizer: 2 full blocks of 16 plus a partial
+# block of 6. The length is chosen so the token count divides evenly by the
+# full-block count (38 / 2 = 19): a simulator that derives block_size from
+# its token_ids (5f5babe4..e06ece11) sends 19 here, and the block_size check
+# below fails. At 39 tokens it divided unevenly, the derived path never ran
+# and the check passed against that simulator too.
 CHALLENGE_PROMPT = (
     "The quick brown fox jumps over the lazy dog. "
     "Pack my box with five dozen liquor jugs. "
-    "Sphinx of black quartz, judge my vow. "
+    "Sphinx of quartz, judge my vow. "
     "How vexingly quick daft zebras jump!")
 
 _fails = 0
@@ -201,6 +206,11 @@ def run_positive():
         ref_ids, ref_hashes = reference_blocks(CHALLENGE_PROMPT)
         chk("challenge prompt spans >= 2 full blocks", len(ref_hashes) >= 2,
             f"only {len(ref_hashes)} full blocks of {len(ref_ids)} tokens")
+        chk("challenge prompt's token count divides evenly by its full blocks "
+            "into a value other than the block size (the block_size check guards)",
+            len(ref_hashes) > 0 and len(ref_ids) % len(ref_hashes) == 0
+            and len(ref_ids) // len(ref_hashes) != BLOCK_SIZE,
+            f"{len(ref_ids)} tokens over {len(ref_hashes)} full blocks")
         st, body = http_json("POST", sim.url("/v1/completions"),
                              {"model": MODEL, "prompt": CHALLENGE_PROMPT})
         chk("/v1/completions answers 200 with usage",
