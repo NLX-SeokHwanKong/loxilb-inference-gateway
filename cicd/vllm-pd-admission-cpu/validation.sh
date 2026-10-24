@@ -195,10 +195,24 @@ start_holders() {
 # answered it 504 at the prefill timeout, and the holders never left while hung. Newer
 # sudo relays it, which is why a 24.04 host does not show this. Signal the whole tree,
 # leaves first, so the curl itself gets the TERM.
+#
+# The leaves below sudo are root's (ip, curl). When this script runs as a non-root user a
+# plain kill of such a leaf is refused with EPERM, the TERM reaches only the sudo process
+# and the holder lives on to the gateway's 504 exactly as before: both B-left lines then
+# read Δ6 (the probes) instead of Δ9. kill_one therefore retries a refused TERM through
+# sudo, which the script already relies on for the netns and fault helpers; as root the
+# plain kill succeeds and sudo is never invoked, so the one code path serves both runners.
+kill_one() {
+    kill -TERM "$1" >/dev/null 2>&1 && return 0
+    [ -d "/proc/$1" ] || return 0            # already gone
+    [ "$(id -u)" = "0" ] && return 0         # root cannot be refused: nothing to retry
+    sudo kill -TERM "$1" >/dev/null 2>&1 || true
+}
+
 kill_tree() {
     local child
     for child in $(pgrep -P "$1" 2>/dev/null); do kill_tree "${child}"; done
-    kill "$1" >/dev/null 2>&1 || true
+    kill_one "$1"
 }
 
 stop_holders() {
