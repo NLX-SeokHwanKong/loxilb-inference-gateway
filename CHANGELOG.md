@@ -510,6 +510,18 @@ binary behaves exactly like upstream loxilb.
 
 ### Fixed
 
+- **The capacity-queue deadline timer is opened before any worker thread
+  starts** (candidate qualification 2026-10-24, TSAN-01): a start-up data race
+  on the queue deadline timer's descriptor between the deadline thread, which
+  opened it at its own start, and the health pass, which read it on every pass
+  to decide whether it owed the fallback deadline sweep. The effect was one
+  redundant fallback sweep in the first second; no client-visible effect. The
+  timer is now opened in `proxy_main` before the threads exist, so every
+  thread's start orders its reads after the open; the deadline thread only
+  checks that a timer exists, arms and waits, and a process whose timer could
+  not be opened logs it once and leaves the deadlines to the 1 Hz pass, as
+  before. A source invariant (`check_deadline_init_order`, mutation-tested)
+  keeps the order.
 - **A rule whose `id` is already bound to another rule is refused with 400
   and the reason** (`lbrule-id conflict: id already bound to a different
   rule`). It was answered 500 `Internal service error` with the wording
