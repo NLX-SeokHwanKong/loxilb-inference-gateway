@@ -613,21 +613,34 @@ echo "--- QOS-HA-007: peer state must not mint phantom headroom ---"
 # The oracle is a COUNT, driven at the standby while the master pushes. A
 # single request cannot see headroom shrink; it can only see it gone.
 PHANTOM_KEY=$(key_raw ha-phantom-key)
-if [ -z "$PHANTOM_KEY" ]; then
-  bad "QOS-HA-007 identity present" "missing raw key for ha-phantom-key"
+FEED_KEY=$(key_raw ha-phantom-feed-key)
+if [ -z "$PHANTOM_KEY" ] || [ -z "$FEED_KEY" ]; then
+  bad "QOS-HA-007 identity present" "missing raw key for ha-phantom-key or ha-phantom-feed-key"
 else
   # Precondition: the master must be pushing, or "nothing changed at the
   # standby" is a statement about a silent channel and not about snapshots.
   PH_MARK=$(metric "$MASTER" loxilb_sockproxy_sync_push_latency_seconds_count 'rpc="RateLimiterSync"')
   PH_ADMITTED=0
   PH_TOTAL=0
-  for _ in $(seq 1 8); do
+  # The window ends on its precondition, not on a request count: at least
+  # eight requests at the standby AND a completed master push, bounded at
+  # 10 s. Each standby request follows a spend at the master (config.sh,
+  # ha-phantom-feed), so the master holds entries and every push in the
+  # window carries real peer state; a fixed eight requests could finish
+  # inside one 200 ms push tick.
+  PH_END=$((SECONDS + 10))
+  while :; do
+    new_nonce
+    req "$MVIP" 2020 "$FEED_KEY" >/dev/null
     new_nonce
     c=$(req "$SVIP" 2020 "$PHANTOM_KEY")
     PH_TOTAL=$((PH_TOTAL + 1))
     [ "$c" = "200" ] && PH_ADMITTED=$((PH_ADMITTED + 1))
+    [ "$PH_TOTAL" -lt 8 ] && continue
+    PH_NOW=$(metric "$MASTER" loxilb_sockproxy_sync_push_latency_seconds_count 'rpc="RateLimiterSync"')
+    awk -v a="$PH_NOW" -v b="$PH_MARK" 'BEGIN{exit !(a>b)}' 2>/dev/null && break
+    [ "$SECONDS" -ge "$PH_END" ] && break
   done
-  PH_NOW=$(metric "$MASTER" loxilb_sockproxy_sync_push_latency_seconds_count 'rpc="RateLimiterSync"')
   if [ "$PH_MARK" = "unreadable" ] || [ "$PH_NOW" = "unreadable" ]; then
     bad "QOS-HA-007 pre: snapshots were arriving during the window" \
         "the master's push counter is unreadable, so the window carried no proven peer state"
@@ -638,7 +651,8 @@ else
     ok "QOS-HA-007 pre: snapshots were arriving during the window" \
        "master push count $PH_MARK -> $PH_NOW"
   fi
-  # 12 tokens a request against 100000/min: all eight must be admitted. The
+  # 12 tokens a request against 100000/min: every request of the window must
+  # be admitted (at most ~10 s of them, far below the bound). The
   # bound exists only so the tenant resolves a quota at all — a tenant with
   # no bound is never consulted and the case would pass vacuously.
   if [ "$PH_ADMITTED" -eq "$PH_TOTAL" ]; then
