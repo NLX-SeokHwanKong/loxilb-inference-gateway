@@ -12,13 +12,13 @@ inputs:
     required: true
   loxicmd-pin:
     description: >
-      "true" overlays the image's loxicmd with loxicmd-inference-gateway built
-      at the commit the Dockerfile pins (ARG LOXICMD_TAG), as the Dockerfile
-      builds it, so a job's CLI half runs the CLI this tree ships rather than
-      the one in the published image. "false" (the default) keeps the
-      published image's loxicmd.
+      "true" (the default) overlays the image's loxicmd with
+      loxicmd-inference-gateway built at the commit the Dockerfile pins (ARG
+      LOXICMD_TAG), as the Dockerfile builds it, so a job's CLI half runs the
+      CLI this tree ships rather than the one in the published image. "false"
+      keeps the published image's loxicmd.
     required: false
-    default: "false"
+    default: "true"
 runs:
   using: composite
   steps:
@@ -86,7 +86,7 @@ runs:
     # which is how the tenant scheduling suite first failed here.
     - run: pwd && ls && sudo -E env "PATH=$PATH" make docker-cp EXTRA_CFLAGS=-DHAVE_SOCKOPS
       shell: bash
-    # loxicmd at the tree's pin (loxicmd-pin: "true" only). The Dockerfile is
+    # loxicmd at the tree's pin (unless loxicmd-pin: "false"). The Dockerfile is
     # the single source of the SHA; scripts/check-loxicmd-pin.sh keeps the
     # other Dockerfiles equal to it. Built as the Dockerfile builds it (a
     # checkout of exactly that commit, go get, make), cached per SHA and

@@ -9,19 +9,22 @@ name: AI-Gateway-Sanity-CI
 # One job per family, in parallel: the single job took 68 minutes on main
 # (the vLLM P/D mock alone 20), so a red arrived an hour after the push.
 # Every job starts from the same composite setup (.github/actions/ai-sanity-setup:
-# toolchain, from-source build, the image overlay) and keeps the artifacts of a
-# failed run. Each job is a required check on main; a scenario that is moved
-# or renamed moves with its job name, never silently out of the gate.
+# toolchain, from-source build, the image overlay, and the loxicmd the
+# Dockerfile pins, so every CLI half runs the CLI this tree ships) and keeps
+# the artifacts of a failed run. Each job is a required check on main; a
+# scenario that is moved or renamed moves with its job name, never silently
+# out of the gate.
 #   ai-pd-vllm        vLLM P/D disaggregation (mock vLLM)             ~23 min
 #   ai-engine-mocks   SGLang/TRT-LLM P/D, llama.cpp, SGLang KV-cache   ~18 min
-#   ai-auth           API keys, auth-plane separation, SSE quota
-#   ai-jwtauth        JWT bearer admission (Keycloak) and its CLI half,
-#                     on the tree's pinned loxicmd (loxicmd-pin)
-#   ai-admission      capacity gate, model routing/conflict, endpoint
-#                     health, connectionLimit, rule replace            ~17 min
+#   ai-auth           API keys, auth-plane separation, SSE quota,
+#                     with the CLI halves of ai-apikey and ai-sse-quota
+#   ai-jwtauth        JWT bearer admission (Keycloak) and its CLI half
+#   ai-admission      capacity gate, model routing/conflict (with the
+#                     ai-model-routing CLI half), endpoint health,
+#                     connectionLimit, rule replace                    ~17 min
 #   ai-tenant-sched   tenant scheduling, bands, release accounting
 #                     (cicd/ai-tenant, REQUIRE_ALL=1), and its CLI
-#                     half on the tree's pinned loxicmd (loxicmd-pin)  ~25 min
+#                     half                                             ~25 min
 #   ai-pd-admission   P/D bounded admission per endpoint: shed, park,
 #                     overflow (cicd/vllm-pd-admission-cpu)            ~3 min
 #   ai-kv-strict      strict KV admission: profile/engine contract
@@ -228,9 +231,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-  # JWT bearer admission against a live Keycloak realm, on its own job so it
-  # alone runs the tree's pinned loxicmd (the setup's loxicmd-pin): every
-  # scenario of ai-auth keeps the published image's CLI.
+  # JWT bearer admission against a live Keycloak realm, on its own job.
   ai-jwtauth:
     name: ai-jwtauth
     runs-on: ubuntu-22.04
@@ -245,7 +246,6 @@ jobs:
       - uses: ./.github/actions/ai-sanity-setup
         with:
           ghcr-token: ${{ secrets.GHCR_TOKEN || github.token }}
-          loxicmd-pin: "true"
       # The bearer (JWT) admission arm against a real Keycloak realm: the token
       # verdict ladder, apikey-or-jwt precedence, upstream header hygiene, the
       # HTTP/2 admission legs, the keyless VIP quota arm and the missing-usage
@@ -391,7 +391,6 @@ jobs:
       - uses: ./.github/actions/ai-sanity-setup
         with:
           ghcr-token: ${{ secrets.GHCR_TOKEN || github.token }}
-          loxicmd-pin: "true"
       # CLI_TESTS=required: the setup installed the tree's pinned loxicmd
       # (loxicmd-pin), so the CLI half (validate_cli.sh, folded into
       # validation-sched.sh) must run, never skip.
