@@ -11312,7 +11312,7 @@ func init() {
     },
     "/config/bfd": {
       "post": {
-        "description": "Create or update a BFD session for an existing cluster instance. New sessions require a valid remote address, interval at least 100000 microseconds, and retryCount greater than zero; first setup also validates source IP. Existing-session zero interval/retryCount preserves that value, while unchanged submissions conflict and source-IP changes are not applied. Interval narrows from uint64 to uint32. First creation is asynchronous and can fail after HTTP success.",
+        "description": "Create or update a BFD session for an existing cluster instance. New sessions require a valid remote address, interval at least 100000 microseconds, and retryCount greater than zero; first setup also validates source IP. Existing-session zero interval/retryCount preserves that value, while unchanged submissions conflict and source-IP changes are not applied. Interval narrows from uint64 to uint32. First creation is asynchronous and can fail after HTTP success. BGP-only mode returns 400; an uninitialized BFD subsystem returns 503.",
         "parameters": [
           {
             "description": "Attributes for Vlan Interface",
@@ -11332,7 +11332,7 @@ func init() {
             }
           },
           "400": {
-            "description": "Malformed arguments for API call",
+            "description": "Malformed arguments for API call or BFD unavailable in BGP-only mode",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -11368,7 +11368,7 @@ func init() {
             }
           },
           "503": {
-            "description": "Maintenance mode",
+            "description": "Maintenance mode or BFD subsystem unavailable",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -11379,7 +11379,7 @@ func init() {
     },
     "/config/bfd/all": {
       "get": {
-        "description": "Return BFD sessions when the cluster BFD running flag is set. Current IPv6 host/port parsing can corrupt readback. A session accepted for asynchronous creation may not yet appear; the global running flag can also become inconsistent after deletion.",
+        "description": "Return the initialized BFD session table. No configured sessions (including keepalive disabled or after deleting the last session) returns 200 with Attr: []. BGP-only mode returns 400 and an uninitialized BFD subsystem returns 503. Current IPv6 host/port parsing can corrupt readback.",
         "responses": {
           "200": {
             "description": "OK",
@@ -11393,6 +11393,12 @@ func init() {
                 }
               },
               "type": "object"
+            }
+          },
+          "400": {
+            "description": "BFD is unavailable in BGP-only mode",
+            "schema": {
+              "$ref": "#/definitions/Error"
             }
           },
           "401": {
@@ -11411,7 +11417,7 @@ func init() {
             }
           },
           "503": {
-            "description": "Maintenance mode",
+            "description": "Maintenance mode or BFD subsystem unavailable",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -11422,7 +11428,7 @@ func init() {
     },
     "/config/bfd/remoteIP/{remote_ip}": {
       "delete": {
-        "description": "Request deletion of a BFD session by remote IP. Supply an existing instance explicitly; omission does not default to the default instance. Safety limitation: instance existence is checked but session ownership is not, and successful deletion clears a global running flag even if other sessions remain. Do not assume instance-scoped isolation or complete BFD shutdown.",
+        "description": "Request deletion of a BFD session by remote IP. Supply an existing instance explicitly; omission does not default to the default instance. Successful deletion retains the keepalive running hint while any sessions remain and clears it only after the last session is removed. Safety limitation: instance existence is checked but session ownership is not; do not assume instance-scoped isolation or complete BFD shutdown. BGP-only mode returns 400; an uninitialized BFD subsystem returns 503.",
         "parameters": [
           {
             "description": "Remote IP address",
@@ -11447,7 +11453,7 @@ func init() {
             }
           },
           "400": {
-            "description": "Malformed arguments for API call",
+            "description": "Malformed arguments for API call or BFD unavailable in BGP-only mode",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -11483,7 +11489,7 @@ func init() {
             }
           },
           "503": {
-            "description": "Maintenance mode",
+            "description": "Maintenance mode or BFD subsystem unavailable",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -21844,7 +21850,7 @@ func init() {
     },
     "/status/process": {
       "get": {
-        "description": "Returns Linux process observations assembled from top, with CPU and memory percentages from ps. Values depend on command availability and output format; the current parser incompletely handles failed or short command output.",
+        "description": "Read Linux procfs directly without top or ps. CPUUsage is cumulative user plus system CPU time divided by elapsed process lifetime, as a percentage that can exceed 100 for multithreaded processes. MemoryUsage is resident bytes divided by MemTotal. Virtual, resident and shared sizes are decimal KiB strings; CPU time is minutes:seconds.centiseconds. Command is the kernel comm name (normally limited to 15 bytes), with embedded whitespace preserved. Effective UID uses the first matching passwd entry or its numeric value. Rows sort by displayed CPU usage descending, then PID ascending. Exited, inaccessible and malformed individual PID records are skipped; reads are not an atomic snapshot. Missing or invalid global procfs data, or no readable processes, returns 500 with a generic collection-failure response, never a message-inferred 400/404 or fabricated healthy empty list.",
         "responses": {
           "200": {
             "description": "OK",
@@ -21862,7 +21868,7 @@ func init() {
             "$ref": "#/responses/ManagementForbidden"
           },
           "500": {
-            "description": "Internal service error",
+            "description": "Internal service error, including missing or invalid global process data or no readable processes",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -24698,7 +24704,7 @@ func init() {
     },
     "/config/bfd": {
       "post": {
-        "description": "Create or update a BFD session for an existing cluster instance. New sessions require a valid remote address, interval at least 100000 microseconds, and retryCount greater than zero; first setup also validates source IP. Existing-session zero interval/retryCount preserves that value, while unchanged submissions conflict and source-IP changes are not applied. Interval narrows from uint64 to uint32. First creation is asynchronous and can fail after HTTP success.",
+        "description": "Create or update a BFD session for an existing cluster instance. New sessions require a valid remote address, interval at least 100000 microseconds, and retryCount greater than zero; first setup also validates source IP. Existing-session zero interval/retryCount preserves that value, while unchanged submissions conflict and source-IP changes are not applied. Interval narrows from uint64 to uint32. First creation is asynchronous and can fail after HTTP success. BGP-only mode returns 400; an uninitialized BFD subsystem returns 503.",
         "summary": "Create vlan interface in the device",
         "parameters": [
           {
@@ -24719,7 +24725,7 @@ func init() {
             }
           },
           "400": {
-            "description": "Malformed arguments for API call",
+            "description": "Malformed arguments for API call or BFD unavailable in BGP-only mode",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -24755,7 +24761,7 @@ func init() {
             }
           },
           "503": {
-            "description": "Maintenance mode",
+            "description": "Maintenance mode or BFD subsystem unavailable",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -24765,7 +24771,7 @@ func init() {
     },
     "/config/bfd/all": {
       "get": {
-        "description": "Return BFD sessions when the cluster BFD running flag is set. Current IPv6 host/port parsing can corrupt readback. A session accepted for asynchronous creation may not yet appear; the global running flag can also become inconsistent after deletion.",
+        "description": "Return the initialized BFD session table. No configured sessions (including keepalive disabled or after deleting the last session) returns 200 with Attr: []. BGP-only mode returns 400 and an uninitialized BFD subsystem returns 503. Current IPv6 host/port parsing can corrupt readback.",
         "summary": "Get BFD session inforrmation in the device",
         "responses": {
           "200": {
@@ -24780,6 +24786,12 @@ func init() {
                   }
                 }
               }
+            }
+          },
+          "400": {
+            "description": "BFD is unavailable in BGP-only mode",
+            "schema": {
+              "$ref": "#/definitions/Error"
             }
           },
           "401": {
@@ -24801,7 +24813,7 @@ func init() {
             }
           },
           "503": {
-            "description": "Maintenance mode",
+            "description": "Maintenance mode or BFD subsystem unavailable",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -24811,7 +24823,7 @@ func init() {
     },
     "/config/bfd/remoteIP/{remote_ip}": {
       "delete": {
-        "description": "Request deletion of a BFD session by remote IP. Supply an existing instance explicitly; omission does not default to the default instance. Safety limitation: instance existence is checked but session ownership is not, and successful deletion clears a global running flag even if other sessions remain. Do not assume instance-scoped isolation or complete BFD shutdown.",
+        "description": "Request deletion of a BFD session by remote IP. Supply an existing instance explicitly; omission does not default to the default instance. Successful deletion retains the keepalive running hint while any sessions remain and clears it only after the last session is removed. Safety limitation: instance existence is checked but session ownership is not; do not assume instance-scoped isolation or complete BFD shutdown. BGP-only mode returns 400; an uninitialized BFD subsystem returns 503.",
         "summary": "Delete a BFD session",
         "parameters": [
           {
@@ -24836,7 +24848,7 @@ func init() {
             }
           },
           "400": {
-            "description": "Malformed arguments for API call",
+            "description": "Malformed arguments for API call or BFD unavailable in BGP-only mode",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -24872,7 +24884,7 @@ func init() {
             }
           },
           "503": {
-            "description": "Maintenance mode",
+            "description": "Maintenance mode or BFD subsystem unavailable",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -35937,7 +35949,7 @@ func init() {
     },
     "/status/process": {
       "get": {
-        "description": "Returns Linux process observations assembled from top, with CPU and memory percentages from ps. Values depend on command availability and output format; the current parser incompletely handles failed or short command output.",
+        "description": "Read Linux procfs directly without top or ps. CPUUsage is cumulative user plus system CPU time divided by elapsed process lifetime, as a percentage that can exceed 100 for multithreaded processes. MemoryUsage is resident bytes divided by MemTotal. Virtual, resident and shared sizes are decimal KiB strings; CPU time is minutes:seconds.centiseconds. Command is the kernel comm name (normally limited to 15 bytes), with embedded whitespace preserved. Effective UID uses the first matching passwd entry or its numeric value. Rows sort by displayed CPU usage descending, then PID ascending. Exited, inaccessible and malformed individual PID records are skipped; reads are not an atomic snapshot. Missing or invalid global procfs data, or no readable processes, returns 500 with a generic collection-failure response, never a message-inferred 400/404 or fabricated healthy empty list.",
         "summary": "Get a process based on CPU usage info in the device",
         "responses": {
           "200": {
@@ -35959,7 +35971,7 @@ func init() {
             }
           },
           "500": {
-            "description": "Internal service error",
+            "description": "Internal service error, including missing or invalid global process data or no readable processes",
             "schema": {
               "$ref": "#/definitions/Error"
             }
