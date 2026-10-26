@@ -18,6 +18,7 @@ package status
 
 import (
 	"fmt"
+	"golang.org/x/sys/unix"
 	"os"
 	"os/exec"
 	"strings"
@@ -136,51 +137,20 @@ func DeviceInfoGet() (*models.DeviceInfoEntry, error) {
 	}
 	result.Uptime = string(uptime)
 
-	app := "uname"
-	arg0 := "-p"
-	cmd := exec.Command(app, arg0)
-	stdout, err := cmd.Output()
-	if err != nil {
+	var uts unix.Utsname
+	if err := unix.Uname(&uts); err != nil {
 		return nil, err
 	}
-	result.Architecture = string(stdout)
+	result.Architecture = unix.ByteSliceToString(uts.Machine[:])
+
 	return result, nil
 }
 
 // Get FileSystem Status
 func FileSystemInfoGet() ([]*models.FileSystemInfoEntry, error) {
-	var result []*models.FileSystemInfoEntry
-	result = make([]*models.FileSystemInfoEntry, 0)
-	app := "df"
-	arg0 := "-hT"
-	cmd := exec.Command(app, arg0)
-	stdout, err := cmd.Output()
+	data, err := os.ReadFile("/proc/self/mountinfo")
 	if err != nil {
 		return nil, err
 	}
-	dfResult := string(stdout)
-
-	if len(strings.Split(dfResult, "\n")) < 2 {
-		return nil, fmt.Errorf("no file system information found")
-	}
-	// Print the output
-	for _, dfInfos := range strings.Split(dfResult, "\n")[1:] {
-		tmpdf := strings.Fields(dfInfos)
-		if len(tmpdf) == 7 {
-			tmpResult := &models.FileSystemInfoEntry{
-				FileSystem: tmpdf[0],
-				Type:       tmpdf[1],
-				Size:       tmpdf[2],
-				Used:       tmpdf[3],
-				Avail:      tmpdf[4],
-				UsePercent: tmpdf[5],
-				MountedOn:  tmpdf[6],
-			}
-
-			result = append(result, tmpResult)
-		}
-
-	}
-
-	return result, nil
+	return filesystemInfoFromMounts(string(data), unix.Statfs)
 }
