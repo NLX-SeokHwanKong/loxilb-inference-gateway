@@ -2322,23 +2322,29 @@ echo "   still holding a claim, or hand the gateway an identity the bucket"
 echo "   keyspace cannot represent -- and watch what the gate does."
 
 # ---------------------------------------------------------------------------
-# The store-outage lever.
+# The store-outage levers. There are two, and they fail differently.
 #
-# `docker pause pg-jwtauth` CANNOT produce policy_store_unavailable and is not
-# used here. Traced at source: Service.store() (pkg/aikey/service.go) returns
-# an error only when the pool POINTER is nil, and Service.Ticker() never nils
-# an existing pool -- *sql.DB re-dials its own connections. What the error
-# path actually keys on is the QUERY returning an error. A paused Postgres
-# returns nothing at all: the socket stays open and the query blocks, so the
-# request hangs until curl's --max-time kills it and the case scores
-# http_code=000 -- a lost measurement, not a gateway answer.
+# Revoking the data-plane role's USAGE on the schema (QOS-OUT) makes every
+# statement against aigw.* fail at planning time, including on connections
+# that are already open, so there is nothing to wait for; the container and
+# its data directory are untouched, so the GRANT restores service without a
+# gateway restart -- which is exactly what QOS-OUT-004 has to show. Measured
+# on the bed before this was written: 179ms to the error. A server-side
+# error is an ANSWER: it is reported as the outage code but it does not open
+# the data path's store-health circuit, which counts only round trips the
+# store never answered.
 #
-# Revoking the data-plane role's USAGE on the schema produces the error
-# directly. Every statement against aigw.* fails at planning time, including
-# on connections that are already open, so there is nothing to wait for; the
-# container and its data directory are untouched, so the GRANT restores
-# service without a gateway restart -- which is exactly what QOS-OUT-004 has
-# to show. Measured on the bed before this was written: 179ms to the error.
+# `docker pause pg-jwtauth` (QOS-STALL) is the other failure: the kernel
+# keeps the TCP connections open and acknowledging, and the server answers
+# nothing. Before the store round trips carried deadlines this case could not
+# be driven here -- the request hung until curl's --max-time killed it and
+# scored http_code=000, a lost measurement, not a gateway answer. Every round
+# trip is now bounded (LLB_AI_KEY_LOOKUP_TIMEOUT_MS on the data path,
+# LLB_AI_STORE_OP_TIMEOUT_MS on the management plane, LLB_AI_STORE_PING_TIMEOUT_MS
+# for readiness), so a stall is an answer with a shape, and QOS-STALL-001..003
+# measure that shape: the refusal code, the time it took, what a cached
+# identity sees, what readiness and the objective read say, what the write
+# answered 504 leaves behind, and how a retried create converges.
 pg_admin_sql() { docker exec "$PG_NAME" psql -U "$PG_OWNER" -d "$PG_DB" -Atc "$1" 2>&1; }
 
 # pg_dp_read -- one read as the DATA-PLANE role, with a hard timeout. The
@@ -2710,6 +2716,216 @@ else
   echo "         recovery through a restart is not the property this case claims"
   FAIL=$((FAIL + 1))
 fi
+
+echo ""
+echo "-- QOS-STALL: the store stalls -- TCP open, nothing answered --"
+echo "   docker pause freezes the server; the kernel keeps acknowledging. A"
+echo "   gateway that waited for an answer hung here. Every round trip now"
+echo "   carries a budget, so each surface answers inside it and these cases"
+echo "   measure the answer, the time it took, and what the stall left behind."
+
+# ---- helpers for the stall cases ------------------------------------------
+ms_since() { echo $(( ($(date +%s%N) - $1) / 1000000 )); }
+pg_pause()   { docker pause   "$PG_NAME" >/dev/null; }
+pg_unpause() { docker unpause "$PG_NAME" >/dev/null; }
+# mgmt_call <method> <path> [body] -- one management call from inside llb1,
+# timed. Publishes MGMT_BODY (with the http_code= trailer chk_code reads),
+# MGMT_CODE and MGMT_MS. --max-time 20 is far above every budget asserted
+# below, so a measurement of 000 means the gateway really did not answer.
+mgmt_call() {
+  local method=$1 path=$2 body=${3:-} t0 out
+  t0=$(date +%s%N)
+  if [ -n "$body" ]; then
+    out=$($hexec llb1 curl -s --max-time 20 -w '\nhttp_code=%{http_code}' -X "$method" \
+      "$QOS_MGMT$path" -H "Content-Type: application/json" -d "$body" 2>/dev/null)
+  else
+    out=$($hexec llb1 curl -s --max-time 20 -w '\nhttp_code=%{http_code}' -X "$method" \
+      "$QOS_MGMT$path" 2>/dev/null)
+  fi
+  MGMT_MS=$(ms_since "$t0"); MGMT_BODY="$out"; MGMT_CODE=$(http_code_of "$out")
+}
+mgmt_json() { printf '%s\n' "$MGMT_BODY" | sed '$d' | jq -r "$1" 2>/dev/null; }
+# chk_within <name> <took-ms> <bound-ms> -- the budget held. The bound is
+# the budget plus the docker-exec + curl overhead measured on the bed, never
+# a value a hang could satisfy (curl's own --max-time is 20 s).
+chk_within() {
+  note_case "$1"
+  case "$2" in ''|*[!0-9]*) echo "  [FAIL] $1 - elapsed '$2' unreadable"; FAIL=$((FAIL + 1)); return ;; esac
+  if [ "$2" -le "$3" ]; then
+    echo "  [PASS] $1 (${2}ms <= ${3}ms)"; PASS=$((PASS + 1))
+  else
+    echo "  [FAIL] $1 - took ${2}ms, bound ${3}ms: the budget did not hold"; FAIL=$((FAIL + 1))
+  fi
+}
+pg_conns() { pg_admin_sql "SELECT count(*) FROM pg_stat_activity WHERE usename = '${PG_DP_USER}'"; }
+# wait_data_path_recovered -- unknown keys until the store itself refuses one
+# (a 4xx is the store's "no such key"; 503 is still the outage or the
+# circuit's cool-down; 000 is a hang). Up to 20 s.
+wait_data_path_recovered() {
+  local i r c
+  for i in $(seq 1 40); do
+    r=$(req 2041 "$body_llama" -H "X-Api-Key: lxb_nosuch_recover_${RANDOM}${RANDOM}")
+    last_nonce >/dev/null
+    c=$(http_code_of "$r")
+    case "$c" in 4*) RECOVER_CODE=$c; return 0 ;; esac
+    sleep 0.5
+  done
+  RECOVER_CODE=$c
+  return 1
+}
+
+echo ""
+echo "QOS-STALL-001: a warm, idle pool, then the store is paused. Every"
+echo "               surface answers inside its budget: the management write"
+echo "               504, the cache miss 503, the cached identity 200,"
+echo "               readiness 503, the objective read 200 with"
+echo "               store_reachable=false; and the counter names the write."
+# Two management reads first: the pooled connection the write will use has
+# then been reused at least once. The driver pings a connection on its first
+# reuse, and a ping against a stall absorbs the whole budget -- the statement
+# is never sent and the answer is 503, which is the OTHER contract. The
+# write below follows the pause within a second of the last reuse for the
+# same reason: a connection idle longer than that is pinged again.
+mgmt_call GET "/config/ai/apikey?tenant_id=$QOS_OUT_T"
+mgmt_call GET "/config/ai/apikey?tenant_id=$QOS_OUT_T"
+chk_code     "QOS-STALL-001 the management plane reads before the stall" 200 "$MGMT_BODY"
+sleep 1.2 # f1 carries rps=1 from QOS-OUT; one refill since its last request
+qreq 2063 "Authorization: Bearer $TOK_f1"
+chk_code     "QOS-STALL-001 the cached identity is served before the stall" 200 "$QR"
+STALL_CONNS0=$(pg_conns)
+STALL_WOU0=$(metric_value loxilb_ai_store_write_outcome_unknown_total)
+STALL_OP="stall-$(date +%s)-$$"
+STALL_BODY="{\"tenant_id\":\"$QOS_OUT_T\",\"name\":\"stall-create\",\"client_op_id\":\"$STALL_OP\"}"
+pg_pause
+mgmt_call POST /config/ai/apikey "$STALL_BODY"
+chk_code     "QOS-STALL-001 a management write under the stall is answered 504" 504 "$MGMT_BODY"
+chk_has      "QOS-STALL-001 with the outcome-unknown code" "ai_key_store_outcome_unknown" "$MGMT_BODY"
+chk_not_has  "QOS-STALL-001 and not as 'nothing was written'" "ai_key_store_unavailable" "$MGMT_BODY"
+chk_within   "QOS-STALL-001 inside the operation budget (3 s) plus margin" "$MGMT_MS" 4500
+t0=$(date +%s%N)
+qreq 2041 "X-Api-Key: lxb_nosuch_stall_${RANDOM}${RANDOM}"
+STALL_MISS_MS=$(ms_since "$t0"); STALL_MISS_NONCE=$QR_NONCE
+chk_code     "QOS-STALL-001 an unknown key is refused during the stall" 503 "$QR"
+chk_has      "QOS-STALL-001 with the store's code" "policy_store_unavailable" "$QR"
+chk_within   "QOS-STALL-001 inside the lookup budget (300 ms) plus margin" "$STALL_MISS_MS" 1500
+chk_receipt  "QOS-STALL-001 and it never reached the backend" 0 "$STALL_MISS_NONCE"
+sleep 1.2
+qreq 2063 "Authorization: Bearer $TOK_f1"
+STALL_HIT_NONCE=$QR_NONCE
+chk_code     "QOS-STALL-001 the cached identity is still served during the stall" 200 "$QR"
+chk_receipt  "QOS-STALL-001 and reached the backend exactly once" 1 "$STALL_HIT_NONCE"
+mgmt_call GET /status/ready
+chk_code     "QOS-STALL-001 /status/ready answers 503 during the stall" 503 "$MGMT_BODY"
+chk_within   "QOS-STALL-001 inside the ping budget (1 s) plus margin" "$MGMT_MS" 2500
+# The refresher reads every LLB_AI_OBJECTIVE_REFRESH_SEC (10 s) under its own
+# 3 s budget; one interval plus one budget is the bound on the flip.
+flipped=0
+for i in $(seq 1 16); do
+  mgmt_call GET /config/ai/objective
+  if [ "$MGMT_CODE" = 200 ] && [ "$(mgmt_json '.store_reachable')" = "false" ]; then flipped=1; break; fi
+  sleep 1
+done
+chk_num      "QOS-STALL-001 GET /config/ai/objective keeps answering 200 and reports store_reachable=false within one refresh interval" 1 "$flipped"
+chk_has      "QOS-STALL-001 from the snapshot the gateway applies" '"objectives"' "$MGMT_BODY"
+STALL_WOU1=$(metric_value loxilb_ai_store_write_outcome_unknown_total)
+chk_metric_delta "QOS-STALL-001 loxilb_ai_store_write_outcome_unknown_total counts the one write answered 504" 1 "$STALL_WOU0" "$STALL_WOU1"
+pg_unpause
+note_case "QOS-STALL-001"
+if wait_data_path_recovered; then
+  echo "  [PASS] QOS-STALL-001 the data path answers from the store again after the pause ends (unknown key -> $RECOVER_CODE)"; PASS=$((PASS + 1))
+else
+  echo "  [FAIL] QOS-STALL-001 the data path did not recover within 20 s of the pause ending (last code $RECOVER_CODE)"; FAIL=$((FAIL + 1))
+fi
+chk_receipt  "QOS-STALL-001 the cached request's receipt did not grow after recovery" 1 "$STALL_HIT_NONCE"
+chk_receipt  "QOS-STALL-001 the refused request did not reach the backend late" 0 "$STALL_MISS_NONCE"
+# What the 504 left behind is read back, as the contract says, and printed:
+# the create runs as one transaction, and a stall that swallows its BEGIN
+# leaves nothing, while one that swallows a later statement may leave the
+# row. Either is consistent with "outcome unknown"; QOS-STALL-002 asserts
+# that the retry converges whichever it was.
+mgmt_call GET "/config/ai/apikey?tenant_id=$QOS_OUT_T"
+STALL_LANDED=$(mgmt_json "[.[] | select(.client_op_id==\"$STALL_OP\")] | length")
+echo "  the write answered 504 $(case "$STALL_LANDED" in 1) echo 'LANDED: the key exists';; 0) echo 'did not land: no key';; *) echo "is unreadable ($STALL_LANDED)";; esac) once the store resumed"
+sleep 3
+STALL_CONNS1=$(pg_conns)
+note_case "QOS-STALL-001"
+case "$STALL_CONNS0$STALL_CONNS1" in
+  *[!0-9]*) echo "  [FAIL] QOS-STALL-001 pg_stat_activity unreadable (before='$STALL_CONNS0' after='$STALL_CONNS1')"; FAIL=$((FAIL + 1)) ;;
+  *) if [ "$STALL_CONNS1" -le "$STALL_CONNS0" ]; then
+       echo "  [PASS] QOS-STALL-001 no store connection leaked across the stall ($STALL_CONNS0 -> $STALL_CONNS1)"; PASS=$((PASS + 1))
+     else
+       echo "  [FAIL] QOS-STALL-001 the data-plane role holds more connections after the stall ($STALL_CONNS0 -> $STALL_CONNS1)"; FAIL=$((FAIL + 1))
+     fi ;;
+esac
+
+echo ""
+echo "QOS-STALL-002: the retry of the create answered 504 converges on one"
+echo "               key: same client_op_id, same key_id if the first landed,"
+echo "               one row either way, a secret that works, and a further"
+echo "               retry refused once that secret has authenticated."
+mgmt_call POST /config/ai/apikey "$STALL_BODY"
+chk_code     "QOS-STALL-002 the retry is answered 201" 201 "$MGMT_BODY"
+STALL_KEY_ID=$(mgmt_json '.key_id'); STALL_RAW=$(mgmt_json '.raw_key'); STALL_REUSED=$(mgmt_json '.reused')
+case "$STALL_LANDED" in
+  1) chk_num "QOS-STALL-002 reused=true: the retry converged on the row the first create left" 1 "$([ "$STALL_REUSED" = true ] && echo 1 || echo 0)" ;;
+  0) chk_num "QOS-STALL-002 reused=false: nothing had landed, so the retry created the key" 1 "$([ "$STALL_REUSED" = false ] && echo 1 || echo 0)" ;;
+esac
+mgmt_call GET "/config/ai/apikey?tenant_id=$QOS_OUT_T"
+chk_num      "QOS-STALL-002 exactly one key carries the operation id" 1 "$(mgmt_json "[.[] | select(.client_op_id==\"$STALL_OP\")] | length")"
+chk_num      "QOS-STALL-002 and it is the key the retry answered with" 1 "$(mgmt_json "[.[] | select(.client_op_id==\"$STALL_OP\" and .key_id==\"$STALL_KEY_ID\")] | length")"
+qreq 2041 "X-Api-Key: $STALL_RAW"
+chk_code     "QOS-STALL-002 the secret the retry delivered authenticates" 200 "$QR"
+chk_receipt  "QOS-STALL-002 and the request reached the backend" 1 "$QR_NONCE"
+# The first use is recorded off the proxy worker; the refusal follows within
+# a few hundred milliseconds, polled rather than assumed.
+STALL_RETRY_CODE=""
+for i in $(seq 1 12); do
+  mgmt_call POST /config/ai/apikey "$STALL_BODY"
+  STALL_RETRY_CODE=$MGMT_CODE
+  [ "$STALL_RETRY_CODE" = 409 ] && break
+  sleep 0.25
+done
+chk_code     "QOS-STALL-002 a retry after the key has authenticated is refused" 409 "$MGMT_BODY"
+chk_has      "QOS-STALL-002 with the already-delivered code" "api_key_already_delivered" "$MGMT_BODY"
+chk_has      "QOS-STALL-002 naming the key to read back" "$STALL_KEY_ID" "$MGMT_BODY"
+chk_not_has  "QOS-STALL-002 and never the secret" "$STALL_RAW" "$MGMT_BODY"
+sleep 1.2
+qreq 2041 "X-Api-Key: $STALL_RAW"
+chk_code     "QOS-STALL-002 the refused retry did not rotate the secret in use" 200 "$QR"
+mgmt_call GET "/config/ai/apikey?tenant_id=$QOS_OUT_T"
+chk_num      "QOS-STALL-002 still exactly one key for the operation" 1 "$(mgmt_json "[.[] | select(.client_op_id==\"$STALL_OP\")] | length")"
+mgmt_call DELETE "/config/ai/apikey/$STALL_KEY_ID"
+chk_code     "QOS-STALL-002 the key is removed again" 204 "$MGMT_BODY"
+
+echo ""
+echo "QOS-STALL-003: the stall arrives mid-statement. An ACCESS EXCLUSIVE lock"
+echo "               on api_keys is held by another session, so a lookup that"
+echo "               reaches the server waits inside the statement; the lookup"
+echo "               budget bounds that wait too."
+docker exec "$PG_NAME" psql -U "$PG_OWNER" -d "$PG_DB" -Atc \
+  "BEGIN; LOCK TABLE ${PG_SCHEMA}.api_keys IN ACCESS EXCLUSIVE MODE; SELECT pg_sleep(6); COMMIT;" >/dev/null 2>&1 &
+STALL_LOCK_PID=$!
+sleep 0.7
+t0=$(date +%s%N)
+qreq 2041 "X-Api-Key: lxb_nosuch_lock_${RANDOM}${RANDOM}"
+STALL_LOCK_MS=$(ms_since "$t0"); STALL_LOCK_NONCE=$QR_NONCE
+chk_code     "QOS-STALL-003 an unknown key is refused while its statement waits on the lock" 503 "$QR"
+chk_has      "QOS-STALL-003 with the store's code" "policy_store_unavailable" "$QR"
+chk_within   "QOS-STALL-003 inside the lookup budget (300 ms) plus margin" "$STALL_LOCK_MS" 1500
+chk_receipt  "QOS-STALL-003 and it never reached the backend" 0 "$STALL_LOCK_NONCE"
+sleep 1.2
+qreq 2063 "Authorization: Bearer $TOK_f1"
+chk_code     "QOS-STALL-003 the cached identity is served meanwhile" 200 "$QR"
+wait $STALL_LOCK_PID 2>/dev/null
+note_case "QOS-STALL-003"
+if wait_data_path_recovered; then
+  echo "  [PASS] QOS-STALL-003 the data path answers from the store again once the lock is released (unknown key -> $RECOVER_CODE)"; PASS=$((PASS + 1))
+else
+  echo "  [FAIL] QOS-STALL-003 the data path did not recover within 20 s of the lock's release (last code $RECOVER_CODE)"; FAIL=$((FAIL + 1))
+fi
+echo "  (the cold outage -- a store that refuses the connection -- is the path the REVOKE cases"
+echo "   and ai-authsep DP-16 already drive; a stopped container would change the store's"
+echo "   address under the running gateway and is not used here)"
 
 echo ""
 echo "-- QOS-ID: identities the bucket keyspace cannot represent --"
