@@ -195,6 +195,17 @@ probe_loxilb_rest() {
   return 0
 }
 
+# Docker resolves short arguments as either names or ID prefixes. A missing
+# host named c1 must never resolve to a different container whose ID starts c1.
+# Verify the exact name, then mutate by full ID to avoid a second name lookup.
+loxi_exact_container_id() {
+  local record actual_name container_id
+  record=$(docker container inspect --format '{{.Name}} {{.Id}}' "$1" 2>/dev/null) || return 1
+  read -r actual_name container_id <<< "$record"
+  [[ "$actual_name" == "/$1" && "$container_id" =~ ^[a-f0-9]{64}$ ]] || return 1
+  printf '%s\n' "$container_id"
+}
+
 ## Creates a docker host
 ## arg1 - "loxilb"|"host"
 ## arg2 - instance-name
@@ -261,9 +272,10 @@ spawn_docker_host() {
   # that never restarts) and shows up as a long hang rather than a clear error.
   # Purge any stale namesake so every spawn starts from a clean slate; both
   # commands are no-ops when the environment is already clean.
-  if docker inspect "$dname" >/dev/null 2>&1; then
+  local stale_container_id
+  if stale_container_id=$(loxi_exact_container_id "$dname"); then
     echo "  (removing stale container $dname left by a previous run)" >&2
-    docker rm -f "$dname" >/dev/null 2>&1 || true
+    docker rm -f "$stale_container_id" >/dev/null 2>&1 || true
   fi
   if [ -f "$hexist/$dname" ]; then
     $hns del "$dname" >/dev/null 2>&1 || true
@@ -397,6 +409,8 @@ get_llb_peerIP() {
 ## Deletes a docker host
 ## arg1 - hostname 
 delete_docker_host() {
+  local target_container_id ka_container_id
+  target_container_id=$(loxi_exact_container_id "$1") || target_container_id=""
   dcmd="kill"
   if [[ $1 == "llb"* ]] || [[ $1 == "loxilb"* ]]; then
     dcmd="stop"
@@ -408,21 +422,22 @@ delete_docker_host() {
   #   Error response from daemon: cannot kill container: r1: No such container: r1
   # on every run where the optional (vrrp/HA) hosts were never spawned. `>/dev/null 2>&1`
   # is the intended order and keeps the same exit status the `if` below tests.
-  if docker $dcmd $1 >/dev/null 2>&1
+  if [[ -n "$target_container_id" ]] && docker "$dcmd" "$target_container_id" >/dev/null 2>&1
   then
     hd="true"
-    ka=`docker ps -f name=ka_$1| grep -w ka_$1 | cut  -d " "  -f 1 | grep -iv  "CONTAINER"`
     loxilbs=( "${loxilbs[@]/$1}" )
-    if [ "$ka" != "" ]; then
-      docker kill ka_$1 >/dev/null 2>&1
-      docker rm ka_$1 >/dev/null 2>&1
+    if ka_container_id=$(loxi_exact_container_id "ka_$1"); then
+      docker kill "$ka_container_id" >/dev/null 2>&1
+      docker rm "$ka_container_id" >/dev/null 2>&1
     fi
   fi
   if [ -f "$hexist/$1" ]; then
     $hns del $1 >/dev/null 2>&1 || true
     sudo rm -fr "$hexist/$1" >/dev/null 2>&1
   fi
-  docker rm $1 >/dev/null 2>&1 || true
+  if [[ -n "$target_container_id" ]]; then
+    docker rm "$target_container_id" >/dev/null 2>&1 || true
+  fi
 }
 
 ## Connects two docker hosts

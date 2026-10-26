@@ -16,7 +16,9 @@
 package handler
 
 import (
+	"errors"
 	"net"
+	"net/http"
 
 	"github.com/go-openapi/runtime/middleware"
 	"github.com/loxilb-io/loxilb/api/models"
@@ -64,6 +66,17 @@ func ConfigPostCIState(params operations.PostConfigCistateParams, principal inte
 	return &ResultResponse{Result: "Success"}
 }
 
+func bfdErrorResponse(err error) middleware.Responder {
+	switch {
+	case errors.Is(err, cmn.ErrBFDUnavailable):
+		return errorResponseWithCode(http.StatusServiceUnavailable, "BFD subsystem unavailable")
+	case errors.Is(err, cmn.ErrBFDUnsupported):
+		return errorResponseWithCode(http.StatusBadRequest, "BFD is unavailable in BGP-only mode")
+	default:
+		return &ErrorResponse{Payload: ResultErrorResponseError(err)}
+	}
+}
+
 func ConfigGetBFDSession(params operations.GetConfigBfdAllParams, principal interface{}) middleware.Responder {
 	var result []*models.BfdGetEntry
 	result = make([]*models.BfdGetEntry, 0)
@@ -71,7 +84,7 @@ func ConfigGetBFDSession(params operations.GetConfigBfdAllParams, principal inte
 	bfdMod, err := ApiHooks.NetBFDGet()
 	if err != nil {
 		tk.LogIt(tk.LogDebug, "api: Error occur : %v\n", err)
-		return &ErrorResponse{Payload: ResultErrorResponseErrorMessage(err.Error())}
+		return bfdErrorResponse(err)
 	}
 	for _, h := range bfdMod {
 		var tempResult models.BfdGetEntry
@@ -106,7 +119,7 @@ func ConfigPostBFDSession(params operations.PostConfigBfdParams, principal inter
 	_, err := ApiHooks.NetBFDAdd(&bfdMod)
 	if err != nil {
 		tk.LogIt(tk.LogDebug, "api: Error occur : %v\n", err)
-		return &ErrorResponse{Payload: ResultErrorResponseErrorMessage(err.Error())}
+		return bfdErrorResponse(err)
 	}
 	return &ResultResponse{Result: "Success"}
 }
@@ -128,7 +141,7 @@ func ConfigDeleteBFDSession(params operations.DeleteConfigBfdRemoteIPRemoteIPPar
 	_, err := ApiHooks.NetBFDDel(&bfdMod)
 	if err != nil {
 		tk.LogIt(tk.LogDebug, "api: Error occur : %v\n", err)
-		return &ErrorResponse{Payload: ResultErrorResponseErrorMessage(err.Error())}
+		return bfdErrorResponse(err)
 	}
 	return &ResultResponse{Result: "Success"}
 }
