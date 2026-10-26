@@ -21850,7 +21850,7 @@ func init() {
     },
     "/status/process": {
       "get": {
-        "description": "Returns Linux process observations assembled from top, with CPU and memory percentages from ps. Values depend on command availability and output format; the current parser incompletely handles failed or short command output.",
+        "description": "Read Linux procfs directly without top or ps. CPUUsage is cumulative user plus system CPU time divided by elapsed process lifetime, as a percentage that can exceed 100 for multithreaded processes. MemoryUsage is resident bytes divided by MemTotal. Virtual, resident and shared sizes are decimal KiB strings; CPU time is minutes:seconds.centiseconds. Command is the kernel comm name (normally limited to 15 bytes), with embedded whitespace preserved. Effective UID uses the first matching passwd entry or its numeric value. Rows sort by displayed CPU usage descending, then PID ascending. Exited, inaccessible and malformed individual PID records are skipped; reads are not an atomic snapshot. Missing or invalid global procfs data, or no readable processes, returns 500 with a generic collection-failure response, never a message-inferred 400/404 or fabricated healthy empty list.",
         "responses": {
           "200": {
             "description": "OK",
@@ -21868,7 +21868,7 @@ func init() {
             "$ref": "#/responses/ManagementForbidden"
           },
           "500": {
-            "description": "Internal service error",
+            "description": "Internal service error, including missing or invalid global process data or no readable processes",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -35949,7 +35949,7 @@ func init() {
     },
     "/status/process": {
       "get": {
-        "description": "Returns Linux process observations assembled from top, with CPU and memory percentages from ps. Values depend on command availability and output format; the current parser incompletely handles failed or short command output.",
+        "description": "Read Linux procfs directly without top or ps. CPUUsage is cumulative user plus system CPU time divided by elapsed process lifetime, as a percentage that can exceed 100 for multithreaded processes. MemoryUsage is resident bytes divided by MemTotal. Virtual, resident and shared sizes are decimal KiB strings; CPU time is minutes:seconds.centiseconds. Command is the kernel comm name (normally limited to 15 bytes), with embedded whitespace preserved. Effective UID uses the first matching passwd entry or its numeric value. Rows sort by displayed CPU usage descending, then PID ascending. Exited, inaccessible and malformed individual PID records are skipped; reads are not an atomic snapshot. Missing or invalid global procfs data, or no readable processes, returns 500 with a generic collection-failure response, never a message-inferred 400/404 or fabricated healthy empty list.",
         "summary": "Get a process based on CPU usage info in the device",
         "responses": {
           "200": {
@@ -35971,7 +35971,7 @@ func init() {
             }
           },
           "500": {
-            "description": "Internal service error",
+            "description": "Internal service error, including missing or invalid global process data or no readable processes",
             "schema": {
               "$ref": "#/definitions/Error"
             }
