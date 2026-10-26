@@ -59,8 +59,9 @@ const (
 	lookupMaxInflightDefault = 2
 
 	// LookupCircuitFailuresEnv is the number of consecutive store failures
-	// (deadline, transport, not connected) that opens the circuit. 0
-	// disables the circuit: every read is admitted.
+	// (deadline, transport) that opens the circuit. 0 disables the circuit:
+	// every read is admitted. A store that is not connected fails fast
+	// without a round trip and does not count.
 	LookupCircuitFailuresEnv     = "LLB_AI_KEY_LOOKUP_CIRCUIT_FAILURES"
 	lookupCircuitFailuresDefault = 3
 
@@ -361,7 +362,10 @@ func classifyLookup(ctx context.Context, err error) lookupResult {
 // fn runs the statement and returns its error unchanged (nil, sql.ErrNoRows
 // or a driver error); the caller then takes exactly the branch it took
 // before the guard existed. A refusal, and a store that is not connected,
-// come back as ErrDBUnavailable without the statement running.
+// come back as ErrDBUnavailable without the statement running; the latter
+// is observed as a zero-duration unavailable sample and does not move the
+// circuit, since no worker was parked and a reconnect must not wait out a
+// cool-down.
 func (s *Service) dataPathRead(fn func(ctx context.Context, db DBTX) error) error {
 	db, err := s.store()
 	if err != nil {
@@ -418,7 +422,7 @@ func (s *Service) negativeHit(hash string) bool {
 		return false
 	}
 	if s.guard.now().After(exp) {
-		delete(n.entries, hash)
+		n.drop(hash)
 		return false
 	}
 	return true
@@ -453,6 +457,15 @@ func (s *Service) forgetNegative(hash string) {
 	n := &s.negative
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	n.drop(hash)
+}
+
+// drop removes hash from the entries and from the order together, so the
+// two never disagree: a hash left in the order after its entry went would
+// be appended a second time when remembered again, and a cap eviction that
+// popped the stale copy would then delete the live entry. The caller holds
+// the lock.
+func (n *negativeKeyCache) drop(hash string) {
 	if _, ok := n.entries[hash]; !ok {
 		return
 	}
@@ -467,8 +480,15 @@ func (s *Service) forgetNegative(hash string) {
 
 // negativeLen is the entry count, for the tests.
 func (s *Service) negativeLen() int {
+	entries, _ := s.negativeShape()
+	return entries
+}
+
+// negativeShape is the entry count and the order length, for the tests:
+// the two must always agree.
+func (s *Service) negativeShape() (entries, order int) {
 	n := &s.negative
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	return len(n.entries)
+	return len(n.entries), len(n.order)
 }

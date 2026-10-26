@@ -456,6 +456,34 @@ func TestNegativeCacheBoundsRepeatedUnknownKeys(t *testing.T) {
 	if st := svc.LookupStats(); st.Count[resultMissInvalid] != uint64(db.callCount()) {
 		t.Fatalf("miss_invalid=%d, store calls=%d", st.Count[resultMissInvalid], db.callCount())
 	}
+
+	// Expire an entry on a hit while the cache is below the cap, remember the
+	// same hash again, then fill past the cap. The entries and the order must
+	// agree throughout: a stale copy of the hash left in the order would be
+	// popped by a later eviction, deleting the live entry and sending the
+	// next lookup of that key to the store again. The cache holds g3, g4, g5.
+	svc.forgetNegative(hashKey("g5"))
+	clk.advance(2001 * time.Millisecond) // g3 and g4 are now expired
+	_, _ = svc.ValidateAPIKey("g4")      // expiry branch, then remembered again
+	if e, o := svc.negativeShape(); e != o || e != 2 {
+		t.Fatalf("after expire+re-remember: entries=%d order=%d, want 2 and 2", e, o)
+	}
+	_, _ = svc.ValidateAPIKey("g7")
+	_, _ = svc.ValidateAPIKey("g8") // at the cap: evicts the oldest, g3
+	if e, o := svc.negativeShape(); e != o || e != 3 {
+		t.Fatalf("after evict-at-cap: entries=%d order=%d, want 3 and 3", e, o)
+	}
+	if svc.negativeHit(hashKey("g3")) {
+		t.Fatal("eviction did not drop the oldest entry")
+	}
+	if !svc.negativeHit(hashKey("g4")) {
+		t.Fatal("the re-remembered entry was evicted ahead of older ones")
+	}
+	before := db.callCount()
+	_, _ = svc.ValidateAPIKey("g4")
+	if db.callCount() != before {
+		t.Fatalf("a live negative entry was asked of the store again: calls=%d, want %d", db.callCount(), before)
+	}
 }
 
 // The negative cache is off at TTL 0.

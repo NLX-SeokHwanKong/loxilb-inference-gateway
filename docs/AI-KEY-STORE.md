@@ -224,9 +224,11 @@ ping and the snapshot refresher do not consult them.
 | `LLB_AI_KEY_NEGATIVE_CACHE_CAP` | 4096 | Entries the negative cache holds; the oldest goes first. |
 
 **The circuit.** It is closed while the store answers. A failure is a round
-trip the store did not answer: the budget expired, the connection failed, or
-the store is not connected. A row, and the store's "no such row", are answers
-and reset the count. After `LLB_AI_KEY_LOOKUP_CIRCUIT_FAILURES` failures in a
+trip the store did not answer: the budget expired or the connection failed. A
+row, and the store's "no such row", are answers and reset the count. A store
+that is not connected yet fails fast without a round trip; it shows as
+zero-duration `unavailable` samples and does not move the circuit, so a
+reconnect is used as soon as it lands. After `LLB_AI_KEY_LOOKUP_CIRCUIT_FAILURES` failures in a
 row the circuit opens: every data-path miss is refused at once without
 contacting the store, and every quota read answers from the last value the
 store confirmed to this process (or from the last-known-good file), refusing
