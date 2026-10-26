@@ -69,78 +69,57 @@ function checkSync() {
     echo "$sync"
 }
 
-function restart_mloxilb() {
-    if [[ $master == "llb1" ]]; then
-        pat="cluster=172.17.0.3"
-        copts=" --cluster=172.17.0.3"
-        self=" --self=0"
-        ka=" --ka=172.17.0.3:172.17.0.2"
-    else
-        pat="cluster=172.17.0.2"
-        copts=" --cluster=172.17.0.2"
-        self=" --self=1"
-        ka=" --ka=172.17.0.2:172.17.0.3"
+# Restarts the gateway in one node with the command line it runs now, so
+# the restart keeps every option the harness started it with, and with the
+# same output redirect, so a gateway that dies after the restart leaves its
+# stderr in /tmp/loxilb.err of that node.
+function restart_llb() {
+    local node=$1
+    local pids cmd i
+
+    pids=$(docker exec $node pgrep -x loxilb)
+    if [[ -z $pids ]]; then
+        echo "No loxilb running in $node" >&2
+        return 1
     fi
+    cmd=$(docker exec $node cat /proc/$(echo $pids | cut -d' ' -f1)/cmdline | tr '\0' ' ')
+    echo "Killing $node loxilb pid(s): $(echo $pids)" >&2
+    docker exec $node kill -9 $pids
+    for i in $(seq 1 50); do
+        docker exec $node pgrep -x loxilb > /dev/null || break
+        sleep 0.2
+    done
+    if docker exec $node pgrep -x loxilb > /dev/null; then
+        echo "loxilb in $node did not exit after kill" >&2
+        return 1
+    fi
+
+    docker exec $node ip link del llb0 2> /dev/null
+    echo "$node: $cmd" >&2
+    docker exec -d $node bash -c "$cmd > /tmp/loxilb.out 2> /tmp/loxilb.err"
+    for i in $(seq 1 50); do
+        pids=$(docker exec $node pgrep -x loxilb)
+        [[ -n $pids ]] && break
+        sleep 0.2
+    done
+    if [[ -z $pids ]]; then
+        echo "loxilb in $node did not start; /tmp/loxilb.err:" >&2
+        docker exec $node tail -n 20 /tmp/loxilb.err >&2
+        return 1
+    fi
+    echo "New loxilb pid: $(echo $pids)" >&2
+}
+
+function restart_mloxilb() {
     echo "Restarting MASTER: $master"
-    #pid=$(docker exec -i $master ps -aef | grep $pat | xargs | cut -d ' ' -f 2)
-    pid=$(ps -aef | grep $pat | xargs | cut -d ' ' -f 2)
-    echo "Killing $pid" >&2
-    #docker exec -dt $master kill -9 $pid
-    sudo kill -9 $pid
-    docker exec -dt $master ip link del llb0
-    docker exec -dt $master /root/loxilb-io/loxilb/loxilb $copts $self $ka
-    #pid=$(docker exec -i $master ps -aef | grep $pat | xargs | cut -d ' ' -f 2)
-    pid=$(ps -aef | grep $pat | xargs | cut -d ' ' -f 2)
-    echo "New loxilb pid: $pid" >&2
+    restart_llb $master
 }
 
 function restart_loxilbs() {
-    if [[ $master == "llb1" ]]; then
-        mpat="cluster=172.17.0.3"
-        mcopts=" --cluster=172.17.0.3"
-        mself=" --self=0"
-        mka=" --ka=172.17.0.3:172.17.0.2"
-        
-        bpat="cluster=172.17.0.2"
-        bcopts=" --cluster=172.17.0.2"
-        bself=" --self=1"
-        bka=" --ka=172.17.0.2:172.17.0.3"
-    else
-        mpat="cluster=172.17.0.2"
-        mcopts=" --cluster=172.17.0.2"
-        mself=" --self=1"
-        mka=" --ka=172.17.0.2:172.17.0.3"
-        
-        bpat="cluster=172.17.0.3"
-        bcopts=" --cluster=172.17.0.3"
-        bself=" --self=0"
-        bka=" --ka=172.17.0.3:172.17.0.2"
-    fi
     echo "Restarting $master"
-    pid=$(ps -aef | grep $mpat | xargs | cut -d ' ' -f 2)
-    #pid=$(docker exec -i $master ps -aef | grep $mpat | xargs | cut -d ' ' -f 2)
-    echo "Killing $pid" >&2
-    #docker exec -dt $master kill -9 $pid
-    sudo kill -9 $pid
-    docker exec -dt $master ip link del llb0
-    echo "/root/loxilb-io/loxilb/loxilb $mcopts $mself $mka" >&2
-    docker exec -dt $master /root/loxilb-io/loxilb/loxilb $mcopts $mself $mka
-    pid=$(ps -aef | grep $mpat | xargs | cut -d ' ' -f 2)
-    #pid=$(docker exec -i $master ps -aef | grep $mpat | xargs | cut -d ' ' -f 2)
-    echo "New loxilb pid: $pid" >&2
-
+    restart_llb $master
     echo "Restarting $backup"
-    pid=$(ps -aef | grep $bpat | xargs | cut -d ' ' -f 2)
-    #pid=$(docker exec -i $backup ps -aef | grep $bpat | xargs | cut -d ' ' -f 2)
-    echo "Killing $pid" >&2
-    #docker exec -dt $backup kill -9 $pid
-    sudo kill -9 $pid
-    docker exec -dt $backup ip link del llb0
-    echo "/root/loxilb-io/loxilb/loxilb $bcopts $bself $bka" >&2
-    docker exec -dt $backup /root/loxilb-io/loxilb/loxilb $bcopts $bself $bka
-    #pid=$(docker exec -i $backup ps -aef | grep $bpat | xargs | cut -d ' ' -f 2)
-    pid=$(ps -aef | grep $bpat | xargs | cut -d ' ' -f 2)
-    echo "New loxilb pid: $pid" >&2
+    restart_llb $backup
 }
 
 
