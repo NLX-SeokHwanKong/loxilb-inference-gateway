@@ -262,3 +262,48 @@ func (o *PostConfigAiUserRatelimitServiceUnavailable) WriteResponse(rw http.Resp
 		}
 	}
 }
+
+// PostConfigAiUserRatelimitGatewayTimeoutCode is the HTTP code returned for type PostConfigAiUserRatelimitGatewayTimeout
+const PostConfigAiUserRatelimitGatewayTimeoutCode int = 504
+
+/*
+PostConfigAiUserRatelimitGatewayTimeout Write outcome unknown (code ai_key_store_outcome_unknown). The statement was handed to the API-key store and the store did not answer within the operation budget; the store may still apply it when it resumes. Not a 503: nothing says the write did not happen. Read the resource back (GET) before deciding whether to retry; a blind retry of a non-idempotent write can create a second row.
+
+swagger:response postConfigAiUserRatelimitGatewayTimeout
+*/
+type PostConfigAiUserRatelimitGatewayTimeout struct {
+
+	/*
+	  In: Body
+	*/
+	Payload *models.Error `json:"body,omitempty"`
+}
+
+// NewPostConfigAiUserRatelimitGatewayTimeout creates PostConfigAiUserRatelimitGatewayTimeout with default headers values
+func NewPostConfigAiUserRatelimitGatewayTimeout() *PostConfigAiUserRatelimitGatewayTimeout {
+
+	return &PostConfigAiUserRatelimitGatewayTimeout{}
+}
+
+// WithPayload adds the payload to the post config ai user ratelimit gateway timeout response
+func (o *PostConfigAiUserRatelimitGatewayTimeout) WithPayload(payload *models.Error) *PostConfigAiUserRatelimitGatewayTimeout {
+	o.Payload = payload
+	return o
+}
+
+// SetPayload sets the payload to the post config ai user ratelimit gateway timeout response
+func (o *PostConfigAiUserRatelimitGatewayTimeout) SetPayload(payload *models.Error) {
+	o.Payload = payload
+}
+
+// WriteResponse to the client
+func (o *PostConfigAiUserRatelimitGatewayTimeout) WriteResponse(rw http.ResponseWriter, producer runtime.Producer) {
+
+	rw.WriteHeader(504)
+	if o.Payload != nil {
+		payload := o.Payload
+		if err := producer.Produce(rw, payload); err != nil {
+			panic(err) // let the recovery middleware deal with this
+		}
+	}
+}

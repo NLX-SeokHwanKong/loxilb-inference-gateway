@@ -16,6 +16,7 @@
 package user
 
 import (
+	"context"
 	"database/sql"
 	"encoding/base64"
 	"errors"
@@ -57,7 +58,7 @@ func TestU6_RetryOperationTerminalErrorIsNotRetried(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			attempts := 0
 			start := time.Now()
-			err := RetryOperation(func() error {
+			err := RetryOperation(context.Background(), func() error {
 				attempts++
 				return tc.err
 			}, AuthMaxRetries, AuthRetryDelay, retryableDBError)
@@ -80,7 +81,7 @@ func TestU7_RetryOperationTransientErrorUsesFullBudgetWithoutTrailingSleep(t *te
 	transient := errors.New("connection refused")
 	attempts := 0
 	start := time.Now()
-	err := RetryOperation(func() error {
+	err := RetryOperation(context.Background(), func() error {
 		attempts++
 		return transient
 	}, AuthMaxRetries, AuthRetryDelay, retryableDBError)
@@ -135,7 +136,7 @@ func TestU8_ValidateTokenUnknownTokenAnswersImmediately(t *testing.T) {
 	svc := storeFixture(t)
 
 	start := time.Now()
-	_, err := svc.ValidateToken("a-token-that-was-never-issued")
+	_, err := svc.ValidateToken(context.Background(), "a-token-that-was-never-issued")
 	elapsed := time.Since(start)
 
 	if err == nil {
@@ -174,14 +175,14 @@ func TestU17_BcryptOnlyVerification(t *testing.T) {
 
 	t.Run("a bcrypt row verifies", func(t *testing.T) {
 		insertUserRow(t, svc, "bcryptuser", mustHash(t, "Admin123!"), "admin")
-		role, ok, err := svc.ValidateUser("bcryptuser", "Admin123!")
+		role, ok, err := svc.ValidateUser(context.Background(), "bcryptuser", "Admin123!")
 		if err != nil || !ok {
 			t.Fatalf("valid credential rejected: ok=%v err=%v", ok, err)
 		}
 		if role != "admin" {
 			t.Errorf("role=%q, want admin", role)
 		}
-		if _, ok, _ := svc.ValidateUser("bcryptuser", "WrongPass1!"); ok {
+		if _, ok, _ := svc.ValidateUser(context.Background(), "bcryptuser", "WrongPass1!"); ok {
 			t.Error("wrong password accepted")
 		}
 	})
@@ -192,20 +193,20 @@ func TestU17_BcryptOnlyVerification(t *testing.T) {
 	// two-column query, so the change always failed; and had it succeeded, it
 	// wrote a format ValidateUser could not read.
 	t.Run("add then change then login", func(t *testing.T) {
-		if _, err := svc.AddUser(cmn.User{Username: "rotator", Password: "Admin123!", Role: "admin", CreatedAt: time.Now()}); err != nil {
+		if _, err := svc.AddUser(context.Background(), cmn.User{Username: "rotator", Password: "Admin123!", Role: "admin", CreatedAt: time.Now()}); err != nil {
 			t.Fatalf("AddUser: %v", err)
 		}
-		if _, ok, err := svc.ValidateUser("rotator", "Admin123!"); err != nil || !ok {
+		if _, ok, err := svc.ValidateUser(context.Background(), "rotator", "Admin123!"); err != nil || !ok {
 			t.Fatalf("login before change: ok=%v err=%v", ok, err)
 		}
 		id := userID(t, svc, "rotator")
-		if err := svc.UpdateUser(cmn.User{ID: id, Username: "rotator", Password: "NewPass456!"}); err != nil {
+		if err := svc.UpdateUser(context.Background(), cmn.User{ID: id, Username: "rotator", Password: "NewPass456!"}); err != nil {
 			t.Fatalf("UpdateUser: %v", err)
 		}
-		if _, ok, err := svc.ValidateUser("rotator", "NewPass456!"); err != nil || !ok {
+		if _, ok, err := svc.ValidateUser(context.Background(), "rotator", "NewPass456!"); err != nil || !ok {
 			t.Fatalf("the new password does not authenticate: ok=%v err=%v", ok, err)
 		}
-		if _, ok, _ := svc.ValidateUser("rotator", "Admin123!"); ok {
+		if _, ok, _ := svc.ValidateUser(context.Background(), "rotator", "Admin123!"); ok {
 			t.Error("the old password still authenticates after a change")
 		}
 	})
@@ -214,7 +215,7 @@ func TestU17_BcryptOnlyVerification(t *testing.T) {
 		// Exactly what the deleted writer produced: base64 of salt||hash.
 		legacy := base64.StdEncoding.EncodeToString(make([]byte, 48))
 		insertUserRow(t, svc, "legacyuser", legacy, "admin")
-		role, ok, err := svc.ValidateUser("legacyuser", "Admin123!")
+		role, ok, err := svc.ValidateUser(context.Background(), "legacyuser", "Admin123!")
 		if ok {
 			t.Fatal("a pbkdf2 row was accepted — a dual-format verifier exists")
 		}
@@ -257,7 +258,7 @@ func TestU18_ShortStoredValueDoesNotPanic(t *testing.T) {
 			}()
 			name := "shortuser" + string(rune('a'+i))
 			insertUserRow(t, svc, name, stored, "admin")
-			if _, ok, _ := svc.ValidateUser(name, "Admin123!"); ok {
+			if _, ok, _ := svc.ValidateUser(context.Background(), name, "Admin123!"); ok {
 				t.Errorf("case %d (%q) authenticated", i, stored)
 			}
 		}()
@@ -442,11 +443,11 @@ func TestU19b_ConnectStoreClosesThePoolOnEveryFailurePath(t *testing.T) {
 
 type saveFailingDB struct{ *sql.DB }
 
-func (f saveFailingDB) Exec(query string, args ...any) (sql.Result, error) {
+func (f saveFailingDB) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
 	if strings.Contains(strings.ToUpper(query), ".TOKEN (") {
 		return nil, errors.New("store rejected the token row")
 	}
-	return f.DB.Exec(query, args...)
+	return f.DB.ExecContext(ctx, query, args...)
 }
 
 func TestU20_LoginDoesNotCacheATokenItCouldNotPersist(t *testing.T) {
@@ -459,7 +460,7 @@ func TestU20_LoginDoesNotCacheATokenItCouldNotPersist(t *testing.T) {
 	}
 	svc.Attach(saveFailingDB{pool.(*sql.DB)})
 
-	token, ok, err := svc.Login("loginuser", "Admin123!")
+	token, ok, err := svc.Login(context.Background(), "loginuser", "Admin123!")
 	if err == nil || ok || token != "" {
 		t.Fatalf("login reported success although the token could not be saved: token=%q ok=%v err=%v", token, ok, err)
 	}
@@ -525,7 +526,7 @@ func openMgmtStore(t *testing.T) *sql.DB {
 	// same way pkg/aikey's is to aigw: run it against a scratch store, never
 	// against one a live topology is using.
 	dropSchemaTables(t, db)
-	if err := ensureSchema(db); err != nil {
+	if err := ensureSchema(context.Background(), db); err != nil {
 		t.Fatalf("provision the store: %v", err)
 	}
 	t.Cleanup(func() { truncate(t, db) })
@@ -536,7 +537,7 @@ func dropSchemaTables(t *testing.T, db *sql.DB) {
 	t.Helper()
 	// token first: it references users.
 	for _, table := range []string{"token", "users"} {
-		if _, err := db.Exec(fmt.Sprintf("DROP TABLE IF EXISTS %s.%s CASCADE", Schema, table)); err != nil {
+		if _, err := db.ExecContext(context.Background(), fmt.Sprintf("DROP TABLE IF EXISTS %s.%s CASCADE", Schema, table)); err != nil {
 			t.Fatalf("drop %s: %v", table, err)
 		}
 	}
@@ -546,7 +547,7 @@ func truncate(t *testing.T, db *sql.DB) {
 	t.Helper()
 	// token first: it references users.
 	for _, table := range []string{"token", "users"} {
-		if _, err := db.Exec(fmt.Sprintf("DELETE FROM %s.%s", Schema, table)); err != nil {
+		if _, err := db.ExecContext(context.Background(), fmt.Sprintf("DELETE FROM %s.%s", Schema, table)); err != nil {
 			t.Fatalf("clear %s: %v", table, err)
 		}
 	}
@@ -558,7 +559,7 @@ func insertUserRow(t *testing.T, svc *UserService, username, password, role stri
 	if err != nil {
 		t.Fatalf("no store: %v", err)
 	}
-	if _, err := h.Exec(fmt.Sprintf(
+	if _, err := h.ExecContext(context.Background(), fmt.Sprintf(
 		`INSERT INTO %s.users (username, password, created_at, role) VALUES ($1, $2, $3, $4)`, Schema),
 		username, password, time.Now(), role); err != nil {
 		t.Fatalf("seed user %s: %v", username, err)
@@ -572,7 +573,7 @@ func userID(t *testing.T, svc *UserService, username string) int {
 		t.Fatalf("no store: %v", err)
 	}
 	var id int
-	if err := h.QueryRow(fmt.Sprintf(`SELECT id FROM %s.users WHERE username = $1`, Schema), username).Scan(&id); err != nil {
+	if err := h.QueryRowContext(context.Background(), fmt.Sprintf(`SELECT id FROM %s.users WHERE username = $1`, Schema), username).Scan(&id); err != nil {
 		t.Fatalf("read id for %s: %v", username, err)
 	}
 	return id

@@ -520,6 +520,29 @@ binary behaves exactly like upstream loxilb.
 
 ### Fixed
 
+- **Every key-store and management-store statement carries a deadline, and a
+  write says whether the server may still apply it.** A PostgreSQL that stalled
+  while keeping its TCP connections open (hung or overloaded server, stalled
+  volume, black-holing path, paused container) was answered never: a management
+  write committed after its client had given up, `/status/ready` hung, and a
+  cache-miss key lookup parked the proxy worker thread that asked. Budgets, as
+  environment variables in milliseconds: `LLB_AI_STORE_OP_TIMEOUT_MS` (3000,
+  one management operation, retries included; also the session
+  `statement_timeout`), `LLB_AI_STORE_PING_TIMEOUT_MS` (1000, readiness and
+  housekeeping pings), `LLB_AI_STORE_REFRESH_TIMEOUT_MS` (3000, one snapshot
+  refresh, clamped to half the refresh interval), `LLB_AI_KEY_LOOKUP_TIMEOUT_MS`
+  (300, one data-path store round trip). Idle pooled connections are dropped
+  after 60 s. The management hooks take the request's context, so a client
+  that hangs up cancels its own statement. Write endpoints now distinguish
+  **503** (`ai_key_store_unavailable`: nothing was sent, retry is safe) from
+  **504** (`ai_key_store_outcome_unknown`, management-plane result
+  `store_outcome_unknown`: the statement was sent and not answered within the
+  budget; read the resource back before retrying), declared in swagger on
+  every write operation of both planes. The `DBTX` interfaces of `pkg/aikey`
+  and `pkg/user` carry only the context-taking methods, and
+  `scripts/check-store-deadlines.sh` fails CI on a store call without one.
+  (`docs/AI-KEY-STORE.md`, "Time budgets and the write-outcome contract")
+
 - **The capacity-queue deadline timer is opened before any worker thread
   starts** (candidate qualification 2026-10-24, TSAN-01): a start-up data race
   on the queue deadline timer's descriptor between the deadline thread, which

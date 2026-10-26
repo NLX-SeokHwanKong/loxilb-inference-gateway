@@ -26,6 +26,7 @@ package aikey
 // exactly the kind of asymmetry an operator cannot see until a failover.
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -147,7 +148,7 @@ func ValidateQoSIdentity(kind, id string) error {
 // are all zero is refused: a row that constrains nothing is
 // indistinguishable from clutter, and "remove the limits" is what
 // DeleteUserRateLimit says explicitly.
-func (s *Service) SetUserRateLimit(entry cmn.UserRateLimitEntry) error {
+func (s *Service) SetUserRateLimit(ctx context.Context, entry cmn.UserRateLimitEntry) error {
 	if err := ValidateQoSIdentity("tenant_id", entry.TenantID); err != nil {
 		return err
 	}
@@ -183,11 +184,13 @@ func (s *Service) SetUserRateLimit(entry cmn.UserRateLimitEntry) error {
 	if err != nil {
 		return err
 	}
+	ctx, cancel := s.opContext(ctx)
+	defer cancel()
 	now := time.Now().UTC()
-	if _, err := db.Exec(sqlUpsertUserRateLimit,
+	if _, err := db.ExecContext(ctx, sqlUpsertUserRateLimit,
 		entry.TenantID, entry.UserID, entry.RPS, entry.BurstSize, entry.TokensPerMin, now); err != nil {
 		tk.LogIt(tk.LogError, "[AIKey] Failed to set user rate limit for %s/%s: %v\n", entry.TenantID, entry.UserID, err)
-		return err
+		return writeErr(err)
 	}
 	s.rememberUserRateLimit(cacheKeyForUser(entry.TenantID, entry.UserID),
 		&userRateLimitCacheEntry{rps: entry.RPS, burstSize: entry.BurstSize, tokensPerMin: entry.TokensPerMin})
@@ -199,10 +202,10 @@ func (s *Service) SetUserRateLimit(entry cmn.UserRateLimitEntry) error {
 	// their cached quotas would go on being enforced. The loop below then
 	// re-remembers the models this entry does carry, so a model present in
 	// both the old and the new set is never left without a cached value.
-	s.forgetUserModelRateLimits(entry.TenantID, entry.UserID)
-	if _, err := db.Exec(sqlDeleteUserModelRateLimits, entry.TenantID, entry.UserID); err != nil {
+	s.forgetUserModelRateLimits(ctx, db, entry.TenantID, entry.UserID)
+	if _, err := db.ExecContext(ctx, sqlDeleteUserModelRateLimits, entry.TenantID, entry.UserID); err != nil {
 		tk.LogIt(tk.LogError, "[AIKey] Failed to clear user model rate limits for %s/%s: %v\n", entry.TenantID, entry.UserID, err)
-		return err
+		return writeErr(err)
 	}
 	for _, ml := range entry.ModelLimits {
 		if ml.TokensPerMin <= 0 {
@@ -210,11 +213,11 @@ func (s *Service) SetUserRateLimit(entry cmn.UserRateLimitEntry) error {
 				&userRateLimitCacheEntry{})
 			continue
 		}
-		if _, err := db.Exec(sqlUpsertUserModelRateLimit,
+		if _, err := db.ExecContext(ctx, sqlUpsertUserModelRateLimit,
 			entry.TenantID, entry.UserID, ml.Model, ml.TokensPerMin, now); err != nil {
 			tk.LogIt(tk.LogError, "[AIKey] Failed to set user model rate limit for %s/%s/%s: %v\n",
 				entry.TenantID, entry.UserID, ml.Model, err)
-			return err
+			return writeErr(err)
 		}
 		s.rememberUserRateLimit(cacheKeyForUserModel(entry.TenantID, entry.UserID, ml.Model),
 			&userRateLimitCacheEntry{tokensPerMin: ml.TokensPerMin})
@@ -242,13 +245,10 @@ func (s *Service) SetUserRateLimit(entry cmn.UserRateLimitEntry) error {
 // of writers that clear by omission rather than by name.
 //
 // A store that cannot answer is not an error here: the rows could not be
-// deleted either, so there is nothing stale to forget.
-func (s *Service) forgetUserModelRateLimits(tenantID, userID string) {
-	db, err := s.store()
-	if err != nil {
-		return
-	}
-	rows, err := db.Query(sqlSelectUserModelRateLimits, tenantID, userID)
+// deleted either, so there is nothing stale to forget. It runs on the
+// writer's handle and under the writer's deadline.
+func (s *Service) forgetUserModelRateLimits(ctx context.Context, db DBTX, tenantID, userID string) {
+	rows, err := db.QueryContext(ctx, sqlSelectUserModelRateLimits, tenantID, userID)
 	if err != nil {
 		tk.LogIt(tk.LogError, "[AIKey] Failed to list user model rate limits for cache eviction %s/%s: %v\n",
 			tenantID, userID, err)
@@ -316,8 +316,10 @@ func (s *Service) GetUserRateLimit(tenantID, userID string) (rps, burstSize, tok
 		}
 		return 0, 0, 0, errStoreUnavailable
 	}
+	ctx, cancel := lookupContext()
+	defer cancel()
 	var r, b, t int
-	err = db.QueryRow(sqlSelectUserRateLimit, tenantID, userID).Scan(&r, &b, &t)
+	err = db.QueryRowContext(ctx, sqlSelectUserRateLimit, tenantID, userID).Scan(&r, &b, &t)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			// The remembered miss is what keeps an unlimited user servable
@@ -355,8 +357,10 @@ func (s *Service) GetUserModelRateLimit(tenantID, userID, model string) (tokensP
 		}
 		return 0, errStoreUnavailable
 	}
+	ctx, cancel := lookupContext()
+	defer cancel()
 	var t int
-	err = db.QueryRow(sqlSelectUserModelRateLimit, tenantID, userID, model).Scan(&t)
+	err = db.QueryRowContext(ctx, sqlSelectUserModelRateLimit, tenantID, userID, model).Scan(&t)
 	if err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
 			tk.LogIt(tk.LogError, "[AIKey] Failed to get user model rate limit for %s/%s/%s: %v\n", tenantID, userID, model, err)
@@ -374,81 +378,87 @@ func (s *Service) GetUserModelRateLimit(tenantID, userID, model string) (tokensP
 // GetUserRateLimitEntry is the config GET surface: the full row with
 // metadata and model limits, read from the store directly (config reads are
 // not on the datapath). ErrUserRateLimitNotFound when no row exists.
-func (s *Service) GetUserRateLimitEntry(tenantID, userID string) (*cmn.UserRateLimitEntry, error) {
+func (s *Service) GetUserRateLimitEntry(ctx context.Context, tenantID, userID string) (*cmn.UserRateLimitEntry, error) {
 	db, err := s.store()
 	if err != nil {
 		return nil, err
 	}
+	ctx, cancel := s.opContext(ctx)
+	defer cancel()
 	e := &cmn.UserRateLimitEntry{TenantID: tenantID, UserID: userID}
-	err = db.QueryRow(sqlSelectUserRateLimitFull, tenantID, userID).
+	err = db.QueryRowContext(ctx, sqlSelectUserRateLimitFull, tenantID, userID).
 		Scan(&e.RPS, &e.BurstSize, &e.TokensPerMin, &e.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrUserRateLimitNotFound
 		}
-		return nil, err
+		return nil, readErr(err)
 	}
-	rows, err := db.Query(sqlSelectUserModelRateLimits, tenantID, userID)
+	rows, err := db.QueryContext(ctx, sqlSelectUserModelRateLimits, tenantID, userID)
 	if err != nil {
-		return nil, err
+		return nil, readErr(err)
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var ml cmn.UserModelRateLimit
 		if err := rows.Scan(&ml.Model, &ml.TokensPerMin); err != nil {
-			return nil, err
+			return nil, readErr(err)
 		}
 		e.ModelLimits = append(e.ModelLimits, ml)
 	}
-	return e, rows.Err()
+	return e, readErr(rows.Err())
 }
 
 // ListUserRateLimits returns every explicit user row for a tenant, without
 // model limits (the per-user GET carries those).
-func (s *Service) ListUserRateLimits(tenantID string) ([]cmn.UserRateLimitEntry, error) {
+func (s *Service) ListUserRateLimits(ctx context.Context, tenantID string) ([]cmn.UserRateLimitEntry, error) {
 	db, err := s.store()
 	if err != nil {
 		return nil, err
 	}
-	rows, err := db.Query(sqlSelectUserRateLimitsByTenant, tenantID)
+	ctx, cancel := s.opContext(ctx)
+	defer cancel()
+	rows, err := db.QueryContext(ctx, sqlSelectUserRateLimitsByTenant, tenantID)
 	if err != nil {
-		return nil, err
+		return nil, readErr(err)
 	}
 	defer rows.Close()
 	out := []cmn.UserRateLimitEntry{}
 	for rows.Next() {
 		e := cmn.UserRateLimitEntry{TenantID: tenantID}
 		if err := rows.Scan(&e.UserID, &e.RPS, &e.BurstSize, &e.TokensPerMin, &e.UpdatedAt); err != nil {
-			return nil, err
+			return nil, readErr(err)
 		}
 		out = append(out, e)
 	}
-	return out, rows.Err()
+	return out, readErr(rows.Err())
 }
 
 // DeleteUserRateLimit removes a user's explicit row and its model rows. The
 // clear is a store-confirmed answer ("no limits"), so it is remembered —
 // a bare eviction would leave the last-known map still enforcing the
 // removed limit through the next outage.
-func (s *Service) DeleteUserRateLimit(tenantID, userID string) error {
+func (s *Service) DeleteUserRateLimit(ctx context.Context, tenantID, userID string) error {
 	db, err := s.store()
 	if err != nil {
 		return err
 	}
-	res, err := db.Exec(sqlDeleteUserRateLimit, tenantID, userID)
+	ctx, cancel := s.opContext(ctx)
+	defer cancel()
+	res, err := db.ExecContext(ctx, sqlDeleteUserRateLimit, tenantID, userID)
 	if err != nil {
 		tk.LogIt(tk.LogError, "[AIKey] Failed to delete user rate limit for %s/%s: %v\n", tenantID, userID, err)
-		return err
+		return writeErr(err)
 	}
 	if n, aerr := res.RowsAffected(); aerr == nil && n == 0 {
 		return ErrUserRateLimitNotFound
 	}
 	// Same order as the replace path: name the models while they still
 	// exist, or their quotas outlive the row that configured them.
-	s.forgetUserModelRateLimits(tenantID, userID)
-	if _, err := db.Exec(sqlDeleteUserModelRateLimits, tenantID, userID); err != nil {
+	s.forgetUserModelRateLimits(ctx, db, tenantID, userID)
+	if _, err := db.ExecContext(ctx, sqlDeleteUserModelRateLimits, tenantID, userID); err != nil {
 		tk.LogIt(tk.LogError, "[AIKey] Failed to delete user model rate limits for %s/%s: %v\n", tenantID, userID, err)
-		return err
+		return writeErr(err)
 	}
 	s.rememberUserRateLimit(cacheKeyForUser(tenantID, userID), &userRateLimitCacheEntry{})
 	s.Cache.Delete(cacheKeyForUser(tenantID, userID))
@@ -470,7 +480,7 @@ var (
 // SetRateLimitDefaults upserts one defaults row. Scope 'global' must carry
 // no rule_ident; scope 'rule' must carry one. All-zero rows are refused for
 // the same reason all-zero user rows are.
-func (s *Service) SetRateLimitDefaults(entry cmn.RateLimitDefaultsEntry) error {
+func (s *Service) SetRateLimitDefaults(ctx context.Context, entry cmn.RateLimitDefaultsEntry) error {
 	switch entry.Scope {
 	case cmn.RateLimitScopeGlobal:
 		if entry.RuleIdent != "" {
@@ -505,12 +515,14 @@ func (s *Service) SetRateLimitDefaults(entry cmn.RateLimitDefaultsEntry) error {
 	if err != nil {
 		return err
 	}
+	ctx, cancel := s.opContext(ctx)
+	defer cancel()
 	now := time.Now().UTC()
-	if _, err := db.Exec(sqlUpsertRateLimitDefaults,
+	if _, err := db.ExecContext(ctx, sqlUpsertRateLimitDefaults,
 		entry.Scope, entry.RuleIdent, entry.DefaultUserRPS, entry.DefaultUserTPM,
 		entry.DefaultTenantRPS, entry.DefaultTenantTPM, entry.VipSharedRPS, entry.VipSharedTPM, now); err != nil {
 		tk.LogIt(tk.LogError, "[AIKey] Failed to set rate limit defaults (%s/%s): %v\n", entry.Scope, entry.RuleIdent, err)
-		return err
+		return writeErr(err)
 	}
 	s.rememberDefaults(cacheKeyForDefaults(entry.Scope, entry.RuleIdent), &defaultsCacheEntry{
 		userRPS: entry.DefaultUserRPS, userTPM: entry.DefaultUserTPM,
@@ -564,8 +576,10 @@ func (s *Service) GetRateLimitDefaults(scope, ruleIdent string) (entry cmn.RateL
 		}
 		return entry, false, errStoreUnavailable
 	}
+	ctx, cancel := lookupContext()
+	defer cancel()
 	e := &defaultsCacheEntry{}
-	err = db.QueryRow(sqlSelectRateLimitDefaults, scope, ruleIdent).
+	err = db.QueryRowContext(ctx, sqlSelectRateLimitDefaults, scope, ruleIdent).
 		Scan(&e.userRPS, &e.userTPM, &e.tenantRPS, &e.tenantTPM, &e.vipRPS, &e.vipTPM)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -585,35 +599,39 @@ func (s *Service) GetRateLimitDefaults(scope, ruleIdent string) (entry cmn.RateL
 
 // GetRateLimitDefaultsEntry is the config GET surface (store-direct, with
 // metadata). ErrRateLimitDefaultsNotFound when the row does not exist.
-func (s *Service) GetRateLimitDefaultsEntry(scope, ruleIdent string) (*cmn.RateLimitDefaultsEntry, error) {
+func (s *Service) GetRateLimitDefaultsEntry(ctx context.Context, scope, ruleIdent string) (*cmn.RateLimitDefaultsEntry, error) {
 	db, err := s.store()
 	if err != nil {
 		return nil, err
 	}
+	ctx, cancel := s.opContext(ctx)
+	defer cancel()
 	e := &cmn.RateLimitDefaultsEntry{Scope: scope, RuleIdent: ruleIdent}
-	err = db.QueryRow(sqlSelectRateLimitDefaultsFull, scope, ruleIdent).
+	err = db.QueryRowContext(ctx, sqlSelectRateLimitDefaultsFull, scope, ruleIdent).
 		Scan(&e.DefaultUserRPS, &e.DefaultUserTPM, &e.DefaultTenantRPS, &e.DefaultTenantTPM,
 			&e.VipSharedRPS, &e.VipSharedTPM, &e.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrRateLimitDefaultsNotFound
 		}
-		return nil, err
+		return nil, readErr(err)
 	}
 	return e, nil
 }
 
 // DeleteRateLimitDefaults removes one defaults row; the clear is remembered
 // as the store-confirmed "no row" for the outage window.
-func (s *Service) DeleteRateLimitDefaults(scope, ruleIdent string) error {
+func (s *Service) DeleteRateLimitDefaults(ctx context.Context, scope, ruleIdent string) error {
 	db, err := s.store()
 	if err != nil {
 		return err
 	}
-	res, err := db.Exec(sqlDeleteRateLimitDefaults, scope, ruleIdent)
+	ctx, cancel := s.opContext(ctx)
+	defer cancel()
+	res, err := db.ExecContext(ctx, sqlDeleteRateLimitDefaults, scope, ruleIdent)
 	if err != nil {
 		tk.LogIt(tk.LogError, "[AIKey] Failed to delete rate limit defaults (%s/%s): %v\n", scope, ruleIdent, err)
-		return err
+		return writeErr(err)
 	}
 	if n, aerr := res.RowsAffected(); aerr == nil && n == 0 {
 		return ErrRateLimitDefaultsNotFound
@@ -633,7 +651,7 @@ func (s *Service) DeleteRateLimitDefaults(scope, ruleIdent string) error {
 // their clients were still holding. Only non-nil fields change. The cache
 // is evicted (locally and on peers) because the validation path caches the
 // whole entry, limits included.
-func (s *Service) PatchAPIKeyRateLimits(keyID string, rps, burstSize, tokensPerMin *int) error {
+func (s *Service) PatchAPIKeyRateLimits(ctx context.Context, keyID string, rps, burstSize, tokensPerMin *int) error {
 	if rps == nil && burstSize == nil && tokensPerMin == nil {
 		return nil
 	}
@@ -646,26 +664,28 @@ func (s *Service) PatchAPIKeyRateLimits(keyID string, rps, burstSize, tokensPerM
 	if err != nil {
 		return err
 	}
-	keyHash, err := s.keyHashByID(db, keyID)
+	ctx, cancel := s.opContext(ctx)
+	defer cancel()
+	keyHash, err := s.keyHashByID(ctx, db, keyID)
 	if err != nil {
 		return err
 	}
 	if rps != nil {
-		if _, err = db.Exec(sqlUpdateAPIKeyRPS, *rps, keyID); err != nil {
+		if _, err = db.ExecContext(ctx, sqlUpdateAPIKeyRPS, *rps, keyID); err != nil {
 			tk.LogIt(tk.LogError, "[AIKey] Failed to patch rate_limit_rps for key %s: %v\n", keyID, err)
-			return err
+			return writeErr(err)
 		}
 	}
 	if burstSize != nil {
-		if _, err = db.Exec(sqlUpdateAPIKeyBurst, *burstSize, keyID); err != nil {
+		if _, err = db.ExecContext(ctx, sqlUpdateAPIKeyBurst, *burstSize, keyID); err != nil {
 			tk.LogIt(tk.LogError, "[AIKey] Failed to patch burst_size for key %s: %v\n", keyID, err)
-			return err
+			return writeErr(err)
 		}
 	}
 	if tokensPerMin != nil {
-		if _, err = db.Exec(sqlUpdateAPIKeyTPM, *tokensPerMin, keyID); err != nil {
+		if _, err = db.ExecContext(ctx, sqlUpdateAPIKeyTPM, *tokensPerMin, keyID); err != nil {
 			tk.LogIt(tk.LogError, "[AIKey] Failed to patch tokens_per_min for key %s: %v\n", keyID, err)
-			return err
+			return writeErr(err)
 		}
 	}
 	s.evictAndFanOut(KeyInvalidation{KeyHash: keyHash, KeyID: keyID})

@@ -16,6 +16,7 @@
 package user
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"io"
@@ -39,11 +40,24 @@ const (
 // DBTX is a minimal database operations interface satisfied by *sql.DB.
 // It allows UserService.DB to be replaced by a test double without
 // importing an external mock library.
+//
+// Only the context-taking methods are on it, on purpose: every statement
+// this package runs carries a deadline (pkg/pgstore budgets), and with the
+// plain methods absent a new call site cannot run without one and compile.
+// A store that stalls while keeping TCP open used to hold a management
+// request for as long as the stall lasted, and then commit the write after
+// the client had given up.
 type DBTX interface {
-	Exec(query string, args ...any) (sql.Result, error)
-	Query(query string, args ...any) (*sql.Rows, error)
-	QueryRow(query string, args ...any) *sql.Row
-	Ping() error
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+	PingContext(ctx context.Context) error
+}
+
+// opContext bounds one management operation by the operation budget and by
+// the caller's context. nil is the background context.
+func opContext(parent context.Context) (context.Context, context.CancelFunc) {
+	return pgstore.WithBudget(parent, pgstore.OpTimeout())
 }
 
 // dbCloseGracePeriod is how long a superseded pool is left open after a
@@ -120,12 +134,17 @@ func (s *UserService) store() (DBTX, error) {
 // pool exists (a dial has succeeded) and a liveness ping succeeds right
 // now. Readiness-surface question only -- the auth chain itself keeps its
 // degraded-503-and-heal behavior.
-func (s *UserService) Ready() error {
+//
+// The ping runs under the ping budget: a store that stalls while keeping its
+// connections open is reported not ready within it.
+func (s *UserService) Ready(ctx context.Context) error {
 	h, err := s.store()
 	if err != nil {
 		return err
 	}
-	return h.Ping()
+	ctx, cancel := pgstore.WithBudget(ctx, pgstore.PingTimeout())
+	defer cancel()
+	return pgstore.ClassifyReadErr(h.PingContext(ctx))
 }
 
 // ErrDBUnavailable is defined in common so the authentication chain can
@@ -196,11 +215,13 @@ func NewUserService() *UserService {
 
 // ValidateUser validates the user credentials.
 // It returns the user's role if the credentials are valid, or an error if the credentials are invalid.
-func (s *UserService) AddUser(user cmn.User) (int, error) {
+func (s *UserService) AddUser(ctx context.Context, user cmn.User) (int, error) {
 	handle, err := s.store()
 	if err != nil {
 		return 0, err
 	}
+	ctx, cancel := opContext(ctx)
+	defer cancel()
 	// Refuse an unimplementable role before doing any work. The authorizer
 	// denies anything outside the set at decision time, but accepting it here
 	// stored an account that then had no authority at all — which reads as a
@@ -209,7 +230,7 @@ func (s *UserService) AddUser(user cmn.User) (int, error) {
 		return 0, cmn.ErrInvalidRole
 	}
 	var userID int
-	err = RetryOperation(func() error {
+	err = retryWrite(ctx, func() error {
 		// Policy only. The previous-password rule compares against a stored
 		// row, and the only row it could find here belongs to a username that
 		// already exists — which is a conflict the insert below reports
@@ -231,7 +252,7 @@ func (s *UserService) AddUser(user cmn.User) (int, error) {
 		// RETURNING rather than LastInsertId: PostgreSQL drivers do not
 		// implement LastInsertId at all, and it silently returned an error
 		// that this path would have reported as a failed create.
-		if err := handle.QueryRow(InsertUserQuery,
+		if err := handle.QueryRowContext(ctx, InsertUserQuery,
 			user.Username, hashedPassword, user.CreatedAt, user.Role).Scan(&userID); err != nil {
 			if pgstore.IsUniqueViolation(err) {
 				tk.LogIt(tk.LogWarning, "Duplicate username: %v\n", user.Username)
@@ -243,7 +264,7 @@ func (s *UserService) AddUser(user cmn.User) (int, error) {
 
 		tk.LogIt(tk.LogInfo, "User created: %v\n", user.Username)
 		return nil
-	}, AuthMaxRetries, AuthRetryDelay, retryableDBError)
+	})
 	return userID, err
 }
 
@@ -270,20 +291,22 @@ func hashUserPassword(password string) (string, error) {
 //
 // Unlike AddUser this does not retry: a closed bootstrap is a terminal answer,
 // and retrying it would only delay the rejection.
-func (s *UserService) BootstrapUser(user cmn.User) (int, error) {
+func (s *UserService) BootstrapUser(ctx context.Context, user cmn.User) (int, error) {
 	handle, err := s.store()
 	if err != nil {
 		return 0, err
 	}
+	ctx, cancel := opContext(ctx)
+	defer cancel()
 
 	// Refuse a closed bootstrap before doing anything else. The caller is
 	// unauthenticated, so it must learn nothing beyond "no" — and the password
 	// checks below query the user table by name, which on a populated table is
 	// a path that reports its own failures instead of this one.
 	var existing int
-	if err := handle.QueryRow(CountUsersQuery).Scan(&existing); err != nil {
+	if err := handle.QueryRowContext(ctx, CountUsersQuery).Scan(&existing); err != nil {
 		tk.LogIt(tk.LogError, "Failed to count users: %v\n", err.Error())
-		return 0, err
+		return 0, pgstore.ClassifyReadErr(err)
 	}
 	if existing > 0 {
 		return 0, ErrBootstrapClosed
@@ -313,7 +336,7 @@ func (s *UserService) BootstrapUser(user cmn.User) (int, error) {
 	// had to ask RowsAffected and then LastInsertId separately, and the second
 	// of those does not exist on PostgreSQL at all.
 	var userID int
-	err = handle.QueryRow(BootstrapUserQuery,
+	err = handle.QueryRowContext(ctx, BootstrapUserQuery,
 		user.Username, hashedPassword, user.CreatedAt, user.Role).Scan(&userID)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -324,7 +347,7 @@ func (s *UserService) BootstrapUser(user cmn.User) (int, error) {
 		return 0, ErrBootstrapClosed
 	case err != nil:
 		tk.LogIt(tk.LogError, "Failed to bootstrap user: %v\n", err.Error())
-		return 0, err
+		return 0, pgstore.ClassifyWriteErr(err)
 	}
 
 	// Logged loudly: this is the one credential in the system that was created
@@ -336,17 +359,19 @@ func (s *UserService) BootstrapUser(user cmn.User) (int, error) {
 }
 
 // GetUsers returns all users from the database.
-func (s *UserService) GetUsers() ([]cmn.User, error) {
+func (s *UserService) GetUsers(ctx context.Context) ([]cmn.User, error) {
 	handle, err := s.store()
 	if err != nil {
 		return nil, err
 	}
+	ctx, cancel := opContext(ctx)
+	defer cancel()
 	var users []cmn.User
-	err = RetryOperation(func() error {
+	err = RetryOperation(ctx, func() error {
 		// The password column is not selected at all. Not selected, rather
 		// than selected-and-dropped: a value that is never read cannot be
 		// forwarded by a later edit to whatever renders this list.
-		rows, err := handle.Query(SelectAllUsersQuery)
+		rows, err := handle.QueryContext(ctx, SelectAllUsersQuery)
 		if err != nil {
 			tk.LogIt(tk.LogError, "Failed to fetch users: %v\n", err.Error())
 			return err
@@ -385,17 +410,19 @@ func (s *UserService) GetUsers() ([]cmn.User, error) {
 // no retry: the question is asked on the request path, once, and a slow
 // answer would hold a management call for a flag that only ever narrows
 // what the record claims.
-func (s *UserService) DelegationAllowed(username string) (bool, error) {
+func (s *UserService) DelegationAllowed(ctx context.Context, username string) (bool, error) {
 	handle, err := s.store()
 	if err != nil {
 		return false, err
 	}
+	ctx, cancel := opContext(ctx)
+	defer cancel()
 	var allowed bool
-	if err := handle.QueryRow(SelectUserDelegationQuery, username).Scan(&allowed); err != nil {
+	if err := handle.QueryRowContext(ctx, SelectUserDelegationQuery, username).Scan(&allowed); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return false, nil
 		}
-		return false, err
+		return false, pgstore.ClassifyReadErr(err)
 	}
 	return allowed, nil
 }
@@ -405,14 +432,16 @@ func (s *UserService) DelegationAllowed(username string) (bool, error) {
 // The two are one operation. Deleting the row alone left the user's tokens
 // valid until they expired, so a removed administrator kept administering for
 // up to twenty-four hours.
-func (s *UserService) DeleteUser(id int) error {
+func (s *UserService) DeleteUser(ctx context.Context, id int) error {
 	handle, err := s.store()
 	if err != nil {
 		return err
 	}
-	return RetryOperation(func() error {
+	ctx, cancel := opContext(ctx)
+	defer cancel()
+	return retryWrite(ctx, func() error {
 		var username string
-		if err := handle.QueryRow(SelectUsernameByIDQuery, id).Scan(&username); err != nil {
+		if err := handle.QueryRowContext(ctx, SelectUsernameByIDQuery, id).Scan(&username); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				// Nothing to delete and nothing to revoke. Reported as the
 				// same "no such user" the REST layer maps to 404.
@@ -421,27 +450,29 @@ func (s *UserService) DeleteUser(id int) error {
 			tk.LogIt(tk.LogError, "Failed to read the user being deleted: %v\n", err.Error())
 			return err
 		}
-		return s.revokeSessions(handle, username, func(tx *sql.Tx) error {
-			if _, err := tx.Exec(DeleteUserQuery, id); err != nil {
+		return s.revokeSessions(ctx, handle, username, func(tx *sql.Tx) error {
+			if _, err := tx.ExecContext(ctx, DeleteUserQuery, id); err != nil {
 				tk.LogIt(tk.LogError, "Failed to delete user: %v\n", err.Error())
 				return err
 			}
 			return nil
 		})
-	}, AuthMaxRetries, AuthRetryDelay, retryableDBError)
+	})
 }
 
 // UpdateUser updates a user in the database.
-func (s *UserService) UpdateUser(user cmn.User) error {
+func (s *UserService) UpdateUser(ctx context.Context, user cmn.User) error {
 	handle, err := s.store()
 	if err != nil {
 		return err
 	}
-	return RetryOperation(func() error {
+	ctx, cancel := opContext(ctx)
+	defer cancel()
+	return retryWrite(ctx, func() error {
 		// Check if the user exists
 		var existingUser cmn.User
 		query := SelectUserQuery
-		err := handle.QueryRow(query, user.ID).Scan(&existingUser.ID, &existingUser.Username, &existingUser.Password, &existingUser.Role)
+		err := handle.QueryRowContext(ctx, query, user.ID).Scan(&existingUser.ID, &existingUser.Username, &existingUser.Password, &existingUser.Role)
 		if err != nil {
 			if err == sql.ErrNoRows {
 				tk.LogIt(tk.LogError, "User not found: %s\n", err.Error())
@@ -452,7 +483,7 @@ func (s *UserService) UpdateUser(user cmn.User) error {
 		}
 
 		// Validate the new password
-		if err := s.validatePassword(user.Username, user.Password); err != nil {
+		if err := s.validatePassword(ctx, user.Username, user.Password); err != nil {
 			tk.LogIt(tk.LogError, "Password validation failed: %v\n", err.Error())
 			return err
 		}
@@ -478,8 +509,8 @@ func (s *UserService) UpdateUser(user cmn.User) error {
 		// row carries the role it was issued with, so a demoted user whose
 		// sessions survived would keep the authority they were demoted out
 		// of — in this process's cache and in every peer's.
-		if err := s.revokeSessions(handle, existingUser.Username, func(tx *sql.Tx) error {
-			if _, err := tx.Exec(UpdateUserQuery, user.Username, hashedPassword, user.Role, user.ID, user.DelegationAllowed); err != nil {
+		if err := s.revokeSessions(ctx, handle, existingUser.Username, func(tx *sql.Tx) error {
+			if _, err := tx.ExecContext(ctx, UpdateUserQuery, user.Username, hashedPassword, user.Role, user.ID, user.DelegationAllowed); err != nil {
 				tk.LogIt(tk.LogError, "Failed to update user: %v\n", err.Error())
 				return err
 			}
@@ -490,15 +521,17 @@ func (s *UserService) UpdateUser(user cmn.User) error {
 
 		tk.LogIt(tk.LogInfo, "User updated successfully: %v\n", user.Username)
 		return nil
-	}, AuthMaxRetries, AuthRetryDelay, retryableDBError)
+	})
 }
 
-func (s *UserService) Login(username, password string) (string, bool, error) {
+func (s *UserService) Login(ctx context.Context, username, password string) (string, bool, error) {
 	if err := s.dbReady(); err != nil {
 		return "", false, err
 	}
+	ctx, cancel := opContext(ctx)
+	defer cancel()
 	// User check
-	role, vaild, err := s.ValidateUser(username, password)
+	role, vaild, err := s.ValidateUser(ctx, username, password)
 	if err != nil {
 		return "", false, err
 	}
@@ -514,7 +547,7 @@ func (s *UserService) Login(username, password string) (string, bool, error) {
 		// for the full TTL against a row that was never written. The cache is
 		// a read-through of the store, so it must not hold what the store
 		// refused.
-		if err := s.saveToken(username, token, role); err != nil {
+		if err := s.saveToken(ctx, username, token, role); err != nil {
 			tk.LogIt(tk.LogWarning, "Save fail : %v \n", err.Error())
 			return "", false, err
 		}
@@ -528,7 +561,7 @@ func (s *UserService) Login(username, password string) (string, bool, error) {
 }
 
 // Logout deletes the token from the cache and the database.
-func (s *UserService) Logout(tokenString string) error {
+func (s *UserService) Logout(ctx context.Context, tokenString string) error {
 	// The API server starts before the user service finishes initialising, so
 	// this can be called on a nil receiver during startup.
 	if s == nil {
@@ -556,8 +589,10 @@ func (s *UserService) Logout(tokenString string) error {
 	if err != nil {
 		return err
 	}
-	return RetryOperation(func() error {
-		_, err := handle.Exec(DeleteTokenQuery, hashed)
+	ctx, cancel := opContext(ctx)
+	defer cancel()
+	return retryWrite(ctx, func() error {
+		_, err := handle.ExecContext(ctx, DeleteTokenQuery, hashed)
 		if err != nil {
 			tk.LogIt(tk.LogError, "Failed to delete token: %v\n", err.Error())
 			return err
@@ -565,7 +600,7 @@ func (s *UserService) Logout(tokenString string) error {
 
 		tk.LogIt(tk.LogInfo, "User logged out: %v\n", username)
 		return nil
-	}, AuthMaxRetries, AuthRetryDelay, retryableDBError)
+	})
 }
 
 // UserServiceTicker is a periodic function that runs every 10 seconds.
@@ -580,7 +615,10 @@ func (s *UserService) UserServiceTicker() {
 			return
 		}
 	}
-	if err := handle.Ping(); err != nil {
+	pingCtx, cancel := pgstore.WithBudget(context.Background(), pgstore.PingTimeout())
+	err = handle.PingContext(pingCtx)
+	cancel()
+	if err != nil {
 		tk.LogIt(tk.LogError, "Failed to ping database: %v\n", err.Error())
 		if err := s.reconnectDB(); err != nil {
 			return
@@ -625,7 +663,9 @@ func (s *UserService) cleanupExpiredTokens() {
 	}
 	query := DeleteExpiredTokenQuery
 
-	result, err := handle.Exec(query)
+	ctx, cancel := opContext(context.Background())
+	defer cancel()
+	result, err := handle.ExecContext(ctx, query)
 	if err != nil {
 		tk.LogIt(tk.LogInfo, "Failed to delete expired tokens: %v\n", err)
 		return

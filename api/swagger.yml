@@ -410,6 +410,15 @@ paths:
           description: Internal Server Error
           schema:
             $ref: '#/definitions/Error'
+        "504":
+          description: >-
+            Write outcome unknown (result store_outcome_unknown). The statement
+            was handed to the management credential store and the store did
+            not answer within the operation budget; the store may still apply
+            it when it resumes. Not a 503: nothing says the write did not
+            happen. Read the resource back before deciding whether to retry.
+          schema:
+            $ref: '#/definitions/Error'
       summary: User login
       tags:
       - auth
@@ -439,6 +448,15 @@ paths:
             $ref: '#/definitions/Error'
         "500":
           description: Internal Server Error
+          schema:
+            $ref: '#/definitions/Error'
+        '504':
+          description: >-
+            Write outcome unknown (result store_outcome_unknown). The statement
+            was handed to the management credential store and the store did
+            not answer within the operation budget; the store may still apply
+            it when it resumes. Not a 503: nothing says the write did not
+            happen. Read the resource back before deciding whether to retry.
           schema:
             $ref: '#/definitions/Error'
       summary: User logout
@@ -528,6 +546,15 @@ paths:
           description: Internal Server Error
           schema:
             $ref: '#/definitions/Error'
+        '504':
+          description: >-
+            Write outcome unknown (result store_outcome_unknown). The statement
+            was handed to the management credential store and the store did
+            not answer within the operation budget; the store may still apply
+            it when it resumes. Not a 503: nothing says the write did not
+            happen. Read the resource back before deciding whether to retry.
+          schema:
+            $ref: '#/definitions/Error'
       summary: Create a new user
       tags:
       - users
@@ -559,6 +586,15 @@ paths:
             $ref: '#/definitions/MessageResponse'
         "500":
           description: Internal Server Error
+          schema:
+            $ref: '#/definitions/Error'
+        '504':
+          description: >-
+            Write outcome unknown (result store_outcome_unknown). The statement
+            was handed to the management credential store and the store did
+            not answer within the operation budget; the store may still apply
+            it when it resumes. Not a 503: nothing says the write did not
+            happen. Read the resource back before deciding whether to retry.
           schema:
             $ref: '#/definitions/Error'
       summary: Delete user
@@ -601,6 +637,15 @@ paths:
             $ref: '#/definitions/Error'
         "500":
           description: Internal Server Error
+          schema:
+            $ref: '#/definitions/Error'
+        '504':
+          description: >-
+            Write outcome unknown (result store_outcome_unknown). The statement
+            was handed to the management credential store and the store did
+            not answer within the operation budget; the store may still apply
+            it when it resumes. Not a 503: nothing says the write did not
+            happen. Read the resource back before deciding whether to retry.
           schema:
             $ref: '#/definitions/Error'
       summary: Update user
@@ -8202,6 +8247,16 @@ paths:
           description: Management credential store or API-key store unavailable
           schema:
             $ref: '#/definitions/Error'
+        '504':
+          description: >-
+            Write outcome unknown (code ai_key_store_outcome_unknown). The
+            statement was handed to the API-key store and the store did not
+            answer within the operation budget; the store may still apply it
+            when it resumes. Not a 503: nothing says the write did not happen.
+            Read the resource back (GET) before deciding whether to retry; a
+            blind retry of a non-idempotent write can create a second row.
+          schema:
+            $ref: '#/definitions/Error'
       operationId: postConfigAiApikey
       tags:
         - ai
@@ -8310,6 +8365,16 @@ paths:
           description: Management credential store or API-key store unavailable
           schema:
             $ref: '#/definitions/Error'
+        '504':
+          description: >-
+            Write outcome unknown (code ai_key_store_outcome_unknown). The
+            statement was handed to the API-key store and the store did not
+            answer within the operation budget; the store may still apply it
+            when it resumes. Not a 503: nothing says the write did not happen.
+            Read the resource back (GET) before deciding whether to retry; a
+            blind retry of a non-idempotent write can create a second row.
+          schema:
+            $ref: '#/definitions/Error'
       operationId: deleteConfigAiApikeyKeyID
       tags:
         - ai
@@ -8358,6 +8423,16 @@ paths:
           description: Internal service error
           schema:
             $ref: '#/definitions/Error'
+        '504':
+          description: >-
+            Write outcome unknown (code ai_key_store_outcome_unknown). The
+            statement was handed to the API-key store and the store did not
+            answer within the operation budget; the store may still apply it
+            when it resumes. Not a 503: nothing says the write did not happen.
+            Read the resource back (GET) before deciding whether to retry; a
+            blind retry of a non-idempotent write can create a second row.
+          schema:
+            $ref: '#/definitions/Error'
       operationId: patchConfigAiApikeyKeyID
       tags:
         - ai
@@ -8392,6 +8467,16 @@ paths:
             $ref: '#/definitions/Error'
         '503':
           description: Management credential store or API-key store unavailable
+          schema:
+            $ref: '#/definitions/Error'
+        '504':
+          description: >-
+            Write outcome unknown (code ai_key_store_outcome_unknown). The
+            statement was handed to the API-key store and the store did not
+            answer within the operation budget; the store may still apply it
+            when it resumes. Not a 503: nothing says the write did not happen.
+            Read the resource back (GET) before deciding whether to retry; a
+            blind retry of a non-idempotent write can create a second row.
           schema:
             $ref: '#/definitions/Error'
       operationId: postConfigAiTenantRatelimit
@@ -8471,6 +8556,16 @@ paths:
             $ref: '#/definitions/Error'
         '503':
           description: Management credential store or API-key store unavailable
+          schema:
+            $ref: '#/definitions/Error'
+        '504':
+          description: >-
+            Write outcome unknown (code ai_key_store_outcome_unknown). The
+            statement was handed to the API-key store and the store did not
+            answer within the operation budget; the store may still apply it
+            when it resumes. Not a 503: nothing says the write did not happen.
+            Read the resource back (GET) before deciding whether to retry; a
+            blind retry of a non-idempotent write can create a second row.
           schema:
             $ref: '#/definitions/Error'
       operationId: postConfigAiUserRatelimit
@@ -8598,6 +8693,16 @@ paths:
           description: Management credential store or API-key store unavailable
           schema:
             $ref: '#/definitions/Error'
+        '504':
+          description: >-
+            Write outcome unknown (code ai_key_store_outcome_unknown). The
+            statement was handed to the API-key store and the store did not
+            answer within the operation budget; the store may still apply it
+            when it resumes. Not a 503: nothing says the write did not happen.
+            Read the resource back (GET) before deciding whether to retry; a
+            blind retry of a non-idempotent write can create a second row.
+          schema:
+            $ref: '#/definitions/Error'
       operationId: deleteConfigAiUserRatelimitTenantIDUserID
       tags:
         - ai
@@ -8637,6 +8742,16 @@ paths:
             $ref: '#/definitions/Error'
         '503':
           description: Management credential store or API-key store unavailable
+          schema:
+            $ref: '#/definitions/Error'
+        '504':
+          description: >-
+            Write outcome unknown (code ai_key_store_outcome_unknown). The
+            statement was handed to the API-key store and the store did not
+            answer within the operation budget; the store may still apply it
+            when it resumes. Not a 503: nothing says the write did not happen.
+            Read the resource back (GET) before deciding whether to retry; a
+            blind retry of a non-idempotent write can create a second row.
           schema:
             $ref: '#/definitions/Error'
       operationId: postConfigAiRatelimitDefaults
@@ -8728,6 +8843,16 @@ paths:
             $ref: '#/definitions/Error'
         '503':
           description: Management credential store or API-key store unavailable
+          schema:
+            $ref: '#/definitions/Error'
+        '504':
+          description: >-
+            Write outcome unknown (code ai_key_store_outcome_unknown). The
+            statement was handed to the API-key store and the store did not
+            answer within the operation budget; the store may still apply it
+            when it resumes. Not a 503: nothing says the write did not happen.
+            Read the resource back (GET) before deciding whether to retry; a
+            blind retry of a non-idempotent write can create a second row.
           schema:
             $ref: '#/definitions/Error'
       operationId: deleteConfigAiRatelimitDefaultsScope
@@ -9323,6 +9448,16 @@ paths:
           description: Maintenance mode, no AI key store configured (ai_key_store_unconfigured), or the store does not answer (ai_key_store_unavailable)
           schema:
             $ref: '#/definitions/Error'
+        '504':
+          description: >-
+            Write outcome unknown (code ai_key_store_outcome_unknown). The
+            statement was handed to the API-key store and the store did not
+            answer within the operation budget; the store may still apply it
+            when it resumes. Not a 503: nothing says the write did not happen.
+            Read the resource back (GET) before deciding whether to retry; a
+            blind retry of a non-idempotent write can create a second row.
+          schema:
+            $ref: '#/definitions/Error'
       tags:
         - ai
     get:
@@ -9428,6 +9563,16 @@ paths:
             $ref: '#/definitions/Error'
         '503':
           description: Maintenance mode, no AI key store configured, or the store does not answer
+          schema:
+            $ref: '#/definitions/Error'
+        '504':
+          description: >-
+            Write outcome unknown (code ai_key_store_outcome_unknown). The
+            statement was handed to the API-key store and the store did not
+            answer within the operation budget; the store may still apply it
+            when it resumes. Not a 503: nothing says the write did not happen.
+            Read the resource back (GET) before deciding whether to retry; a
+            blind retry of a non-idempotent write can create a second row.
           schema:
             $ref: '#/definitions/Error'
       tags:

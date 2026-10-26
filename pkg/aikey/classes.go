@@ -17,6 +17,7 @@
 package aikey
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -211,7 +212,7 @@ func splitList(s string) []string {
 }
 
 // SetObjective creates or replaces an objective and refreshes the snapshot.
-func (s *Service) SetObjective(e cmn.AIObjectiveEntry) error {
+func (s *Service) SetObjective(ctx context.Context, e cmn.AIObjectiveEntry) error {
 	e, err := ValidateObjective(e)
 	if err != nil {
 		return err
@@ -220,9 +221,13 @@ func (s *Service) SetObjective(e cmn.AIObjectiveEntry) error {
 	if err != nil {
 		return err
 	}
-	if _, err := db.Exec(sqlUpsertObjective, e.Name, joinList(e.Services), e.Priority, time.Now().UTC()); err != nil {
+	ctx, cancel := s.opContext(ctx)
+	defer cancel()
+	if _, err := db.ExecContext(ctx, sqlUpsertObjective, e.Name, joinList(e.Services), e.Priority, time.Now().UTC()); err != nil {
 		tk.LogIt(tk.LogError, "[AIKey] Failed to set objective %s: %v\n", e.Name, err)
-		return errStoreUnavailable
+		// Classified, not collapsed: a deadline after the upsert was sent
+		// means the server may still apply it, and the caller is told so.
+		return writeErr(err)
 	}
 	tk.LogIt(tk.LogInfo, "[AIKey] Set objective %s: priority=%d services=%d\n", e.Name, e.Priority, len(e.Services))
 	s.refreshClassesAfterWrite()
@@ -232,15 +237,17 @@ func (s *Service) SetObjective(e cmn.AIObjectiveEntry) error {
 // DeleteObjective removes an objective and refreshes the snapshot. A tenant
 // or key that still names it keeps the name; a request that asks for it is
 // then treated as asking for an unknown objective.
-func (s *Service) DeleteObjective(name string) error {
+func (s *Service) DeleteObjective(ctx context.Context, name string) error {
 	db, err := s.store()
 	if err != nil {
 		return err
 	}
-	res, err := db.Exec(sqlDeleteObjective, name)
+	ctx, cancel := s.opContext(ctx)
+	defer cancel()
+	res, err := db.ExecContext(ctx, sqlDeleteObjective, name)
 	if err != nil {
 		tk.LogIt(tk.LogError, "[AIKey] Failed to delete objective %s: %v\n", name, err)
-		return errStoreUnavailable
+		return writeErr(err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrObjectiveNotFound
@@ -251,14 +258,16 @@ func (s *Service) DeleteObjective(name string) error {
 }
 
 // ListObjectives reads the objective table from the store, by name.
-func (s *Service) ListObjectives() ([]cmn.AIObjectiveEntry, error) {
+func (s *Service) ListObjectives(ctx context.Context) ([]cmn.AIObjectiveEntry, error) {
 	db, err := s.store()
 	if err != nil {
 		return nil, err
 	}
-	objs, err := readObjectives(db)
+	ctx, cancel := s.opContext(ctx)
+	defer cancel()
+	objs, err := readObjectives(ctx, db)
 	if err != nil {
-		return nil, errStoreUnavailable
+		return nil, readErr(err)
 	}
 	out := make([]cmn.AIObjectiveEntry, 0, len(objs))
 	for _, o := range objs {
@@ -276,9 +285,9 @@ func (s *Service) ListObjectives() ([]cmn.AIObjectiveEntry, error) {
 // StoreReachable and StoreLastRead say, whatever the source, whether the
 // store answered its latest read (this one) and when a read last answered:
 // an outage is seen in the answer, not only in the logs.
-func (s *Service) ObjectiveList() (cmn.AIObjectiveList, error) {
+func (s *Service) ObjectiveList(ctx context.Context) (cmn.AIObjectiveList, error) {
 	gen := s.class.readGen.Add(1)
-	objs, err := s.ListObjectives()
+	objs, err := s.ListObjectives(ctx)
 	s.noteStoreRead(gen, err)
 	reachable, lastOK := s.StoreHealth()
 	if err == nil {
@@ -293,8 +302,8 @@ func (s *Service) ObjectiveList() (cmn.AIObjectiveList, error) {
 		StoreReachable: reachable, StoreLastRead: lastOK}, nil
 }
 
-func readObjectives(db DBTX) (map[string]cmn.AIObjectiveEntry, error) {
-	rows, err := db.Query(sqlSelectObjectives)
+func readObjectives(ctx context.Context, db DBTX) (map[string]cmn.AIObjectiveEntry, error) {
+	rows, err := db.QueryContext(ctx, sqlSelectObjectives)
 	if err != nil {
 		return nil, err
 	}
@@ -312,8 +321,8 @@ func readObjectives(db DBTX) (map[string]cmn.AIObjectiveEntry, error) {
 	return out, rows.Err()
 }
 
-func readClassRows(db DBTX, query string) (map[string]cmn.AIClassPolicy, error) {
-	rows, err := db.Query(query)
+func readClassRows(ctx context.Context, db DBTX, query string) (map[string]cmn.AIClassPolicy, error) {
+	rows, err := db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -333,7 +342,7 @@ func readClassRows(db DBTX, query string) (map[string]cmn.AIClassPolicy, error) 
 
 // SetTenantClass writes a tenant's class fields, all three: a field left
 // empty is cleared. The tenant's limits are not touched.
-func (s *Service) SetTenantClass(tenantID string, p cmn.AIClassPolicy) error {
+func (s *Service) SetTenantClass(ctx context.Context, tenantID string, p cmn.AIClassPolicy) error {
 	if err := ValidateQoSIdentity("tenant_id", tenantID); err != nil {
 		return err
 	}
@@ -348,10 +357,12 @@ func (s *Service) SetTenantClass(tenantID string, p cmn.AIClassPolicy) error {
 	if err != nil {
 		return err
 	}
-	if _, err := db.Exec(sqlUpsertTenantClass, tenantID, p.PriorityClass, p.DefaultObjective,
+	ctx, cancel := s.opContext(ctx)
+	defer cancel()
+	if _, err := db.ExecContext(ctx, sqlUpsertTenantClass, tenantID, p.PriorityClass, p.DefaultObjective,
 		joinList(p.AllowedObjectives), time.Now().UTC()); err != nil {
 		tk.LogIt(tk.LogError, "[AIKey] Failed to set class of tenant %s: %v\n", tenantID, err)
-		return errStoreUnavailable
+		return writeErr(err)
 	}
 	s.refreshClassesAfterWrite()
 	return nil
@@ -359,12 +370,12 @@ func (s *Service) SetTenantClass(tenantID string, p cmn.AIClassPolicy) error {
 
 // GetTenantClass reads a tenant's class fields from the store. A tenant
 // with no row has none.
-func (s *Service) GetTenantClass(tenantID string) (cmn.AIClassPolicy, error) {
-	return s.readClass(sqlSelectTenantClass, tenantID, nil)
+func (s *Service) GetTenantClass(ctx context.Context, tenantID string) (cmn.AIClassPolicy, error) {
+	return s.readClass(ctx, sqlSelectTenantClass, tenantID, nil)
 }
 
 // SetAPIKeyClass writes a key's class fields, all three.
-func (s *Service) SetAPIKeyClass(keyID string, p cmn.AIClassPolicy) error {
+func (s *Service) SetAPIKeyClass(ctx context.Context, keyID string, p cmn.AIClassPolicy) error {
 	p, err := ValidateClassPolicy(p)
 	if err != nil {
 		return err
@@ -373,10 +384,12 @@ func (s *Service) SetAPIKeyClass(keyID string, p cmn.AIClassPolicy) error {
 	if err != nil {
 		return err
 	}
-	res, err := db.Exec(sqlUpdateKeyClass, keyID, p.PriorityClass, p.DefaultObjective, joinList(p.AllowedObjectives))
+	ctx, cancel := s.opContext(ctx)
+	defer cancel()
+	res, err := db.ExecContext(ctx, sqlUpdateKeyClass, keyID, p.PriorityClass, p.DefaultObjective, joinList(p.AllowedObjectives))
 	if err != nil {
 		tk.LogIt(tk.LogError, "[AIKey] Failed to set class of key %s: %v\n", keyID, err)
-		return errStoreUnavailable
+		return writeErr(err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrKeyNotFound
@@ -386,22 +399,24 @@ func (s *Service) SetAPIKeyClass(keyID string, p cmn.AIClassPolicy) error {
 }
 
 // GetAPIKeyClass reads a key's class fields from the store.
-func (s *Service) GetAPIKeyClass(keyID string) (cmn.AIClassPolicy, error) {
-	return s.readClass(sqlSelectKeyClass, keyID, ErrKeyNotFound)
+func (s *Service) GetAPIKeyClass(ctx context.Context, keyID string) (cmn.AIClassPolicy, error) {
+	return s.readClass(ctx, sqlSelectKeyClass, keyID, ErrKeyNotFound)
 }
 
-func (s *Service) readClass(query, id string, missing error) (cmn.AIClassPolicy, error) {
+func (s *Service) readClass(ctx context.Context, query, id string, missing error) (cmn.AIClassPolicy, error) {
 	var p cmn.AIClassPolicy
 	db, err := s.store()
 	if err != nil {
 		return p, err
 	}
+	ctx, cancel := s.opContext(ctx)
+	defer cancel()
 	var allowed string
-	if err := db.QueryRow(query, id).Scan(&p.PriorityClass, &p.DefaultObjective, &allowed); err != nil {
+	if err := db.QueryRowContext(ctx, query, id).Scan(&p.PriorityClass, &p.DefaultObjective, &allowed); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return p, missing
 		}
-		return p, errStoreUnavailable
+		return p, readErr(err)
 	}
 	p.AllowedObjectives = splitList(allowed)
 	return p, nil

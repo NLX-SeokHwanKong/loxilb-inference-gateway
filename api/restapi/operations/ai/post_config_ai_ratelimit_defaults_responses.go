@@ -262,3 +262,48 @@ func (o *PostConfigAiRatelimitDefaultsServiceUnavailable) WriteResponse(rw http.
 		}
 	}
 }
+
+// PostConfigAiRatelimitDefaultsGatewayTimeoutCode is the HTTP code returned for type PostConfigAiRatelimitDefaultsGatewayTimeout
+const PostConfigAiRatelimitDefaultsGatewayTimeoutCode int = 504
+
+/*
+PostConfigAiRatelimitDefaultsGatewayTimeout Write outcome unknown (code ai_key_store_outcome_unknown). The statement was handed to the API-key store and the store did not answer within the operation budget; the store may still apply it when it resumes. Not a 503: nothing says the write did not happen. Read the resource back (GET) before deciding whether to retry; a blind retry of a non-idempotent write can create a second row.
+
+swagger:response postConfigAiRatelimitDefaultsGatewayTimeout
+*/
+type PostConfigAiRatelimitDefaultsGatewayTimeout struct {
+
+	/*
+	  In: Body
+	*/
+	Payload *models.Error `json:"body,omitempty"`
+}
+
+// NewPostConfigAiRatelimitDefaultsGatewayTimeout creates PostConfigAiRatelimitDefaultsGatewayTimeout with default headers values
+func NewPostConfigAiRatelimitDefaultsGatewayTimeout() *PostConfigAiRatelimitDefaultsGatewayTimeout {
+
+	return &PostConfigAiRatelimitDefaultsGatewayTimeout{}
+}
+
+// WithPayload adds the payload to the post config ai ratelimit defaults gateway timeout response
+func (o *PostConfigAiRatelimitDefaultsGatewayTimeout) WithPayload(payload *models.Error) *PostConfigAiRatelimitDefaultsGatewayTimeout {
+	o.Payload = payload
+	return o
+}
+
+// SetPayload sets the payload to the post config ai ratelimit defaults gateway timeout response
+func (o *PostConfigAiRatelimitDefaultsGatewayTimeout) SetPayload(payload *models.Error) {
+	o.Payload = payload
+}
+
+// WriteResponse to the client
+func (o *PostConfigAiRatelimitDefaultsGatewayTimeout) WriteResponse(rw http.ResponseWriter, producer runtime.Producer) {
+
+	rw.WriteHeader(504)
+	if o.Payload != nil {
+		payload := o.Payload
+		if err := producer.Produce(rw, payload); err != nil {
+			panic(err) // let the recovery middleware deal with this
+		}
+	}
+}

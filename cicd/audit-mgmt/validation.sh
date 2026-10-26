@@ -537,15 +537,26 @@ echo "T20: a crash after the durable intent leaves exactly one orphan report"
 # A fresh login makes sure the store pool holds a live connection; the
 # paused store then keeps the handler waiting on that connection instead of
 # failing fast on a connect timeout, which would have written a result.
+# The wait is bounded: the operation budget (LLB_AI_STORE_OP_TIMEOUT_MS,
+# 3 s by default) answers the call with 504 and writes an outcome-unknown
+# result. The crash has to land inside that window, so the trail is polled
+# for the open intent and the gateway is killed as soon as it shows.
 TOKEN=$(login "$ADMIN_USER" "$ADMIN_PW"); AUTH=(-H "Authorization: Bearer $TOKEN")
 docker pause "$PG_NAME"
 printf 'POST /auth/users (ghost, store paused)\n' >> "$REQLOG"
 docker exec llb1 curl -s -m 90 -o /dev/null -w '%{http_code}' -X POST "$API/auth/users" "${AUTH[@]}" "${CT[@]}" \
   -d '{"username":"ghost","password":"Gh0st-pass!7q","role":"viewer"}' > "$WORK/t20.code" 2>/dev/null &
 T20PID=$!
-sleep 4
-OPEN_INTENTS=$(trail | jq -s -r '[.[] | select(.phase=="result") | .event_id] as $done
-  | .[] | select(.event_type=="mgmt.user.create" and .phase=="intent" and ((.event_id as $i | $done | index($i)) == null)) | .event_id')
+open_user_create_intents() {
+  trail | jq -s -r '[.[] | select(.phase=="result") | .event_id] as $done
+    | .[] | select(.event_type=="mgmt.user.create" and .phase=="intent" and ((.event_id as $i | $done | index($i)) == null)) | .event_id'
+}
+OPEN_INTENTS=""
+for i in $(seq 1 10); do
+  OPEN_INTENTS=$(open_user_create_intents)
+  [[ -n "$OPEN_INTENTS" ]] && break
+  sleep 0.2
+done
 ORPHAN_ID=$(printf '%s\n' "$OPEN_INTENTS" | tail -n1)
 chk     T20-0a "exactly one user-create intent is open while the store is paused" 1 "$(printf '%s\n' "$OPEN_INTENTS" | grep -c .)"
 chk_nonempty T20-0b "its event_id" "$ORPHAN_ID"

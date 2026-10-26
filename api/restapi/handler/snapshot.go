@@ -518,7 +518,7 @@ func ConfigGetStatusReady(params operations.GetStatusReadyParams, principal any)
 				Required:   d.Required,
 				Status:     snapshot.DepStatusReady,
 			}
-			if perr := ApiHooks.NetRecoveryDepReady(d.Type); perr != nil {
+			if perr := ApiHooks.NetRecoveryDepReady(params.HTTPRequest.Context(), d.Type); perr != nil {
 				st.Status = snapshot.DepStatusFailed
 				if d.Required {
 					depFailures = append(depFailures, fmt.Sprintf("dependency %s: %v", d.Type, perr))

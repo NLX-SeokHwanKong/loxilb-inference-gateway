@@ -9519,6 +9519,12 @@ func init() {
             "schema": {
               "$ref": "#/definitions/Error"
             }
+          },
+          "504": {
+            "description": "Write outcome unknown (result store_outcome_unknown). The statement was handed to the management credential store and the store did not answer within the operation budget; the store may still apply it when it resumes. Not a 503: nothing says the write did not happen. Read the resource back before deciding whether to retry.",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
           }
         },
         "security": [],
@@ -9564,6 +9570,12 @@ func init() {
           },
           "503": {
             "$ref": "#/responses/ManagementStoreUnavailable"
+          },
+          "504": {
+            "description": "Write outcome unknown (result store_outcome_unknown). The statement was handed to the management credential store and the store did not answer within the operation budget; the store may still apply it when it resumes. Not a 503: nothing says the write did not happen. Read the resource back before deciding whether to retry.",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
           }
         },
         "security": [
@@ -9736,6 +9748,12 @@ func init() {
             "schema": {
               "$ref": "#/definitions/Error"
             }
+          },
+          "504": {
+            "description": "Write outcome unknown (result store_outcome_unknown). The statement was handed to the management credential store and the store did not answer within the operation budget; the store may still apply it when it resumes. Not a 503: nothing says the write did not happen. Read the resource back before deciding whether to retry.",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
           }
         },
         "security": [],
@@ -9784,6 +9802,12 @@ func init() {
           },
           "503": {
             "$ref": "#/responses/ManagementStoreUnavailable"
+          },
+          "504": {
+            "description": "Write outcome unknown (result store_outcome_unknown). The statement was handed to the management credential store and the store did not answer within the operation budget; the store may still apply it when it resumes. Not a 503: nothing says the write did not happen. Read the resource back before deciding whether to retry.",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
           }
         },
         "security": [
@@ -9849,6 +9873,12 @@ func init() {
           },
           "503": {
             "$ref": "#/responses/ManagementStoreUnavailable"
+          },
+          "504": {
+            "description": "Write outcome unknown (result store_outcome_unknown). The statement was handed to the management credential store and the store did not answer within the operation budget; the store may still apply it when it resumes. Not a 503: nothing says the write did not happen. Read the resource back before deciding whether to retry.",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
           }
         },
         "security": [
@@ -9970,6 +10000,12 @@ func init() {
             "schema": {
               "$ref": "#/definitions/Error"
             }
+          },
+          "504": {
+            "description": "Write outcome unknown (code ai_key_store_outcome_unknown). The statement was handed to the API-key store and the store did not answer within the operation budget; the store may still apply it when it resumes. Not a 503: nothing says the write did not happen. Read the resource back (GET) before deciding whether to retry; a blind retry of a non-idempotent write can create a second row.",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
           }
         },
         "summary": "Create a new API key",
@@ -10021,6 +10057,12 @@ func init() {
           },
           "503": {
             "description": "Management credential store or API-key store unavailable",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "504": {
+            "description": "Write outcome unknown (code ai_key_store_outcome_unknown). The statement was handed to the API-key store and the store did not answer within the operation budget; the store may still apply it when it resumes. Not a 503: nothing says the write did not happen. Read the resource back (GET) before deciding whether to retry; a blind retry of a non-idempotent write can create a second row.",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -10137,6 +10179,12 @@ func init() {
           },
           "503": {
             "$ref": "#/responses/ManagementStoreUnavailable"
+          },
+          "504": {
+            "description": "Write outcome unknown (code ai_key_store_outcome_unknown). The statement was handed to the API-key store and the store did not answer within the operation budget; the store may still apply it when it resumes. Not a 503: nothing says the write did not happen. Read the resource back (GET) before deciding whether to retry; a blind retry of a non-idempotent write can create a second row.",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
           }
         },
         "summary": "Update an AI gateway API key",
@@ -10718,6 +10766,12 @@ func init() {
             "schema": {
               "$ref": "#/definitions/Error"
             }
+          },
+          "504": {
+            "description": "Write outcome unknown (code ai_key_store_outcome_unknown). The statement was handed to the API-key store and the store did not answer within the operation budget; the store may still apply it when it resumes. Not a 503: nothing says the write did not happen. Read the resource back (GET) before deciding whether to retry; a blind retry of a non-idempotent write can create a second row.",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
           }
         },
         "summary": "Create or replace an objective",
@@ -10769,6 +10823,12 @@ func init() {
           },
           "503": {
             "description": "Maintenance mode, no AI key store configured, or the store does not answer",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "504": {
+            "description": "Write outcome unknown (code ai_key_store_outcome_unknown). The statement was handed to the API-key store and the store did not answer within the operation budget; the store may still apply it when it resumes. Not a 503: nothing says the write did not happen. Read the resource back (GET) before deciding whether to retry; a blind retry of a non-idempotent write can create a second row.",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -10824,6 +10884,12 @@ func init() {
           },
           "503": {
             "description": "Management credential store or API-key store unavailable",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "504": {
+            "description": "Write outcome unknown (code ai_key_store_outcome_unknown). The statement was handed to the API-key store and the store did not answer within the operation budget; the store may still apply it when it resumes. Not a 503: nothing says the write did not happen. Read the resource back (GET) before deciding whether to retry; a blind retry of a non-idempotent write can create a second row.",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -10889,6 +10955,12 @@ func init() {
           },
           "503": {
             "description": "Management credential store or API-key store unavailable",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "504": {
+            "description": "Write outcome unknown (code ai_key_store_outcome_unknown). The statement was handed to the API-key store and the store did not answer within the operation budget; the store may still apply it when it resumes. Not a 503: nothing says the write did not happen. Read the resource back (GET) before deciding whether to retry; a blind retry of a non-idempotent write can create a second row.",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -11013,6 +11085,12 @@ func init() {
             "schema": {
               "$ref": "#/definitions/Error"
             }
+          },
+          "504": {
+            "description": "Write outcome unknown (code ai_key_store_outcome_unknown). The statement was handed to the API-key store and the store did not answer within the operation budget; the store may still apply it when it resumes. Not a 503: nothing says the write did not happen. Read the resource back (GET) before deciding whether to retry; a blind retry of a non-idempotent write can create a second row.",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
           }
         },
         "summary": "Set or update tenant rate limit",
@@ -11122,6 +11200,12 @@ func init() {
           },
           "503": {
             "description": "Management credential store or API-key store unavailable",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "504": {
+            "description": "Write outcome unknown (code ai_key_store_outcome_unknown). The statement was handed to the API-key store and the store did not answer within the operation budget; the store may still apply it when it resumes. Not a 503: nothing says the write did not happen. Read the resource back (GET) before deciding whether to retry; a blind retry of a non-idempotent write can create a second row.",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -11237,6 +11321,12 @@ func init() {
           },
           "503": {
             "description": "Management credential store or API-key store unavailable",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "504": {
+            "description": "Write outcome unknown (code ai_key_store_outcome_unknown). The statement was handed to the API-key store and the store did not answer within the operation budget; the store may still apply it when it resumes. Not a 503: nothing says the write did not happen. Read the resource back (GET) before deciding whether to retry; a blind retry of a non-idempotent write can create a second row.",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -22841,6 +22931,12 @@ func init() {
             "schema": {
               "$ref": "#/definitions/Error"
             }
+          },
+          "504": {
+            "description": "Write outcome unknown (result store_outcome_unknown). The statement was handed to the management credential store and the store did not answer within the operation budget; the store may still apply it when it resumes. Not a 503: nothing says the write did not happen. Read the resource back before deciding whether to retry.",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
           }
         }
       }
@@ -22896,6 +22992,12 @@ func init() {
           },
           "503": {
             "description": "Management credential store unavailable; the credential could not be evaluated",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "504": {
+            "description": "Write outcome unknown (result store_outcome_unknown). The statement was handed to the management credential store and the store did not answer within the operation budget; the store may still apply it when it resumes. Not a 503: nothing says the write did not happen. Read the resource back before deciding whether to retry.",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -23073,6 +23175,12 @@ func init() {
             "schema": {
               "$ref": "#/definitions/Error"
             }
+          },
+          "504": {
+            "description": "Write outcome unknown (result store_outcome_unknown). The statement was handed to the management credential store and the store did not answer within the operation budget; the store may still apply it when it resumes. Not a 503: nothing says the write did not happen. Read the resource back before deciding whether to retry.",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
           }
         }
       }
@@ -23149,6 +23257,12 @@ func init() {
             "schema": {
               "$ref": "#/definitions/Error"
             }
+          },
+          "504": {
+            "description": "Write outcome unknown (result store_outcome_unknown). The statement was handed to the management credential store and the store did not answer within the operation budget; the store may still apply it when it resumes. Not a 503: nothing says the write did not happen. Read the resource back before deciding whether to retry.",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
           }
         }
       },
@@ -23205,6 +23319,12 @@ func init() {
           },
           "503": {
             "description": "Management credential store unavailable; the credential could not be evaluated",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "504": {
+            "description": "Write outcome unknown (result store_outcome_unknown). The statement was handed to the management credential store and the store did not answer within the operation budget; the store may still apply it when it resumes. Not a 503: nothing says the write did not happen. Read the resource back before deciding whether to retry.",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -23323,6 +23443,12 @@ func init() {
             "schema": {
               "$ref": "#/definitions/Error"
             }
+          },
+          "504": {
+            "description": "Write outcome unknown (code ai_key_store_outcome_unknown). The statement was handed to the API-key store and the store did not answer within the operation budget; the store may still apply it when it resumes. Not a 503: nothing says the write did not happen. Read the resource back (GET) before deciding whether to retry; a blind retry of a non-idempotent write can create a second row.",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
           }
         }
       }
@@ -23432,6 +23558,12 @@ func init() {
             "schema": {
               "$ref": "#/definitions/Error"
             }
+          },
+          "504": {
+            "description": "Write outcome unknown (code ai_key_store_outcome_unknown). The statement was handed to the API-key store and the store did not answer within the operation budget; the store may still apply it when it resumes. Not a 503: nothing says the write did not happen. Read the resource back (GET) before deciding whether to retry; a blind retry of a non-idempotent write can create a second row.",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
           }
         }
       },
@@ -23496,6 +23628,12 @@ func init() {
           },
           "503": {
             "description": "Management credential store unavailable; the credential could not be evaluated",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "504": {
+            "description": "Write outcome unknown (code ai_key_store_outcome_unknown). The statement was handed to the API-key store and the store did not answer within the operation budget; the store may still apply it when it resumes. Not a 503: nothing says the write did not happen. Read the resource back (GET) before deciding whether to retry; a blind retry of a non-idempotent write can create a second row.",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -23733,7 +23871,7 @@ func init() {
             }
           },
           "401": {
-            "description": "Invalid authentication credentials (unknown, expired or missing token, or a credential that is not a management identity \u2014 the cases are deliberately indistinguishable)",
+            "description": "Invalid authentication credentials (unknown, expired or missing token, or a credential that is not a management identity — the cases are deliberately indistinguishable)",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -23751,7 +23889,7 @@ func init() {
             }
           },
           "503": {
-            "description": "Credential store unavailable \u2014 the credential was never examined; retry after a moment",
+            "description": "Credential store unavailable — the credential was never examined; retry after a moment",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -23784,7 +23922,7 @@ func init() {
             }
           },
           "401": {
-            "description": "Invalid authentication credentials (unknown, expired or missing token, or a credential that is not a management identity \u2014 the cases are deliberately indistinguishable)",
+            "description": "Invalid authentication credentials (unknown, expired or missing token, or a credential that is not a management identity — the cases are deliberately indistinguishable)",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -24113,6 +24251,12 @@ func init() {
             "schema": {
               "$ref": "#/definitions/Error"
             }
+          },
+          "504": {
+            "description": "Write outcome unknown (code ai_key_store_outcome_unknown). The statement was handed to the API-key store and the store did not answer within the operation budget; the store may still apply it when it resumes. Not a 503: nothing says the write did not happen. Read the resource back (GET) before deciding whether to retry; a blind retry of a non-idempotent write can create a second row.",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
           }
         }
       }
@@ -24170,6 +24314,12 @@ func init() {
             "schema": {
               "$ref": "#/definitions/Error"
             }
+          },
+          "504": {
+            "description": "Write outcome unknown (code ai_key_store_outcome_unknown). The statement was handed to the API-key store and the store did not answer within the operation budget; the store may still apply it when it resumes. Not a 503: nothing says the write did not happen. Read the resource back (GET) before deciding whether to retry; a blind retry of a non-idempotent write can create a second row.",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
           }
         }
       }
@@ -24222,6 +24372,12 @@ func init() {
           },
           "503": {
             "description": "Management credential store or API-key store unavailable",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "504": {
+            "description": "Write outcome unknown (code ai_key_store_outcome_unknown). The statement was handed to the API-key store and the store did not answer within the operation budget; the store may still apply it when it resumes. Not a 503: nothing says the write did not happen. Read the resource back (GET) before deciding whether to retry; a blind retry of a non-idempotent write can create a second row.",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -24354,6 +24510,12 @@ func init() {
             "schema": {
               "$ref": "#/definitions/Error"
             }
+          },
+          "504": {
+            "description": "Write outcome unknown (code ai_key_store_outcome_unknown). The statement was handed to the API-key store and the store did not answer within the operation budget; the store may still apply it when it resumes. Not a 503: nothing says the write did not happen. Read the resource back (GET) before deciding whether to retry; a blind retry of a non-idempotent write can create a second row.",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
           }
         }
       }
@@ -24406,6 +24568,12 @@ func init() {
           },
           "503": {
             "description": "Management credential store or API-key store unavailable",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "504": {
+            "description": "Write outcome unknown (code ai_key_store_outcome_unknown). The statement was handed to the API-key store and the store did not answer within the operation budget; the store may still apply it when it resumes. Not a 503: nothing says the write did not happen. Read the resource back (GET) before deciding whether to retry; a blind retry of a non-idempotent write can create a second row.",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -24518,6 +24686,12 @@ func init() {
           },
           "503": {
             "description": "Management credential store or API-key store unavailable",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "504": {
+            "description": "Write outcome unknown (code ai_key_store_outcome_unknown). The statement was handed to the API-key store and the store did not answer within the operation budget; the store may still apply it when it resumes. Not a 503: nothing says the write did not happen. Read the resource back (GET) before deciding whether to retry; a blind retry of a non-idempotent write can create a second row.",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -24695,6 +24869,12 @@ func init() {
           },
           "503": {
             "description": "Management credential store or API-key store unavailable",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "504": {
+            "description": "Write outcome unknown (code ai_key_store_outcome_unknown). The statement was handed to the API-key store and the store did not answer within the operation budget; the store may still apply it when it resumes. Not a 503: nothing says the write did not happen. Read the resource back (GET) before deciding whether to retry; a blind retry of a non-idempotent write can create a second row.",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -25704,7 +25884,7 @@ func init() {
     },
     "/config/cert": {
       "post": {
-        "description": "Uploads inline PEM material (cert + key [+ chain]) under an opaque certId \u2014 the canonical TLS-material store. The handler persists the PEM to the managed dir (/etc/loxilb/certs/<certId>/, 0700 dir / 0600 key) and registers it via the C certId registry, which auto-derives the hostname(s) from the leaf cert SAN/CN and registers them into the hostname-keyed SNI store. Selection at handshake stays by hostname; certId is the upload/rotate/delete handle. When certId is absent the server mints one. Malformed PEM / missing key is rejected with 400 (never a panic).",
+        "description": "Uploads inline PEM material (cert + key [+ chain]) under an opaque certId — the canonical TLS-material store. The handler persists the PEM to the managed dir (/etc/loxilb/certs/\u003ccertId\u003e/, 0700 dir / 0600 key) and registers it via the C certId registry, which auto-derives the hostname(s) from the leaf cert SAN/CN and registers them into the hostname-keyed SNI store. Selection at handshake stays by hostname; certId is the upload/rotate/delete handle. When certId is absent the server mints one. Malformed PEM / missing key is rejected with 400 (never a panic).",
         "summary": "Upload a TLS certificate under an opaque certId",
         "operationId": "postConfigCert",
         "parameters": [
@@ -25812,7 +25992,7 @@ func init() {
         }
       },
       "put": {
-        "description": "Atomic zero-downtime rotation \u2014 re-persists the new PEM under the SAME certId and swaps the cert object into the SNI store under lock; in-flight connections keep the old SSL until they close. Unknown certId returns 404; malformed material returns 400.",
+        "description": "Atomic zero-downtime rotation — re-persists the new PEM under the SAME certId and swaps the cert object into the SNI store under lock; in-flight connections keep the old SSL until they close. Unknown certId returns 404; malformed material returns 400.",
         "summary": "Rotate the material under a stable certId",
         "operationId": "putConfigCertCertId",
         "parameters": [
@@ -26912,7 +27092,7 @@ func init() {
     },
     "/config/firewall": {
       "post": {
-        "description": "Add a firewall rule. Ports and preference are 0..65535; protocol is 0..255. Zero port pairs and protocol zero mean wildcard. Nonzero port pairs require minimum <= maximum; CIDR families must agree. Avoid conflicting terminal actions: precedence and independent doSnat side effects are not a safe one-action contract. Duplicate POST can change fwMark before returning conflict. Hardware expressibility admission does not establish hardware installation.",
+        "description": "Add a firewall rule. Ports and preference are 0..65535; protocol is 0..255. Zero port pairs and protocol zero mean wildcard. Nonzero port pairs require minimum \u003c= maximum; CIDR families must agree. Avoid conflicting terminal actions: precedence and independent doSnat side effects are not a safe one-action contract. Duplicate POST can change fwMark before returning conflict. Hardware expressibility admission does not establish hardware installation.",
         "summary": "Create a new firewall config",
         "parameters": [
           {
@@ -30498,7 +30678,7 @@ func init() {
             }
           },
           "401": {
-            "description": "Invalid authentication credentials (unknown, expired or missing token, or a credential that is not a management identity \u2014 the cases are deliberately indistinguishable)",
+            "description": "Invalid authentication credentials (unknown, expired or missing token, or a credential that is not a management identity — the cases are deliberately indistinguishable)",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -30510,7 +30690,7 @@ func init() {
             }
           },
           "404": {
-            "description": "No KV-exact status on this key. Deliberately coalesced: no rule exists on the composite key, the rule(s) on the key are not KV-exact, the model_name filter matched no rule, or the composite key itself is unservable (for example an unsupported protocol \u2014 a key that can never hold a rule answers the same as an empty key) \u2014 all four answer 404. A 200 body always carries at least one entry (empty result sets are never emitted as 200).",
+            "description": "No KV-exact status on this key. Deliberately coalesced: no rule exists on the composite key, the rule(s) on the key are not KV-exact, the model_name filter matched no rule, or the composite key itself is unservable (for example an unsupported protocol — a key that can never hold a rule answers the same as an empty key) — all four answer 404. A 200 body always carries at least one entry (empty result sets are never emitted as 200).",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -30528,7 +30708,7 @@ func init() {
             }
           },
           "503": {
-            "description": "Credential store unavailable \u2014 the credential was never examined; retry after a moment",
+            "description": "Credential store unavailable — the credential was never examined; retry after a moment",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -32661,7 +32841,7 @@ func init() {
     },
     "/config/securityrate": {
       "post": {
-        "description": "Replace SYN, connection-SYN, and UDP rate configuration and the security-rate whitelist. Supply all required flags and thresholds; at least one protection must be enabled. Omitted whitelist clears the previous list. Numeric and relational limits are described on the configuration model. Programming is not atomic: errors can follow partial datapath changes. Explicit cookieThreshold zero becomes 50 in the datapath, and cookie telemetry does not implement a SYN-cookie exchange.",
+        "description": "Replace SYN, connection-SYN, and UDP rate configuration and the security-rate whitelist. Supply all required flags and thresholds; at least one per-source protection or positive aggregate budget must be enabled. Omitted whitelist clears the previous list. Numeric and relational limits are described on the configuration model. Programming is not atomic: errors can follow partial datapath changes. Explicit cookieThreshold zero becomes 50 in the datapath, and cookie telemetry does not implement a SYN-cookie exchange.",
         "summary": "Configure unified security rate limiting",
         "parameters": [
           {
@@ -32699,6 +32879,20 @@ func init() {
               "$ref": "#/definitions/Error"
             }
           },
+          "422": {
+            "description": "Schema validation rejected the request before datapath mutation",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "integer"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Internal service error",
             "schema": {
@@ -32709,20 +32903,6 @@ func init() {
             "description": "Management credential store unavailable; the credential could not be evaluated",
             "schema": {
               "$ref": "#/definitions/Error"
-            }
-          },
-          "422": {
-            "description": "Schema validation rejected the request before datapath mutation",
-            "schema": {
-              "properties": {
-                "code": {
-                  "type": "integer"
-                },
-                "message": {
-                  "type": "string"
-                }
-              },
-              "type": "object"
             }
           }
         }
@@ -33222,7 +33402,7 @@ func init() {
     },
     "/config/snapshot": {
       "get": {
-        "description": "Returns a versioned, checksummed snapshot document using schema 1.5. Supported snapshot domains exclude some runtime-only state and externally stored secrets. Replaces deprecated /config/export. Response carries Content-Disposition and X-Snapshot-Checksum headers.",
+        "description": "Returns a versioned, checksummed snapshot document using schema 1.12. Supported snapshot domains exclude some runtime-only state and externally stored secrets. Replaces deprecated /config/export. Response carries Content-Disposition and X-Snapshot-Checksum headers.",
         "produces": [
           "application/json"
         ],
@@ -33230,7 +33410,7 @@ func init() {
         "parameters": [
           {
             "type": "string",
-            "description": "Comma-separated domains (endpoint, loadbalancer, kvexactbinding, l7policy, firewall, policy, mirror, session, sessionulcl, ipfilter, securityrate, bfd, bgp, ipsec, cors, tracing, cert). Omitted or empty selection captures all supported domains. Inspect included_domains and excluded_domains for actual coverage; certificate material and OTLP header values remain external.",
+            "description": "Comma-separated domains (endpoint, jwtauthprofile, halfclose, netidentity, loadbalancer, kvexactbinding, l7policy, firewall, policy, mirror, session, sessionulcl, ipfilter, securityrate, bfd, bgp, bgppolicyassignment, ipsec, cors, tracing, cert, auditsink). Omitted or empty selection captures all supported domains. Inspect included_domains and excluded_domains for actual coverage; certificate material and OTLP header values remain external.",
             "name": "components",
             "in": "query"
           }
@@ -33358,7 +33538,7 @@ func init() {
             "BearerAuth": []
           }
         ],
-        "description": "Dynamically changes which parser is used for a specific catalog at runtime.\nThe override is runtime-only, does not edit YAML, and can be replaced by catalog synchronization. The handler validates the parser key but not catalog existence; current success has an empty body despite the declared response schema.\n\n**Use Cases:**\n- Switch from mock to production parser after testing\n- Change parser when service protocol changes\n- A/B testing different parser implementations\n\n**Parser Selection Priority:**\n1. Catalog ID \u2192 parser mapping (set by this endpoint or YAML)\n2. URL path prefix matching (e.g., /v1/chat/completions \u2192 openai)\n3. Default mock parser\n",
+        "description": "Dynamically changes which parser is used for a specific catalog at runtime.\nThe override is runtime-only, does not edit YAML, and can be replaced by catalog synchronization. The handler validates the parser key but not catalog existence; current success has an empty body despite the declared response schema.\n\n**Use Cases:**\n- Switch from mock to production parser after testing\n- Change parser when service protocol changes\n- A/B testing different parser implementations\n\n**Parser Selection Priority:**\n1. Catalog ID → parser mapping (set by this endpoint or YAML)\n2. URL path prefix matching (e.g., /v1/chat/completions → openai)\n3. Default mock parser\n",
         "tags": [
           "Tracing"
         ],
@@ -33956,7 +34136,7 @@ func init() {
     },
     "/config/tunnel/vxlan": {
       "post": {
-        "description": "Create interface vxlan<ID> using the first IPv4 address of epIntf, UDP port 8472, MTU 9000, and learning enabled. The endpoint interface must exist and have an IPv4 address. Numeric and peer-family validation are incomplete. Backend failure can return HTTP 200 with result set to fail.",
+        "description": "Create interface vxlan\u003cID\u003e using the first IPv4 address of epIntf, UDP port 8472, MTU 9000, and learning enabled. The endpoint interface must exist and have an IPv4 address. Numeric and peer-family validation are incomplete. Backend failure can return HTTP 200 with result set to fail.",
         "summary": "Add a one of vxlan configuration",
         "parameters": [
           {
@@ -34057,7 +34237,7 @@ func init() {
     },
     "/config/tunnel/vxlan/{vxlanID}": {
       "delete": {
-        "description": "Delete interface vxlan<ID>. The current helper continues after failed interface lookup; verify existence before submission. Backend failure can return HTTP 200 with result set to fail, so HTTP status alone is not success evidence.",
+        "description": "Delete interface vxlan\u003cID\u003e. The current helper continues after failed interface lookup; verify existence before submission. Backend failure can return HTTP 200 with result set to fail, so HTTP status alone is not success evidence.",
         "summary": "Delete a one of vxlan configuration",
         "parameters": [
           {
@@ -37004,7 +37184,7 @@ func init() {
       }
     },
     "BGPGlobalConfig": {
-      "description": "BGP startup input, not an atomic general replacement. Local ASN narrows to uint32 and listenPort to uint16; omitted or zero listenPort selects 179. SetNextHopSelf is a case-sensitive wire field and triggers additional policy setup. Failure can occur after partial startup or policy creation.",
+      "description": "BGP startup input, not an atomic general replacement. An identical running core is reused and SetNextHopSelf is reconciled. Changes to a running ASN/router ID/listen port are refused with 400; use a scoped snapshot replacement, which prepares the speaker before LB re-application. Local ASN narrows to uint32 and listenPort to uint16; omitted or zero listenPort selects 179. SetNextHopSelf is a case-sensitive wire field and triggers additional policy setup. Failure can occur after partial startup or policy creation.",
       "type": "object",
       "required": [
         "routerId",
@@ -38023,7 +38203,7 @@ func init() {
           "type": "string"
         },
         "reason_code": {
-          "description": "Stable machine-readable code for why the capability is not ready, for clients that must branch without matching prose. Absent when ready. Known values - \"KV_EXACT_SEED_UNSET\": the Gateway was launched without a non-empty LLB_KV_NONE_HASH_SEED; \"KV_EXACT_SEED_TOO_LONG\": the seed exceeds the 23-byte representable bound; \"KV_EXACT_TOKENIZER_UNLOADABLE\": no tokenizer can be loaded for the model_name asked about (nothing staged under /etc/loxilb/tokenizers/<model-slug>/ and no published model profile carries one); \"LB_SOURCE_CHECK_SLOTS_EXHAUSTED\": every load-balancer rule slot able to carry source checks is held by an existing rule; \"LB_RULES_UNAVAILABLE\": this Gateway is not serving load-balancer rules (bgp-only mode); \"BACKEND_TLS_NOT_BUILT\": this Gateway was built without client-certificate support.",
+          "description": "Stable machine-readable code for why the capability is not ready, for clients that must branch without matching prose. Absent when ready. Known values - \"KV_EXACT_SEED_UNSET\": the Gateway was launched without a non-empty LLB_KV_NONE_HASH_SEED; \"KV_EXACT_SEED_TOO_LONG\": the seed exceeds the 23-byte representable bound; \"KV_EXACT_TOKENIZER_UNLOADABLE\": no tokenizer can be loaded for the model_name asked about (nothing staged under /etc/loxilb/tokenizers/\u003cmodel-slug\u003e/ and no published model profile carries one); \"LB_SOURCE_CHECK_SLOTS_EXHAUSTED\": every load-balancer rule slot able to carry source checks is held by an existing rule; \"LB_RULES_UNAVAILABLE\": this Gateway is not serving load-balancer rules (bgp-only mode); \"BACKEND_TLS_NOT_BUILT\": this Gateway was built without client-certificate support.",
           "type": "string",
           "example": "KV_EXACT_SEED_UNSET"
         }
@@ -38621,8 +38801,9 @@ func init() {
         "epPort": {
           "description": "Nonzero port in 1..65535 requires epProto; zero or omission requires epProto empty for host-wide targeting.",
           "type": "integer",
+          "maximum": 65535,
           "minimum": 0,
-          "maximum": 65535
+          "x-nullable": false
         },
         "epProto": {
           "description": "Generated monitor-key probe type: tcp, udp, sctp, http, https, ping, tls-hello or none. Supply together with nonzero epPort or omit both. This selector cannot resolve a custom monitor name and is not a universal transport-protocol selector.",
@@ -38738,7 +38919,7 @@ func init() {
       "type": "object",
       "properties": {
         "digest": {
-          "description": "Store content digest at capture (\"sha256:<hex>\"); absent for stores without content digests.",
+          "description": "Store content digest at capture (\"sha256:\u003chex\u003e\"); absent for stores without content digests.",
           "type": "string"
         },
         "generation": {
@@ -40154,7 +40335,7 @@ func init() {
           "type": "boolean"
         },
         "default_tenant": {
-          "description": "Tenant used when the tenant claim is absent. Empty means such tokens are denied (401) \u2014 an unattributable request cannot be metered.",
+          "description": "Tenant used when the tenant claim is absent. Empty means such tokens are denied (401) — an unattributable request cannot be metered.",
           "type": "string"
         },
         "forward_identity": {
@@ -41542,7 +41723,7 @@ func init() {
               "format": "uint32"
             },
             "cb_enable": {
-              "description": "Enable the per-endpoint circuit breaker for full-proxy rules. Five consecutive backend connect failures open the breaker; an open endpoint is excluded from selection. Recovery uses a 30-second open interval followed by half-open probing. This is independent of the configured health monitor (probetype); one failed request does not by itself meet the opening threshold. Omission is resolved at the API layer: on a rule with pd_disagg_mode=true it resolves to true (P/D services default to breaker protection), otherwise to false. An explicit value is honored as given \u2014 including false on a P/D rule \u2014 and create and update resolve identically, so updating a rule never silently changes the breaker state. GET reports the resolved value.",
+              "description": "Enable the per-endpoint circuit breaker for full-proxy rules. Five consecutive backend connect failures open the breaker; an open endpoint is excluded from selection. Recovery uses a 30-second open interval followed by half-open probing. This is independent of the configured health monitor (probetype); one failed request does not by itself meet the opening threshold. Omission is resolved at the API layer: on a rule with pd_disagg_mode=true it resolves to true (P/D services default to breaker protection), otherwise to false. An explicit value is honored as given — including false on a P/D rule — and create and update resolve identically, so updating a rule never silently changes the breaker state. GET reports the resolved value.",
               "type": "boolean",
               "x-nullable": true
             },
@@ -41730,8 +41911,8 @@ func init() {
                 "decode_max_inflight": {
                   "description": "Per-endpoint ceiling for decode legs; 0 is unlimited.",
                   "type": "integer",
-                  "x-omitempty": false,
-                  "format": "int32"
+                  "format": "int32",
+                  "x-omitempty": false
                 },
                 "default_max_tokens": {
                   "description": "The default reservation in tokens in force for requests that route to this rule; 0 while default_reservation is off.",
@@ -41750,14 +41931,14 @@ func init() {
                 "effective_max_outstanding": {
                   "description": "The service ceiling in force now; below max_outstanding while an adaptive pool is tightened.",
                   "type": "integer",
-                  "x-omitempty": false,
-                  "format": "int32"
+                  "format": "int32",
+                  "x-omitempty": false
                 },
                 "ep_max_inflight": {
                   "description": "Per-endpoint ceiling for the normal role; 0 is unlimited.",
                   "type": "integer",
-                  "x-omitempty": false,
-                  "format": "int32"
+                  "format": "int32",
+                  "x-omitempty": false
                 },
                 "expose_headers": {
                   "description": "Whether admitted responses carry the admission headers.",
@@ -41770,7 +41951,8 @@ func init() {
                 "inflight": {
                   "description": "Inference requests executing on the pool right now.",
                   "type": "integer",
-                  "format": "int32"
+                  "format": "int32",
+                  "x-omitempty": false
                 },
                 "llmd_headers": {
                   "description": "Whether refusals carry x-llm-d-request-dropped-reason and x-llm-d-inference-ttl may shorten a wait.",
@@ -41783,8 +41965,8 @@ func init() {
                 "max_outstanding": {
                   "description": "Pool-wide ceiling on executing inference requests; 0 is unlimited.",
                   "type": "integer",
-                  "x-omitempty": false,
-                  "format": "int32"
+                  "format": "int32",
+                  "x-omitempty": false
                 },
                 "mode": {
                   "description": "The gate mode in force on the pool (off, observe or enforce).",
@@ -41793,26 +41975,26 @@ func init() {
                 "prefill_max_inflight": {
                   "description": "Per-endpoint ceiling for prefill legs; 0 is unlimited.",
                   "type": "integer",
-                  "x-omitempty": false,
-                  "format": "int32"
+                  "format": "int32",
+                  "x-omitempty": false
                 },
                 "queue_depth": {
                   "description": "Requests that may wait for a unit; 0 means over a ceiling is refused.",
                   "type": "integer",
-                  "x-omitempty": false,
-                  "format": "int32"
+                  "format": "int32",
+                  "x-omitempty": false
                 },
                 "queue_memory_bound_mib": {
                   "description": "Memory the full queue may park, in MiB (queue_depth x 1 MiB, one parked client connection per waiting request).",
                   "type": "integer",
-                  "x-omitempty": false,
-                  "format": "int64"
+                  "format": "int64",
+                  "x-omitempty": false
                 },
                 "queue_wait_ms": {
                   "description": "The wait window in force for a queued request, in milliseconds.",
                   "type": "integer",
-                  "x-omitempty": false,
-                  "format": "int32"
+                  "format": "int32",
+                  "x-omitempty": false
                 },
                 "queued": {
                   "description": "Inference requests waiting for a unit right now.",
@@ -42084,19 +42266,20 @@ func init() {
                 "telemetry_stale_ms": {
                   "description": "The P/D scorers' trust window for scraped queue depth, in milliseconds.",
                   "type": "integer",
-                  "x-omitempty": false,
-                  "format": "int32"
+                  "format": "int32",
+                  "x-omitempty": false
                 },
                 "tenant_max_share_pct": {
                   "description": "The tenant share in force, in percent; 0 or 100 is no share.",
                   "type": "integer",
-                  "x-omitempty": false,
-                  "format": "int32"
+                  "format": "int32",
+                  "x-omitempty": false
                 },
                 "tenant_slots": {
                   "description": "Tenants the pool tracks by name at once for the tenant share; tenants past it share one budget. Fixed when the pool is created (LLB_FC_TENANT_SLOTS).",
                   "type": "integer",
-                  "format": "int32"
+                  "format": "int32",
+                  "x-omitempty": false
                 },
                 "tenant_wake": {
                   "description": "The order inside one band, as configured (fifo, or rr across tenants).",
@@ -42117,12 +42300,13 @@ func init() {
                 "tenants_active": {
                   "description": "Tenants holding a unit or waiting on the pool now, while it holds tenants to a share.",
                   "type": "integer",
-                  "x-omitempty": false,
-                  "format": "int32"
+                  "format": "int32",
+                  "x-omitempty": false
                 },
                 "ttft_target_ms": {
                   "type": "integer",
-                  "format": "int32"
+                  "format": "int32",
+                  "x-omitempty": false
                 },
                 "wake_policy": {
                   "description": "The wake policy as configured, by the rule or inherited (source.wake_policy); wake_policy_effective is the one the gate runs. strict - while higher-band demand keeps the ceiling full, a lower band is admitted zero requests; each waiter is refused when its band's wait window ends. weighted - a deficit round robin: while several bands have waiters, each receives its weight's share of wake-ups, exactly over whole rounds (8:3:1 is 8, 3, 1 in every 12); the share is of admissions, not of tokens, GPU time or latency. No band is promoted because it has waited long.",
@@ -42143,16 +42327,18 @@ func init() {
                 "warming_endpoints": {
                   "description": "Endpoints inside their warm-up window.",
                   "type": "integer",
-                  "x-omitempty": false,
-                  "format": "int32"
+                  "format": "int32",
+                  "x-omitempty": false
                 },
                 "warmup_ms": {
                   "type": "integer",
-                  "format": "int32"
+                  "format": "int32",
+                  "x-omitempty": false
                 },
                 "weights_in_use": {
                   "description": "true when wake_policy_effective is weighted and the weights decide the wake; declared weights are stored but not in use otherwise.",
-                  "type": "boolean"
+                  "type": "boolean",
+                  "x-omitempty": false
                 }
               },
               "readOnly": true
@@ -42398,7 +42584,7 @@ func init() {
               "x-nullable": false
             },
             "kvExactApiMode": {
-              "description": "Request API surfaces this KV-exact rule serves. Absent on a profile-less rule keeps the legacy behavior (both surfaces, unattested); with kvModelProfile bound, the effective surfaces default to the profile's declared supportedApis and an explicit value must be a subset of them. Declaring a chat surface requires a validated chat renderer for the rule's model_name \u2014 an unsupported chat declaration is refused at create time, never degraded into a silent runtime fallback. Meaningless without kvExactMode (rejected). Immutable after create with NO exception (delete+recreate to change): even the sanctioned migration attach (see kvModelProfile) must carry the SAME raw declaration as the live rule \u2014 the guard compares raw declared strings, so an unset value matches only unset. Scalar by schema \u2014 arrays are rejected representations.",
+              "description": "Request API surfaces this KV-exact rule serves. Absent on a profile-less rule keeps the legacy behavior (both surfaces, unattested); with kvModelProfile bound, the effective surfaces default to the profile's declared supportedApis and an explicit value must be a subset of them. Declaring a chat surface requires a validated chat renderer for the rule's model_name — an unsupported chat declaration is refused at create time, never degraded into a silent runtime fallback. Meaningless without kvExactMode (rejected). Immutable after create with NO exception (delete+recreate to change): even the sanctioned migration attach (see kvModelProfile) must carry the SAME raw declaration as the live rule — the guard compares raw declared strings, so an unset value matches only unset. Scalar by schema — arrays are rejected representations.",
               "type": "string",
               "enum": [
                 "completions",
@@ -42417,7 +42603,7 @@ func init() {
               "x-nullable": false
             },
             "kvHashAlgo": {
-              "description": "Block-hash contract used to match the prompt against the engine-published KV inventory. PREFER OMITTING THIS FIELD \u2014 when absent, the contract is derived from kvEngineType (vllm => sha256_cbor, sglang => sha256_sglang, trtllm => blockhash_trtllm). These are Gateway defaults, not discovery of the backend's actual hash settings. An explicit value overrides that default and MUST match the engine, or every computed hash misses and Tier 1.5 is silently dead; incoherent pairs are therefore rejected at config time. vLLM engines: \"sha256_cbor\" (must equal --prefix-caching-hash-algo) or \"xxhash_cbor\". SGLang engines: \"sha256_sglang\" only \u2014 SGLang hashes parent||tokens raw (no CBOR, no NONE seed) and truncates to the FIRST 8 digest bytes, where vLLM CBOR-encodes and truncates to the LAST 8. TRT-LLM engines: \"blockhash_trtllm\" only \u2014 the same raw chained-SHA256 contract applied on both sides by the gateway itself (requests and the token lists carried in stored KV events); the engine's own unversioned uint64 mixing hash is never used as a routing key. For vLLM Exact routing, Gateway admission also requires a non-empty LLB_KV_NONE_HASH_SEED of at most 23 bytes; deployment must ensure it matches the engine PYTHONHASHSEED. Tokenizer, template, and block geometry must agree independently of this enum.",
+              "description": "Block-hash contract used to match the prompt against the engine-published KV inventory. PREFER OMITTING THIS FIELD — when absent, the contract is derived from kvEngineType (vllm =\u003e sha256_cbor, sglang =\u003e sha256_sglang, trtllm =\u003e blockhash_trtllm). These are Gateway defaults, not discovery of the backend's actual hash settings. An explicit value overrides that default and MUST match the engine, or every computed hash misses and Tier 1.5 is silently dead; incoherent pairs are therefore rejected at config time. vLLM engines: \"sha256_cbor\" (must equal --prefix-caching-hash-algo) or \"xxhash_cbor\". SGLang engines: \"sha256_sglang\" only — SGLang hashes parent||tokens raw (no CBOR, no NONE seed) and truncates to the FIRST 8 digest bytes, where vLLM CBOR-encodes and truncates to the LAST 8. TRT-LLM engines: \"blockhash_trtllm\" only — the same raw chained-SHA256 contract applied on both sides by the gateway itself (requests and the token lists carried in stored KV events); the engine's own unversioned uint64 mixing hash is never used as a routing key. For vLLM Exact routing, Gateway admission also requires a non-empty LLB_KV_NONE_HASH_SEED of at most 23 bytes; deployment must ensure it matches the engine PYTHONHASHSEED. Tokenizer, template, and block geometry must agree independently of this enum.",
               "type": "string",
               "enum": [
                 "sha256_cbor",
@@ -42750,7 +42936,7 @@ func init() {
               "type": "boolean"
             },
             "sockMapMode": {
-              "description": "Directional sockmap acceleration for this FullProxy service - off (default), both, request (client->backend only), response (backend->client only). The direction that is not selected stays on the userspace relay and never runs the sockmap verdict. A mode other than off requires a plaintext tcp fullproxy service with an ipv4 external IP and ipv4 endpoints, and the daemon started with --sockmapsupport; a request that does not meet either condition is rejected with 400 before any rule state changes. A snapshot restore on a daemon without --sockmapsupport keeps the mode, logs a warning and runs the rule unaccelerated. A service whose data plane changes bytes in the direction being accelerated is rejected with 400, and the check is per direction. sse_mode, pd_disagg_mode and an attached L7 policy own BOTH directions and accept only off. ANY api_key_auth declaration - an explicit disabled included, since that value still makes the gateway strip X-Api-Key, as is one kept by a replace that omits the field - owns the REQUEST direction only - both and request are rejected with 400, response is accepted because validating the credential and stripping X-Api-Key both happen before dispatch and neither rewrites a response byte. Accepting it logs a warning, since api_key_auth arms ai_gw_mode and an accelerated response is not recorded. On a connection whose REQUEST direction is accelerated the later keep-alive requests skip admission, the request-header rewrites and the X-Api-Key strip; on one whose RESPONSE direction is accelerated the responses are not recorded. Attaching an L7 policy to a service that declares a mode is rejected with 400 as well, since a policy can arrive long after the rule. A snapshot restore of such a service turns the mode off with a warning; a restored policy whose rule declares a mode is attached with a warning and the rule stays unaccelerated. Services are told apart by address and port; services pointing at the same endpoint address and port, or host-based services on the same VIP address and port, share a portset entry, but a connection is accelerated only in the directions its own service selects. HTTP/2, including h2c, is never accelerated. Adding a direction applies to new connections; a connection already running is never accelerated retroactively. Taking a direction away, and deleting the service, close the connections that had it accelerated, since the verdict decides on the pairing installed when a connection was accepted and could not otherwise be reached. POST .../sockmapreset does the same without changing the configuration. Connections that were never accelerated are not touched. Redirect correctness depends on the kernel - see docs/sockmap-acceleration.md before enabling.",
+              "description": "Directional sockmap acceleration for this FullProxy service - off (default), both, request (client-\u003ebackend only), response (backend-\u003eclient only). The direction that is not selected stays on the userspace relay and never runs the sockmap verdict. A mode other than off requires a plaintext tcp fullproxy service with an ipv4 external IP and ipv4 endpoints, and the daemon started with --sockmapsupport; a request that does not meet either condition is rejected with 400 before any rule state changes. A snapshot restore on a daemon without --sockmapsupport keeps the mode, logs a warning and runs the rule unaccelerated. A service whose data plane changes bytes in the direction being accelerated is rejected with 400, and the check is per direction. sse_mode, pd_disagg_mode and an attached L7 policy own BOTH directions and accept only off. ANY api_key_auth declaration - an explicit disabled included, since that value still makes the gateway strip X-Api-Key, as is one kept by a replace that omits the field - owns the REQUEST direction only - both and request are rejected with 400, response is accepted because validating the credential and stripping X-Api-Key both happen before dispatch and neither rewrites a response byte. Accepting it logs a warning, since api_key_auth arms ai_gw_mode and an accelerated response is not recorded. On a connection whose REQUEST direction is accelerated the later keep-alive requests skip admission, the request-header rewrites and the X-Api-Key strip; on one whose RESPONSE direction is accelerated the responses are not recorded. Attaching an L7 policy to a service that declares a mode is rejected with 400 as well, since a policy can arrive long after the rule. A snapshot restore of such a service turns the mode off with a warning; a restored policy whose rule declares a mode is attached with a warning and the rule stays unaccelerated. Services are told apart by address and port; services pointing at the same endpoint address and port, or host-based services on the same VIP address and port, share a portset entry, but a connection is accelerated only in the directions its own service selects. HTTP/2, including h2c, is never accelerated. Adding a direction applies to new connections; a connection already running is never accelerated retroactively. Taking a direction away, and deleting the service, close the connections that had it accelerated, since the verdict decides on the pairing installed when a connection was accepted and could not otherwise be reached. POST .../sockmapreset does the same without changing the configuration. Connections that were never accelerated are not touched. Redirect correctness depends on the kernel - see docs/sockmap-acceleration.md before enabling.",
               "type": "string",
               "default": "off",
               "enum": [
@@ -43064,7 +43250,7 @@ func init() {
           "format": "uint32"
         },
         "cb_enable": {
-          "description": "Enable the per-endpoint circuit breaker for full-proxy rules. Five consecutive backend connect failures open the breaker; an open endpoint is excluded from selection. Recovery uses a 30-second open interval followed by half-open probing. This is independent of the configured health monitor (probetype); one failed request does not by itself meet the opening threshold. Omission is resolved at the API layer: on a rule with pd_disagg_mode=true it resolves to true (P/D services default to breaker protection), otherwise to false. An explicit value is honored as given \u2014 including false on a P/D rule \u2014 and create and update resolve identically, so updating a rule never silently changes the breaker state. GET reports the resolved value.",
+          "description": "Enable the per-endpoint circuit breaker for full-proxy rules. Five consecutive backend connect failures open the breaker; an open endpoint is excluded from selection. Recovery uses a 30-second open interval followed by half-open probing. This is independent of the configured health monitor (probetype); one failed request does not by itself meet the opening threshold. Omission is resolved at the API layer: on a rule with pd_disagg_mode=true it resolves to true (P/D services default to breaker protection), otherwise to false. An explicit value is honored as given — including false on a P/D rule — and create and update resolve identically, so updating a rule never silently changes the breaker state. GET reports the resolved value.",
           "type": "boolean",
           "x-nullable": true
         },
@@ -43252,8 +43438,8 @@ func init() {
             "decode_max_inflight": {
               "description": "Per-endpoint ceiling for decode legs; 0 is unlimited.",
               "type": "integer",
-              "x-omitempty": false,
-              "format": "int32"
+              "format": "int32",
+              "x-omitempty": false
             },
             "default_max_tokens": {
               "description": "The default reservation in tokens in force for requests that route to this rule; 0 while default_reservation is off.",
@@ -43272,14 +43458,14 @@ func init() {
             "effective_max_outstanding": {
               "description": "The service ceiling in force now; below max_outstanding while an adaptive pool is tightened.",
               "type": "integer",
-              "x-omitempty": false,
-              "format": "int32"
+              "format": "int32",
+              "x-omitempty": false
             },
             "ep_max_inflight": {
               "description": "Per-endpoint ceiling for the normal role; 0 is unlimited.",
               "type": "integer",
-              "x-omitempty": false,
-              "format": "int32"
+              "format": "int32",
+              "x-omitempty": false
             },
             "expose_headers": {
               "description": "Whether admitted responses carry the admission headers.",
@@ -43292,7 +43478,8 @@ func init() {
             "inflight": {
               "description": "Inference requests executing on the pool right now.",
               "type": "integer",
-              "format": "int32"
+              "format": "int32",
+              "x-omitempty": false
             },
             "llmd_headers": {
               "description": "Whether refusals carry x-llm-d-request-dropped-reason and x-llm-d-inference-ttl may shorten a wait.",
@@ -43305,8 +43492,8 @@ func init() {
             "max_outstanding": {
               "description": "Pool-wide ceiling on executing inference requests; 0 is unlimited.",
               "type": "integer",
-              "x-omitempty": false,
-              "format": "int32"
+              "format": "int32",
+              "x-omitempty": false
             },
             "mode": {
               "description": "The gate mode in force on the pool (off, observe or enforce).",
@@ -43315,26 +43502,26 @@ func init() {
             "prefill_max_inflight": {
               "description": "Per-endpoint ceiling for prefill legs; 0 is unlimited.",
               "type": "integer",
-              "x-omitempty": false,
-              "format": "int32"
+              "format": "int32",
+              "x-omitempty": false
             },
             "queue_depth": {
               "description": "Requests that may wait for a unit; 0 means over a ceiling is refused.",
               "type": "integer",
-              "x-omitempty": false,
-              "format": "int32"
+              "format": "int32",
+              "x-omitempty": false
             },
             "queue_memory_bound_mib": {
               "description": "Memory the full queue may park, in MiB (queue_depth x 1 MiB, one parked client connection per waiting request).",
               "type": "integer",
-              "x-omitempty": false,
-              "format": "int64"
+              "format": "int64",
+              "x-omitempty": false
             },
             "queue_wait_ms": {
               "description": "The wait window in force for a queued request, in milliseconds.",
               "type": "integer",
-              "x-omitempty": false,
-              "format": "int32"
+              "format": "int32",
+              "x-omitempty": false
             },
             "queued": {
               "description": "Inference requests waiting for a unit right now.",
@@ -43606,19 +43793,20 @@ func init() {
             "telemetry_stale_ms": {
               "description": "The P/D scorers' trust window for scraped queue depth, in milliseconds.",
               "type": "integer",
-              "x-omitempty": false,
-              "format": "int32"
+              "format": "int32",
+              "x-omitempty": false
             },
             "tenant_max_share_pct": {
               "description": "The tenant share in force, in percent; 0 or 100 is no share.",
               "type": "integer",
-              "x-omitempty": false,
-              "format": "int32"
+              "format": "int32",
+              "x-omitempty": false
             },
             "tenant_slots": {
               "description": "Tenants the pool tracks by name at once for the tenant share; tenants past it share one budget. Fixed when the pool is created (LLB_FC_TENANT_SLOTS).",
               "type": "integer",
-              "format": "int32"
+              "format": "int32",
+              "x-omitempty": false
             },
             "tenant_wake": {
               "description": "The order inside one band, as configured (fifo, or rr across tenants).",
@@ -43639,12 +43827,13 @@ func init() {
             "tenants_active": {
               "description": "Tenants holding a unit or waiting on the pool now, while it holds tenants to a share.",
               "type": "integer",
-              "x-omitempty": false,
-              "format": "int32"
+              "format": "int32",
+              "x-omitempty": false
             },
             "ttft_target_ms": {
               "type": "integer",
-              "format": "int32"
+              "format": "int32",
+              "x-omitempty": false
             },
             "wake_policy": {
               "description": "The wake policy as configured, by the rule or inherited (source.wake_policy); wake_policy_effective is the one the gate runs. strict - while higher-band demand keeps the ceiling full, a lower band is admitted zero requests; each waiter is refused when its band's wait window ends. weighted - a deficit round robin: while several bands have waiters, each receives its weight's share of wake-ups, exactly over whole rounds (8:3:1 is 8, 3, 1 in every 12); the share is of admissions, not of tokens, GPU time or latency. No band is promoted because it has waited long.",
@@ -43665,16 +43854,18 @@ func init() {
             "warming_endpoints": {
               "description": "Endpoints inside their warm-up window.",
               "type": "integer",
-              "x-omitempty": false,
-              "format": "int32"
+              "format": "int32",
+              "x-omitempty": false
             },
             "warmup_ms": {
               "type": "integer",
-              "format": "int32"
+              "format": "int32",
+              "x-omitempty": false
             },
             "weights_in_use": {
               "description": "true when wake_policy_effective is weighted and the weights decide the wake; declared weights are stored but not in use otherwise.",
-              "type": "boolean"
+              "type": "boolean",
+              "x-omitempty": false
             }
           },
           "readOnly": true
@@ -43920,7 +44111,7 @@ func init() {
           "x-nullable": false
         },
         "kvExactApiMode": {
-          "description": "Request API surfaces this KV-exact rule serves. Absent on a profile-less rule keeps the legacy behavior (both surfaces, unattested); with kvModelProfile bound, the effective surfaces default to the profile's declared supportedApis and an explicit value must be a subset of them. Declaring a chat surface requires a validated chat renderer for the rule's model_name \u2014 an unsupported chat declaration is refused at create time, never degraded into a silent runtime fallback. Meaningless without kvExactMode (rejected). Immutable after create with NO exception (delete+recreate to change): even the sanctioned migration attach (see kvModelProfile) must carry the SAME raw declaration as the live rule \u2014 the guard compares raw declared strings, so an unset value matches only unset. Scalar by schema \u2014 arrays are rejected representations.",
+          "description": "Request API surfaces this KV-exact rule serves. Absent on a profile-less rule keeps the legacy behavior (both surfaces, unattested); with kvModelProfile bound, the effective surfaces default to the profile's declared supportedApis and an explicit value must be a subset of them. Declaring a chat surface requires a validated chat renderer for the rule's model_name — an unsupported chat declaration is refused at create time, never degraded into a silent runtime fallback. Meaningless without kvExactMode (rejected). Immutable after create with NO exception (delete+recreate to change): even the sanctioned migration attach (see kvModelProfile) must carry the SAME raw declaration as the live rule — the guard compares raw declared strings, so an unset value matches only unset. Scalar by schema — arrays are rejected representations.",
           "type": "string",
           "enum": [
             "completions",
@@ -43939,7 +44130,7 @@ func init() {
           "x-nullable": false
         },
         "kvHashAlgo": {
-          "description": "Block-hash contract used to match the prompt against the engine-published KV inventory. PREFER OMITTING THIS FIELD \u2014 when absent, the contract is derived from kvEngineType (vllm => sha256_cbor, sglang => sha256_sglang, trtllm => blockhash_trtllm). These are Gateway defaults, not discovery of the backend's actual hash settings. An explicit value overrides that default and MUST match the engine, or every computed hash misses and Tier 1.5 is silently dead; incoherent pairs are therefore rejected at config time. vLLM engines: \"sha256_cbor\" (must equal --prefix-caching-hash-algo) or \"xxhash_cbor\". SGLang engines: \"sha256_sglang\" only \u2014 SGLang hashes parent||tokens raw (no CBOR, no NONE seed) and truncates to the FIRST 8 digest bytes, where vLLM CBOR-encodes and truncates to the LAST 8. TRT-LLM engines: \"blockhash_trtllm\" only \u2014 the same raw chained-SHA256 contract applied on both sides by the gateway itself (requests and the token lists carried in stored KV events); the engine's own unversioned uint64 mixing hash is never used as a routing key. For vLLM Exact routing, Gateway admission also requires a non-empty LLB_KV_NONE_HASH_SEED of at most 23 bytes; deployment must ensure it matches the engine PYTHONHASHSEED. Tokenizer, template, and block geometry must agree independently of this enum.",
+          "description": "Block-hash contract used to match the prompt against the engine-published KV inventory. PREFER OMITTING THIS FIELD — when absent, the contract is derived from kvEngineType (vllm =\u003e sha256_cbor, sglang =\u003e sha256_sglang, trtllm =\u003e blockhash_trtllm). These are Gateway defaults, not discovery of the backend's actual hash settings. An explicit value overrides that default and MUST match the engine, or every computed hash misses and Tier 1.5 is silently dead; incoherent pairs are therefore rejected at config time. vLLM engines: \"sha256_cbor\" (must equal --prefix-caching-hash-algo) or \"xxhash_cbor\". SGLang engines: \"sha256_sglang\" only — SGLang hashes parent||tokens raw (no CBOR, no NONE seed) and truncates to the FIRST 8 digest bytes, where vLLM CBOR-encodes and truncates to the LAST 8. TRT-LLM engines: \"blockhash_trtllm\" only — the same raw chained-SHA256 contract applied on both sides by the gateway itself (requests and the token lists carried in stored KV events); the engine's own unversioned uint64 mixing hash is never used as a routing key. For vLLM Exact routing, Gateway admission also requires a non-empty LLB_KV_NONE_HASH_SEED of at most 23 bytes; deployment must ensure it matches the engine PYTHONHASHSEED. Tokenizer, template, and block geometry must agree independently of this enum.",
           "type": "string",
           "enum": [
             "sha256_cbor",
@@ -44272,7 +44463,7 @@ func init() {
           "type": "boolean"
         },
         "sockMapMode": {
-          "description": "Directional sockmap acceleration for this FullProxy service - off (default), both, request (client->backend only), response (backend->client only). The direction that is not selected stays on the userspace relay and never runs the sockmap verdict. A mode other than off requires a plaintext tcp fullproxy service with an ipv4 external IP and ipv4 endpoints, and the daemon started with --sockmapsupport; a request that does not meet either condition is rejected with 400 before any rule state changes. A snapshot restore on a daemon without --sockmapsupport keeps the mode, logs a warning and runs the rule unaccelerated. A service whose data plane changes bytes in the direction being accelerated is rejected with 400, and the check is per direction. sse_mode, pd_disagg_mode and an attached L7 policy own BOTH directions and accept only off. ANY api_key_auth declaration - an explicit disabled included, since that value still makes the gateway strip X-Api-Key, as is one kept by a replace that omits the field - owns the REQUEST direction only - both and request are rejected with 400, response is accepted because validating the credential and stripping X-Api-Key both happen before dispatch and neither rewrites a response byte. Accepting it logs a warning, since api_key_auth arms ai_gw_mode and an accelerated response is not recorded. On a connection whose REQUEST direction is accelerated the later keep-alive requests skip admission, the request-header rewrites and the X-Api-Key strip; on one whose RESPONSE direction is accelerated the responses are not recorded. Attaching an L7 policy to a service that declares a mode is rejected with 400 as well, since a policy can arrive long after the rule. A snapshot restore of such a service turns the mode off with a warning; a restored policy whose rule declares a mode is attached with a warning and the rule stays unaccelerated. Services are told apart by address and port; services pointing at the same endpoint address and port, or host-based services on the same VIP address and port, share a portset entry, but a connection is accelerated only in the directions its own service selects. HTTP/2, including h2c, is never accelerated. Adding a direction applies to new connections; a connection already running is never accelerated retroactively. Taking a direction away, and deleting the service, close the connections that had it accelerated, since the verdict decides on the pairing installed when a connection was accepted and could not otherwise be reached. POST .../sockmapreset does the same without changing the configuration. Connections that were never accelerated are not touched. Redirect correctness depends on the kernel - see docs/sockmap-acceleration.md before enabling.",
+          "description": "Directional sockmap acceleration for this FullProxy service - off (default), both, request (client-\u003ebackend only), response (backend-\u003eclient only). The direction that is not selected stays on the userspace relay and never runs the sockmap verdict. A mode other than off requires a plaintext tcp fullproxy service with an ipv4 external IP and ipv4 endpoints, and the daemon started with --sockmapsupport; a request that does not meet either condition is rejected with 400 before any rule state changes. A snapshot restore on a daemon without --sockmapsupport keeps the mode, logs a warning and runs the rule unaccelerated. A service whose data plane changes bytes in the direction being accelerated is rejected with 400, and the check is per direction. sse_mode, pd_disagg_mode and an attached L7 policy own BOTH directions and accept only off. ANY api_key_auth declaration - an explicit disabled included, since that value still makes the gateway strip X-Api-Key, as is one kept by a replace that omits the field - owns the REQUEST direction only - both and request are rejected with 400, response is accepted because validating the credential and stripping X-Api-Key both happen before dispatch and neither rewrites a response byte. Accepting it logs a warning, since api_key_auth arms ai_gw_mode and an accelerated response is not recorded. On a connection whose REQUEST direction is accelerated the later keep-alive requests skip admission, the request-header rewrites and the X-Api-Key strip; on one whose RESPONSE direction is accelerated the responses are not recorded. Attaching an L7 policy to a service that declares a mode is rejected with 400 as well, since a policy can arrive long after the rule. A snapshot restore of such a service turns the mode off with a warning; a restored policy whose rule declares a mode is attached with a warning and the rule stays unaccelerated. Services are told apart by address and port; services pointing at the same endpoint address and port, or host-based services on the same VIP address and port, share a portset entry, but a connection is accelerated only in the directions its own service selects. HTTP/2, including h2c, is never accelerated. Adding a direction applies to new connections; a connection already running is never accelerated retroactively. Taking a direction away, and deleting the service, close the connections that had it accelerated, since the verdict decides on the pairing installed when a connection was accepted and could not otherwise be reached. POST .../sockmapreset does the same without changing the configuration. Connections that were never accelerated are not touched. Redirect correctness depends on the kernel - see docs/sockmap-acceleration.md before enabling.",
           "type": "string",
           "default": "off",
           "enum": [
@@ -44369,7 +44560,7 @@ func init() {
       "readOnly": true
     },
     "LoadbalanceEntryServiceArgumentsFcEffective": {
-      "description": "The capacity admission gate's resolved state on this rule's model pool, read from the data plane. Present on GET for AI-gateway services (sse_mode, pd_disagg_mode or an api-key policy); ignored on input. mode is off, observe or enforce; the ceilings are the values in force, the process defaults where the rule declared nothing; inflight and queued are live counts; queue_memory_bound_mib is the memory the full queue may park (queue_depth x 1 MiB); telemetry_stale_ms is the P/D scorers' trust window; source names where each value in force came from (rule, env or default); effective_max_outstanding is the service ceiling in force now (the adaptive one while the pool adapts), adapt_state and adapt_reason say where it stands and why, warming_endpoints counts endpoints inside their warm-up window.",
+      "description": "The capacity admission gate's resolved state on this rule's model pool, read from the data plane. Present on GET for installed AI-gateway and modern MCP services; absent when no pool was read. Every numeric value is explicit, including zero. Ignored on input. mode is off, observe or enforce; the ceilings are the values in force, the process defaults where the rule declared nothing; inflight and queued are live counts; queue_memory_bound_mib is the memory the full queue may park (queue_depth x 1 MiB); telemetry_stale_ms is the P/D scorers' trust window; source names where each value in force came from (rule, env or default); effective_max_outstanding is the service ceiling in force now (the adaptive one while the pool adapts), adapt_state and adapt_reason say where it stands and why, warming_endpoints counts endpoints inside their warm-up window.",
       "type": "object",
       "properties": {
         "adapt_reason": {
@@ -44454,12 +44645,14 @@ func init() {
         "decode_max_inflight": {
           "description": "Per-endpoint ceiling for decode legs; 0 is unlimited.",
           "type": "integer",
-          "format": "int32"
+          "format": "int32",
+          "x-omitempty": false
         },
         "default_max_tokens": {
           "description": "The default reservation in tokens in force for requests that route to this rule; 0 while default_reservation is off.",
           "type": "integer",
-          "format": "int32"
+          "format": "int32",
+          "x-omitempty": false
         },
         "default_reservation": {
           "description": "Whether a request without a declared max_tokens that routes to this rule reserves a default for its completion. Each rule of a VIP and port has its own value - the gate takes it from the rule the request's host, path and model select.",
@@ -44472,12 +44665,14 @@ func init() {
         "effective_max_outstanding": {
           "description": "The service ceiling in force now; below max_outstanding while an adaptive pool is tightened.",
           "type": "integer",
-          "format": "int32"
+          "format": "int32",
+          "x-omitempty": false
         },
         "ep_max_inflight": {
           "description": "Per-endpoint ceiling for the normal role; 0 is unlimited.",
           "type": "integer",
-          "format": "int32"
+          "format": "int32",
+          "x-omitempty": false
         },
         "expose_headers": {
           "description": "Whether admitted responses carry the admission headers.",
@@ -44490,7 +44685,8 @@ func init() {
         "inflight": {
           "description": "Inference requests executing on the pool right now.",
           "type": "integer",
-          "format": "int32"
+          "format": "int32",
+          "x-omitempty": false
         },
         "llmd_headers": {
           "description": "Whether refusals carry x-llm-d-request-dropped-reason and x-llm-d-inference-ttl may shorten a wait.",
@@ -44503,7 +44699,8 @@ func init() {
         "max_outstanding": {
           "description": "Pool-wide ceiling on executing inference requests; 0 is unlimited.",
           "type": "integer",
-          "format": "int32"
+          "format": "int32",
+          "x-omitempty": false
         },
         "mode": {
           "description": "The gate mode in force on the pool (off, observe or enforce).",
@@ -44512,42 +44709,50 @@ func init() {
         "prefill_max_inflight": {
           "description": "Per-endpoint ceiling for prefill legs; 0 is unlimited.",
           "type": "integer",
-          "format": "int32"
+          "format": "int32",
+          "x-omitempty": false
         },
         "queue_depth": {
           "description": "Requests that may wait for a unit; 0 means over a ceiling is refused.",
           "type": "integer",
-          "format": "int32"
+          "format": "int32",
+          "x-omitempty": false
         },
         "queue_memory_bound_mib": {
           "description": "Memory the full queue may park, in MiB (queue_depth x 1 MiB, one parked client connection per waiting request).",
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-omitempty": false
         },
         "queue_wait_ms": {
           "description": "The wait window in force for a queued request, in milliseconds.",
           "type": "integer",
-          "format": "int32"
+          "format": "int32",
+          "x-omitempty": false
         },
         "queued": {
           "description": "Inference requests waiting for a unit right now.",
           "type": "integer",
-          "format": "int32"
+          "format": "int32",
+          "x-omitempty": false
         },
         "reservation_clamped_budget": {
           "description": "Requests admitted with less than default_max_tokens reserved, since the process started, because the bucket's budget was already taken by other claims or by spend. Transient - it passes as the window refills. Counted per service, as reservation_clamped_burst. Never a refusal.",
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-omitempty": false
         },
         "reservation_clamped_burst": {
           "description": "Requests admitted with less than default_max_tokens reserved, since the process started, because default_max_tokens beside the prompt is more than a quota bucket can ever hold, so the request is clamped on an idle bucket too. A configuration to fix - lower the default or raise the quota or its burst. A request this applies to is counted here whatever the budgets held. Counted per service - every model pool of the same VIP and port reads the same number. Never a refusal.",
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-omitempty": false
         },
         "reservation_epoch": {
           "description": "The minute (Unix time divided by 60) the reservation_held_* fields below are a reading of. A token reservation belongs to the minute it was made in and does not outlive it - a request that ended without settling leaves its claim until the minute turns, and no longer. Compare two readings only when this value is the same in both.",
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-omitempty": false
         },
         "reservation_held": {
           "description": "The quota buckets holding reserved tokens right now, largest first, at most 64. Empty when nothing is held. A bucket not listed holds nothing unless reservation_held_truncated is true.",
@@ -44559,11 +44764,13 @@ func init() {
         "reservation_held_claims": {
           "description": "How many token reservations are held right now on the quota buckets this service's requests reserve on, counted one per request and bucket - a request holds one claim on every quota bucket that applies to it (tenant, tenant and model, user, user and model, key, service), so one in-flight request on three buckets is three claims. Zero exactly when nothing is held. It is a count of claims and says nothing about tokens - the tokens each bucket holds are in reservation_held. A tenant's bucket is shared by every service the tenant uses, and its claims are counted on each of them. Read from the quota store's own counters. Management read-back only - not exported as a metric.",
           "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "x-omitempty": false
         },
         "reservation_held_truncated": {
           "description": "true when reservation_held does not list every bucket holding a reservation - more than 64 hold one, or the service has reserved on more buckets than the gateway tracks for it (4096). reservation_held_claims covers the tracked buckets in either case.",
-          "type": "boolean"
+          "type": "boolean",
+          "x-omitempty": false
         },
         "shed_queue": {
           "description": "As configured: whether a sheddable request at the ceiling waits in its band instead of 429 admission_shed.",
@@ -44793,17 +45000,20 @@ func init() {
         "telemetry_stale_ms": {
           "description": "The P/D scorers' trust window for scraped queue depth, in milliseconds.",
           "type": "integer",
-          "format": "int32"
+          "format": "int32",
+          "x-omitempty": false
         },
         "tenant_max_share_pct": {
           "description": "The tenant share in force, in percent; 0 or 100 is no share.",
           "type": "integer",
-          "format": "int32"
+          "format": "int32",
+          "x-omitempty": false
         },
         "tenant_slots": {
           "description": "Tenants the pool tracks by name at once for the tenant share; tenants past it share one budget. Fixed when the pool is created (LLB_FC_TENANT_SLOTS).",
           "type": "integer",
-          "format": "int32"
+          "format": "int32",
+          "x-omitempty": false
         },
         "tenant_wake": {
           "description": "The order inside one band, as configured (fifo, or rr across tenants).",
@@ -44824,11 +45034,13 @@ func init() {
         "tenants_active": {
           "description": "Tenants holding a unit or waiting on the pool now, while it holds tenants to a share.",
           "type": "integer",
-          "format": "int32"
+          "format": "int32",
+          "x-omitempty": false
         },
         "ttft_target_ms": {
           "type": "integer",
-          "format": "int32"
+          "format": "int32",
+          "x-omitempty": false
         },
         "wake_policy": {
           "description": "The wake policy as configured, by the rule or inherited (source.wake_policy); wake_policy_effective is the one the gate runs. strict - while higher-band demand keeps the ceiling full, a lower band is admitted zero requests; each waiter is refused when its band's wait window ends. weighted - a deficit round robin: while several bands have waiters, each receives its weight's share of wake-ups, exactly over whole rounds (8:3:1 is 8, 3, 1 in every 12); the share is of admissions, not of tokens, GPU time or latency. No band is promoted because it has waited long.",
@@ -44849,15 +45061,18 @@ func init() {
         "warming_endpoints": {
           "description": "Endpoints inside their warm-up window.",
           "type": "integer",
-          "format": "int32"
+          "format": "int32",
+          "x-omitempty": false
         },
         "warmup_ms": {
           "type": "integer",
-          "format": "int32"
+          "format": "int32",
+          "x-omitempty": false
         },
         "weights_in_use": {
           "description": "true when wake_policy_effective is weighted and the weights decide the wake; declared weights are stored but not in use otherwise.",
-          "type": "boolean"
+          "type": "boolean",
+          "x-omitempty": false
         }
       },
       "readOnly": true
@@ -45212,7 +45427,7 @@ func init() {
       "type": "object",
       "properties": {
         "activeConnections": {
-          "description": "Live concurrent-connection count for the rule \u2014 the same selector-agnostic live count the connectionLimit gate enforces. Recomputed from the conntrack walk; reset to zero on restart.",
+          "description": "Live concurrent-connection count for the rule — the same selector-agnostic live count the connectionLimit gate enforces. Recomputed from the conntrack walk; reset to zero on restart.",
           "type": "integer",
           "format": "uint64",
           "x-omitempty": false
@@ -45242,7 +45457,7 @@ func init() {
       "type": "object",
       "properties": {
         "adminStateUp": {
-          "description": "Octavia admin_state_up \u2014 true = enabled, false = paused.",
+          "description": "Octavia admin_state_up — true = enabled, false = paused.",
           "type": "boolean"
         },
         "lastUpdated": {
@@ -45286,7 +45501,7 @@ func init() {
       "type": "object",
       "properties": {
         "archive_info": {
-          "description": "Per-archive metadata, in the same order as archives. Additive \u2014 archives stays populated for existing clients.",
+          "description": "Per-archive metadata, in the same order as archives. Additive — archives stays populated for existing clients.",
           "type": "array",
           "items": {
             "$ref": "#/definitions/LogArchiveInfo"
@@ -45320,11 +45535,11 @@ func init() {
       ],
       "properties": {
         "has_more": {
-          "description": "Whether the backwards scan stopped before the start of the file, i.e. older lines remain to be searched. True implies next_cursor is set. Unfiltered this means more lines exist; filtered it means more matches may exist \u2014 the final page of a filtered search can legitimately come back empty.",
+          "description": "Whether the backwards scan stopped before the start of the file, i.e. older lines remain to be searched. True implies next_cursor is set. Unfiltered this means more lines exist; filtered it means more matches may exist — the final page of a filtered search can legitimately come back empty.",
           "type": "boolean"
         },
         "log_count": {
-          "description": "Number of lines in this page \u2014 that is, the length of logs after filtering. Not a count of matches in the file.",
+          "description": "Number of lines in this page — that is, the length of logs after filtering. Not a count of matches in the file.",
           "type": "integer"
         },
         "log_file": {
@@ -46542,7 +46757,7 @@ func init() {
               "type": "integer"
             },
             "peakInfoRate": {
-              "description": "Peak rate in Mbps; zero or at least 8 passes current domain validation. PIR >= CIR is not enforced and zero is not limited to the single-rate type.",
+              "description": "Peak rate in Mbps; zero or at least 8 passes current domain validation. PIR \u003e= CIR is not enforced and zero is not limited to the single-rate type.",
               "type": "integer"
             },
             "type": {
@@ -46599,7 +46814,7 @@ func init() {
           "type": "integer"
         },
         "peakInfoRate": {
-          "description": "Peak rate in Mbps; zero or at least 8 passes current domain validation. PIR >= CIR is not enforced and zero is not limited to the single-rate type.",
+          "description": "Peak rate in Mbps; zero or at least 8 passes current domain validation. PIR \u003e= CIR is not enforced and zero is not limited to the single-rate type.",
           "type": "integer"
         },
         "type": {
@@ -47062,7 +47277,7 @@ func init() {
           "format": "int64"
         },
         "vip_shared_tpm": {
-          "description": "LLM tokens per minute for the service's shared bucket, charged by every token-metered response on the service \u2014 credentialed and keyless alike, with the exact usage extracted at response settle. Keyless requests carry no pre-admission reservation: the bucket's debt denies the NEXT keyless admission once spend crosses the bound",
+          "description": "LLM tokens per minute for the service's shared bucket, charged by every token-metered response on the service — credentialed and keyless alike, with the exact usage extracted at response settle. Keyless requests carry no pre-admission reservation: the bucket's debt denies the NEXT keyless admission once spend crosses the bound",
           "type": "integer",
           "format": "int64"
         }
@@ -47113,7 +47328,7 @@ func init() {
           "format": "int64"
         },
         "vip_shared_tpm": {
-          "description": "LLM tokens per minute for the service's shared bucket, charged by every token-metered response on the service \u2014 credentialed and keyless alike, with the exact usage extracted at response settle. Keyless requests carry no pre-admission reservation: the bucket's debt denies the NEXT keyless admission once spend crosses the bound",
+          "description": "LLM tokens per minute for the service's shared bucket, charged by every token-metered response on the service — credentialed and keyless alike, with the exact usage extracted at response settle. Keyless requests carry no pre-admission reservation: the bucket's debt denies the NEXT keyless admission once spend crosses the bound",
           "type": "integer",
           "format": "int64"
         }
@@ -47388,7 +47603,7 @@ func init() {
       }
     },
     "SecurityRateConfigMod": {
-      "description": "Full replacement of rate-limit configuration and security-rate whitelist. All required flags and thresholds must be supplied; schema defaults do not establish omission support. Thresholds are 0..16777216 and UDP bandwidth is 0..4095 MiB/s. Enabled protections require positive applicable thresholds, and enabled SYN protection requires cookieThreshold < synThreshold. At least one protection must be enabled. At most 1024 valid whitelist CIDRs are accepted; omission clears the prior list. Explicit cookieThreshold zero becomes 50 in the datapath. Programming is non-atomic and shares whitelist maps with IP filtering.",
+      "description": "Full replacement of rate-limit configuration and security-rate whitelist. All required flags and thresholds must be supplied; schema defaults do not establish omission support. Thresholds are 0..16777216 and UDP bandwidth is 0..4095 MiB/s. Enabled protections require positive applicable thresholds, and enabled SYN protection requires cookieThreshold \u003c synThreshold. At least one per-source protection or positive aggregate budget must be enabled. At most 1024 valid whitelist CIDRs are accepted; omission clears the prior list. Explicit cookieThreshold zero becomes 50 in the datapath. Programming is non-atomic and shares whitelist maps with IP filtering.",
       "type": "object",
       "required": [
         "synEnabled",
@@ -47401,6 +47616,34 @@ func init() {
         "udpBandwidthMB"
       ],
       "properties": {
+        "aggregateConnRatePerSec": {
+          "description": "Optional Gateway-wide IPv4/IPv6 SYN packet budget per one-second window. Zero or omission disables it independently of per-source flags; trusted whitelist sources bypass it. Budget is shared across listeners and interfaces; it can reject normal tenants before authentication. ",
+          "type": "integer",
+          "format": "int64",
+          "maximum": 16777216,
+          "minimum": 0
+        },
+        "aggregateSynThreshold": {
+          "description": "Optional Gateway-wide IPv4/IPv6 SYN packet budget per one-second window. Zero or omission disables it independently of per-source flags; trusted whitelist sources bypass it. Budget is shared across listeners and interfaces; it can reject normal tenants before authentication. ",
+          "type": "integer",
+          "format": "int64",
+          "maximum": 16777216,
+          "minimum": 0
+        },
+        "aggregateUdpBandwidthMB": {
+          "description": "Optional Gateway-wide IPv4/IPv6 UDP bandwidth budget per one-second window. Zero or omission disables it independently of per-source flags; trusted whitelist sources bypass it. Budget is shared across listeners and interfaces; it can reject normal tenants before authentication. Units are MiB using 1024*1024 bytes.",
+          "type": "integer",
+          "format": "int64",
+          "maximum": 4095,
+          "minimum": 0
+        },
+        "aggregateUdpPktThreshold": {
+          "description": "Optional Gateway-wide IPv4/IPv6 UDP packet budget per one-second window. Zero or omission disables it independently of per-source flags; trusted whitelist sources bypass it. Budget is shared across listeners and interfaces; it can reject normal tenants before authentication. ",
+          "type": "integer",
+          "format": "int64",
+          "maximum": 16777216,
+          "minimum": 0
+        },
         "connRateEnabled": {
           "description": "Enable/disable connection rate limiting (P0-6)",
           "type": "boolean"
@@ -47449,34 +47692,6 @@ func init() {
           "items": {
             "type": "string"
           }
-        },
-        "aggregateConnRatePerSec": {
-          "description": "Optional Gateway-wide IPv4/IPv6 SYN packet budget per one-second window. Zero or omission disables it independently of per-source flags; trusted whitelist sources bypass it. Budget is shared across listeners and interfaces; it can reject normal tenants before authentication. ",
-          "format": "int64",
-          "maximum": 16777216,
-          "minimum": 0,
-          "type": "integer"
-        },
-        "aggregateSynThreshold": {
-          "description": "Optional Gateway-wide IPv4/IPv6 SYN packet budget per one-second window. Zero or omission disables it independently of per-source flags; trusted whitelist sources bypass it. Budget is shared across listeners and interfaces; it can reject normal tenants before authentication. ",
-          "format": "int64",
-          "maximum": 16777216,
-          "minimum": 0,
-          "type": "integer"
-        },
-        "aggregateUdpBandwidthMB": {
-          "description": "Optional Gateway-wide IPv4/IPv6 UDP bandwidth budget per one-second window. Zero or omission disables it independently of per-source flags; trusted whitelist sources bypass it. Budget is shared across listeners and interfaces; it can reject normal tenants before authentication. Units are MiB using 1024*1024 bytes.",
-          "format": "int64",
-          "maximum": 4095,
-          "minimum": 0,
-          "type": "integer"
-        },
-        "aggregateUdpPktThreshold": {
-          "description": "Optional Gateway-wide IPv4/IPv6 UDP packet budget per one-second window. Zero or omission disables it independently of per-source flags; trusted whitelist sources bypass it. Budget is shared across listeners and interfaces; it can reject normal tenants before authentication. ",
-          "format": "int64",
-          "maximum": 16777216,
-          "minimum": 0,
-          "type": "integer"
         }
       }
     },
@@ -47484,6 +47699,49 @@ func init() {
       "description": "Stored configuration with observed security-rate statistics. GET does not establish effective configuration after defaults or partial programming failures, and statistics read failures return an error. Connection counters concern SYN packets, not completed connections. synCookies is threshold telemetry, not proof of a SYN-cookie exchange. uniqueIps is current tracking-map occupancy and is not cleared by counter reset.",
       "type": "object",
       "properties": {
+        "aggregateConnBlocked": {
+          "description": "Aggregate budget drops, also included in the corresponding total blocked counter.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "aggregateConnRatePerSec": {
+          "description": "Optional Gateway-wide IPv4/IPv6 SYN packet budget per one-second window. Zero or omission disables it independently of per-source flags; trusted whitelist sources bypass it. Budget is shared across listeners and interfaces; it can reject normal tenants before authentication. ",
+          "type": "integer",
+          "format": "int64",
+          "maximum": 16777216,
+          "minimum": 0
+        },
+        "aggregateSynBlocked": {
+          "description": "Aggregate budget drops, also included in the corresponding total blocked counter.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "aggregateSynThreshold": {
+          "description": "Optional Gateway-wide IPv4/IPv6 SYN packet budget per one-second window. Zero or omission disables it independently of per-source flags; trusted whitelist sources bypass it. Budget is shared across listeners and interfaces; it can reject normal tenants before authentication. ",
+          "type": "integer",
+          "format": "int64",
+          "maximum": 16777216,
+          "minimum": 0
+        },
+        "aggregateUdpBandwidthMB": {
+          "description": "Optional Gateway-wide IPv4/IPv6 UDP bandwidth budget per one-second window. Zero or omission disables it independently of per-source flags; trusted whitelist sources bypass it. Budget is shared across listeners and interfaces; it can reject normal tenants before authentication. Units are MiB using 1024*1024 bytes.",
+          "type": "integer",
+          "format": "int64",
+          "maximum": 4095,
+          "minimum": 0
+        },
+        "aggregateUdpBlocked": {
+          "description": "Aggregate budget drops, also included in the corresponding total blocked counter.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "aggregateUdpPktThreshold": {
+          "description": "Optional Gateway-wide IPv4/IPv6 UDP packet budget per one-second window. Zero or omission disables it independently of per-source flags; trusted whitelist sources bypass it. Budget is shared across listeners and interfaces; it can reject normal tenants before authentication. ",
+          "type": "integer",
+          "format": "int64",
+          "maximum": 16777216,
+          "minimum": 0
+        },
         "connBlocked": {
           "description": "SYN packets blocked by connection-rate checking, not distinct completed connections.",
           "type": "integer",
@@ -47532,6 +47790,11 @@ func init() {
           "type": "integer",
           "format": "int64"
         },
+        "trackingFailures": {
+          "description": "Source tracking-map insertion errors. Protected SYN or UDP packets fail closed on these errors; ordinary established TCP data is not denied by an insertion error.",
+          "type": "integer",
+          "format": "int64"
+        },
         "udpBandwidthMB": {
           "description": "Stored UDP bandwidth threshold in MiB per second per source IP.",
           "type": "integer",
@@ -47571,65 +47834,17 @@ func init() {
           "type": "integer",
           "format": "int64"
         },
+        "unsupportedPacketBlocked": {
+          "description": "IPv6 fragment (including atomic fragment), malformed transport, or bounded header-chain rejection under applicable TCP/UDP rate protection. Whitelisted sources bypass rate protection. Extension chains of up to eight headers are inspected; ESP remains opaque.",
+          "type": "integer",
+          "format": "int64"
+        },
         "whitelistIps": {
           "description": "Whitelisted IPs",
           "type": "array",
           "items": {
             "type": "string"
           }
-        },
-        "aggregateConnBlocked": {
-          "description": "Aggregate budget drops, also included in the corresponding total blocked counter.",
-          "format": "int64",
-          "type": "integer"
-        },
-        "aggregateConnRatePerSec": {
-          "description": "Optional Gateway-wide IPv4/IPv6 SYN packet budget per one-second window. Zero or omission disables it independently of per-source flags; trusted whitelist sources bypass it. Budget is shared across listeners and interfaces; it can reject normal tenants before authentication. ",
-          "format": "int64",
-          "maximum": 16777216,
-          "minimum": 0,
-          "type": "integer"
-        },
-        "aggregateSynBlocked": {
-          "description": "Aggregate budget drops, also included in the corresponding total blocked counter.",
-          "format": "int64",
-          "type": "integer"
-        },
-        "aggregateSynThreshold": {
-          "description": "Optional Gateway-wide IPv4/IPv6 SYN packet budget per one-second window. Zero or omission disables it independently of per-source flags; trusted whitelist sources bypass it. Budget is shared across listeners and interfaces; it can reject normal tenants before authentication. ",
-          "format": "int64",
-          "maximum": 16777216,
-          "minimum": 0,
-          "type": "integer"
-        },
-        "aggregateUdpBandwidthMB": {
-          "description": "Optional Gateway-wide IPv4/IPv6 UDP bandwidth budget per one-second window. Zero or omission disables it independently of per-source flags; trusted whitelist sources bypass it. Budget is shared across listeners and interfaces; it can reject normal tenants before authentication. Units are MiB using 1024*1024 bytes.",
-          "format": "int64",
-          "maximum": 4095,
-          "minimum": 0,
-          "type": "integer"
-        },
-        "aggregateUdpBlocked": {
-          "description": "Aggregate budget drops, also included in the corresponding total blocked counter.",
-          "format": "int64",
-          "type": "integer"
-        },
-        "aggregateUdpPktThreshold": {
-          "description": "Optional Gateway-wide IPv4/IPv6 UDP packet budget per one-second window. Zero or omission disables it independently of per-source flags; trusted whitelist sources bypass it. Budget is shared across listeners and interfaces; it can reject normal tenants before authentication. ",
-          "format": "int64",
-          "maximum": 16777216,
-          "minimum": 0,
-          "type": "integer"
-        },
-        "trackingFailures": {
-          "description": "Source tracking-map insertion errors. Protected SYN or UDP packets fail closed on these errors; ordinary established TCP data is not denied by an insertion error.",
-          "format": "int64",
-          "type": "integer"
-        },
-        "unsupportedPacketBlocked": {
-          "type": "integer",
-          "format": "int64",
-          "description": "IPv6 fragment (including atomic fragment), malformed transport, or bounded header-chain rejection under applicable TCP/UDP rate protection. Whitelisted sources bypass rate protection. Extension chains of up to eight headers are inspected; ESP remains opaque."
         }
       }
     },
@@ -48139,7 +48354,7 @@ func init() {
       }
     },
     "UserRateLimitMod": {
-      "description": "POST replaces the user's explicit entry; a zero field constrains nothing and falls through to the configured defaults. An entry whose limit fields are all zero is rejected \u2014 DELETE removes limits. Supplied model_limits replace the user's model rows as a set; omitted/empty model_limits clears them.",
+      "description": "POST replaces the user's explicit entry; a zero field constrains nothing and falls through to the configured defaults. An entry whose limit fields are all zero is rejected — DELETE removes limits. Supplied model_limits replace the user's model rows as a set; omitted/empty model_limits clears them.",
       "type": "object",
       "required": [
         "tenant_id",
@@ -48213,10 +48428,10 @@ func init() {
         },
         "features": {
           "description": "Gateway-only capabilities this build implements, as stable tokens a controller checks before it sends the matching rule fields; absent on builds that predate the field. \"api_key_auth\": the serviceArguments api_key_auth credential-policy declaration is accepted and enforced. \"jwt_auth_profile\": the Bearer arm (api_key_auth \"jwt\" and \"apikey-or-jwt\") and the jwt_auth_profile reference are accepted and enforced. The REST layer ignores fields it does not know, so a build without a token would install a rule WITHOUT that policy and report success: a controller that does not find the token for a field it needs must not send the rule.",
+          "type": "array",
           "items": {
             "type": "string"
-          },
-          "type": "array"
+          }
         },
         "product": {
           "description": "Product identifier for API flavor detection. This gateway reports \"loxilb-inference-gateway\"; upstream loxilb (and gateway builds predating the field) omit it, which clients treat as plain loxilb.",
@@ -48296,7 +48511,7 @@ func init() {
       }
     },
     "VlanMemberEntry": {
-      "description": "Member interface and tagging choice. Omitted tagged means false. Tagged membership creates <dev>.<ID>; untagged membership attaches dev directly. The current helpers do not consistently enforce current-master ownership, and partial failures can leave intermediate state.",
+      "description": "Member interface and tagging choice. Omitted tagged means false. Tagged membership creates \u003cdev\u003e.\u003cID\u003e; untagged membership attaches dev directly. The current helpers do not consistently enforce current-master ownership, and partial failures can leave intermediate state.",
       "type": "object",
       "properties": {
         "dev": {
@@ -48304,13 +48519,13 @@ func init() {
           "type": "string"
         },
         "tagged": {
-          "description": "True creates a tagged child <interface>.<ID>; false or omission attaches the named interface directly.",
+          "description": "True creates a tagged child \u003cinterface\u003e.\u003cID\u003e; false or omission attaches the named interface directly.",
           "type": "boolean"
         }
       }
     },
     "VxlanBridgeEntry": {
-      "description": "VXLAN creation input. epIntf must exist and have an IPv4 address; its first IPv4 address is selected as source. Creation uses vxlan<ID>, UDP port 8472, MTU 9000, and learning enabled. Numeric validation is incomplete.",
+      "description": "VXLAN creation input. epIntf must exist and have an IPv4 address; its first IPv4 address is selected as source. Creation uses vxlan\u003cID\u003e, UDP port 8472, MTU 9000, and learning enabled. Numeric validation is incomplete.",
       "type": "object",
       "required": [
         "epIntf",

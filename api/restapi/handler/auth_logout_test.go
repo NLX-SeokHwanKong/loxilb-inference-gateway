@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"github.com/go-openapi/runtime"
 	"github.com/loxilb-io/loxilb/api/restapi/operations/auth"
@@ -16,7 +17,7 @@ type logoutHook struct {
 	err  error
 }
 
-func (h *logoutHook) NetUserLogout(token string) error {
+func (h *logoutHook) NetUserLogout(_ context.Context, token string) error {
 	if h.err != nil {
 		return h.err
 	}

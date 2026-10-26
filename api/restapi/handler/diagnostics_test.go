@@ -16,6 +16,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -44,7 +45,7 @@ func (s *stubDiagnosticsHook) NetRecoveryDepsGet() ([]cmn.RecoveryDependency, er
 	return s.deps, nil
 }
 
-func (s *stubDiagnosticsHook) NetRecoveryDepReady(depType string) error {
+func (s *stubDiagnosticsHook) NetRecoveryDepReady(_ context.Context, depType string) error {
 	if depType == s.failDep {
 		return errors.New("connection refused")
 	}

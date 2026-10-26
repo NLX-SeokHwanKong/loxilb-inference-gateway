@@ -150,6 +150,10 @@ jobs:
           MGMT_TEST_PG: required
           MGMT_TEST_DSN: postgres://aigw_mgmt_user:ci-mgmt-pw@127.0.0.1:5432/loxilb
         run: |
+          # Every store statement carries a context deadline: the DBTX
+          # interfaces enforce it for calls through them, this script for
+          # calls on a concrete pool, transaction or handle.
+          scripts/check-store-deadlines.sh
           sudo -E env "PATH=$PATH" go vet ./pkg/aikey ./pkg/user ./pkg/authz ./pkg/pgstore
           sudo -E env "PATH=$PATH" go test -count=1 ./pkg/authz ./pkg/pgstore
           sudo -E env "PATH=$PATH" go test -count=1 -race ./pkg/aikey ./pkg/user

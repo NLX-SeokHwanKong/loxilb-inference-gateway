@@ -462,7 +462,11 @@ func auditActionOf(method string) string {
 // the principal the chain established, an actor a handler established
 // itself, and detail a handler adds to the result.
 type auditTrail struct {
-	mu        sync.Mutex
+	mu sync.Mutex
+	// ctx is the request's context, for the one store lookup the trail
+	// makes (the delegation flag): it runs under the operation budget and
+	// is cancelled with the request.
+	ctx       context.Context
 	principal any
 	hasPrinc  bool
 	actor     *audit.Actor
@@ -480,7 +484,7 @@ type auditTrail struct {
 // newAuditTrail starts the request-scoped state, reading the originator
 // header exactly once.
 func newAuditTrail(r *http.Request) *auditTrail {
-	return &auditTrail{originator: auditOriginatorOf(r)}
+	return &auditTrail{ctx: r.Context(), originator: auditOriginatorOf(r)}
 }
 
 // delegationTrusted decides, once per request and only when an originator
@@ -499,7 +503,11 @@ func (t *auditTrail) delegationTrusted(username string) bool {
 	auditDelegationLookups.Add(1)
 	allowed := false
 	if ApiHooks != nil {
-		if ok, err := ApiHooks.NetUserDelegationAllowed(username); err == nil {
+		ctx := t.ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		if ok, err := ApiHooks.NetUserDelegationAllowed(ctx, username); err == nil {
 			allowed = ok
 		}
 	}

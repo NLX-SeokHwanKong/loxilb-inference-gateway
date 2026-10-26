@@ -17,6 +17,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -55,17 +56,17 @@ type emitStubHook struct {
 	lookupErr error     // what a lookup answers when the store is down
 }
 
-func (s *emitStubHook) NetUserBootstrap(u *cmn.User) (int, error) {
+func (s *emitStubHook) NetUserBootstrap(_ context.Context, u *cmn.User) (int, error) {
 	if s.bootstrap != nil {
 		return 0, s.bootstrap
 	}
 	return 1, nil
 }
 
-func (s *emitStubHook) NetUserAdd(u *cmn.User) (int, error) { return 2, nil }
-func (s *emitStubHook) NetUserGet() ([]cmn.User, error)     { return s.users, nil }
-func (s *emitStubHook) NetUserUpdate(u *cmn.User) error     { s.updated = u; return nil }
-func (s *emitStubHook) NetUserDelegationAllowed(username string) (bool, error) {
+func (s *emitStubHook) NetUserAdd(context.Context, *cmn.User) (int, error) { return 2, nil }
+func (s *emitStubHook) NetUserGet(context.Context) ([]cmn.User, error)     { return s.users, nil }
+func (s *emitStubHook) NetUserUpdate(_ context.Context, u *cmn.User) error { s.updated = u; return nil }
+func (s *emitStubHook) NetUserDelegationAllowed(_ context.Context, username string) (bool, error) {
 	s.lookups++
 	if s.lookupErr != nil {
 		return false, s.lookupErr
@@ -78,18 +79,18 @@ func (s *emitStubHook) NetUserDelegationAllowed(username string) (bool, error) {
 	return false, nil
 }
 func (s *emitStubHook) NetAiInFlightStreamsGet() int64 { return 0 }
-func (s *emitStubHook) NetAPIKeyList(string) ([]cmn.ApiKeySummary, error) {
+func (s *emitStubHook) NetAPIKeyList(context.Context, string) ([]cmn.ApiKeySummary, error) {
 	return s.keys, nil
 }
 
-func (s *emitStubHook) NetUserValidate(token string) (interface{}, error) {
+func (s *emitStubHook) NetUserValidate(_ context.Context, token string) (interface{}, error) {
 	if s.principal == nil {
 		return nil, errors.New("invalid token")
 	}
 	return s.principal, nil
 }
 
-func (s *emitStubHook) NetAPIKeyGet(id string) (*cmn.ApiKeySummary, error) {
+func (s *emitStubHook) NetAPIKeyGet(_ context.Context, id string) (*cmn.ApiKeySummary, error) {
 	for i := range s.keys {
 		if s.keys[i].KeyID == id {
 			return &s.keys[i], nil
@@ -246,11 +247,11 @@ func TestAuditEmitUserUpdateNamesTheAccount(t *testing.T) {
 	assertNoSecret(t, recs, "hunter2")
 
 	// The stored role is what a role change would be recorded against.
-	if got := currentUserRole(7); got != "viewer" {
+	if got := currentUserRole(context.Background(), 7); got != "viewer" {
 		t.Fatalf("currentUserRole(7) = %q", got)
 	}
-	if got := currentUserRole(8); got != "" {
-		t.Fatalf("currentUserRole(8) = %q", got)
+	if got := currentUserRole(context.Background(), 8); got != "" {
+		t.Fatalf("currentUserRole(context.Background(), 8) = %q", got)
 	}
 }
 
