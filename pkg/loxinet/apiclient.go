@@ -846,26 +846,20 @@ func (na *NetAPIStruct) NetCIStateMod(hm *cmn.HASMod) (int, error) {
 	return 0, nil
 }
 
-// NetCIStateMod - Modify cluster state
+// NetBFDGet - Return configured BFD sessions, including an idle empty list.
 func (na *NetAPIStruct) NetBFDGet() ([]cmn.BFDMod, error) {
 	if na.BgpPeerMode {
-		return nil, errors.New("running in bgp only mode")
+		return nil, cmn.ErrBFDUnsupported
 	}
 	mh.mtx.Lock()
-	if !mh.has.SpawnKa || mh.has.Bs == nil {
-		mh.mtx.Unlock()
-		tk.LogIt(tk.LogError, "[CLUSTER] BFD sessions not running\n")
-		return nil, errors.New("bfd session not running")
-	}
-	bp := mh.has.Bs
-	mh.mtx.Unlock()
-	return bp.BFDGet()
+	defer mh.mtx.Unlock()
+	return mh.has.CIBFDSessionGet()
 }
 
 // NetBFDAdd - Add BFD Session
 func (na *NetAPIStruct) NetBFDAdd(bm *cmn.BFDMod) (int, error) {
 	if na.BgpPeerMode {
-		return CIErrBase, errors.New("running in bgp only mode")
+		return CIErrBase, cmn.ErrBFDUnsupported
 	}
 	mh.mtx.Lock()
 	defer mh.mtx.Unlock()
@@ -881,7 +875,7 @@ func (na *NetAPIStruct) NetBFDAdd(bm *cmn.BFDMod) (int, error) {
 // NetBFDDel - Delete BFD Session
 func (na *NetAPIStruct) NetBFDDel(bm *cmn.BFDMod) (int, error) {
 	if na.BgpPeerMode {
-		return CIErrBase, errors.New("running in bgp only mode")
+		return CIErrBase, cmn.ErrBFDUnsupported
 	}
 	mh.mtx.Lock()
 	defer mh.mtx.Unlock()

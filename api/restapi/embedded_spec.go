@@ -11368,7 +11368,7 @@ func init() {
             }
           },
           "503": {
-            "description": "Maintenance mode",
+            "description": "Maintenance mode or BFD subsystem unavailable",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -11379,7 +11379,7 @@ func init() {
     },
     "/config/bfd/all": {
       "get": {
-        "description": "Return BFD sessions when the cluster BFD running flag is set. Current IPv6 host/port parsing can corrupt readback. A session accepted for asynchronous creation may not yet appear; the global running flag can also become inconsistent after deletion.",
+        "description": "Return the initialized BFD session table. No configured sessions (including keepalive disabled or after deleting the last session) returns 200 with Attr: []. BGP-only mode returns 403 and an uninitialized BFD subsystem returns 503. Current IPv6 host/port parsing can corrupt readback.",
         "responses": {
           "200": {
             "description": "OK",
@@ -11411,7 +11411,7 @@ func init() {
             }
           },
           "503": {
-            "description": "Maintenance mode",
+            "description": "Maintenance mode or BFD subsystem unavailable",
             "schema": {
               "$ref": "#/definitions/Error"
             }
