@@ -19,6 +19,10 @@ The `Status API contracts` workflow runs the status package with the Linux race 
 
 The package tests cover stacked paths, escaped paths, bind aliases, skipped autofs/pseudo filesystems, disappearing mounts, fragment-size fallback, reserved blocks, undefined percentages, formatting boundaries and live syscall reads with no executable search path. The package is explicitly Linux-only.
 
-## Separate follow-up
+## Native process status
 
-`ProcessInfoGet` still launches `top` and `ps`. It remains susceptible to the same child-reaper race and may provide incomplete process data; its command-error handling and output parsing need their own correction. This change does not fix that endpoint, modify the global reaper or claim that every status endpoint is subprocess-free.
+`ProcessInfoGet` reads `/proc` directly and creates no `top`/`ps` children. All existing process response field names and string types are retained. CPU usage is cumulative user + system CPU time divided by elapsed process lifetime, multiplied by 100 (the former `ps` lifetime semantics, not a sampled interval); multithreaded CPU can exceed 100%. The kernel's `AT_CLKTCK` auxiliary-vector entry supplies the clock rate. Memory usage is resident bytes / `MemTotal`; virtual, resident and shared sizes are now consistently reported as decimal KiB strings rather than `top`'s adaptive units. CPU time is minutes:seconds.centiseconds. Command is the kernel comm name, including embedded spaces, rather than a whitespace-split/truncated `top` column. Effective UID resolves through `/etc/passwd`, falling back to its numeric string without NSS or subprocess calls. Rows sort by descending displayed CPU percentage, then ascending PID.
+
+Processes that exit or become inaccessible during reads are skipped. A changed start time prevents combining records after PID reuse. Missing global procfs data, malformed records and a wholly unreadable process list return an API error rather than an empty healthy list; this also removes the former short-output slice panic. Procfs remains a sequence of kernel reads, not an atomic snapshot. The global SIGCHLD reaper is unchanged.
+
+Fixture tests cover fields, command delimiters, missing/corrupt procfs and UID fallback. A live Linux test makes 160 concurrent reads with an empty executable search path and requires the test process to be present in every response. These run in the existing Linux race-detector job.

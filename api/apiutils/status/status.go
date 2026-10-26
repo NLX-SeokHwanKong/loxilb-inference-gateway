@@ -19,80 +19,11 @@
 package status
 
 import (
-	"fmt"
 	"os"
-	"os/exec"
-	"strings"
 
 	"github.com/loxilb-io/loxilb/api/models"
 	"golang.org/x/sys/unix"
 )
-
-// ProcessInfoGet- Get Process Status using "top -bn 1" command
-func ProcessInfoGet() []*models.ProcessInfoEntry {
-	var result []*models.ProcessInfoEntry
-	result = make([]*models.ProcessInfoEntry, 0)
-	app := "top"
-	arg0 := "-bn"
-	arg1 := "1"
-	cmd := exec.Command(app, arg0, arg1)
-	stdout, err := cmd.Output()
-	if err != nil {
-		fmt.Println(err.Error())
-	}
-	topResult := string(stdout)
-	pscmd := exec.Command("ps", "-eo", "pid,%cpu,%mem", "--sort=-%cpu", "--no-headers")
-	psstdout, err := pscmd.Output()
-	if err != nil {
-		fmt.Println(err.Error())
-	}
-	psResult := string(psstdout)
-	cpuMemPerPid := make(map[string]struct {
-		CPUUsage    string
-		MemoryUsage string
-	})
-	for _, cpumem := range strings.Split(psResult, "\n") {
-		fields := strings.Fields(cpumem)
-		if len(fields) < 3 {
-			continue
-		}
-		pid := fields[0]
-		cpu := fields[1]
-		mem := fields[2]
-		cpuMemPerPid[pid] = struct {
-			CPUUsage    string
-			MemoryUsage string
-		}{
-			CPUUsage:    cpu,
-			MemoryUsage: mem,
-		}
-	}
-
-	for _, processInfos := range strings.Split(topResult, "\n")[7:] {
-		tmpProcess := strings.Fields(processInfos)
-		if len(tmpProcess) == 12 {
-			tmpResult := &models.ProcessInfoEntry{
-				Pid:          tmpProcess[0],
-				User:         tmpProcess[1],
-				Priority:     tmpProcess[2],
-				Nice:         tmpProcess[3],
-				VirtMemory:   tmpProcess[4],
-				ResidentSize: tmpProcess[5],
-				SharedMemory: tmpProcess[6],
-				Status:       tmpProcess[7],
-				CPUUsage:     cpuMemPerPid[tmpProcess[0]].CPUUsage,    // CPU usage from ps command
-				MemoryUsage:  cpuMemPerPid[tmpProcess[0]].MemoryUsage, // Memory usage from ps command
-				Time:         tmpProcess[10],
-				Command:      tmpProcess[11],
-			}
-
-			result = append(result, tmpResult)
-		}
-
-	}
-
-	return result
-}
 
 // DeviceInfoGet - Get Device Status
 func DeviceInfoGet() (*models.DeviceInfoEntry, error) {

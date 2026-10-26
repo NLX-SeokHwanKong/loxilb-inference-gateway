@@ -26,8 +26,10 @@ import (
 
 func ConfigGetProcess(params operations.GetStatusProcessParams, principal interface{}) middleware.Responder {
 	tk.LogIt(tk.LogTrace, "api: Status %s API called. url : %s\n", params.HTTPRequest.Method, params.HTTPRequest.URL)
-	//var result []*models.ProcessInfoEntry
-	process := status.ProcessInfoGet()
+	process, err := status.ProcessInfoGet()
+	if err != nil {
+		return &ErrorResponse{Payload: ResultErrorResponseError(err)}
+	}
 
 	return operations.NewGetStatusProcessOK().WithPayload(&models.ProcessStatus{ProcessAttr: process})
 }
