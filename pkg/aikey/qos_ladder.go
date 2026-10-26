@@ -309,17 +309,10 @@ func (s *Service) GetUserRateLimit(tenantID, userID string) (rps, burstSize, tok
 			return e.rps, e.burstSize, e.tokensPerMin, nil
 		}
 	}
-	db, dbErr := s.store()
-	if dbErr != nil {
-		if e, ok := s.lastKnownUserRateLimit(cacheKey); ok {
-			return e.rps, e.burstSize, e.tokensPerMin, nil
-		}
-		return 0, 0, 0, errStoreUnavailable
-	}
-	ctx, cancel := lookupContext()
-	defer cancel()
 	var r, b, t int
-	err = db.QueryRowContext(ctx, sqlSelectUserRateLimit, tenantID, userID).Scan(&r, &b, &t)
+	err = s.dataPathRead(func(ctx context.Context, db DBTX) error {
+		return db.QueryRowContext(ctx, sqlSelectUserRateLimit, tenantID, userID).Scan(&r, &b, &t)
+	})
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			// The remembered miss is what keeps an unlimited user servable
@@ -350,17 +343,10 @@ func (s *Service) GetUserModelRateLimit(tenantID, userID, model string) (tokensP
 			return e.tokensPerMin, nil
 		}
 	}
-	db, dbErr := s.store()
-	if dbErr != nil {
-		if e, ok := s.lastKnownUserRateLimit(cacheKey); ok {
-			return e.tokensPerMin, nil
-		}
-		return 0, errStoreUnavailable
-	}
-	ctx, cancel := lookupContext()
-	defer cancel()
 	var t int
-	err = db.QueryRowContext(ctx, sqlSelectUserModelRateLimit, tenantID, userID, model).Scan(&t)
+	err = s.dataPathRead(func(ctx context.Context, db DBTX) error {
+		return db.QueryRowContext(ctx, sqlSelectUserModelRateLimit, tenantID, userID, model).Scan(&t)
+	})
 	if err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
 			tk.LogIt(tk.LogError, "[AIKey] Failed to get user model rate limit for %s/%s/%s: %v\n", tenantID, userID, model, err)
@@ -569,18 +555,11 @@ func (s *Service) GetRateLimitDefaults(scope, ruleIdent string) (entry cmn.RateL
 			return fill(e)
 		}
 	}
-	db, dbErr := s.store()
-	if dbErr != nil {
-		if e, ok := s.lastKnownDefaults(cacheKey); ok {
-			return fill(e)
-		}
-		return entry, false, errStoreUnavailable
-	}
-	ctx, cancel := lookupContext()
-	defer cancel()
 	e := &defaultsCacheEntry{}
-	err = db.QueryRowContext(ctx, sqlSelectRateLimitDefaults, scope, ruleIdent).
-		Scan(&e.userRPS, &e.userTPM, &e.tenantRPS, &e.tenantTPM, &e.vipRPS, &e.vipTPM)
+	err = s.dataPathRead(func(ctx context.Context, db DBTX) error {
+		return db.QueryRowContext(ctx, sqlSelectRateLimitDefaults, scope, ruleIdent).
+			Scan(&e.userRPS, &e.userTPM, &e.tenantRPS, &e.tenantTPM, &e.vipRPS, &e.vipTPM)
+	})
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			s.rememberDefaults(cacheKey, &defaultsCacheEntry{})

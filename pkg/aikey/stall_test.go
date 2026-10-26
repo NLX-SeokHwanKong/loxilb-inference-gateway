@@ -37,6 +37,10 @@ type stallDB struct {
 	calls     int
 	deadlines []time.Duration // remaining budget as seen at each call
 	cancelled atomic.Int32
+	// inflight / maxInflight: statements waiting on the double right now
+	// and the most that ever waited at once (the in-flight bound's oracle).
+	inflight    int
+	maxInflight int
 }
 
 func newStallDB(t *testing.T) *stallDB {
@@ -62,9 +66,25 @@ func (d *stallDB) note(ctx context.Context) {
 
 func (d *stallDB) wait(ctx context.Context) error {
 	d.note(ctx)
+	d.mu.Lock()
+	d.inflight++
+	if d.inflight > d.maxInflight {
+		d.maxInflight = d.inflight
+	}
+	d.mu.Unlock()
 	<-ctx.Done()
+	d.mu.Lock()
+	d.inflight--
+	d.mu.Unlock()
 	d.cancelled.Add(1)
 	return ctx.Err()
+}
+
+// peakInflight is the most statements that ever waited on the double at once.
+func (d *stallDB) peakInflight() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.maxInflight
 }
 
 func (d *stallDB) ExecContext(ctx context.Context, _ string, _ ...any) (sql.Result, error) {
@@ -350,6 +370,11 @@ func TestValidateAPIKeyMissIsBoundedByTheLookupBudgetAndHitsNeverWait(t *testing
 func TestDataPathQuotaReadsUseTheLookupBudget(t *testing.T) {
 	const budget = 80 * time.Millisecond
 	t.Setenv(pgstore.LookupTimeoutEnv, "80")
+	// The budget is the property here. With the circuit on, the third
+	// timeout below would open it and every later read would be refused at
+	// once instead of waiting out its budget; that behaviour has its own
+	// tests in lookup_guard_test.go.
+	t.Setenv(LookupCircuitFailuresEnv, "0")
 	svc, db := stalledService(t)
 
 	// Never answered for: fail closed, inside the budget.
