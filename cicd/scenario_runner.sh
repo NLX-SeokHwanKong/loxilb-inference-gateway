@@ -23,11 +23,15 @@
 #
 #   source "$(dirname "$0")/scenario_runner.sh"
 #   scenario_preflight                       # optional; cheap gates first
-#   run_scenario <dir> [label] -- <step>...  # steps are shell strings
+#   run_scenario [--needs <cap>[,<cap>]] <dir> [label] -- <step>...
 #   scenario_summary                         # returns non-zero if any failed
 #
 # Each step runs with the scenario directory as cwd, so steps read exactly the
 # way they did inline: './config.sh', 'EXPECT=fixed ./validation.sh'.
+#
+# --needs names host capabilities the scenario cannot run without (sctp, ipv6,
+# minica; see preflight-caps.sh). When one is missing the scenario is skipped
+# with the reason, not run into a failure that reads like a product defect.
 #
 # Knobs (all optional):
 #   SCENARIO_TIMEOUT  per-step timeout in seconds            (default 1800)
@@ -35,6 +39,17 @@
 #   LEAK_STRICT       1 = leftover state fails the scenario   (default 1)
 #   CLEANUP_CMD       cleanup step, always run                (default ./rmconfig.sh)
 #   ARTIFACT_DIR      where failure logs are kept
+#   ONLY              run only the scenarios matching these   (default: all)
+#   SKIP              skip the scenarios matching these       (default: none)
+#
+# ONLY and SKIP take shell glob patterns, separated by commas or spaces,
+# matched against a scenario's label and its directory:
+#
+#   ONLY='ai-* kv-*' ./run_local_cicd.sh
+#   SKIP=tcpsctpperf,ai-tenant ./run_local_cicd.sh
+#
+# A scenario left out by either is recorded as skipped in the summary, so a
+# partial run cannot be mistaken for a full one.
 #
 # Leftover state is a failure by default and that is deliberate: a scenario
 # whose rmconfig does not fully clean up is a defect in that scenario, and the
@@ -48,6 +63,8 @@ _SR_START_ALL=$(date +%s)
 : "${LEAK_STRICT:=1}"
 : "${CLEANUP_CMD:=./rmconfig.sh}"
 : "${ARTIFACT_DIR:=/tmp/cicd-artifacts-$(date +%Y%m%d-%H%M%S)}"
+: "${ONLY:=}"
+: "${SKIP:=}"
 
 mkdir -p "$ARTIFACT_DIR"
 
@@ -180,9 +197,65 @@ _sr_run() {
 }
 
 # ---------------------------------------------------------------------------
+# Selection and capabilities: the two reasons a scenario is skipped instead of
+# run. Both record the skip in the summary with its reason.
+# ---------------------------------------------------------------------------
+
+# _sr_listed <patterns> <name>... — true when any name matches any pattern.
+# `read -a` splits the list without pathname expansion, so each pattern
+# reaches the [[ == ]] match as written rather than as the files it names.
+_sr_listed() {
+  local list=$1; shift
+  local -a pats
+  local pat name
+  IFS=', ' read -r -a pats <<< "$list"
+  for pat in "${pats[@]}"; do
+    [[ -z $pat ]] && continue
+    for name in "$@"; do
+      # shellcheck disable=SC2053  # $pat is a glob on purpose
+      [[ $name == $pat ]] && return 0
+    done
+  done
+  return 1
+}
+
+_sr_skip() {
+  local label=$1 reason=$2
+  echo "[SKIP] $label — $reason"
+  _SR_RESULTS+=("$label|skipped|0|$reason|")
+}
+
+# Capability name -> "" when present, the reason when missing. A name that is
+# not a key at all is one preflight-caps.sh does not probe.
+declare -A _SR_CAP_MISSING=()
+_SR_CAPS_PROBED=0
+
+# _sr_caps_probe — run preflight-caps.sh once and record its verdicts. Returns
+# the probe's exit status: non-zero means something every scenario needs is
+# broken, which scenario_preflight treats as a preflight failure.
+_sr_caps_probe() {
+  local out rc=0 tag name state reason
+  # `|| rc=$?`, not a bare assignment: run_local_cicd.sh runs under set -e.
+  out=$(bash "$(dirname "${BASH_SOURCE[0]}")/preflight-caps.sh" 2>&1) || rc=$?
+  printf '%s\n' "$out"
+  while read -r tag name state reason; do
+    [[ $tag == cap ]] || continue
+    if [[ $state == ok ]]; then
+      _SR_CAP_MISSING[$name]=""
+    else
+      _SR_CAP_MISSING[$name]=${reason:-missing}
+    fi
+  done <<< "$out"
+  _SR_CAPS_PROBED=1
+  return $rc
+}
+
+# ---------------------------------------------------------------------------
 # run_scenario <dir> [label] -- <step>...
 # ---------------------------------------------------------------------------
 run_scenario() {
+  local needs=""
+  if [[ ${1:-} == "--needs" ]]; then needs=$2; shift 2; fi
   local dir=$1; shift
   local label=$dir
   if [[ ${1:-} != "--" ]]; then label=$1; shift; fi
@@ -190,6 +263,35 @@ run_scenario() {
 
   local steps=("$@")
   local here; here=$(pwd)
+
+  if [[ -n $ONLY ]] && ! _sr_listed "$ONLY" "$label" "$dir"; then
+    _sr_skip "$label" "not in ONLY"
+    return 0
+  fi
+  if [[ -n $SKIP ]] && _sr_listed "$SKIP" "$label" "$dir"; then
+    _sr_skip "$label" "in SKIP"
+    return 0
+  fi
+
+  if [[ -n $needs ]]; then
+    # Probed here only when scenario_preflight did not run; a broken common
+    # binary is preflight's verdict to give, so it does not fail this one.
+    [[ $_SR_CAPS_PROBED == 1 ]] || _sr_caps_probe >/dev/null || true
+    local cap
+    for cap in ${needs//,/ }; do
+      if [[ -z ${_SR_CAP_MISSING[$cap]+set} ]]; then
+        # A typo here would otherwise skip or run the scenario silently.
+        echo "[FAIL] $label — --needs names an unknown capability '$cap'"
+        _SR_RESULTS+=("$label|fail:needs|0|unknown capability $cap|")
+        _SR_FAILED=1
+        return 0
+      fi
+      if [[ -n ${_SR_CAP_MISSING[$cap]} ]]; then
+        _sr_skip "$label" "needs $cap: ${_SR_CAP_MISSING[$cap]}"
+        return 0
+      fi
+    done
+  fi
 
   if [[ ! -d $dir ]]; then
     echo "[SKIP] $label — directory $dir does not exist"
@@ -291,6 +393,12 @@ scenario_preflight() {
   echo "--- preflight: host dependencies"
   bash "$(dirname "${BASH_SOURCE[0]}")/preflight-deps.sh" || rc=1
 
+  # Capabilities only some scenarios need. A missing one is not a preflight
+  # failure: the scenarios that declare it (--needs) are skipped, with the
+  # reason, when their turn comes.
+  echo "--- preflight: host capabilities (a scenario that --needs a missing one is skipped)"
+  _sr_caps_probe || rc=1
+
   # The C header and the Go export must agree on arity: a mismatch is a link
   # or a silent ABI error, not a compile error.
   echo "--- preflight: source invariants (incl. C/Go arity lockstep)"
@@ -351,7 +459,7 @@ scenario_summary() {
   echo "======================================================================"
   echo "SCENARIO SUMMARY  (${total}s total, artifacts: $ARTIFACT_DIR)"
   echo "======================================================================"
-  printf '%-44s %-10s %6s  %s\n' "SCENARIO" "RESULT" "SECS" "FAILED STAGE"
+  printf '%-44s %-10s %6s  %s\n' "SCENARIO" "RESULT" "SECS" "FAILED STAGE / SKIP REASON"
   local row name res secs stage leaks passes=0 fails=0 skips=0
   for row in "${_SR_RESULTS[@]}"; do
     IFS='|' read -r name res secs stage leaks <<< "$row"

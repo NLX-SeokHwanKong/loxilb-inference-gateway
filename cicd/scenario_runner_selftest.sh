@@ -198,6 +198,108 @@ else
 fi
 rm -rf "$scen"
 
+# ---------------------------------------------------------------------------
+# Selection and capability cases. Each runs the runner in a subshell with a
+# stand-in step, and reads the verdict off scenario_summary, which is where a
+# skip has to show up: a skip that is not in the summary is a silent one.
+# ---------------------------------------------------------------------------
+sel_case() {
+  local out=$1; shift
+  (
+    export ARTIFACT_DIR="$SELFTEST_TMP/artifacts-sel"
+    export SCENARIO_TIMEOUT=30 CLEANUP_CMD=./kill.sh LEAK_STRICT=0
+    mkdir -p "$ARTIFACT_DIR"
+    # shellcheck disable=SC1091
+    source ./scenario_runner.sh
+    "$@"
+    scenario_summary
+  ) > "$out" 2>&1
+}
+for scen in sr-sel-alpha sr-sel-beta; do
+  mkdir -p "$scen"
+  printf '#!/usr/bin/env bash\necho ran\nexit 0\n' > "$scen/step.sh"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$scen/kill.sh"
+  chmod +x "$scen/step.sh" "$scen/kill.sh"
+done
+
+# Case 5: ONLY selects by glob, and what it leaves out is recorded as skipped.
+echo "SR-5: ONLY runs only the matching scenarios and records the rest as skipped"
+sr5() {
+  # shellcheck disable=SC2034  # read by run_scenario
+  ONLY='sr-sel-a*'
+  run_scenario sr-sel-alpha -- ./step.sh
+  run_scenario sr-sel-beta -- ./step.sh
+}
+sel_case "$SELFTEST_TMP/case5.out" sr5
+if grep -q "\[PASS\] sr-sel-alpha" "$SELFTEST_TMP/case5.out" &&
+   grep -qE "^sr-sel-beta +skipped +0 +not in ONLY" "$SELFTEST_TMP/case5.out" &&
+   grep -q "passed: 1   failed: 0   skipped: 1" "$SELFTEST_TMP/case5.out"; then
+  ok "SR-5 alpha ran, beta is in the summary as skipped (not in ONLY)"
+else
+  bad "SR-5 ONLY did not select and record as expected:"
+  sed 's/^/        /' "$SELFTEST_TMP/case5.out" | tail -12
+fi
+
+# Case 6: SKIP matches a label as well as a directory, comma-separated.
+echo "SR-6: SKIP leaves out scenarios by label or directory and records why"
+sr6() {
+  # shellcheck disable=SC2034  # read by run_scenario
+  SKIP='nothing-here,sr-sel-beta-label'
+  run_scenario sr-sel-alpha -- ./step.sh
+  run_scenario sr-sel-beta sr-sel-beta-label -- 'touch ran.marker; ./step.sh'
+}
+rm -f sr-sel-beta/ran.marker   # a case judged by this marker starts without it
+sel_case "$SELFTEST_TMP/case6.out" sr6
+if grep -q "\[PASS\] sr-sel-alpha" "$SELFTEST_TMP/case6.out" &&
+   grep -qE "^sr-sel-beta-label +skipped +0 +in SKIP" "$SELFTEST_TMP/case6.out" &&
+   [[ ! -e sr-sel-beta/ran.marker ]]; then
+  ok "SR-6 the labelled scenario was skipped (in SKIP), the other ran"
+else
+  bad "SR-6 SKIP did not leave the scenario out as expected:"
+  sed 's/^/        /' "$SELFTEST_TMP/case6.out" | tail -12
+fi
+
+# Case 7: a scenario whose --needs capability is missing is skipped with the
+# reason, and its steps never run. The capability table is seeded directly so
+# the case does not depend on what this host has.
+echo "SR-7: --needs on a missing capability skips the scenario with the reason"
+sr7() {
+  # shellcheck disable=SC2154  # an associative array declared by scenario_runner.sh
+  _SR_CAP_MISSING=([sctp]="" [ipv6]="the kernel was booted with ipv6.disable=1")
+  _SR_CAPS_PROBED=1
+  run_scenario --needs sctp sr-sel-alpha -- ./step.sh
+  run_scenario --needs sctp,ipv6 sr-sel-beta -- 'touch ran.marker; ./step.sh'
+}
+rm -f sr-sel-beta/ran.marker
+sel_case "$SELFTEST_TMP/case7.out" sr7
+if grep -q "\[PASS\] sr-sel-alpha" "$SELFTEST_TMP/case7.out" &&
+   grep -qE "^sr-sel-beta +skipped +0 +needs ipv6: the kernel was booted with ipv6.disable=1" "$SELFTEST_TMP/case7.out" &&
+   [[ ! -e sr-sel-beta/ran.marker ]] &&
+   grep -q "RESULT: PASS" "$SELFTEST_TMP/case7.out"; then
+  ok "SR-7 the present capability ran, the missing one skipped with its reason and did not fail the run"
+else
+  bad "SR-7 a missing capability was not turned into a recorded skip:"
+  sed 's/^/        /' "$SELFTEST_TMP/case7.out" | tail -12
+fi
+
+# Case 8: a --needs name the probe does not know is a failure, not a skip: a
+# typo must not quietly drop a scenario from every run.
+echo "SR-8: --needs naming an unknown capability fails the scenario"
+sr8() {
+  _SR_CAP_MISSING=([sctp]="")
+  _SR_CAPS_PROBED=1
+  run_scenario --needs scpt sr-sel-alpha -- ./step.sh
+}
+sel_case "$SELFTEST_TMP/case8.out" sr8
+if grep -q "unknown capability 'scpt'" "$SELFTEST_TMP/case8.out" &&
+   grep -q "RESULT: FAIL" "$SELFTEST_TMP/case8.out"; then
+  ok "SR-8 the misspelt capability failed the run"
+else
+  bad "SR-8 an unknown capability did not fail the run:"
+  sed 's/^/        /' "$SELFTEST_TMP/case8.out" | tail -12
+fi
+rm -rf sr-sel-alpha sr-sel-beta
+
 echo
 if [[ $fails == 0 ]]; then
   echo "SCENARIO-scenario-runner-selftest [OK]"
