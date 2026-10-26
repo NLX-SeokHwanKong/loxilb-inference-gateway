@@ -1,18 +1,18 @@
 {
  "schema_version": 1,
  "provenance": {
-  "generated_at": "2026-10-26T07:37:00+00:00",
-  "source_revision": "fe47404eb7499771639c5e29ff34df4f59e9f1eb"
+  "generated_at": "2026-10-26T11:50:00+00:00",
+  "source_revision": "82bbeaccc2b78f35149f0637f257f0bba10b83d9"
  },
  "contract": {
-  "total": 345,
+  "total": 348,
   "owners": {
-   "loxilb": 322,
+   "loxilb": 325,
    "loxilb-ai-controller": 19,
    "loxilb-kv-agent": 4
   },
   "classes": {
-   "default": 289,
+   "default": 292,
    "dpu-doca": 24,
    "aictrl-bridge": 8,
    "kv-agent-health": 1,
@@ -21,11 +21,11 @@
   }
  },
  "coverage": {
-  "default_families": 289,
+  "default_families": 292,
   "default_referenced": 184,
   "default_waived": 21,
-  "default_unreferenced": 84,
-  "writer_classified": 289,
+  "default_unreferenced": 87,
+  "writer_classified": 292,
   "writer_unclassified": 0,
   "writer_unverified": 80
  },
@@ -894,8 +894,8 @@
      "symbol": "llb_ai_stream_start",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 1510,
-     "call_line": 1518,
+     "def_line": 1537,
+     "call_line": 1545,
      "calls": "AdjustActiveStreams",
      "entry_point": "cgo-export"
     }
@@ -1984,14 +1984,139 @@
      "symbol": "llb_ai_validate_bearer",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 609,
-     "call_line": 632,
+     "def_line": 624,
+     "call_line": 647,
      "calls": "RecordJWTValidation",
      "entry_point": "cgo-export",
      "note": "recorded in the same defer as recordGateDenial, so every arm counts exactly once -- including the nil-result and panic paths, which leave before a verdict is reached and are counted as internal_error"
     }
    ],
    "verification_evidence": "api/prometheus/jwt_metrics_test.go TestRecordJWTValidationLabels asserts one increment per call and the '-' stand-in for a tenant that is not yet verified. Runtime proof is owed: this family has no scenario yet."
+  },
+  {
+   "name": "loxilb_ai_key_store_circuit_open",
+   "owner": "loxilb",
+   "class": "default",
+   "packaged": true,
+   "type": "gauge",
+   "definition_mechanism": "desc",
+   "labels": [],
+   "activation": "C",
+   "priority": "diagnostic",
+   "privacy": "none",
+   "consumers": [],
+   "waiver": "",
+   "source": "api/prometheus/ai_key_lookup_metrics.go:59",
+   "release_scope": "release",
+   "runtime_scope": "gateway-default",
+   "implementation_status": "verified-static",
+   "activation_precondition": "",
+   "writer_sources": [
+    {
+     "symbol": "Collect",
+     "kind": "method",
+     "receiver": "aiKeyLookupCollector",
+     "file": "api/prometheus/ai_key_lookup_metrics.go",
+     "def_line": 87,
+     "writes": "aiKeyCircuitOpenDesc",
+     "note": "read at scrape time from the source pkg/loxinet sets (ai_key_lookup_metrics.go aiKeyLookupSnapshot: the key service's LookupStats, the data-path lookup guard's atomics): whether the key store's data-path circuit is open or half-open (pkg/aikey lookup_guard.go); emitted from start at 0. The data path writes the atomics on every cache-miss round trip (pkg/aikey lookup_guard.go dataPathRead -> lookupGuard.report/observe); the management plane never does"
+    },
+    {
+     "symbol": "init",
+     "kind": "func",
+     "file": "api/prometheus/ai_key_lookup_metrics.go",
+     "def_line": 103,
+     "call_line": 104,
+     "calls": "aiKeyLookupCollector",
+     "entry_point": "registry-collector",
+     "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
+    }
+   ],
+   "verification_evidence": "api/prometheus/ai_key_lookup_metrics_test.go TestAIKeyLookupCollectorEmitsEveryFamily gathers the collector from a stub source (one histogram series per result, both gauges, zero with no source). pkg/aikey/lookup_guard_test.go drives the statistics the source reads: TestLookupStatsAreConsistent (counts per result, cumulative buckets, CircuitOpen following the state), TestCircuitOpensAfterConsecutiveFailuresAndRefusesWithoutTheStore, TestInflightBoundParksAtMostMaxInflightWorkers. pkg/loxinet/ai_key_lookup_dp_test.go TestAIKeyLookupSnapshotSeedsEveryResult pins the adapter. Not yet seen on a bed; the PR-B live gate (QA datapath-stall-primed.sh) is where circuit_open is first expected to read 1."
+  },
+  {
+   "name": "loxilb_ai_key_store_lookup_inflight",
+   "owner": "loxilb",
+   "class": "default",
+   "packaged": true,
+   "type": "gauge",
+   "definition_mechanism": "desc",
+   "labels": [],
+   "activation": "C",
+   "priority": "diagnostic",
+   "privacy": "none",
+   "consumers": [],
+   "waiver": "",
+   "source": "api/prometheus/ai_key_lookup_metrics.go:63",
+   "release_scope": "release",
+   "runtime_scope": "gateway-default",
+   "implementation_status": "verified-static",
+   "activation_precondition": "",
+   "writer_sources": [
+    {
+     "symbol": "Collect",
+     "kind": "method",
+     "receiver": "aiKeyLookupCollector",
+     "file": "api/prometheus/ai_key_lookup_metrics.go",
+     "def_line": 87,
+     "writes": "aiKeyLookupInflightDesc",
+     "note": "read at scrape time from the source pkg/loxinet sets (ai_key_lookup_metrics.go aiKeyLookupSnapshot: the key service's LookupStats, the data-path lookup guard's atomics): data-path round trips on the key store right now, bounded by LLB_AI_KEY_LOOKUP_MAX_INFLIGHT; emitted from start at 0. The data path writes the atomics on every cache-miss round trip (pkg/aikey lookup_guard.go dataPathRead -> lookupGuard.report/observe); the management plane never does"
+    },
+    {
+     "symbol": "init",
+     "kind": "func",
+     "file": "api/prometheus/ai_key_lookup_metrics.go",
+     "def_line": 103,
+     "call_line": 104,
+     "calls": "aiKeyLookupCollector",
+     "entry_point": "registry-collector",
+     "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
+    }
+   ],
+   "verification_evidence": "api/prometheus/ai_key_lookup_metrics_test.go TestAIKeyLookupCollectorEmitsEveryFamily gathers the collector from a stub source (one histogram series per result, both gauges, zero with no source). pkg/aikey/lookup_guard_test.go drives the statistics the source reads: TestLookupStatsAreConsistent (counts per result, cumulative buckets, CircuitOpen following the state), TestCircuitOpensAfterConsecutiveFailuresAndRefusesWithoutTheStore, TestInflightBoundParksAtMostMaxInflightWorkers. pkg/loxinet/ai_key_lookup_dp_test.go TestAIKeyLookupSnapshotSeedsEveryResult pins the adapter. Not yet seen on a bed; the PR-B live gate (QA datapath-stall-primed.sh) is where circuit_open is first expected to read 1."
+  },
+  {
+   "name": "loxilb_ai_key_store_lookup_seconds",
+   "owner": "loxilb",
+   "class": "default",
+   "packaged": true,
+   "type": "histogram",
+   "definition_mechanism": "desc",
+   "labels": [
+    "result"
+   ],
+   "activation": "C",
+   "priority": "diagnostic",
+   "privacy": "none",
+   "consumers": [],
+   "waiver": "",
+   "source": "api/prometheus/ai_key_lookup_metrics.go:55",
+   "release_scope": "release",
+   "runtime_scope": "gateway-default",
+   "implementation_status": "verified-static",
+   "activation_precondition": "",
+   "writer_sources": [
+    {
+     "symbol": "Collect",
+     "kind": "method",
+     "receiver": "aiKeyLookupCollector",
+     "file": "api/prometheus/ai_key_lookup_metrics.go",
+     "def_line": 87,
+     "writes": "aiKeyLookupSecondsDesc",
+     "note": "read at scrape time from the source pkg/loxinet sets (ai_key_lookup_metrics.go aiKeyLookupSnapshot: the key service's LookupStats, the data-path lookup guard's atomics): one histogram series per result label (miss_found, miss_invalid, timeout, refused_circuit, refused_inflight, unavailable), all seeded at zero once the source is set so a first event shows in increase(). The data path writes the atomics on every cache-miss round trip (pkg/aikey lookup_guard.go dataPathRead -> lookupGuard.report/observe); the management plane never does"
+    },
+    {
+     "symbol": "init",
+     "kind": "func",
+     "file": "api/prometheus/ai_key_lookup_metrics.go",
+     "def_line": 103,
+     "call_line": 104,
+     "calls": "aiKeyLookupCollector",
+     "entry_point": "registry-collector",
+     "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
+    }
+   ],
+   "verification_evidence": "api/prometheus/ai_key_lookup_metrics_test.go TestAIKeyLookupCollectorEmitsEveryFamily gathers the collector from a stub source (one histogram series per result, both gauges, zero with no source). pkg/aikey/lookup_guard_test.go drives the statistics the source reads: TestLookupStatsAreConsistent (counts per result, cumulative buckets, CircuitOpen following the state), TestCircuitOpensAfterConsecutiveFailuresAndRefusesWithoutTheStore, TestInflightBoundParksAtMostMaxInflightWorkers. pkg/loxinet/ai_key_lookup_dp_test.go TestAIKeyLookupSnapshotSeedsEveryResult pins the adapter. Not yet seen on a bed; the PR-B live gate (QA datapath-stall-primed.sh) is where circuit_open is first expected to read 1."
   },
   {
    "name": "loxilb_ai_key_token_quota_limit_tokens",
@@ -2036,8 +2161,8 @@
      "symbol": "getGlobalRL",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 718,
-     "call_line": 759,
+     "def_line": 733,
+     "call_line": 774,
      "calls": "RegisterTokenQuotaSource",
      "note": "registration happens on first use of the rate-limiter store, not at package init, so the collector can never observe a nil store"
     },
@@ -2045,8 +2170,8 @@
      "symbol": "llb_ai_ratelimit_check",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 897,
-     "call_line": 926,
+     "def_line": 912,
+     "call_line": 941,
      "calls": "getGlobalRL",
      "entry_point": "cgo-export"
     }
@@ -2096,8 +2221,8 @@
      "symbol": "getGlobalRL",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 718,
-     "call_line": 759,
+     "def_line": 733,
+     "call_line": 774,
      "calls": "RegisterTokenQuotaSource",
      "note": "registration happens on first use of the rate-limiter store, not at package init, so the collector can never observe a nil store"
     },
@@ -2105,8 +2230,8 @@
      "symbol": "llb_ai_ratelimit_check",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 897,
-     "call_line": 926,
+     "def_line": 912,
+     "call_line": 941,
      "calls": "getGlobalRL",
      "entry_point": "cgo-export"
     }
@@ -2937,8 +3062,8 @@
      "symbol": "llb_ai_validate_key",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 520,
-     "call_line": 582,
+     "def_line": 535,
+     "call_line": 597,
      "calls": "RecordModelNotAllowed",
      "entry_point": "cgo-export"
     }
@@ -2979,8 +3104,8 @@
      "symbol": "llb_ai_record_request",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 1617,
-     "call_line": 1626,
+     "def_line": 1644,
+     "call_line": 1653,
      "calls": "RecordNetIDRequest",
      "entry_point": "cgo-export",
      "note": "TWO ENTRY POINTS. This one writes admitted and matched: once per completed response, only when the data plane names a binding. The other is the cgo export llb_ai_record_deny in the same file (def :1724, call :1730), which writes denied: once per refusal, from the gate's verdict frame and from the capacity gate's, only when the refused request's source matched a binding"
@@ -3081,8 +3206,8 @@
      "symbol": "llb_ai_normal_session_hit",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 1861,
-     "call_line": 1864,
+     "def_line": 1888,
+     "call_line": 1891,
      "calls": "RecordNormalSessionHit",
      "entry_point": "cgo-export"
     }
@@ -3123,8 +3248,8 @@
      "symbol": "llb_ai_pd_record",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 1788,
-     "call_line": 1791,
+     "def_line": 1815,
+     "call_line": 1818,
      "calls": "RecordPDRequest",
      "entry_point": "cgo-export",
      "note": "called by the C fullproxy datapath once per P/D lifecycle event"
@@ -3165,8 +3290,8 @@
      "symbol": "llb_ai_pd_decode_selected",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 1849,
-     "call_line": 1852,
+     "def_line": 1876,
+     "call_line": 1879,
      "calls": "RecordPDDecodeSelected",
      "entry_point": "cgo-export"
     }
@@ -3207,8 +3332,8 @@
      "symbol": "llb_ai_pd_decode_selected",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 1849,
-     "call_line": 1852,
+     "def_line": 1876,
+     "call_line": 1879,
      "calls": "RecordPDDecodeSelected",
      "entry_point": "cgo-export"
     }
@@ -3249,8 +3374,8 @@
      "symbol": "llb_ai_pd_record_extra",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 1810,
-     "call_line": 1812,
+     "def_line": 1837,
+     "call_line": 1839,
      "calls": "RecordPDRecordExtra",
      "entry_point": "cgo-export",
      "note": "the record's second half: the C helper sp_pd_record calls it right after llb_ai_pd_record, for the same request, every time"
@@ -3292,8 +3417,8 @@
      "symbol": "llb_ai_pd_record",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 1788,
-     "call_line": 1791,
+     "def_line": 1815,
+     "call_line": 1818,
      "calls": "RecordPDRequest",
      "entry_point": "cgo-export",
      "note": "called by the C fullproxy datapath once per P/D lifecycle event"
@@ -3335,8 +3460,8 @@
      "symbol": "llb_ai_pd_record",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 1788,
-     "call_line": 1791,
+     "def_line": 1815,
+     "call_line": 1818,
      "calls": "RecordPDRequest",
      "entry_point": "cgo-export",
      "note": "called by the C fullproxy datapath once per P/D lifecycle event"
@@ -3378,8 +3503,8 @@
      "symbol": "llb_ai_pd_record",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 1788,
-     "call_line": 1791,
+     "def_line": 1815,
+     "call_line": 1818,
      "calls": "RecordPDRequest",
      "entry_point": "cgo-export",
      "note": "called by the C fullproxy datapath once per P/D lifecycle event"
@@ -3423,8 +3548,8 @@
      "symbol": "llb_ai_pd_record_extra",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 1810,
-     "call_line": 1812,
+     "def_line": 1837,
+     "call_line": 1839,
      "calls": "RecordPDRecordExtra",
      "entry_point": "cgo-export",
      "note": "the record's second half: the C helper sp_pd_record calls it right after llb_ai_pd_record, for the same request, every time"
@@ -3469,8 +3594,8 @@
      "symbol": "llb_ai_pd_record",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 1788,
-     "call_line": 1791,
+     "def_line": 1815,
+     "call_line": 1818,
      "calls": "RecordPDRequest",
      "entry_point": "cgo-export",
      "note": "called by the C fullproxy datapath once per P/D lifecycle event"
@@ -3512,8 +3637,8 @@
      "symbol": "llb_ai_pd_session_hit",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 1821,
-     "call_line": 1824,
+     "def_line": 1848,
+     "call_line": 1851,
      "calls": "RecordPDSessionHit",
      "entry_point": "cgo-export"
     }
@@ -3620,8 +3745,8 @@
      "symbol": "llb_ai_pd_tier_selected",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 1834,
-     "call_line": 1837,
+     "def_line": 1861,
+     "call_line": 1864,
      "calls": "RecordPDTierSelected",
      "entry_point": "cgo-export"
     }
@@ -3661,8 +3786,8 @@
      "symbol": "llb_ai_validate_key",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 520,
-     "call_line": 551,
+     "def_line": 535,
+     "call_line": 566,
      "calls": "RecordPolicyStoreUnavailable",
      "entry_point": "cgo-export",
      "note": "two more sites share the family: validateAPIKeyInternal (:235) and llb_ai_ratelimit_check (:559)"
@@ -3706,8 +3831,8 @@
      "symbol": "llb_ai_ratelimit_check",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 897,
-     "call_line": 947,
+     "def_line": 912,
+     "call_line": 962,
      "calls": "RecordRateLimitHit",
      "entry_point": "cgo-export",
      "note": "llb_ai_token_quota_reserve records the same family at ai_gateway_dp.go:756 with reason token_quota_would_exceed"
@@ -3815,8 +3940,8 @@
      "symbol": "llb_ai_record_request",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 1617,
-     "call_line": 1624,
+     "def_line": 1644,
+     "call_line": 1651,
      "calls": "RecordAIRequest",
      "entry_point": "cgo-export"
     }
@@ -3864,8 +3989,8 @@
      "symbol": "llb_ai_record_request",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 1617,
-     "call_line": 1624,
+     "def_line": 1644,
+     "call_line": 1651,
      "calls": "RecordAIRequest",
      "entry_point": "cgo-export"
     }
@@ -3914,8 +4039,8 @@
      "symbol": "llb_ai_token_quota_reserve",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 1251,
-     "call_line": 1313,
+     "def_line": 1278,
+     "call_line": 1340,
      "calls": "noteReservationClamped",
      "entry_point": "cgo-export",
      "note": "the one call site: after an admission whose granted default is smaller than the default asked, never on a refusal; the reason comes from tokenQuotaReserveElasticReason"
@@ -4061,8 +4186,8 @@
      "symbol": "getGlobalRL",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 718,
-     "call_line": 736,
+     "def_line": 733,
+     "call_line": 751,
      "calls": "RecordTokenQuotaColdOpen",
      "note": "the no-peer branch; the warmup-deadline branch increments from the StartQuotaWarmup callback at :437"
     },
@@ -4070,8 +4195,8 @@
      "symbol": "llb_ai_ratelimit_check",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 897,
-     "call_line": 926,
+     "def_line": 912,
+     "call_line": 941,
      "calls": "getGlobalRL",
      "entry_point": "cgo-export"
     }
@@ -4112,8 +4237,8 @@
      "symbol": "llb_ai_ratelimit_check",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 897,
-     "call_line": 949,
+     "def_line": 912,
+     "call_line": 964,
      "calls": "RecordTokenQuotaDenied",
      "entry_point": "cgo-export",
      "note": "TWO CALL SITES, and they are NOT the same condition. This one is the gate's post-hoc latch (error code token_quota_exceeded): the tenant is over budget and every request is refused until the bucket refills. The second is llb_ai_token_quota_reserve at pkg/loxinet/ai_gateway_dp.go:1319 (def :1266), the pre-admission reservation refusal (error code token_quota_would_exceed): THIS request's worst case did not fit the headroom left, the bucket is NOT put in debt, and a smaller request from the same tenant is still admitted. So this family is the union of both refusal modes and a delta on it names neither site on its own; the reason label on loxilb_ai_rate_limit_hits_total is the byproduct that separates them, and both arms are now driven per-site in cicd/ai-jwtauth. The second site was previously carried here as a bare aside pointing at :757, a line three edits stale."
@@ -4165,8 +4290,8 @@
      "symbol": "getGlobalRL",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 718,
-     "call_line": 759,
+     "def_line": 733,
+     "call_line": 774,
      "calls": "RegisterTokenQuotaSource",
      "note": "registration happens on first use of the rate-limiter store, not at package init, so the collector can never observe a nil store"
     },
@@ -4174,8 +4299,8 @@
      "symbol": "llb_ai_ratelimit_check",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 897,
-     "call_line": 926,
+     "def_line": 912,
+     "call_line": 941,
      "calls": "getGlobalRL",
      "entry_point": "cgo-export"
     }
@@ -4225,8 +4350,8 @@
      "symbol": "getGlobalRL",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 718,
-     "call_line": 759,
+     "def_line": 733,
+     "call_line": 774,
      "calls": "RegisterTokenQuotaSource",
      "note": "registration happens on first use of the rate-limiter store, not at package init, so the collector can never observe a nil store"
     },
@@ -4234,8 +4359,8 @@
      "symbol": "llb_ai_ratelimit_check",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 897,
-     "call_line": 926,
+     "def_line": 912,
+     "call_line": 941,
      "calls": "getGlobalRL",
      "entry_point": "cgo-export"
     }
@@ -4287,8 +4412,8 @@
      "symbol": "getGlobalRL",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 718,
-     "call_line": 759,
+     "def_line": 733,
+     "call_line": 774,
      "calls": "RegisterTokenQuotaSource",
      "note": "registration happens on first use of the rate-limiter store, not at package init, so the collector can never observe a nil store"
     },
@@ -4296,8 +4421,8 @@
      "symbol": "llb_ai_ratelimit_check",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 897,
-     "call_line": 926,
+     "def_line": 912,
+     "call_line": 941,
      "calls": "getGlobalRL",
      "entry_point": "cgo-export"
     }
@@ -4349,8 +4474,8 @@
      "symbol": "getGlobalRL",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 718,
-     "call_line": 759,
+     "def_line": 733,
+     "call_line": 774,
      "calls": "RegisterTokenQuotaSource",
      "note": "registration happens on first use of the rate-limiter store, not at package init, so the collector can never observe a nil store"
     },
@@ -4358,8 +4483,8 @@
      "symbol": "llb_ai_ratelimit_check",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 897,
-     "call_line": 926,
+     "def_line": 912,
+     "call_line": 941,
      "calls": "getGlobalRL",
      "entry_point": "cgo-export"
     }
@@ -4402,8 +4527,8 @@
      "symbol": "llb_ai_token_quota_consume",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 1363,
-     "call_line": 1389,
+     "def_line": 1390,
+     "call_line": 1416,
      "calls": "RecordTokenUsage",
      "entry_point": "cgo-export"
     }
@@ -4445,8 +4570,8 @@
      "symbol": "llb_ai_token_quota_consume",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 1363,
-     "call_line": 1389,
+     "def_line": 1390,
+     "call_line": 1416,
      "calls": "RecordTokenUsage",
      "entry_point": "cgo-export"
     }
@@ -4490,8 +4615,8 @@
      "symbol": "llb_ai_token_quota_consume",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 1363,
-     "call_line": 1389,
+     "def_line": 1390,
+     "call_line": 1416,
      "calls": "RecordTokenUsage",
      "entry_point": "cgo-export"
     }
@@ -4534,8 +4659,8 @@
      "symbol": "llb_ai_record_unmetered",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 1878,
-     "call_line": 1880,
+     "def_line": 1905,
+     "call_line": 1907,
      "calls": "RecordUnmeteredRequest",
      "entry_point": "cgo-export"
     }
@@ -4587,8 +4712,8 @@
      "symbol": "getGlobalRL",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 718,
-     "call_line": 759,
+     "def_line": 733,
+     "call_line": 774,
      "calls": "RegisterTokenQuotaSource",
      "note": "registration happens on first use of the rate-limiter store, not at package init, so the collector can never observe a nil store"
     },
@@ -4596,8 +4721,8 @@
      "symbol": "llb_ai_ratelimit_check",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 897,
-     "call_line": 926,
+     "def_line": 912,
+     "call_line": 941,
      "calls": "getGlobalRL",
      "entry_point": "cgo-export"
     }
@@ -4649,8 +4774,8 @@
      "symbol": "getGlobalRL",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 718,
-     "call_line": 759,
+     "def_line": 733,
+     "call_line": 774,
      "calls": "RegisterTokenQuotaSource",
      "note": "registration happens on first use of the rate-limiter store, not at package init, so the collector can never observe a nil store"
     },
@@ -4658,8 +4783,8 @@
      "symbol": "llb_ai_ratelimit_check",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 897,
-     "call_line": 926,
+     "def_line": 912,
+     "call_line": 941,
      "calls": "getGlobalRL",
      "entry_point": "cgo-export"
     }
@@ -4710,8 +4835,8 @@
      "symbol": "getGlobalRL",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 718,
-     "call_line": 759,
+     "def_line": 733,
+     "call_line": 774,
      "calls": "RegisterTokenQuotaSource",
      "note": "registration happens on first use of the rate-limiter store, not at package init, so the collector can never observe a nil store"
     },
@@ -4719,8 +4844,8 @@
      "symbol": "llb_ai_ratelimit_check",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 897,
-     "call_line": 926,
+     "def_line": 912,
+     "call_line": 941,
      "calls": "getGlobalRL",
      "entry_point": "cgo-export"
     }
@@ -4771,8 +4896,8 @@
      "symbol": "getGlobalRL",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 718,
-     "call_line": 759,
+     "def_line": 733,
+     "call_line": 774,
      "calls": "RegisterTokenQuotaSource",
      "note": "registration happens on first use of the rate-limiter store, not at package init, so the collector can never observe a nil store"
     },
@@ -4780,8 +4905,8 @@
      "symbol": "llb_ai_ratelimit_check",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 897,
-     "call_line": 926,
+     "def_line": 912,
+     "call_line": 941,
      "calls": "getGlobalRL",
      "entry_point": "cgo-export"
     }
@@ -4831,8 +4956,8 @@
      "symbol": "getGlobalRL",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 718,
-     "call_line": 759,
+     "def_line": 733,
+     "call_line": 774,
      "calls": "RegisterTokenQuotaSource",
      "note": "registration happens on first use of the rate-limiter store, not at package init, so the collector can never observe a nil store"
     },
@@ -4840,8 +4965,8 @@
      "symbol": "llb_ai_ratelimit_check",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 897,
-     "call_line": 926,
+     "def_line": 912,
+     "call_line": 941,
      "calls": "getGlobalRL",
      "entry_point": "cgo-export"
     }
@@ -4891,8 +5016,8 @@
      "symbol": "getGlobalRL",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 718,
-     "call_line": 759,
+     "def_line": 733,
+     "call_line": 774,
      "calls": "RegisterTokenQuotaSource",
      "note": "registration happens on first use of the rate-limiter store, not at package init, so the collector can never observe a nil store"
     },
@@ -4900,8 +5025,8 @@
      "symbol": "llb_ai_ratelimit_check",
      "kind": "func",
      "file": "pkg/loxinet/ai_gateway_dp.go",
-     "def_line": 897,
-     "call_line": 926,
+     "def_line": 912,
+     "call_line": 941,
      "calls": "getGlobalRL",
      "entry_point": "cgo-export"
     }

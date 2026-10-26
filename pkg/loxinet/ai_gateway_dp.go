@@ -257,11 +257,26 @@ func rateLimitCheckInternal(svc rateLimitService, store *rl.RateLimiterStore, ke
 		keyRPS := 0
 		keyBurst := 0
 		if svc != nil {
-			if key, err := svc.GetAPIKeyByID(keyIDStr); err == nil {
+			key, err := svc.GetAPIKeyByID(keyIDStr)
+			switch {
+			case err == nil:
 				keyRPS = key.RateLimitRPS
 				keyBurst = key.BurstSize
 				keyTPM = key.TokensPerMin
+			case errors.Is(err, cmn.ErrDBUnavailable):
+				// The store could not describe the key and neither the cache
+				// nor the last store-confirmed view has it: a key validated on
+				// another peer, or evicted. Admitting it on zeroes would switch
+				// off exactly the limits an operator put on it, so this fails
+				// closed like an unknowable tenant row does. (A key validated
+				// by this process always has a last-known view, written by the
+				// validation itself, so this arm is the exception it reads as.)
+				tk.LogIt(tk.LogWarning,
+					"[AIGateway] rateLimitCheckInternal: key %s limits unknowable (store outage, nothing cached) — failing closed\n", keyIDStr)
+				return 4, 5, "policy_store_unavailable"
 			}
+			// Any other error is the store's own verdict that the row is gone;
+			// no key limits apply and the key's next validation refuses it.
 		}
 		// BurstSize=0 falls back to RateLimitRPS (consistent with CheckKey semantics).
 		if keyBurst <= 0 {
@@ -1129,8 +1144,20 @@ func quotaBucketsFor(svc rateLimitService, tenantID, modelName, userID, keyID, s
 		}
 	}
 	if keyID != "" {
-		if key, err := svc.GetAPIKeyByID(keyID); err == nil && key.TokensPerMin > 0 {
-			out = append(out, quotaBucket{key: rl.KeyQuotaKey(keyID), tpm: key.TokensPerMin, burstPct: burstPct, kind: cmn.FcResvBucketKey})
+		key, err := svc.GetAPIKeyByID(keyID)
+		switch {
+		case err == nil:
+			if key.TokensPerMin > 0 {
+				out = append(out, quotaBucket{key: rl.KeyQuotaKey(keyID), tpm: key.TokensPerMin, burstPct: burstPct, kind: cmn.FcResvBucketKey})
+			}
+		case errors.Is(err, cmn.ErrDBUnavailable):
+			// The admission for this request wrote the key's last-known view
+			// a moment ago, so reaching here means the process has never
+			// described this key and the store is away. Nothing can be
+			// settled against a bucket whose limit is unknown; the omission
+			// is counted by the key service as an unavailable lookup.
+			tk.LogIt(tk.LogWarning,
+				"[AIGateway] quotaBucketsFor: key %s quota unknowable during a store outage — key bucket omitted\n", keyID)
 		}
 	}
 	if svcIdent != "" && defaults.vipTPM > 0 {

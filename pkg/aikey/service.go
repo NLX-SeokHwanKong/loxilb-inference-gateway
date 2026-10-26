@@ -255,6 +255,12 @@ type Service struct {
 	// tenant|model pairs this process has served.
 	rlLastKnown sync.Map
 
+	// guard fronts every data-path store round trip (lookup_guard.go): the
+	// in-flight bound, the store-health circuit and the lookup statistics.
+	// negative remembers key hashes the store said do not exist.
+	guard    lookupGuard
+	negative negativeKeyCache
+
 	// class is the objective and class snapshot (class_snapshot.go).
 	class classState
 }
@@ -279,6 +285,41 @@ func (s *Service) lastKnownRateLimit(cacheKey string) (*rateLimitCacheEntry, boo
 		}
 	}
 	return s.lkgRateLimit(cacheKey)
+}
+
+// rememberKeySummary records a store-confirmed view of one key by ID in the
+// TTL cache and in the last-known map. Both data-path reads that learn a
+// key's limits write through here -- the by-hash validation and the by-ID
+// read -- so a key this process has validated always has a by-ID entry to
+// fall back on while the store is away. The entry is removed with the key's
+// other cached views (invalidate.go) and when the store says the row is gone.
+func (s *Service) rememberKeySummary(keyID string, k *cmn.ApiKeySummary) {
+	cacheKey := cacheKeyForID(keyID)
+	s.Cache.Set(cacheKey, k, CacheExpirationTime*time.Minute)
+	s.rlLastKnown.Store(cacheKey, k)
+}
+
+func (s *Service) lastKnownKeySummary(keyID string) (*cmn.ApiKeySummary, bool) {
+	if v, ok := s.rlLastKnown.Load(cacheKeyForID(keyID)); ok {
+		if k, ok2 := v.(*cmn.ApiKeySummary); ok2 {
+			return k, true
+		}
+	}
+	return nil, false
+}
+
+func (s *Service) forgetKeySummary(keyID string) {
+	s.rlLastKnown.Delete(cacheKeyForID(keyID))
+}
+
+// summaryOfEntry is the by-ID view of a validated key: the same columns the
+// by-ID read scans, so the two writers of rememberKeySummary agree.
+func summaryOfEntry(e *cmn.ApiKeyEntry) *cmn.ApiKeySummary {
+	return &cmn.ApiKeySummary{
+		KeyID: e.KeyID, TenantID: e.TenantID, Name: e.Name, AllowedModels: e.AllowedModels,
+		RateLimitRPS: e.RateLimitRPS, BurstSize: e.BurstSize, TokensPerMin: e.TokensPerMin,
+		CreatedAt: e.CreatedAt, ExpiresAt: e.ExpiresAt, Enabled: e.Enabled,
+	}
 }
 
 // New returns a service with no store attached. Every store-backed method on
@@ -565,6 +606,9 @@ func (s *Service) CreateAPIKey(ctx context.Context, entry cmn.ApiKeyEntry) (stri
 	}
 
 	keyHash := hashKey(rawKey)
+	// A probe for this secret before it existed may have left a negative
+	// entry; the key is about to exist.
+	s.forgetNegative(keyHash)
 	allowedModels := strings.Join(entry.AllowedModels, ",")
 	now := time.Now().UTC()
 
@@ -620,31 +664,39 @@ func (s *Service) ValidateAPIKey(rawKey string) (*cmn.ApiKeyEntry, error) {
 		}
 	}
 
+	// Layer 1b: a hash the store recently said does not exist is refused
+	// without asking again (bounded, short TTL; lookup_guard.go).
+	if s.negativeHit(keyHash) {
+		return nil, ErrInvalidKey
+	}
+
 	// Layer 2: store. Fails closed when unavailable — a cache hit above still
 	// validates during a short outage.
-	db, err := s.store()
-	if err != nil {
-		return nil, err
-	}
-	var entry cmn.ApiKeyEntry
-	var allowedModels string
-	var expiresAt sql.NullTime
-
+	//
 	// The lookup budget is the longest the calling proxy worker is parked.
 	// A store that stalls while keeping its connections open is answered
 	// "could not ask" inside it; the data plane then refuses the request
-	// the way it refuses one during a cold outage. A cache hit above never
-	// gets here, so cached keys keep validating through the stall.
-	ctx, cancel := lookupContext()
-	defer cancel()
-	err = db.QueryRowContext(ctx, sqlSelectAPIKeyByHash, keyHash).Scan(
-		&entry.KeyID, &entry.KeyHash, &entry.TenantID, &entry.Name,
-		&allowedModels, &entry.RateLimitRPS, &entry.BurstSize, &entry.TokensPerMin,
-		&entry.CreatedAt, &expiresAt, &entry.Enabled)
+	// the way it refuses one during a cold outage. The guard in front of the
+	// round trip refuses at once, inside the same budget, once the store has
+	// failed a few in a row or the in-flight slots are taken. A cache hit
+	// above never gets here, so cached keys keep validating through a stall.
+	var entry cmn.ApiKeyEntry
+	var allowedModels string
+	var expiresAt sql.NullTime
+	err := s.dataPathRead(func(ctx context.Context, db DBTX) error {
+		return db.QueryRowContext(ctx, sqlSelectAPIKeyByHash, keyHash).Scan(
+			&entry.KeyID, &entry.KeyHash, &entry.TenantID, &entry.Name,
+			&allowedModels, &entry.RateLimitRPS, &entry.BurstSize, &entry.TokensPerMin,
+			&entry.CreatedAt, &expiresAt, &entry.Enabled)
+	})
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			tk.LogIt(tk.LogWarning, "[AIKey] API key not found or disabled\n")
+			s.rememberNegative(keyHash)
 			return nil, ErrInvalidKey
+		}
+		if errors.Is(err, ErrDBUnavailable) {
+			return nil, err
 		}
 		tk.LogIt(tk.LogError, "[AIKey] Failed to validate API key: %v\n", err)
 		return nil, readErr(err)
@@ -659,6 +711,10 @@ func (s *Service) ValidateAPIKey(rawKey string) (*cmn.ApiKeyEntry, error) {
 	}
 
 	s.Cache.Set(cacheKeyForHash(keyHash), &entry, CacheExpirationTime*time.Minute)
+	// The row carries the key's limits, so the by-ID view the quota stages
+	// read is written now: a key validated here always has one to fall back
+	// on while the store is away.
+	s.rememberKeySummary(entry.KeyID, summaryOfEntry(&entry))
 
 	return &entry, nil
 }
@@ -829,17 +885,10 @@ func (s *Service) GetTenantRateLimit(tenantID string) (rps, tokensPerMin, burstP
 	// store confirmed (a real limit or an explicit no-row), and refuse only
 	// a tenant the store has never answered for — the same shape the key
 	// cache itself gives a cached key during an outage.
-	db, dbErr := s.store()
-	if dbErr != nil {
-		if e, ok := s.lastKnownRateLimit(cacheKey); ok {
-			return e.rps, e.tokensPerMin, e.burstPct, nil
-		}
-		return 0, 0, 0, errStoreUnavailable
-	}
-	ctx, cancel := lookupContext()
-	defer cancel()
 	var r, t, b int
-	err = db.QueryRowContext(ctx, sqlSelectTenantRateLimit, tenantID).Scan(&r, &t, &b)
+	err = s.dataPathRead(func(ctx context.Context, db DBTX) error {
+		return db.QueryRowContext(ctx, sqlSelectTenantRateLimit, tenantID).Scan(&r, &t, &b)
+	})
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			// An explicit "no limits configured" is an answer worth keeping:
@@ -935,17 +984,10 @@ func (s *Service) GetTenantModelRateLimit(tenantID, model string) (tokensPerMin 
 			return entry.tokensPerMin, nil
 		}
 	}
-	db, dbErr := s.store()
-	if dbErr != nil {
-		if e, ok := s.lastKnownRateLimit(cacheKey); ok {
-			return e.tokensPerMin, nil
-		}
-		return 0, errStoreUnavailable
-	}
-	ctx, cancel := lookupContext()
-	defer cancel()
 	var t int
-	err = db.QueryRowContext(ctx, sqlSelectTenantModelRateLimit, tenantID, model).Scan(&t)
+	err = s.dataPathRead(func(ctx context.Context, db DBTX) error {
+		return db.QueryRowContext(ctx, sqlSelectTenantModelRateLimit, tenantID, model).Scan(&t)
+	})
 	if err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
 			tk.LogIt(tk.LogError, "[AIKey] Failed to get model rate limit for %s/%s: %v\n", tenantID, model, err)
@@ -1004,24 +1046,32 @@ func (s *Service) GetAPIKeyByID(keyID string) (*cmn.ApiKeySummary, error) {
 		}
 	}
 
-	db, err := s.store()
-	if err != nil {
-		return nil, err
-	}
-	ctx, cancel := lookupContext()
-	defer cancel()
+	// Store, under the lookup budget and the guard; then the last view the
+	// store confirmed, so that a key's limits that aged out of the TTL cache
+	// during an outage are enforced rather than read as "unlimited". Only a
+	// key the store has never described to this process is reported as
+	// unavailable, and the admission path fails closed on that.
 	var key cmn.ApiKeySummary
 	var allowedModels string
 	var expiresAt sql.NullTime
-
-	err = db.QueryRowContext(ctx, sqlSelectAPIKeyByID, keyID).Scan(
-		&key.KeyID, &key.TenantID, &key.Name,
-		&allowedModels, &key.RateLimitRPS, &key.BurstSize, &key.TokensPerMin,
-		&key.CreatedAt, &expiresAt, &key.Enabled)
+	err := s.dataPathRead(func(ctx context.Context, db DBTX) error {
+		return db.QueryRowContext(ctx, sqlSelectAPIKeyByID, keyID).Scan(
+			&key.KeyID, &key.TenantID, &key.Name,
+			&allowedModels, &key.RateLimitRPS, &key.BurstSize, &key.TokensPerMin,
+			&key.CreatedAt, &expiresAt, &key.Enabled)
+	})
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
+			// A real answer: the row is gone. Nothing last-known may outlive it.
 			tk.LogIt(tk.LogWarning, "[AIKey] API key not found: %s\n", keyID)
+			s.forgetKeySummary(keyID)
 			return nil, ErrKeyNotFound
+		}
+		if k, ok := s.lastKnownKeySummary(keyID); ok {
+			return k, nil
+		}
+		if errors.Is(err, ErrDBUnavailable) {
+			return nil, err
 		}
 		tk.LogIt(tk.LogError, "[AIKey] Failed to get API key %s: %v\n", keyID, err)
 		return nil, readErr(err)
@@ -1035,7 +1085,7 @@ func (s *Service) GetAPIKeyByID(keyID string) (*cmn.ApiKeySummary, error) {
 		key.ExpiresAt = &t
 	}
 
-	s.Cache.Set(cacheKey, &key, CacheExpirationTime*time.Minute)
+	s.rememberKeySummary(keyID, &key)
 
 	return &key, nil
 }
