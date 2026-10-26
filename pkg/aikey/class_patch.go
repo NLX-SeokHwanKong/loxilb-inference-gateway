@@ -17,6 +17,7 @@
 package aikey
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"time"
@@ -77,7 +78,7 @@ func classPatchArgs(patch cmn.AIClassPatch) (pc, def, allowed sql.NullString, er
 // PatchTenantClass changes the class fields of a tenant that the patch
 // names and leaves the others, and the tenant's limits, as they are, in one
 // statement. A tenant with no row gets one, with zero limits.
-func (s *Service) PatchTenantClass(tenantID string, patch cmn.AIClassPatch) error {
+func (s *Service) PatchTenantClass(ctx context.Context, tenantID string, patch cmn.AIClassPatch) error {
 	if patch.IsZero() {
 		return nil
 	}
@@ -95,9 +96,11 @@ func (s *Service) PatchTenantClass(tenantID string, patch cmn.AIClassPatch) erro
 	if err != nil {
 		return err
 	}
-	if _, err := db.Exec(sqlPatchTenantClass, tenantID, pc, def, allowed, time.Now().UTC()); err != nil {
+	ctx, cancel := s.opContext(ctx)
+	defer cancel()
+	if _, err := db.ExecContext(ctx, sqlPatchTenantClass, tenantID, pc, def, allowed, time.Now().UTC()); err != nil {
 		tk.LogIt(tk.LogError, "[AIKey] Failed to patch class of tenant %s: %v\n", tenantID, err)
-		return errStoreUnavailable
+		return writeErr(err)
 	}
 	s.refreshClassesAfterWrite()
 	return nil
@@ -105,7 +108,7 @@ func (s *Service) PatchTenantClass(tenantID string, patch cmn.AIClassPatch) erro
 
 // PatchAPIKeyClass changes the class fields of a key that the patch names
 // and leaves the others as they are, in one statement.
-func (s *Service) PatchAPIKeyClass(keyID string, patch cmn.AIClassPatch) error {
+func (s *Service) PatchAPIKeyClass(ctx context.Context, keyID string, patch cmn.AIClassPatch) error {
 	if patch.IsZero() {
 		return nil
 	}
@@ -117,10 +120,12 @@ func (s *Service) PatchAPIKeyClass(keyID string, patch cmn.AIClassPatch) error {
 	if err != nil {
 		return err
 	}
-	res, err := db.Exec(sqlPatchKeyClass, keyID, pc, def, allowed)
+	ctx, cancel := s.opContext(ctx)
+	defer cancel()
+	res, err := db.ExecContext(ctx, sqlPatchKeyClass, keyID, pc, def, allowed)
 	if err != nil {
 		tk.LogIt(tk.LogError, "[AIKey] Failed to patch class of key %s: %v\n", keyID, err)
-		return errStoreUnavailable
+		return writeErr(err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrKeyNotFound
@@ -131,15 +136,17 @@ func (s *Service) PatchAPIKeyClass(keyID string, patch cmn.AIClassPatch) error {
 
 // ListAPIKeyClasses reads from the store the class fields of every key that
 // sets one, by key id.
-func (s *Service) ListAPIKeyClasses() (map[string]cmn.AIClassPolicy, error) {
+func (s *Service) ListAPIKeyClasses(ctx context.Context) (map[string]cmn.AIClassPolicy, error) {
 	db, err := s.store()
 	if err != nil {
 		return nil, err
 	}
-	out, err := readClassRows(db, sqlSelectKeyClasses)
+	ctx, cancel := s.opContext(ctx)
+	defer cancel()
+	out, err := readClassRows(ctx, db, sqlSelectKeyClasses)
 	if err != nil {
 		tk.LogIt(tk.LogError, "[AIKey] Failed to list key classes: %v\n", err)
-		return nil, errStoreUnavailable
+		return nil, readErr(err)
 	}
 	return out, nil
 }

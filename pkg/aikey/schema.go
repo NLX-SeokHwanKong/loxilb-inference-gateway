@@ -16,6 +16,7 @@
 package aikey
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 
@@ -152,9 +153,9 @@ var (
 // on it. search_path is reported but not required: every statement here
 // qualifies its table, so a role without the schema on its path still works,
 // and failing on it would be asserting something the code does not depend on.
-func preflight(db *sql.DB) error {
+func preflight(ctx context.Context, db *sql.DB) error {
 	var schemaExists bool
-	if err := db.QueryRow(
+	if err := db.QueryRowContext(ctx,
 		`SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = $1)`, Schema).Scan(&schemaExists); err != nil {
 		return fmt.Errorf("aikey: key store preflight failed: cannot read the schema catalogue: %w", err)
 	}
@@ -164,21 +165,21 @@ func preflight(db *sql.DB) error {
 	}
 
 	var usage, create bool
-	if err := db.QueryRow(
+	if err := db.QueryRowContext(ctx,
 		`SELECT has_schema_privilege(current_user, $1, 'USAGE'),
 		        has_schema_privilege(current_user, $1, 'CREATE')`, Schema).Scan(&usage, &create); err != nil {
 		return fmt.Errorf("aikey: key store preflight failed: cannot read schema privileges on %q: %w", Schema, err)
 	}
 	if !usage || !create {
 		var role string
-		_ = db.QueryRow(`SELECT current_user`).Scan(&role)
+		_ = db.QueryRowContext(ctx, `SELECT current_user`).Scan(&role)
 		return fmt.Errorf("aikey: key store preflight failed: schema %q is not accessible to role %q "+
 			"(usage=%t create=%t). Run scripts/aigw-db-bootstrap.sql against this database as its owner. "+
 			"See docs/AI-KEY-STORE.md", Schema, role, usage, create)
 	}
 
 	var searchPath string
-	if err := db.QueryRow(`SHOW search_path`).Scan(&searchPath); err == nil {
+	if err := db.QueryRowContext(ctx, `SHOW search_path`).Scan(&searchPath); err == nil {
 		tk.LogIt(tk.LogInfo, "[AIKey] Store preflight passed: schema %q writable, search_path=%s\n", Schema, searchPath)
 	}
 	return nil
@@ -187,7 +188,7 @@ func preflight(db *sql.DB) error {
 // ensureSchema provisions the data-plane tables. Idempotent: safe on every
 // boot, and the path by which a gateway that started against a cold database
 // becomes functional when the store heals.
-func ensureSchema(db *sql.DB) error {
+func ensureSchema(ctx context.Context, db *sql.DB) error {
 	stmts := []struct {
 		what string
 		sql  string
@@ -203,12 +204,12 @@ func ensureSchema(db *sql.DB) error {
 		{"rate_limit_defaults table", createRateLimitDefaultsTable},
 	}
 	for _, s := range stmts {
-		if _, err := db.Exec(s.sql); err != nil {
+		if _, err := db.ExecContext(ctx, s.sql); err != nil {
 			return fmt.Errorf("aikey: failed to create %s: %w", s.what, err)
 		}
 	}
 	for _, s := range classSchemaStmts() {
-		if _, err := db.Exec(s.sql); err != nil {
+		if _, err := db.ExecContext(ctx, s.sql); err != nil {
 			return fmt.Errorf("aikey: failed to create %s: %w", s.what, err)
 		}
 	}

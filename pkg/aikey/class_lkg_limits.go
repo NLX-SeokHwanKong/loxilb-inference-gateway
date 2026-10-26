@@ -17,6 +17,7 @@
 package aikey
 
 import (
+	"context"
 	"fmt"
 	"sort"
 )
@@ -79,9 +80,9 @@ type limitRows struct {
 	Defaults     []lkgDefaults
 }
 
-func readLimitRows(db DBTX) (*limitRows, error) {
+func readLimitRows(ctx context.Context, db DBTX) (*limitRows, error) {
 	out := &limitRows{}
-	rows, err := db.Query(sqlSelectAllTenantLimits)
+	rows, err := db.QueryContext(ctx, sqlSelectAllTenantLimits)
 	if err != nil {
 		return nil, err
 	}
@@ -97,7 +98,7 @@ func readLimitRows(db DBTX) (*limitRows, error) {
 		return nil, err
 	}
 
-	if rows, err = db.Query(sqlSelectAllTenantModelLimits); err != nil {
+	if rows, err = db.QueryContext(ctx, sqlSelectAllTenantModelLimits); err != nil {
 		return nil, err
 	}
 	for rows.Next() {
@@ -112,7 +113,7 @@ func readLimitRows(db DBTX) (*limitRows, error) {
 		return nil, err
 	}
 
-	if rows, err = db.Query(sqlSelectAllRateLimitDefaults); err != nil {
+	if rows, err = db.QueryContext(ctx, sqlSelectAllRateLimitDefaults); err != nil {
 		return nil, err
 	}
 	for rows.Next() {

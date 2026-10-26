@@ -16,6 +16,7 @@
 package loxinet
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -48,40 +49,46 @@ func TestAbsentKeyStoreDistinguishesUnconfiguredFromUnreachable(t *testing.T) {
 	// individually rather than testing one is the point: a hook added later
 	// that returns the bare sentinel would pass a single-hook test.
 	calls := map[string]func() error{
-		"NetAPIKeyCreate":       func() error { _, _, err := na.NetAPIKeyCreate(cmn.ApiKeyEntry{TenantID: "t"}); return err },
-		"NetAPIKeyList":         func() error { _, err := na.NetAPIKeyList(""); return err },
-		"NetAPIKeyGet":          func() error { _, err := na.NetAPIKeyGet("k"); return err },
-		"NetAPIKeyRevoke":       func() error { return na.NetAPIKeyRevoke("k") },
-		"NetAPIKeyDelete":       func() error { return na.NetAPIKeyDelete("k") },
-		"NetAPIKeyPatch":        func() error { return na.NetAPIKeyPatch("k", nil, &enabled) },
-		"NetTenantRateLimitSet": func() error { return na.NetTenantRateLimitSet("t", 1, 1, 1, nil) },
-		"NetTenantRateLimitGet": func() error { _, err := na.NetTenantRateLimitGet("t"); return err },
-		"NetAPIKeyRateLimitPatch": func() error {
-			one := 1
-			return na.NetAPIKeyRateLimitPatch("k", &one, nil, nil)
-		},
-		"NetUserRateLimitSet": func() error {
-			return na.NetUserRateLimitSet(cmn.UserRateLimitEntry{TenantID: "t", UserID: "u", RPS: 1})
-		},
-		"NetUserRateLimitGet":    func() error { _, err := na.NetUserRateLimitGet("t", "u"); return err },
-		"NetUserRateLimitList":   func() error { _, err := na.NetUserRateLimitList("t"); return err },
-		"NetUserRateLimitDelete": func() error { return na.NetUserRateLimitDelete("t", "u") },
-		"NetRateLimitDefaultsSet": func() error {
-			return na.NetRateLimitDefaultsSet(cmn.RateLimitDefaultsEntry{Scope: cmn.RateLimitScopeGlobal, DefaultUserRPS: 1})
-		},
-		"NetRateLimitDefaultsGet":    func() error { _, err := na.NetRateLimitDefaultsGet(cmn.RateLimitScopeGlobal, ""); return err },
-		"NetRateLimitDefaultsDelete": func() error { return na.NetRateLimitDefaultsDelete(cmn.RateLimitScopeGlobal, "") },
-		"NetAIObjectiveGet":          func() error { _, err := na.NetAIObjectiveGet(); return err },
-		"NetAIObjectiveAdd": func() error {
-			_, err := na.NetAIObjectiveAdd(&cmn.AIObjectiveEntry{Name: "o", Priority: 1})
+		"NetAPIKeyCreate": func() error {
+			_, _, err := na.NetAPIKeyCreate(context.Background(), cmn.ApiKeyEntry{TenantID: "t"})
 			return err
 		},
-		"NetAIObjectiveDel": func() error { _, err := na.NetAIObjectiveDel("o"); return err },
+		"NetAPIKeyList":         func() error { _, err := na.NetAPIKeyList(context.Background(), ""); return err },
+		"NetAPIKeyGet":          func() error { _, err := na.NetAPIKeyGet(context.Background(), "k"); return err },
+		"NetAPIKeyRevoke":       func() error { return na.NetAPIKeyRevoke(context.Background(), "k") },
+		"NetAPIKeyDelete":       func() error { return na.NetAPIKeyDelete(context.Background(), "k") },
+		"NetAPIKeyPatch":        func() error { return na.NetAPIKeyPatch(context.Background(), "k", nil, &enabled) },
+		"NetTenantRateLimitSet": func() error { return na.NetTenantRateLimitSet(context.Background(), "t", 1, 1, 1, nil) },
+		"NetTenantRateLimitGet": func() error { _, err := na.NetTenantRateLimitGet(context.Background(), "t"); return err },
+		"NetAPIKeyRateLimitPatch": func() error {
+			one := 1
+			return na.NetAPIKeyRateLimitPatch(context.Background(), "k", &one, nil, nil)
+		},
+		"NetUserRateLimitSet": func() error {
+			return na.NetUserRateLimitSet(context.Background(), cmn.UserRateLimitEntry{TenantID: "t", UserID: "u", RPS: 1})
+		},
+		"NetUserRateLimitGet":    func() error { _, err := na.NetUserRateLimitGet(context.Background(), "t", "u"); return err },
+		"NetUserRateLimitList":   func() error { _, err := na.NetUserRateLimitList(context.Background(), "t"); return err },
+		"NetUserRateLimitDelete": func() error { return na.NetUserRateLimitDelete(context.Background(), "t", "u") },
+		"NetRateLimitDefaultsSet": func() error {
+			return na.NetRateLimitDefaultsSet(context.Background(), cmn.RateLimitDefaultsEntry{Scope: cmn.RateLimitScopeGlobal, DefaultUserRPS: 1})
+		},
+		"NetRateLimitDefaultsGet": func() error {
+			_, err := na.NetRateLimitDefaultsGet(context.Background(), cmn.RateLimitScopeGlobal, "")
+			return err
+		},
+		"NetRateLimitDefaultsDelete": func() error { return na.NetRateLimitDefaultsDelete(context.Background(), cmn.RateLimitScopeGlobal, "") },
+		"NetAIObjectiveGet":          func() error { _, err := na.NetAIObjectiveGet(context.Background()); return err },
+		"NetAIObjectiveAdd": func() error {
+			_, err := na.NetAIObjectiveAdd(context.Background(), &cmn.AIObjectiveEntry{Name: "o", Priority: 1})
+			return err
+		},
+		"NetAIObjectiveDel": func() error { _, err := na.NetAIObjectiveDel(context.Background(), "o"); return err },
 		"NetTenantClassPatch": func() error {
-			return na.NetTenantClassPatch("t", cmn.AIClassPatch{PriorityClass: &classStd})
+			return na.NetTenantClassPatch(context.Background(), "t", cmn.AIClassPatch{PriorityClass: &classStd})
 		},
 		"NetAPIKeyClassPatch": func() error {
-			return na.NetAPIKeyClassPatch("k", cmn.AIClassPatch{PriorityClass: &classStd})
+			return na.NetAPIKeyClassPatch(context.Background(), "k", cmn.AIClassPatch{PriorityClass: &classStd})
 		},
 	}
 

@@ -262,3 +262,48 @@ func (o *DeleteConfigAiUserRatelimitTenantIDUserIDServiceUnavailable) WriteRespo
 		}
 	}
 }
+
+// DeleteConfigAiUserRatelimitTenantIDUserIDGatewayTimeoutCode is the HTTP code returned for type DeleteConfigAiUserRatelimitTenantIDUserIDGatewayTimeout
+const DeleteConfigAiUserRatelimitTenantIDUserIDGatewayTimeoutCode int = 504
+
+/*
+DeleteConfigAiUserRatelimitTenantIDUserIDGatewayTimeout Write outcome unknown (code ai_key_store_outcome_unknown). The statement was handed to the API-key store and the store did not answer within the operation budget; the store may still apply it when it resumes. Not a 503: nothing says the write did not happen. Read the resource back (GET) before deciding whether to retry; a blind retry of a non-idempotent write can create a second row.
+
+swagger:response deleteConfigAiUserRatelimitTenantIdUserIdGatewayTimeout
+*/
+type DeleteConfigAiUserRatelimitTenantIDUserIDGatewayTimeout struct {
+
+	/*
+	  In: Body
+	*/
+	Payload *models.Error `json:"body,omitempty"`
+}
+
+// NewDeleteConfigAiUserRatelimitTenantIDUserIDGatewayTimeout creates DeleteConfigAiUserRatelimitTenantIDUserIDGatewayTimeout with default headers values
+func NewDeleteConfigAiUserRatelimitTenantIDUserIDGatewayTimeout() *DeleteConfigAiUserRatelimitTenantIDUserIDGatewayTimeout {
+
+	return &DeleteConfigAiUserRatelimitTenantIDUserIDGatewayTimeout{}
+}
+
+// WithPayload adds the payload to the delete config ai user ratelimit tenant Id user Id gateway timeout response
+func (o *DeleteConfigAiUserRatelimitTenantIDUserIDGatewayTimeout) WithPayload(payload *models.Error) *DeleteConfigAiUserRatelimitTenantIDUserIDGatewayTimeout {
+	o.Payload = payload
+	return o
+}
+
+// SetPayload sets the payload to the delete config ai user ratelimit tenant Id user Id gateway timeout response
+func (o *DeleteConfigAiUserRatelimitTenantIDUserIDGatewayTimeout) SetPayload(payload *models.Error) {
+	o.Payload = payload
+}
+
+// WriteResponse to the client
+func (o *DeleteConfigAiUserRatelimitTenantIDUserIDGatewayTimeout) WriteResponse(rw http.ResponseWriter, producer runtime.Producer) {
+
+	rw.WriteHeader(504)
+	if o.Payload != nil {
+		payload := o.Payload
+		if err := producer.Produce(rw, payload); err != nil {
+			panic(err) // let the recovery middleware deal with this
+		}
+	}
+}

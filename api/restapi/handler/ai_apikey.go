@@ -37,14 +37,23 @@ import (
 // keyStoreFailure gives a key-store condition the status and the wording it
 // must be answered with, or nil when err is about something else.
 //
-// The two conditions are told apart on the wire because they ask the operator
+// The conditions are told apart on the wire because they ask the operator
 // for different things. "Unconfigured" means no store was ever named, and the
-// fix is a --aikey-db-host; "unavailable" means one was named and cannot be
-// reached, and the fix is at the store. Both are 503: the routes are
-// registered either way, so neither is a 501, and neither is a fault in the
-// gateway, so neither is a 500.
+// fix is a --aikey-db-host; "unavailable" means one was named and was never
+// reached for this request, so nothing was written and a retry is safe; both
+// are 503: the routes are registered either way, so neither is a 501, and
+// neither is a fault in the gateway, so neither is a 500.
+//
+// "Outcome unknown" is the third condition and the one that must not be
+// confused with the other two: the write was handed to the store and the
+// store did not answer within the budget. The server may still apply it
+// when it resumes. That is 504 with its own code, no Retry-After, and the
+// instruction to read the resource back before retrying -- a 503 here
+// would invite the retry that creates the duplicate.
 func keyStoreFailure(err error) *ErrorResponse {
 	switch {
+	case errors.Is(err, cmn.ErrStoreOutcomeUnknown):
+		return errorResponseWithCode(http.StatusGatewayTimeout, keyStoreOutcomeUnknownCode)
 	case errors.Is(err, cmn.ErrKeyStoreUnconfigured):
 		return errorResponseWithCode(http.StatusServiceUnavailable, "ai_key_store_unconfigured")
 	case errors.Is(err, cmn.ErrDBUnavailable):
@@ -52,6 +61,11 @@ func keyStoreFailure(err error) *ErrorResponse {
 	}
 	return nil
 }
+
+// keyStoreOutcomeUnknownCode is the error code of a write the key store may
+// still apply. The status and the code are the documented contract of every
+// write endpoint on this plane (swagger: the 504 response).
+const keyStoreOutcomeUnknownCode = "ai_key_store_outcome_unknown"
 
 // writeKeyStoreFailure is keyStoreFailure for the raw-handler arm, which does
 // not go through the generated responder chain.
@@ -107,7 +121,7 @@ func ConfigPostAIApikey(params aiops.PostConfigAiApikeyParams, principal interfa
 		entry.ExpiresAt = &expiresAt
 	}
 
-	rawKey, keyID, err := ApiHooks.NetAPIKeyCreate(entry)
+	rawKey, keyID, err := ApiHooks.NetAPIKeyCreate(params.HTTPRequest.Context(), entry)
 	if err != nil {
 		tk.LogIt(tk.LogError, "[AIApikey] Failed to create API key for tenant %s: %v\n", *req.TenantID, err)
 		if resp := keyStoreFailure(err); resp != nil {
@@ -136,7 +150,7 @@ func ConfigGetAIApikeys(params aiops.GetConfigAiApikeyParams, principal interfac
 		tenantID = *params.TenantID
 	}
 
-	keys, err := ApiHooks.NetAPIKeyList(tenantID)
+	keys, err := ApiHooks.NetAPIKeyList(params.HTTPRequest.Context(), tenantID)
 	if err != nil {
 		tk.LogIt(tk.LogError, "[AIApikey] Failed to list API keys (tenant=%q): %v\n", tenantID, err)
 		if resp := keyStoreFailure(err); resp != nil {
@@ -164,7 +178,7 @@ func ConfigGetAIApikeyByID(params aiops.GetConfigAiApikeyKeyIDParams, principal 
 	tk.LogIt(tk.LogTrace, "api: AIApikey %s API called by IP: %s. url: %s\n",
 		params.HTTPRequest.Method, params.HTTPRequest.RemoteAddr, params.HTTPRequest.URL)
 
-	key, err := ApiHooks.NetAPIKeyGet(params.KeyID)
+	key, err := ApiHooks.NetAPIKeyGet(params.HTTPRequest.Context(), params.KeyID)
 	if err != nil {
 		tk.LogIt(tk.LogError, "[AIApikey] Failed to get API key %s: %v\n", params.KeyID, err)
 		if resp := keyStoreFailure(err); resp != nil {
@@ -186,7 +200,7 @@ func ConfigDeleteAIApikey(params aiops.DeleteConfigAiApikeyKeyIDParams, principa
 	tk.LogIt(tk.LogTrace, "api: AIApikey %s API called by IP: %s. url: %s\n",
 		params.HTTPRequest.Method, params.HTTPRequest.RemoteAddr, params.HTTPRequest.URL)
 
-	if err := ApiHooks.NetAPIKeyDelete(params.KeyID); err != nil {
+	if err := ApiHooks.NetAPIKeyDelete(params.HTTPRequest.Context(), params.KeyID); err != nil {
 		tk.LogIt(tk.LogError, "[AIApikey] Failed to delete API key %s: %v\n", params.KeyID, err)
 		if resp := keyStoreFailure(err); resp != nil {
 			return resp
@@ -278,19 +292,19 @@ func ConfigPatchAIApikey(w http.ResponseWriter, r *http.Request, keyID string) {
 	}
 
 	if body.AllowedModels != nil || body.Enabled != nil {
-		if err := ApiHooks.NetAPIKeyPatch(keyID, body.AllowedModels, body.Enabled); err != nil {
+		if err := ApiHooks.NetAPIKeyPatch(r.Context(), keyID, body.AllowedModels, body.Enabled); err != nil {
 			writePatchErr(err)
 			return
 		}
 	}
 	if body.RateLimitRPS != nil || body.BurstSize != nil || body.TokensPerMin != nil {
-		if err := ApiHooks.NetAPIKeyRateLimitPatch(keyID, body.RateLimitRPS, body.BurstSize, body.TokensPerMin); err != nil {
+		if err := ApiHooks.NetAPIKeyRateLimitPatch(r.Context(), keyID, body.RateLimitRPS, body.BurstSize, body.TokensPerMin); err != nil {
 			writePatchErr(err)
 			return
 		}
 	}
 	if !classPatch.IsZero() {
-		if err := ApiHooks.NetAPIKeyClassPatch(keyID, classPatch); err != nil {
+		if err := ApiHooks.NetAPIKeyClassPatch(r.Context(), keyID, classPatch); err != nil {
 			writePatchErr(err)
 			return
 		}
@@ -333,7 +347,7 @@ func ConfigPostAITenantRateLimit(params aiops.PostConfigAiTenantRatelimitParams,
 		body.BurstPct == 0 && len(modelLimits) == 0
 
 	if !classOnly {
-		if err := ApiHooks.NetTenantRateLimitSet(*body.TenantID, int(body.Rps), int(body.TokensPerMin), int(body.BurstPct), modelLimits); err != nil {
+		if err := ApiHooks.NetTenantRateLimitSet(params.HTTPRequest.Context(), *body.TenantID, int(body.Rps), int(body.TokensPerMin), int(body.BurstPct), modelLimits); err != nil {
 			tk.LogIt(tk.LogError, "[AITenantRateLimit] Failed to set rate limit for tenant %s: %v\n", *body.TenantID, err)
 			if resp := keyStoreFailure(err); resp != nil {
 				return resp
@@ -342,7 +356,7 @@ func ConfigPostAITenantRateLimit(params aiops.PostConfigAiTenantRatelimitParams,
 		}
 	}
 	if !classPatch.IsZero() {
-		if err := ApiHooks.NetTenantClassPatch(*body.TenantID, classPatch); err != nil {
+		if err := ApiHooks.NetTenantClassPatch(params.HTTPRequest.Context(), *body.TenantID, classPatch); err != nil {
 			tk.LogIt(tk.LogError, "[AITenantRateLimit] Failed to set class of tenant %s: %v\n", *body.TenantID, err)
 			if resp := keyStoreFailure(err); resp != nil {
 				return resp
@@ -360,7 +374,7 @@ func ConfigGetAITenantRateLimit(params aiops.GetConfigAiTenantRatelimitTenantIDP
 	tk.LogIt(tk.LogTrace, "api: AITenantRateLimit %s API called by IP: %s. url: %s\n",
 		params.HTTPRequest.Method, params.HTTPRequest.RemoteAddr, params.HTTPRequest.URL)
 
-	entry, err := ApiHooks.NetTenantRateLimitGet(params.TenantID)
+	entry, err := ApiHooks.NetTenantRateLimitGet(params.HTTPRequest.Context(), params.TenantID)
 	if err != nil {
 		tk.LogIt(tk.LogError, "[AITenantRateLimit] Failed to get rate limit for tenant %s: %v\n", params.TenantID, err)
 		if resp := keyStoreFailure(err); resp != nil {

@@ -158,6 +158,54 @@ Keys already in cache keep validating across the restart window, so this is not
 immediately traffic-affecting — but treat it as a maintenance action, because a
 gateway that restarts with a stale password comes up unable to reach the store.
 
+## Time budgets and the write-outcome contract
+
+Every statement the gateway runs against the key store, and against the
+management credential store, carries a context deadline. A PostgreSQL that
+stalls while keeping its TCP connections open (a hung or overloaded server, a
+stalled volume, a path that black-holes packets, a paused container) answers
+a statement with no deadline never: before these budgets a management write
+committed after its client had given up, `/status/ready` hung, and a
+cache-miss key lookup parked the proxy worker thread that asked. The budgets
+are environment variables in milliseconds; keep each well below the client
+timeout in front of the gateway so the gateway answers first.
+
+| Variable | Default | Bounds |
+|---|---|---|
+| `LLB_AI_STORE_OP_TIMEOUT_MS` | 3000 | One management operation (a configuration read or write, retries included, plus the snapshot refresh a write performs before it returns). Also sent to the server as the session `statement_timeout`. |
+| `LLB_AI_STORE_PING_TIMEOUT_MS` | 1000 | The readiness ping behind `/status/ready` and the housekeeping ping. |
+| `LLB_AI_STORE_REFRESH_TIMEOUT_MS` | 3000 | One read of the objective/class/limit snapshot; clamped to half of `LLB_AI_OBJECTIVE_REFRESH_SEC`. |
+| `LLB_AI_KEY_LOOKUP_TIMEOUT_MS` | 300 | One data-path store round trip: the key lookup on a cache miss and the quota-row reads behind a request. This is the longest a proxy worker is ever parked by the store. |
+
+Idle pooled connections are dropped after 60 s, so a connection that idled
+through a stall is not handed to a later statement indefinitely.
+
+**What a write answers during a stall.** A deadline bounds the wait; it cannot
+retract a statement that already reached the server. The API therefore
+distinguishes two failures, and clients must treat them differently:
+
+- **503 `ai_key_store_unavailable`** (management-plane wording: *Credential
+  store unavailable*): the statement was never handed to the store. Nothing
+  was written; retrying is safe.
+- **504 `ai_key_store_outcome_unknown`** (management-plane result
+  `store_outcome_unknown`): the statement was sent and the store did not
+  answer within the budget. The server may still apply it when it resumes.
+  **Read the resource back before retrying.** A blind retry of a
+  non-idempotent write, such as creating a generated API key, can create a
+  second row.
+
+Reads never answer 504: a read whose budget expires is a 503.
+
+**Readiness.** `/status/ready` probes each store under the ping budget and
+answers 503 within it when a store stalls; `GET /config/ai/objective` keeps
+answering from the applied snapshot with `store_reachable=false` once a
+refresh has failed. `/version` answering says nothing about the store.
+
+**Data path.** A request whose key is cached is validated without touching
+the store. A cache miss during a stall is refused with 503
+`policy_store_unavailable` and `Retry-After` inside the lookup budget, the same
+answer a cold outage gives.
+
 ## Troubleshooting
 
 **`key store preflight failed: schema "aigw" does not exist`**

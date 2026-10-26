@@ -21,6 +21,7 @@
 package aikey_test
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"testing"
@@ -64,7 +65,7 @@ func TestPlanesDoNotShareCredentialCaches(t *testing.T) {
 	if _, found := usrSvc.Cache.Get(keyHash); found {
 		t.Error("the key hash resolves in the management token cache")
 	}
-	principal, err := usrSvc.ValidateToken(keyHash)
+	principal, err := usrSvc.ValidateToken(context.Background(), keyHash)
 	if err == nil {
 		t.Errorf("ValidateToken accepted a data-plane key hash and returned %v", principal)
 	}

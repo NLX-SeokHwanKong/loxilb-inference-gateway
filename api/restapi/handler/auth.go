@@ -16,6 +16,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -55,7 +56,11 @@ func BearerAuthAuth(tokenString string) (interface{}, error) {
 	)
 	switch {
 	case opts.Opts.UserServiceEnable:
-		principal, err = ApiHooks.NetUserValidate(tokenString)
+		// go-swagger's token authenticator hands over the header value
+		// alone, no request. The store call behind this still runs under
+		// the operation budget; what it cannot inherit is the client's
+		// disconnect, which for a token read changes nothing.
+		principal, err = ApiHooks.NetUserValidate(context.Background(), tokenString)
 	case opts.Opts.Oauth2Enable:
 		principal, err = ApiHooks.NetOauthUserValidate(tokenString)
 	case opts.Opts.ManualTokenEnable:
@@ -113,7 +118,7 @@ func AuthPostLogin(params auth.PostAuthLoginParams) middleware.Responder {
 	if params.User.Password != nil {
 		user.Password = *params.User.Password
 	}
-	token, valid, err := ApiHooks.NetUserLogin(&user)
+	token, valid, err := ApiHooks.NetUserLogin(params.HTTPRequest.Context(), &user)
 	if err != nil {
 		return &ErrorResponse{Payload: ResultErrorResponseErrorMessage(err.Error())}
 	}
@@ -147,7 +152,7 @@ func AuthPostLogout(params auth.PostAuthLogoutParams, principal interface{}) mid
 	// Match the credential passed to validation: the store/cache hash the
 	// raw token, never the Authorization header including its scheme.
 	token := strings.TrimPrefix(params.HTTPRequest.Header.Get("Authorization"), "Bearer ")
-	err := ApiHooks.NetUserLogout(token)
+	err := ApiHooks.NetUserLogout(params.HTTPRequest.Context(), token)
 	if err != nil {
 		return &ErrorResponse{Payload: ResultErrorResponseErrorMessage(err.Error())}
 	}

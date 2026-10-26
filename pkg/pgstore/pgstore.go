@@ -108,6 +108,15 @@ func PostgresDSN(user, password, host, port, dbname, sslMode string) string {
 	// establishes; the retries are there for a server that is up and
 	// briefly busy, and those answer well inside this.
 	q.Set("connect_timeout", strconv.Itoa(ConnectTimeoutSeconds))
+	// Server-side second line behind the client deadline: a session
+	// statement_timeout equal to the operation budget. pgx passes any key it
+	// does not recognise through to the startup packet as a run-time
+	// parameter, which is how libpq's PGOPTIONS reaches the server too. It
+	// is a second line, not the first: a server that is paused cannot
+	// enforce its own timeout, and a peer that still ACKs never trips TCP
+	// keepalive or tcp_user_timeout either. The client context is what
+	// bounds those; this bounds a server that is up and merely slow.
+	q.Set("statement_timeout", strconv.Itoa(int(OpTimeout().Milliseconds())))
 	u.RawQuery = q.Encode()
 	return u.String()
 }
@@ -284,10 +293,15 @@ func (s Store) openWithRetry(dsn string, maxRetries int, backoff time.Duration) 
 			lastErr = err
 			continue
 		}
-		if err = db.Ping(); err == nil {
+		if err = pingWithBudget(db); err == nil {
 			db.SetMaxOpenConns(PoolMaxOpenConns)
 			db.SetMaxIdleConns(PoolMaxIdleConns)
 			db.SetConnMaxLifetime(PoolConnMaxLifetime)
+			// An idle connection is dropped after ConnMaxIdleTime rather
+			// than kept until its lifetime ends: a connection that idled
+			// through a stall is exactly the one a later statement would
+			// otherwise be handed.
+			db.SetConnMaxIdleTime(ConnMaxIdleTime)
 			return db, nil
 		}
 		lastErr = err
@@ -295,6 +309,15 @@ func (s Store) openWithRetry(dsn string, maxRetries int, backoff time.Duration) 
 		tk.LogIt(tk.LogError, "%s Store connection attempt %d/%d failed: %v\n", s.LogTag, i+1, maxRetries, err)
 	}
 	return nil, s.errf("could not connect to the store after %d attempts: %w", maxRetries, lastErr)
+}
+
+// pingWithBudget pings db under the ping budget. The dial is already bounded
+// by connect_timeout; this bounds the ping's own round trip, which a server
+// that accepted the connection and then stalled would otherwise never answer.
+func pingWithBudget(db *sql.DB) error {
+	ctx, cancel := WithBudget(context.Background(), PingTimeout())
+	defer cancel()
+	return db.PingContext(ctx)
 }
 
 // IsUniqueViolation reports whether err is PostgreSQL's unique_violation

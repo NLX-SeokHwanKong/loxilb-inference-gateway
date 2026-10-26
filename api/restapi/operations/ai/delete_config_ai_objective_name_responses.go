@@ -282,3 +282,48 @@ func (o *DeleteConfigAiObjectiveNameServiceUnavailable) WriteResponse(rw http.Re
 		}
 	}
 }
+
+// DeleteConfigAiObjectiveNameGatewayTimeoutCode is the HTTP code returned for type DeleteConfigAiObjectiveNameGatewayTimeout
+const DeleteConfigAiObjectiveNameGatewayTimeoutCode int = 504
+
+/*
+DeleteConfigAiObjectiveNameGatewayTimeout Write outcome unknown (code ai_key_store_outcome_unknown). The statement was handed to the API-key store and the store did not answer within the operation budget; the store may still apply it when it resumes. Not a 503: nothing says the write did not happen. Read the resource back (GET) before deciding whether to retry; a blind retry of a non-idempotent write can create a second row.
+
+swagger:response deleteConfigAiObjectiveNameGatewayTimeout
+*/
+type DeleteConfigAiObjectiveNameGatewayTimeout struct {
+
+	/*
+	  In: Body
+	*/
+	Payload *models.Error `json:"body,omitempty"`
+}
+
+// NewDeleteConfigAiObjectiveNameGatewayTimeout creates DeleteConfigAiObjectiveNameGatewayTimeout with default headers values
+func NewDeleteConfigAiObjectiveNameGatewayTimeout() *DeleteConfigAiObjectiveNameGatewayTimeout {
+
+	return &DeleteConfigAiObjectiveNameGatewayTimeout{}
+}
+
+// WithPayload adds the payload to the delete config ai objective name gateway timeout response
+func (o *DeleteConfigAiObjectiveNameGatewayTimeout) WithPayload(payload *models.Error) *DeleteConfigAiObjectiveNameGatewayTimeout {
+	o.Payload = payload
+	return o
+}
+
+// SetPayload sets the payload to the delete config ai objective name gateway timeout response
+func (o *DeleteConfigAiObjectiveNameGatewayTimeout) SetPayload(payload *models.Error) {
+	o.Payload = payload
+}
+
+// WriteResponse to the client
+func (o *DeleteConfigAiObjectiveNameGatewayTimeout) WriteResponse(rw http.ResponseWriter, producer runtime.Producer) {
+
+	rw.WriteHeader(504)
+	if o.Payload != nil {
+		payload := o.Payload
+		if err := producer.Produce(rw, payload); err != nil {
+			panic(err) // let the recovery middleware deal with this
+		}
+	}
+}

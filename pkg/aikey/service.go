@@ -16,6 +16,7 @@
 package aikey
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
@@ -32,6 +33,7 @@ import (
 
 	cmn "github.com/loxilb-io/loxilb/common"
 	"github.com/loxilb-io/loxilb/options"
+	"github.com/loxilb-io/loxilb/pkg/pgstore"
 )
 
 const (
@@ -176,12 +178,43 @@ var (
 // DBTX is the minimal database surface this package uses, satisfied by
 // *sql.DB. It exists so a test can substitute a double without an external
 // mock library.
+//
+// Only the context-taking methods are on it, on purpose. Every statement
+// this package runs carries a deadline (pkg/pgstore budgets), because a
+// store that stalls while keeping TCP open answers a statement without one
+// never -- and a cache-miss key lookup runs on a proxy worker thread, so
+// "never" there is a parked worker and every connection it owns. With the
+// plain methods absent from the interface a new call site cannot run without
+// a deadline and compile.
 type DBTX interface {
-	Exec(query string, args ...any) (sql.Result, error)
-	Query(query string, args ...any) (*sql.Rows, error)
-	QueryRow(query string, args ...any) *sql.Row
-	Ping() error
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+	PingContext(ctx context.Context) error
 }
+
+// opContext bounds one management operation by the operation budget, and by
+// the caller's context: a request whose client has gone away is cancelled
+// with it. parent may be nil for a caller with no request to inherit from.
+func (s *Service) opContext(parent context.Context) (context.Context, context.CancelFunc) {
+	return pgstore.WithBudget(parent, pgstore.OpTimeout())
+}
+
+// lookupContext bounds one data-path store round trip. There is no request
+// context to inherit on that path -- the caller is a proxy worker thread
+// inside a cgo callback -- so the budget is the whole deadline.
+func lookupContext() (context.Context, context.CancelFunc) {
+	return pgstore.WithBudget(context.Background(), pgstore.LookupTimeout())
+}
+
+// writeErr and readErr classify a statement's error for the caller: a write
+// says whether the server may still apply it (pkg/pgstore outcome.go), a
+// read only whether the store could be asked. Every error a store-backed
+// method returns from a statement goes through one of them, so the REST
+// layer's errors.Is checks see the shared sentinels rather than the
+// driver's types.
+func writeErr(err error) error { return pgstore.ClassifyWriteErr(err) }
+func readErr(err error) error  { return pgstore.ClassifyReadErr(err) }
 
 // rateLimitCacheEntry holds tenant rate limit values cached in memory.
 type rateLimitCacheEntry struct {
@@ -281,12 +314,19 @@ func (s *Service) Connect() error {
 // succeeds right now. This is the readiness-surface question -- distinct
 // from the restore engine's configured-check, which deliberately never
 // asks it (a store outage must not hold a boot replay hostage).
-func (s *Service) Ready() error {
+//
+// The ping runs under the ping budget, and under the caller's context: a
+// readiness probe whose client has gone is not worth finishing. A store that
+// stalls while keeping its connections open is reported not ready within the
+// budget, instead of the probe hanging for as long as the stall lasts.
+func (s *Service) Ready(ctx context.Context) error {
 	db, err := s.store()
 	if err != nil {
 		return err
 	}
-	return db.Ping()
+	ctx, cancel := pgstore.WithBudget(ctx, pgstore.PingTimeout())
+	defer cancel()
+	return readErr(db.PingContext(ctx))
 }
 
 // NewService is New followed by Connect, for callers with no reason to publish
@@ -352,7 +392,9 @@ func (s *Service) Ticker() {
 		}
 		return
 	}
-	if err = db.Ping(); err != nil {
+	ctx, cancel := pgstore.WithBudget(context.Background(), pgstore.PingTimeout())
+	defer cancel()
+	if err = db.PingContext(ctx); err != nil {
 		tk.LogIt(tk.LogError, "[AIKey] Key store unreachable: %v\n", err)
 	}
 }
@@ -365,10 +407,16 @@ func (s *Service) Ticker() {
 // db is not adopted when provisioning fails: a half-provisioned pool that
 // answers ready would let queries run against tables that do not exist.
 func (s *Service) Attach(db *sql.DB) error {
-	if err := preflight(db); err != nil {
+	// The preflight and the DDL are a management operation of this process
+	// against a store it has only just reached: budgeted like any other, so
+	// a store that accepted the dial and then stalled does not hold the boot
+	// or the reconnect tick.
+	ctx, cancel := s.opContext(context.Background())
+	defer cancel()
+	if err := preflight(ctx, db); err != nil {
 		return err
 	}
-	if err := ensureSchema(db); err != nil {
+	if err := ensureSchema(ctx, db); err != nil {
 		return err
 	}
 	s.mu.Lock()
@@ -472,7 +520,7 @@ func validateSuppliedKey(raw string) error {
 // key_id is generated independently of the key in both paths. Deriving it
 // from the first half of the secret, as the MySQL implementation did, made a
 // public identifier a function of the credential it identifies.
-func (s *Service) CreateAPIKey(entry cmn.ApiKeyEntry) (string, string, error) {
+func (s *Service) CreateAPIKey(ctx context.Context, entry cmn.ApiKeyEntry) (string, string, error) {
 	// A key's tenant_id reaches the QoS ladder as a bucket key exactly as an
 	// operator-set tenant row does, so it is held to the same rule. Without
 	// this, the key surface was a way to introduce an aliasing tenant that
@@ -488,6 +536,8 @@ func (s *Service) CreateAPIKey(entry cmn.ApiKeyEntry) (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
+	ctx, cancel := s.opContext(ctx)
+	defer cancel()
 
 	// 16 bytes for the identifier, 32 for a generated secret, drawn
 	// separately so the identifier reveals nothing about the key.
@@ -518,7 +568,7 @@ func (s *Service) CreateAPIKey(entry cmn.ApiKeyEntry) (string, string, error) {
 	allowedModels := strings.Join(entry.AllowedModels, ",")
 	now := time.Now().UTC()
 
-	if _, err := db.Exec(sqlInsertAPIKey,
+	if _, err := db.ExecContext(ctx, sqlInsertAPIKey,
 		keyID, keyHash, entry.TenantID, entry.Name,
 		allowedModels, entry.RateLimitRPS, entry.BurstSize, entry.TokensPerMin,
 		now, entry.ExpiresAt, entry.Enabled); err != nil {
@@ -530,20 +580,24 @@ func (s *Service) CreateAPIKey(entry cmn.ApiKeyEntry) (string, string, error) {
 			return "", "", cmn.NewConflictError("imported API key is already registered")
 		}
 		tk.LogIt(tk.LogError, "[AIKey] Failed to create API key for tenant %s: %v\n", entry.TenantID, err)
-		return "", "", err
+		return "", "", writeErr(err)
 	}
 
 	// The class fields have their own statement. A key that was asked for
 	// with a class and would exist without it is not left behind: its
 	// requests would run above the class its operator set.
 	if !class.IsZero() {
-		if _, err := db.Exec(sqlUpdateKeyClass, keyID, class.PriorityClass, class.DefaultObjective,
+		if _, err := db.ExecContext(ctx, sqlUpdateKeyClass, keyID, class.PriorityClass, class.DefaultObjective,
 			joinList(class.AllowedObjectives)); err != nil {
 			tk.LogIt(tk.LogError, "[AIKey] Failed to set class of new key %s, removing it: %v\n", keyID, err)
-			if _, dErr := db.Exec(sqlDeleteAPIKeyByID, keyID); dErr != nil {
+			if _, dErr := db.ExecContext(ctx, sqlDeleteAPIKeyByID, keyID); dErr != nil {
 				tk.LogIt(tk.LogError, "[AIKey] New key %s could not be removed either: it exists without its class\n", keyID)
 			}
-			return "", "", errStoreUnavailable
+			// The class statement's own outcome is what the caller is told:
+			// a deadline after it was sent means the key may exist, with or
+			// without its class, and the removal above may or may not have
+			// reached the server either. "Not written" would be a guess.
+			return "", "", writeErr(err)
 		}
 		s.refreshClassesAfterWrite()
 	}
@@ -576,7 +630,14 @@ func (s *Service) ValidateAPIKey(rawKey string) (*cmn.ApiKeyEntry, error) {
 	var allowedModels string
 	var expiresAt sql.NullTime
 
-	err = db.QueryRow(sqlSelectAPIKeyByHash, keyHash).Scan(
+	// The lookup budget is the longest the calling proxy worker is parked.
+	// A store that stalls while keeping its connections open is answered
+	// "could not ask" inside it; the data plane then refuses the request
+	// the way it refuses one during a cold outage. A cache hit above never
+	// gets here, so cached keys keep validating through the stall.
+	ctx, cancel := lookupContext()
+	defer cancel()
+	err = db.QueryRowContext(ctx, sqlSelectAPIKeyByHash, keyHash).Scan(
 		&entry.KeyID, &entry.KeyHash, &entry.TenantID, &entry.Name,
 		&allowedModels, &entry.RateLimitRPS, &entry.BurstSize, &entry.TokensPerMin,
 		&entry.CreatedAt, &expiresAt, &entry.Enabled)
@@ -586,7 +647,7 @@ func (s *Service) ValidateAPIKey(rawKey string) (*cmn.ApiKeyEntry, error) {
 			return nil, ErrInvalidKey
 		}
 		tk.LogIt(tk.LogError, "[AIKey] Failed to validate API key: %v\n", err)
-		return nil, err
+		return nil, readErr(err)
 	}
 
 	if allowedModels != "" {
@@ -604,19 +665,21 @@ func (s *Service) ValidateAPIKey(rawKey string) (*cmn.ApiKeyEntry, error) {
 
 // RevokeAPIKey disables the key identified by keyID and evicts it — here and
 // on every peer — before returning.
-func (s *Service) RevokeAPIKey(keyID string) error {
+func (s *Service) RevokeAPIKey(ctx context.Context, keyID string) error {
 	db, err := s.store()
 	if err != nil {
 		return err
 	}
-	keyHash, err := s.keyHashByID(db, keyID)
+	ctx, cancel := s.opContext(ctx)
+	defer cancel()
+	keyHash, err := s.keyHashByID(ctx, db, keyID)
 	if err != nil {
 		return err
 	}
 
-	if _, err = db.Exec(sqlUpdateAPIKeyEnabled, false, keyID); err != nil {
+	if _, err = db.ExecContext(ctx, sqlUpdateAPIKeyEnabled, false, keyID); err != nil {
 		tk.LogIt(tk.LogError, "[AIKey] Failed to revoke API key %s: %v\n", keyID, err)
-		return err
+		return writeErr(err)
 	}
 
 	s.evictAndFanOut(KeyInvalidation{KeyHash: keyHash, KeyID: keyID})
@@ -629,19 +692,21 @@ func (s *Service) RevokeAPIKey(keyID string) error {
 // here and on every peer. Unlike RevokeAPIKey, which flips enabled=false (a
 // reversible soft-disable that stays visible to the management endpoints),
 // this is a hard delete: a subsequent lookup returns "not found".
-func (s *Service) DeleteAPIKey(keyID string) error {
+func (s *Service) DeleteAPIKey(ctx context.Context, keyID string) error {
 	db, err := s.store()
 	if err != nil {
 		return err
 	}
-	keyHash, err := s.keyHashByID(db, keyID)
+	ctx, cancel := s.opContext(ctx)
+	defer cancel()
+	keyHash, err := s.keyHashByID(ctx, db, keyID)
 	if err != nil {
 		return err
 	}
 
-	if _, err = db.Exec(sqlDeleteAPIKeyByID, keyID); err != nil {
+	if _, err = db.ExecContext(ctx, sqlDeleteAPIKeyByID, keyID); err != nil {
 		tk.LogIt(tk.LogError, "[AIKey] Failed to delete API key %s: %v\n", keyID, err)
-		return err
+		return writeErr(err)
 	}
 
 	s.evictAndFanOut(KeyInvalidation{KeyHash: keyHash, KeyID: keyID})
@@ -654,28 +719,30 @@ func (s *Service) DeleteAPIKey(keyID string) error {
 // Only non-nil fields are updated. The cache is evicted afterwards — locally
 // and on peers, because a patch that disables a key is a revocation by
 // another name.
-func (s *Service) PatchAPIKey(keyID string, allowedModels []string, enabled *bool) error {
+func (s *Service) PatchAPIKey(ctx context.Context, keyID string, allowedModels []string, enabled *bool) error {
 	db, err := s.store()
 	if err != nil {
 		return err
 	}
-	keyHash, err := s.keyHashByID(db, keyID)
+	ctx, cancel := s.opContext(ctx)
+	defer cancel()
+	keyHash, err := s.keyHashByID(ctx, db, keyID)
 	if err != nil {
 		return err
 	}
 
 	if allowedModels != nil {
 		models := strings.Join(allowedModels, ",")
-		if _, err = db.Exec(sqlUpdateAPIKeyAllowedModels, models, keyID); err != nil {
+		if _, err = db.ExecContext(ctx, sqlUpdateAPIKeyAllowedModels, models, keyID); err != nil {
 			tk.LogIt(tk.LogError, "[AIKey] Failed to patch allowed_models for key %s: %v\n", keyID, err)
-			return err
+			return writeErr(err)
 		}
 	}
 
 	if enabled != nil {
-		if _, err = db.Exec(sqlUpdateAPIKeyEnabled, *enabled, keyID); err != nil {
+		if _, err = db.ExecContext(ctx, sqlUpdateAPIKeyEnabled, *enabled, keyID); err != nil {
 			tk.LogIt(tk.LogError, "[AIKey] Failed to patch enabled for key %s: %v\n", keyID, err)
-			return err
+			return writeErr(err)
 		}
 	}
 
@@ -691,23 +758,23 @@ func (s *Service) PatchAPIKey(keyID string, allowedModels []string, enabled *boo
 // It takes the pool rather than fetching one, so that the lookup and the
 // mutation that follows it run against the same store even if the reconnect
 // tick replaces the pool in between.
-func (s *Service) keyHashByID(db DBTX, keyID string) (string, error) {
+func (s *Service) keyHashByID(ctx context.Context, db DBTX, keyID string) (string, error) {
 	var keyHash string
-	err := db.QueryRow(sqlSelectKeyHashByID, keyID).Scan(&keyHash)
+	err := db.QueryRowContext(ctx, sqlSelectKeyHashByID, keyID).Scan(&keyHash)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			tk.LogIt(tk.LogWarning, "[AIKey] API key not found: %s\n", keyID)
 			return "", ErrKeyNotFound
 		}
 		tk.LogIt(tk.LogError, "[AIKey] Failed to fetch key hash for %s: %v\n", keyID, err)
-		return "", err
+		return "", readErr(err)
 	}
 	return keyHash, nil
 }
 
 // SetTenantRateLimit upserts the per-tenant rate limit and refreshes the
 // cache so subsequent reads do not need a round-trip.
-func (s *Service) SetTenantRateLimit(tenantID string, rps, tokensPerMin, burstPct int) error {
+func (s *Service) SetTenantRateLimit(ctx context.Context, tenantID string, rps, tokensPerMin, burstPct int) error {
 	// The tenant id becomes a bucket key verbatim: the tenant aggregate quota
 	// is keyed on the BARE id, so a tenant named "t1|gpt-4" is the same
 	// quotaMap entry as tenant t1's gpt-4 model bucket, and one named "uq:t|u"
@@ -724,10 +791,12 @@ func (s *Service) SetTenantRateLimit(tenantID string, rps, tokensPerMin, burstPc
 	if err != nil {
 		return err
 	}
+	ctx, cancel := s.opContext(ctx)
+	defer cancel()
 	now := time.Now().UTC()
-	if _, err := db.Exec(sqlUpsertTenantRateLimit, tenantID, rps, tokensPerMin, burstPct, now); err != nil {
+	if _, err := db.ExecContext(ctx, sqlUpsertTenantRateLimit, tenantID, rps, tokensPerMin, burstPct, now); err != nil {
 		tk.LogIt(tk.LogError, "[AIKey] Failed to set rate limit for tenant %s: %v\n", tenantID, err)
-		return err
+		return writeErr(err)
 	}
 	s.rememberRateLimit(cacheKeyForTenant(tenantID),
 		&rateLimitCacheEntry{rps: rps, tokensPerMin: tokensPerMin, burstPct: burstPct})
@@ -767,8 +836,10 @@ func (s *Service) GetTenantRateLimit(tenantID string) (rps, tokensPerMin, burstP
 		}
 		return 0, 0, 0, errStoreUnavailable
 	}
+	ctx, cancel := lookupContext()
+	defer cancel()
 	var r, t, b int
-	err = db.QueryRow(sqlSelectTenantRateLimit, tenantID).Scan(&r, &t, &b)
+	err = db.QueryRowContext(ctx, sqlSelectTenantRateLimit, tenantID).Scan(&r, &t, &b)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			// An explicit "no limits configured" is an answer worth keeping:
@@ -791,7 +862,7 @@ func (s *Service) GetTenantRateLimit(tenantID string) (rps, tokensPerMin, burstP
 // SetTenantModelRateLimit upserts one per-model token quota for a tenant.
 // tokensPerMin <= 0 removes the row: the model falls back to the tenant-level
 // quota alone.
-func (s *Service) SetTenantModelRateLimit(tenantID, model string, tokensPerMin int) error {
+func (s *Service) SetTenantModelRateLimit(ctx context.Context, tenantID, model string, tokensPerMin int) error {
 	// "|" is the composite quota-key delimiter (tenant|model): a name
 	// containing it would alias another tenant/model pair's bucket. The
 	// reserved scope prefixes are the second half of the same property and
@@ -815,11 +886,13 @@ func (s *Service) SetTenantModelRateLimit(tenantID, model string, tokensPerMin i
 	if err != nil {
 		return err
 	}
+	ctx, cancel := s.opContext(ctx)
+	defer cancel()
 	cacheKey := cacheKeyForModel(tenantID, model)
 	if tokensPerMin <= 0 {
-		if _, err := db.Exec(sqlDeleteTenantModelRateLimit, tenantID, model); err != nil {
+		if _, err := db.ExecContext(ctx, sqlDeleteTenantModelRateLimit, tenantID, model); err != nil {
 			tk.LogIt(tk.LogError, "[AIKey] Failed to clear model rate limit for %s/%s: %v\n", tenantID, model, err)
-			return err
+			return writeErr(err)
 		}
 		// The clear is itself a store-confirmed answer ("no limit"), so it is
 		// remembered rather than merely dropped from the TTL cache — a bare
@@ -834,9 +907,9 @@ func (s *Service) SetTenantModelRateLimit(tenantID, model string, tokensPerMin i
 		return nil
 	}
 	now := time.Now().UTC()
-	if _, err := db.Exec(sqlUpsertTenantModelRateLimit, tenantID, model, tokensPerMin, now); err != nil {
+	if _, err := db.ExecContext(ctx, sqlUpsertTenantModelRateLimit, tenantID, model, tokensPerMin, now); err != nil {
 		tk.LogIt(tk.LogError, "[AIKey] Failed to set model rate limit for %s/%s: %v\n", tenantID, model, err)
-		return err
+		return writeErr(err)
 	}
 	s.rememberRateLimit(cacheKey, &rateLimitCacheEntry{tokensPerMin: tokensPerMin})
 	tk.LogIt(tk.LogInfo, "[AIKey] Set model rate limit for tenant %s model %s: tokensPerMin=%d\n",
@@ -869,8 +942,10 @@ func (s *Service) GetTenantModelRateLimit(tenantID, model string) (tokensPerMin 
 		}
 		return 0, errStoreUnavailable
 	}
+	ctx, cancel := lookupContext()
+	defer cancel()
 	var t int
-	err = db.QueryRow(sqlSelectTenantModelRateLimit, tenantID, model).Scan(&t)
+	err = db.QueryRowContext(ctx, sqlSelectTenantModelRateLimit, tenantID, model).Scan(&t)
 	if err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
 			tk.LogIt(tk.LogError, "[AIKey] Failed to get model rate limit for %s/%s: %v\n", tenantID, model, err)
@@ -891,29 +966,36 @@ func (s *Service) GetTenantModelRateLimit(tenantID, model string) (tokensPerMin 
 // GetTenantModelRateLimits returns every configured per-model quota for a
 // tenant, for the config GET surface. Reads the store directly (config reads
 // are not on the datapath).
-func (s *Service) GetTenantModelRateLimits(tenantID string) ([]cmn.TenantModelRateLimit, error) {
+func (s *Service) GetTenantModelRateLimits(ctx context.Context, tenantID string) ([]cmn.TenantModelRateLimit, error) {
 	db, err := s.store()
 	if err != nil {
 		return nil, err
 	}
-	rows, err := db.Query(sqlSelectTenantModelRateLimits, tenantID)
+	ctx, cancel := s.opContext(ctx)
+	defer cancel()
+	rows, err := db.QueryContext(ctx, sqlSelectTenantModelRateLimits, tenantID)
 	if err != nil {
-		return nil, err
+		return nil, readErr(err)
 	}
 	defer rows.Close()
 	var out []cmn.TenantModelRateLimit
 	for rows.Next() {
 		var m cmn.TenantModelRateLimit
 		if err := rows.Scan(&m.Model, &m.TokensPerMin); err != nil {
-			return nil, err
+			return nil, readErr(err)
 		}
 		out = append(out, m)
 	}
-	return out, rows.Err()
+	return out, readErr(rows.Err())
 }
 
 // GetAPIKeyByID retrieves API key metadata by key id, without the hash.
 // Returns nil and an error if not found.
+//
+// It is a data-path read (the quota check and the settle path consult it on
+// a cache miss) as well as a management one, so it carries the lookup
+// budget rather than a caller's context: the longest a proxy worker is ever
+// parked by it is that budget.
 func (s *Service) GetAPIKeyByID(keyID string) (*cmn.ApiKeySummary, error) {
 	cacheKey := cacheKeyForID(keyID)
 	if cached, found := s.Cache.Get(cacheKey); found {
@@ -926,11 +1008,13 @@ func (s *Service) GetAPIKeyByID(keyID string) (*cmn.ApiKeySummary, error) {
 	if err != nil {
 		return nil, err
 	}
+	ctx, cancel := lookupContext()
+	defer cancel()
 	var key cmn.ApiKeySummary
 	var allowedModels string
 	var expiresAt sql.NullTime
 
-	err = db.QueryRow(sqlSelectAPIKeyByID, keyID).Scan(
+	err = db.QueryRowContext(ctx, sqlSelectAPIKeyByID, keyID).Scan(
 		&key.KeyID, &key.TenantID, &key.Name,
 		&allowedModels, &key.RateLimitRPS, &key.BurstSize, &key.TokensPerMin,
 		&key.CreatedAt, &expiresAt, &key.Enabled)
@@ -940,7 +1024,7 @@ func (s *Service) GetAPIKeyByID(keyID string) (*cmn.ApiKeySummary, error) {
 			return nil, ErrKeyNotFound
 		}
 		tk.LogIt(tk.LogError, "[AIKey] Failed to get API key %s: %v\n", keyID, err)
-		return nil, err
+		return nil, readErr(err)
 	}
 
 	if allowedModels != "" {
@@ -958,34 +1042,38 @@ func (s *Service) GetAPIKeyByID(keyID string) (*cmn.ApiKeySummary, error) {
 
 // KnownTenantCount returns how many distinct tenants the store knows: the
 // tenants that own an API key and the tenants that have a rate-limit row.
-func (s *Service) KnownTenantCount() (int, error) {
+func (s *Service) KnownTenantCount(ctx context.Context) (int, error) {
 	db, err := s.store()
 	if err != nil {
 		return 0, err
 	}
+	ctx, cancel := s.opContext(ctx)
+	defer cancel()
 	var n int
-	if err := db.QueryRow(sqlCountKnownTenants).Scan(&n); err != nil {
-		return 0, err
+	if err := db.QueryRowContext(ctx, sqlCountKnownTenants).Scan(&n); err != nil {
+		return 0, readErr(err)
 	}
 	return n, nil
 }
 
 // ListAPIKeys returns a summary of API keys. If tenantID is non-empty it
 // filters by tenant; if empty it returns all keys across all tenants.
-func (s *Service) ListAPIKeys(tenantID string) ([]cmn.ApiKeySummary, error) {
+func (s *Service) ListAPIKeys(ctx context.Context, tenantID string) ([]cmn.ApiKeySummary, error) {
 	db, err := s.store()
 	if err != nil {
 		return nil, err
 	}
+	ctx, cancel := s.opContext(ctx)
+	defer cancel()
 	var rows *sql.Rows
 	if tenantID == "" {
-		rows, err = db.Query(sqlSelectAllAPIKeys)
+		rows, err = db.QueryContext(ctx, sqlSelectAllAPIKeys)
 	} else {
-		rows, err = db.Query(sqlSelectAPIKeysByTenant, tenantID)
+		rows, err = db.QueryContext(ctx, sqlSelectAPIKeysByTenant, tenantID)
 	}
 	if err != nil {
 		tk.LogIt(tk.LogError, "[AIKey] Failed to list API keys (tenant=%q): %v\n", tenantID, err)
-		return nil, err
+		return nil, readErr(err)
 	}
 	defer rows.Close()
 
@@ -1000,7 +1088,7 @@ func (s *Service) ListAPIKeys(tenantID string) ([]cmn.ApiKeySummary, error) {
 			&allowedModels, &key.RateLimitRPS, &key.BurstSize, &key.TokensPerMin,
 			&key.CreatedAt, &expiresAt, &key.Enabled); err != nil {
 			tk.LogIt(tk.LogError, "[AIKey] Failed to scan API key row: %v\n", err)
-			return nil, err
+			return nil, readErr(err)
 		}
 
 		if allowedModels != "" {
@@ -1016,7 +1104,7 @@ func (s *Service) ListAPIKeys(tenantID string) ([]cmn.ApiKeySummary, error) {
 
 	if err = rows.Err(); err != nil {
 		tk.LogIt(tk.LogError, "[AIKey] Row iteration error listing API keys (tenant=%q): %v\n", tenantID, err)
-		return nil, err
+		return nil, readErr(err)
 	}
 
 	tk.LogIt(tk.LogInfo, "[AIKey] Listed %d API keys (tenant=%q)\n", len(keys), tenantID)
@@ -1026,23 +1114,25 @@ func (s *Service) ListAPIKeys(tenantID string) ([]cmn.ApiKeySummary, error) {
 // GetTenantRateLimitEntry returns the full rate limit entry, including
 // updated_at and any per-model quotas. Returns nil and an error if the tenant
 // has no configuration at all.
-func (s *Service) GetTenantRateLimitEntry(tenantID string) (*cmn.TenantRateLimitEntry, error) {
+func (s *Service) GetTenantRateLimitEntry(ctx context.Context, tenantID string) (*cmn.TenantRateLimitEntry, error) {
 	db, err := s.store()
 	if err != nil {
 		return nil, err
 	}
+	ctx, cancel := s.opContext(ctx)
+	defer cancel()
 	var entry cmn.TenantRateLimitEntry
 	entry.TenantID = tenantID
 
-	err = db.QueryRow(sqlSelectTenantRateLimitFull, tenantID).Scan(
+	err = db.QueryRowContext(ctx, sqlSelectTenantRateLimitFull, tenantID).Scan(
 		&entry.RPS, &entry.TokensPerMin, &entry.BurstPct, &entry.UpdatedAt)
 	noTenantRow := errors.Is(err, sql.ErrNoRows)
 	if err != nil && !noTenantRow {
 		tk.LogIt(tk.LogError, "[AIKey] Failed to get rate limit entry for tenant %s: %v\n", tenantID, err)
-		return nil, err
+		return nil, readErr(err)
 	}
 
-	entry.ModelLimits, err = s.GetTenantModelRateLimits(tenantID)
+	entry.ModelLimits, err = s.GetTenantModelRateLimits(ctx, tenantID)
 	if err != nil {
 		tk.LogIt(tk.LogError, "[AIKey] Failed to get model rate limits for tenant %s: %v\n", tenantID, err)
 		return nil, err

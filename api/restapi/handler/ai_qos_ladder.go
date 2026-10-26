@@ -71,7 +71,7 @@ func ConfigPostAIUserRateLimit(params aiops.PostConfigAiUserRatelimitParams, pri
 		})
 	}
 
-	if err := ApiHooks.NetUserRateLimitSet(entry); err != nil {
+	if err := ApiHooks.NetUserRateLimitSet(params.HTTPRequest.Context(), entry); err != nil {
 		tk.LogIt(tk.LogError, "[AIUserRateLimit] Failed to set rate limit for %s/%s: %v\n",
 			entry.TenantID, entry.UserID, err)
 		if resp := keyStoreFailure(err); resp != nil {
@@ -110,7 +110,7 @@ func ConfigListAIUserRateLimits(params aiops.GetConfigAiUserRatelimitTenantIDPar
 	tk.LogIt(tk.LogTrace, "api: AIUserRateLimit %s API called by IP: %s. url: %s\n",
 		params.HTTPRequest.Method, params.HTTPRequest.RemoteAddr, params.HTTPRequest.URL)
 
-	entries, err := ApiHooks.NetUserRateLimitList(params.TenantID)
+	entries, err := ApiHooks.NetUserRateLimitList(params.HTTPRequest.Context(), params.TenantID)
 	if err != nil {
 		tk.LogIt(tk.LogError, "[AIUserRateLimit] Failed to list rate limits for tenant %s: %v\n", params.TenantID, err)
 		if resp := keyStoreFailure(err); resp != nil {
@@ -130,7 +130,7 @@ func ConfigGetAIUserRateLimit(params aiops.GetConfigAiUserRatelimitTenantIDUserI
 	tk.LogIt(tk.LogTrace, "api: AIUserRateLimit %s API called by IP: %s. url: %s\n",
 		params.HTTPRequest.Method, params.HTTPRequest.RemoteAddr, params.HTTPRequest.URL)
 
-	entry, err := ApiHooks.NetUserRateLimitGet(params.TenantID, params.UserID)
+	entry, err := ApiHooks.NetUserRateLimitGet(params.HTTPRequest.Context(), params.TenantID, params.UserID)
 	if err != nil {
 		tk.LogIt(tk.LogError, "[AIUserRateLimit] Failed to get rate limit for %s/%s: %v\n",
 			params.TenantID, params.UserID, err)
@@ -150,7 +150,7 @@ func ConfigDeleteAIUserRateLimit(params aiops.DeleteConfigAiUserRatelimitTenantI
 	tk.LogIt(tk.LogTrace, "api: AIUserRateLimit %s API called by IP: %s. url: %s\n",
 		params.HTTPRequest.Method, params.HTTPRequest.RemoteAddr, params.HTTPRequest.URL)
 
-	if err := ApiHooks.NetUserRateLimitDelete(params.TenantID, params.UserID); err != nil {
+	if err := ApiHooks.NetUserRateLimitDelete(params.HTTPRequest.Context(), params.TenantID, params.UserID); err != nil {
 		tk.LogIt(tk.LogError, "[AIUserRateLimit] Failed to delete rate limit for %s/%s: %v\n",
 			params.TenantID, params.UserID, err)
 		if resp := keyStoreFailure(err); resp != nil {
@@ -183,7 +183,7 @@ func ConfigPostAIRateLimitDefaults(params aiops.PostConfigAiRatelimitDefaultsPar
 		VipSharedRPS:     int(body.VipSharedRps),
 		VipSharedTPM:     int(body.VipSharedTpm),
 	}
-	if err := ApiHooks.NetRateLimitDefaultsSet(entry); err != nil {
+	if err := ApiHooks.NetRateLimitDefaultsSet(params.HTTPRequest.Context(), entry); err != nil {
 		tk.LogIt(tk.LogError, "[AIRateLimitDefaults] Failed to set defaults (%s/%s): %v\n",
 			entry.Scope, entry.RuleIdent, err)
 		if resp := keyStoreFailure(err); resp != nil {
@@ -219,7 +219,7 @@ func ConfigGetAIRateLimitDefaults(params aiops.GetConfigAiRatelimitDefaultsScope
 	tk.LogIt(tk.LogTrace, "api: AIRateLimitDefaults %s API called by IP: %s. url: %s\n",
 		params.HTTPRequest.Method, params.HTTPRequest.RemoteAddr, params.HTTPRequest.URL)
 
-	entry, err := ApiHooks.NetRateLimitDefaultsGet(params.Scope, defaultsRuleIdent(params.Scope, params.RuleIdent))
+	entry, err := ApiHooks.NetRateLimitDefaultsGet(params.HTTPRequest.Context(), params.Scope, defaultsRuleIdent(params.Scope, params.RuleIdent))
 	if err != nil {
 		tk.LogIt(tk.LogError, "[AIRateLimitDefaults] Failed to get defaults (%s): %v\n", params.Scope, err)
 		if resp := keyStoreFailure(err); resp != nil {
@@ -250,7 +250,7 @@ func ConfigDeleteAIRateLimitDefaults(params aiops.DeleteConfigAiRatelimitDefault
 	tk.LogIt(tk.LogTrace, "api: AIRateLimitDefaults %s API called by IP: %s. url: %s\n",
 		params.HTTPRequest.Method, params.HTTPRequest.RemoteAddr, params.HTTPRequest.URL)
 
-	if err := ApiHooks.NetRateLimitDefaultsDelete(params.Scope, defaultsRuleIdent(params.Scope, params.RuleIdent)); err != nil {
+	if err := ApiHooks.NetRateLimitDefaultsDelete(params.HTTPRequest.Context(), params.Scope, defaultsRuleIdent(params.Scope, params.RuleIdent)); err != nil {
 		tk.LogIt(tk.LogError, "[AIRateLimitDefaults] Failed to delete defaults (%s): %v\n", params.Scope, err)
 		if resp := keyStoreFailure(err); resp != nil {
 			return resp

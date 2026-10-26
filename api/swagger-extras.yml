@@ -818,6 +818,16 @@ paths:
             # (api/restapi/handler/ai_apikey.go), which is SimpleError.
             $ref: '#/definitions/SimpleError'
 
+        '504':
+          description: >-
+            Write outcome unknown (code ai_key_store_outcome_unknown). The
+            statement was handed to the API-key store and the store did not
+            answer within the operation budget; the store may still apply it
+            when it resumes. Not a 503: nothing says the write did not happen.
+            Read the resource back (GET) before deciding whether to retry; a
+            blind retry of a non-idempotent write can create a second row.
+          schema:
+            $ref: '#/definitions/Error'
 definitions:
   RawError:
     description: >

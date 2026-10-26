@@ -17,6 +17,7 @@
 package aikey
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -149,7 +150,7 @@ func TestClassLKGRoundTrip(t *testing.T) {
 	// A gateway that starts with the store unreachable reads it back.
 	next := &Service{Cache: cache.New(time.Minute, time.Minute)}
 	next.class.dir.Store(&dir)
-	if err := next.RefreshClasses(); !errors.Is(err, ErrDBUnavailable) {
+	if err := next.RefreshClasses(context.Background()); !errors.Is(err, ErrDBUnavailable) {
 		t.Fatalf("refresh with no store = %v, want ErrDBUnavailable", err)
 	}
 	if next.Classes() != nil {
@@ -258,16 +259,16 @@ func TestObjectiveStore(t *testing.T) {
 	dir := t.TempDir()
 	svc.class.dir.Store(&dir)
 
-	if err := svc.SetObjective(cmn.AIObjectiveEntry{Name: "realtime", Priority: 10, Services: []string{"10.0.0.2:80", "10.0.0.1:80"}}); err != nil {
+	if err := svc.SetObjective(context.Background(), cmn.AIObjectiveEntry{Name: "realtime", Priority: 10, Services: []string{"10.0.0.2:80", "10.0.0.1:80"}}); err != nil {
 		t.Fatalf("set: %v", err)
 	}
-	if err := svc.SetObjective(cmn.AIObjectiveEntry{Name: "batch", Priority: -5}); err != nil {
+	if err := svc.SetObjective(context.Background(), cmn.AIObjectiveEntry{Name: "batch", Priority: -5}); err != nil {
 		t.Fatalf("set: %v", err)
 	}
-	if err := svc.SetObjective(cmn.AIObjectiveEntry{Name: "bad name"}); err == nil {
+	if err := svc.SetObjective(context.Background(), cmn.AIObjectiveEntry{Name: "bad name"}); err == nil {
 		t.Errorf("an invalid objective was stored")
 	}
-	list, err := svc.ListObjectives()
+	list, err := svc.ListObjectives(context.Background())
 	if err != nil || len(list) != 2 || list[0].Name != "batch" || list[1].Name != "realtime" {
 		t.Fatalf("list = %+v, %v; want batch, realtime", list, err)
 	}
@@ -283,16 +284,16 @@ func TestObjectiveStore(t *testing.T) {
 		t.Errorf("the file does not hold the objectives: %v", err)
 	}
 	// Replace.
-	if err := svc.SetObjective(cmn.AIObjectiveEntry{Name: "batch", Priority: -1}); err != nil {
+	if err := svc.SetObjective(context.Background(), cmn.AIObjectiveEntry{Name: "batch", Priority: -1}); err != nil {
 		t.Fatalf("replace: %v", err)
 	}
 	if p := svc.Classes().Objectives["batch"].Priority; p != -1 {
 		t.Errorf("batch priority after a replace = %d, want -1", p)
 	}
-	if err := svc.DeleteObjective("batch"); err != nil {
+	if err := svc.DeleteObjective(context.Background(), "batch"); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
-	if err := svc.DeleteObjective("batch"); !errors.Is(err, ErrNotFound) {
+	if err := svc.DeleteObjective(context.Background(), "batch"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("deleting it again = %v, want not found", err)
 	}
 	if _, ok := svc.Classes().Objectives["batch"]; ok {
@@ -305,62 +306,62 @@ func TestTenantAndKeyClassStore(t *testing.T) {
 
 	// A tenant with limits keeps them when its class is written, and the
 	// other way round.
-	if err := svc.SetTenantRateLimit("t1", 25, 120000, 40); err != nil {
+	if err := svc.SetTenantRateLimit(context.Background(), "t1", 25, 120000, 40); err != nil {
 		t.Fatal(err)
 	}
 	want := cmn.AIClassPolicy{PriorityClass: "standard", DefaultObjective: "batch", AllowedObjectives: []string{"batch", "realtime"}}
-	if err := svc.SetTenantClass("t1", cmn.AIClassPolicy{PriorityClass: "standard", DefaultObjective: "batch", AllowedObjectives: []string{"realtime", "batch"}}); err != nil {
+	if err := svc.SetTenantClass(context.Background(), "t1", cmn.AIClassPolicy{PriorityClass: "standard", DefaultObjective: "batch", AllowedObjectives: []string{"realtime", "batch"}}); err != nil {
 		t.Fatalf("set tenant class: %v", err)
 	}
 	svc.Cache.Flush()
 	if rps, tpm, burst, err := svc.GetTenantRateLimit("t1"); err != nil || rps != 25 || tpm != 120000 || burst != 40 {
 		t.Errorf("limits after a class write = %d, %d, %d, %v", rps, tpm, burst, err)
 	}
-	if err := svc.SetTenantRateLimit("t1", 30, 1000, 0); err != nil {
+	if err := svc.SetTenantRateLimit(context.Background(), "t1", 30, 1000, 0); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := svc.GetTenantClass("t1"); err != nil || !reflect.DeepEqual(got, want) {
+	if got, err := svc.GetTenantClass(context.Background(), "t1"); err != nil || !reflect.DeepEqual(got, want) {
 		t.Errorf("class after a limits write = %+v, %v; want %+v", got, err, want)
 	}
 	// A tenant with a class and no limits has no limits.
-	if err := svc.SetTenantClass("t2", cmn.AIClassPolicy{PriorityClass: "sheddable"}); err != nil {
+	if err := svc.SetTenantClass(context.Background(), "t2", cmn.AIClassPolicy{PriorityClass: "sheddable"}); err != nil {
 		t.Fatal(err)
 	}
 	svc.Cache.Flush()
 	if rps, tpm, burst, err := svc.GetTenantRateLimit("t2"); err != nil || rps != 0 || tpm != 0 || burst != 0 {
 		t.Errorf("limits of a class-only tenant = %d, %d, %d, %v; want zeroes", rps, tpm, burst, err)
 	}
-	if got, err := svc.GetTenantClass("nobody"); err != nil || !got.IsZero() {
+	if got, err := svc.GetTenantClass(context.Background(), "nobody"); err != nil || !got.IsZero() {
 		t.Errorf("class of a tenant with no row = %+v, %v; want none", got, err)
 	}
 	for _, bad := range []string{"", "a|b"} {
-		if err := svc.SetTenantClass(bad, cmn.AIClassPolicy{PriorityClass: "standard"}); err == nil {
+		if err := svc.SetTenantClass(context.Background(), bad, cmn.AIClassPolicy{PriorityClass: "standard"}); err == nil {
 			t.Errorf("tenant id %q accepted", bad)
 		}
 	}
-	if err := svc.SetTenantClass("t1", cmn.AIClassPolicy{PriorityClass: "urgent"}); err == nil {
+	if err := svc.SetTenantClass(context.Background(), "t1", cmn.AIClassPolicy{PriorityClass: "urgent"}); err == nil {
 		t.Errorf("an unknown class was stored")
 	}
 
 	// Keys.
-	_, keyID, err := svc.CreateAPIKey(cmn.ApiKeyEntry{TenantID: "t1", Name: "k", Enabled: true})
+	_, keyID, err := svc.CreateAPIKey(context.Background(), cmn.ApiKeyEntry{TenantID: "t1", Name: "k", Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, err := svc.GetAPIKeyClass(keyID); err != nil || !got.IsZero() {
+	if got, err := svc.GetAPIKeyClass(context.Background(), keyID); err != nil || !got.IsZero() {
 		t.Errorf("class of a new key = %+v, %v; want none", got, err)
 	}
 	keyWant := cmn.AIClassPolicy{PriorityClass: "sheddable", AllowedObjectives: []string{"batch"}}
-	if err := svc.SetAPIKeyClass(keyID, keyWant); err != nil {
+	if err := svc.SetAPIKeyClass(context.Background(), keyID, keyWant); err != nil {
 		t.Fatalf("set key class: %v", err)
 	}
-	if got, err := svc.GetAPIKeyClass(keyID); err != nil || !reflect.DeepEqual(got, keyWant) {
+	if got, err := svc.GetAPIKeyClass(context.Background(), keyID); err != nil || !reflect.DeepEqual(got, keyWant) {
 		t.Errorf("key class = %+v, %v; want %+v", got, err, keyWant)
 	}
-	if err := svc.SetAPIKeyClass("no-such-key", keyWant); !errors.Is(err, ErrNotFound) {
+	if err := svc.SetAPIKeyClass(context.Background(), "no-such-key", keyWant); !errors.Is(err, ErrNotFound) {
 		t.Errorf("class of a key that does not exist = %v, want not found", err)
 	}
-	if _, err := svc.GetAPIKeyClass("no-such-key"); !errors.Is(err, ErrNotFound) {
+	if _, err := svc.GetAPIKeyClass(context.Background(), "no-such-key"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("reading it = %v, want not found", err)
 	}
 
@@ -373,7 +374,7 @@ func TestTenantAndKeyClassStore(t *testing.T) {
 		t.Errorf("keys in the snapshot = %+v", snap.Keys)
 	}
 	// Clearing a class takes the row out of it.
-	if err := svc.SetTenantClass("t2", cmn.AIClassPolicy{}); err != nil {
+	if err := svc.SetTenantClass(context.Background(), "t2", cmn.AIClassPolicy{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := svc.Classes().Tenants["t2"]; ok {
@@ -387,7 +388,7 @@ func TestClassOutage(t *testing.T) {
 	svc := storeFixture(t)
 	dir := t.TempDir()
 	svc.class.dir.Store(&dir)
-	if err := svc.SetObjective(cmn.AIObjectiveEntry{Name: "realtime", Priority: 10}); err != nil {
+	if err := svc.SetObjective(context.Background(), cmn.AIObjectiveEntry{Name: "realtime", Priority: 10}); err != nil {
 		t.Fatal(err)
 	}
 	before := svc.Classes()
@@ -402,16 +403,16 @@ func TestClassOutage(t *testing.T) {
 	if src, _, ticks := svc.ClassSource(); src != cmn.AIClassSourceStore || ticks != 0 {
 		t.Errorf("source %s, file intervals %d during an outage after a read; want store, 0", src, ticks)
 	}
-	if err := svc.SetObjective(cmn.AIObjectiveEntry{Name: "x", Priority: 1}); !errors.Is(err, ErrDBUnavailable) {
+	if err := svc.SetObjective(context.Background(), cmn.AIObjectiveEntry{Name: "x", Priority: 1}); !errors.Is(err, ErrDBUnavailable) {
 		t.Errorf("set objective during an outage = %v, want ErrDBUnavailable", err)
 	}
-	if err := svc.DeleteObjective("realtime"); !errors.Is(err, ErrDBUnavailable) {
+	if err := svc.DeleteObjective(context.Background(), "realtime"); !errors.Is(err, ErrDBUnavailable) {
 		t.Errorf("delete objective during an outage = %v, want ErrDBUnavailable", err)
 	}
-	if err := svc.SetTenantClass("t1", cmn.AIClassPolicy{PriorityClass: "standard"}); !errors.Is(err, ErrDBUnavailable) {
+	if err := svc.SetTenantClass(context.Background(), "t1", cmn.AIClassPolicy{PriorityClass: "standard"}); !errors.Is(err, ErrDBUnavailable) {
 		t.Errorf("set tenant class during an outage = %v, want ErrDBUnavailable", err)
 	}
-	if _, err := svc.ListObjectives(); !errors.Is(err, ErrDBUnavailable) {
+	if _, err := svc.ListObjectives(context.Background()); !errors.Is(err, ErrDBUnavailable) {
 		t.Errorf("list during an outage = %v, want ErrDBUnavailable", err)
 	}
 }

@@ -16,6 +16,7 @@
 package user
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -43,11 +44,11 @@ func TestU25_PreviousPasswordQuerySelectsWhatItScans(t *testing.T) {
 	// for ValidateUser, which scans two.
 	var one string
 	insertUserRow(t, svc, "arity", mustHash(t, "Admin123!"), "admin")
-	if err := pool.QueryRow(SelectUserPasswordOnlyQuery, "arity").Scan(&one); err != nil {
+	if err := pool.QueryRowContext(context.Background(), SelectUserPasswordOnlyQuery, "arity").Scan(&one); err != nil {
 		t.Fatalf("previous-password query does not scan into one destination: %v", err)
 	}
 	var hash, role string
-	if err := pool.QueryRow(SelectUserPasswordQuery, "arity").Scan(&hash, &role); err != nil {
+	if err := pool.QueryRowContext(context.Background(), SelectUserPasswordQuery, "arity").Scan(&hash, &role); err != nil {
 		t.Fatalf("ValidateUser's query does not scan into two destinations: %v", err)
 	}
 	if one != hash {
@@ -59,16 +60,16 @@ func TestU25_PreviousPasswordQuerySelectsWhatItScans(t *testing.T) {
 	// the retry budget failing.
 	id := userID(t, svc, "arity")
 	start := time.Now()
-	if err := svc.UpdateUser(cmn.User{ID: id, Username: "arity", Password: "Rotated9!x"}); err != nil {
+	if err := svc.UpdateUser(context.Background(), cmn.User{ID: id, Username: "arity", Password: "Rotated9!x"}); err != nil {
 		t.Fatalf("password change failed: %v", err)
 	}
 	if elapsed := time.Since(start); elapsed > 3*time.Second {
 		t.Errorf("password change took %v — the retry ladder is still being walked", elapsed)
 	}
-	if _, ok, err := svc.ValidateUser("arity", "Rotated9!x"); err != nil || !ok {
+	if _, ok, err := svc.ValidateUser(context.Background(), "arity", "Rotated9!x"); err != nil || !ok {
 		t.Fatalf("the new password does not authenticate: ok=%v err=%v", ok, err)
 	}
-	if _, ok, _ := svc.ValidateUser("arity", "Admin123!"); ok {
+	if _, ok, _ := svc.ValidateUser(context.Background(), "arity", "Admin123!"); ok {
 		t.Error("the old password still authenticates")
 	}
 }
@@ -78,19 +79,19 @@ func TestU25_PreviousPasswordQuerySelectsWhatItScans(t *testing.T) {
 func TestU26_GetUsersWithRowsPresent(t *testing.T) {
 	svc := storeFixture(t)
 
-	if users, err := svc.GetUsers(); err != nil || len(users) != 0 {
+	if users, err := svc.GetUsers(context.Background()); err != nil || len(users) != 0 {
 		t.Fatalf("empty store: users=%d err=%v", len(users), err)
 	}
 
 	before := time.Now().Add(-time.Second)
-	if _, err := svc.AddUser(cmn.User{Username: "listed", Password: "Admin123!", Role: "admin", CreatedAt: time.Now()}); err != nil {
+	if _, err := svc.AddUser(context.Background(), cmn.User{Username: "listed", Password: "Admin123!", Role: "admin", CreatedAt: time.Now()}); err != nil {
 		t.Fatalf("AddUser: %v", err)
 	}
-	if _, err := svc.AddUser(cmn.User{Username: "listed2", Password: "Viewer99!", Role: "viewer", CreatedAt: time.Now()}); err != nil {
+	if _, err := svc.AddUser(context.Background(), cmn.User{Username: "listed2", Password: "Viewer99!", Role: "viewer", CreatedAt: time.Now()}); err != nil {
 		t.Fatalf("AddUser: %v", err)
 	}
 
-	users, err := svc.GetUsers()
+	users, err := svc.GetUsers(context.Background())
 	if err != nil {
 		t.Fatalf("GetUsers failed with rows present — the defect this gate exists for: %v", err)
 	}
@@ -130,19 +131,19 @@ func TestU27_TokensAreHashedAtRest(t *testing.T) {
 		t.Fatalf("no store: %v", err)
 	}
 
-	token, ok, err := svc.Login("tokuser", "Admin123!")
+	token, ok, err := svc.Login(context.Background(), "tokuser", "Admin123!")
 	if err != nil || !ok || token == "" {
 		t.Fatalf("login: token=%q ok=%v err=%v", token, ok, err)
 	}
 
 	// The raw token still validates — the scheme has to work, not merely be
 	// unreadable.
-	if _, err := svc.ValidateToken(token); err != nil {
+	if _, err := svc.ValidateToken(context.Background(), token); err != nil {
 		t.Fatalf("the issued token does not validate: %v", err)
 	}
 
 	// A dump of the table contains no usable credential.
-	rows, err := pool.Query(fmt.Sprintf("SELECT token_hash, username, role FROM %s.token", Schema))
+	rows, err := pool.QueryContext(context.Background(), fmt.Sprintf("SELECT token_hash, username, role FROM %s.token", Schema))
 	if err != nil {
 		t.Fatalf("dump token table: %v", err)
 	}
@@ -164,7 +165,7 @@ func TestU27_TokensAreHashedAtRest(t *testing.T) {
 			t.Errorf("stored value is %d characters, want a 64-character sha256 hex", len(stored))
 		}
 		// The decisive check: what is in the table must not authenticate.
-		if _, err := svc.ValidateToken(stored); err == nil {
+		if _, err := svc.ValidateToken(context.Background(), stored); err == nil {
 			t.Error("the value stored in the table authenticates — a database dump yields live credentials")
 		}
 	}
@@ -184,7 +185,7 @@ func TestU27_TokensAreHashedAtRest(t *testing.T) {
 	// The hash column is unique, so one stored credential cannot be made to
 	// stand for two sessions, and a replayed insert is refused by the store
 	// rather than silently accepted.
-	if _, err := pool.Exec(InsertTokenQuery, hashToken(token), "tokuser", time.Now().Add(time.Hour), "admin"); err == nil {
+	if _, err := pool.ExecContext(context.Background(), InsertTokenQuery, hashToken(token), "tokuser", time.Now().Add(time.Hour), "admin"); err == nil {
 		t.Error("a second row with the same token hash was accepted — the hash is not unique")
 	}
 
@@ -217,13 +218,13 @@ func TestU28w_InvalidRolesAreRefusedAtWriteTime(t *testing.T) {
 	svc := storeFixture(t)
 
 	for _, role := range []string{"operator", "Admin", "ADMIN", "viewers", "", "admin ", "reviewer"} {
-		_, err := svc.AddUser(cmn.User{Username: "role-" + role, Password: "Admin123!", Role: role, CreatedAt: time.Now()})
+		_, err := svc.AddUser(context.Background(), cmn.User{Username: "role-" + role, Password: "Admin123!", Role: role, CreatedAt: time.Now()})
 		if !errors.Is(err, cmn.ErrInvalidRole) {
 			t.Errorf("AddUser with role %q: err=%v, want ErrInvalidRole", role, err)
 		}
 	}
 	for _, role := range []string{"admin", "viewer"} {
-		if _, err := svc.AddUser(cmn.User{Username: "ok-" + role, Password: "Admin123!", Role: role, CreatedAt: time.Now()}); err != nil {
+		if _, err := svc.AddUser(context.Background(), cmn.User{Username: "ok-" + role, Password: "Admin123!", Role: role, CreatedAt: time.Now()}); err != nil {
 			t.Errorf("AddUser with role %q was refused: %v", role, err)
 		}
 	}
@@ -234,7 +235,7 @@ func TestU28w_InvalidRolesAreRefusedAtWriteTime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("no store: %v", err)
 	}
-	if _, err := pool.Exec(fmt.Sprintf(
+	if _, err := pool.ExecContext(context.Background(), fmt.Sprintf(
 		`INSERT INTO %s.users (username, password, created_at, role) VALUES ($1, $2, $3, $4)`, Schema),
 		"handwritten", "x", time.Now(), "operator"); err == nil {
 		t.Error("a row with an unimplemented role was accepted by the database")
@@ -246,7 +247,7 @@ func TestU28w_InvalidRolesAreRefusedAtWriteTime(t *testing.T) {
 func TestU29_ReconnectWithConcurrentValidators(t *testing.T) {
 	svc := storeFixture(t)
 	insertUserRow(t, svc, "racer", mustHash(t, "Admin123!"), "admin")
-	token, ok, err := svc.Login("racer", "Admin123!")
+	token, ok, err := svc.Login(context.Background(), "racer", "Admin123!")
 	if err != nil || !ok {
 		t.Fatalf("login: %v", err)
 	}
@@ -272,7 +273,7 @@ func TestU29_ReconnectWithConcurrentValidators(t *testing.T) {
 				// Validating from cache and from the store, while the pool is
 				// replaced underneath. The cache hit is the common path and
 				// the store read is the one that holds a handle.
-				if _, err := svc.ValidateToken(token); err != nil && !errors.Is(err, cmn.ErrTokenNotFound) {
+				if _, err := svc.ValidateToken(context.Background(), token); err != nil && !errors.Is(err, cmn.ErrTokenNotFound) {
 					// A closed pool would surface here. ErrDBUnavailable is
 					// acceptable only if the service is genuinely degraded,
 					// which it never is in this test.
@@ -314,11 +315,11 @@ func TestU30_CacheTTLIsBoundedByExpiry(t *testing.T) {
 		t.Fatalf("generate: %v", err)
 	}
 	expiry := time.Now().Add(10 * time.Second)
-	if _, err := pool.Exec(InsertTokenQuery, hashToken(raw), "ttluser", expiry, "admin"); err != nil {
+	if _, err := pool.ExecContext(context.Background(), InsertTokenQuery, hashToken(raw), "ttluser", expiry, "admin"); err != nil {
 		t.Fatalf("seed token: %v", err)
 	}
 
-	if _, err := svc.ValidateToken(raw); err != nil {
+	if _, err := svc.ValidateToken(context.Background(), raw); err != nil {
 		t.Fatalf("a live token was rejected: %v", err)
 	}
 	_, expiresAt, found := svc.Cache.GetWithExpiration(hashToken(raw))
@@ -335,10 +336,10 @@ func TestU30_CacheTTLIsBoundedByExpiry(t *testing.T) {
 
 	// And the ceiling still applies to a long-lived token.
 	long, _ := generateToken()
-	if _, err := pool.Exec(InsertTokenQuery, hashToken(long), "ttluser", time.Now().Add(24*time.Hour), "admin"); err != nil {
+	if _, err := pool.ExecContext(context.Background(), InsertTokenQuery, hashToken(long), "ttluser", time.Now().Add(24*time.Hour), "admin"); err != nil {
 		t.Fatalf("seed token: %v", err)
 	}
-	if _, err := svc.ValidateToken(long); err != nil {
+	if _, err := svc.ValidateToken(context.Background(), long); err != nil {
 		t.Fatalf("validate: %v", err)
 	}
 	_, longExpiry, found := svc.Cache.GetWithExpiration(hashToken(long))
@@ -356,8 +357,8 @@ func TestU31_LoginDoesNotEnumerateUsers(t *testing.T) {
 	svc := storeFixture(t)
 	insertUserRow(t, svc, "known", mustHash(t, "Admin123!"), "admin")
 
-	tokMissing, okMissing, errMissing := svc.Login("no-such-user", "Admin123!")
-	tokWrong, okWrong, errWrong := svc.Login("known", "WrongPass1!")
+	tokMissing, okMissing, errMissing := svc.Login(context.Background(), "no-such-user", "Admin123!")
+	tokWrong, okWrong, errWrong := svc.Login(context.Background(), "known", "WrongPass1!")
 
 	if okMissing || okWrong || tokMissing != "" || tokWrong != "" {
 		t.Fatalf("a login succeeded that should not have: missing=%v/%q wrong=%v/%q", okMissing, tokMissing, okWrong, tokWrong)
@@ -375,11 +376,11 @@ func TestU31_LoginDoesNotEnumerateUsers(t *testing.T) {
 	var missingTotal, wrongTotal time.Duration
 	for i := 0; i < rounds; i++ {
 		start := time.Now()
-		_, _, _ = svc.Login("no-such-user", "Admin123!")
+		_, _, _ = svc.Login(context.Background(), "no-such-user", "Admin123!")
 		missingTotal += time.Since(start)
 
 		start = time.Now()
-		_, _, _ = svc.Login("known", "WrongPass1!")
+		_, _, _ = svc.Login(context.Background(), "known", "WrongPass1!")
 		wrongTotal += time.Since(start)
 	}
 	missing := missingTotal / rounds
@@ -409,16 +410,16 @@ func TestU23_RevocationIsCompleteAndPlaneScoped(t *testing.T) {
 	var published [][]string
 	svc.SetTokenSink(func(h []string) { published = append(published, h) })
 
-	token, ok, err := svc.Login("doomed", "Admin123!")
+	token, ok, err := svc.Login(context.Background(), "doomed", "Admin123!")
 	if err != nil || !ok {
 		t.Fatalf("login: %v", err)
 	}
-	if _, err := svc.ValidateToken(token); err != nil {
+	if _, err := svc.ValidateToken(context.Background(), token); err != nil {
 		t.Fatalf("fresh token rejected: %v", err)
 	}
 
 	id := userID(t, svc, "doomed")
-	if err := svc.DeleteUser(id); err != nil {
+	if err := svc.DeleteUser(context.Background(), id); err != nil {
 		t.Fatalf("DeleteUser: %v", err)
 	}
 
@@ -426,7 +427,7 @@ func TestU23_RevocationIsCompleteAndPlaneScoped(t *testing.T) {
 	// peers were told. Before this, the account vanished and its sessions kept
 	// working for up to their full lifetime.
 	var tokenRows int
-	if err := pool.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM %s.token", Schema)).Scan(&tokenRows); err != nil {
+	if err := pool.QueryRowContext(context.Background(), fmt.Sprintf("SELECT COUNT(*) FROM %s.token", Schema)).Scan(&tokenRows); err != nil {
 		t.Fatalf("count tokens: %v", err)
 	}
 	if tokenRows != 0 {
@@ -435,7 +436,7 @@ func TestU23_RevocationIsCompleteAndPlaneScoped(t *testing.T) {
 	if _, found := svc.Cache.Get(hashToken(token)); found {
 		t.Error("the deleted user's token is still in the local cache")
 	}
-	if _, err := svc.ValidateToken(token); err == nil {
+	if _, err := svc.ValidateToken(context.Background(), token); err == nil {
 		t.Error("the deleted user's token still authenticates")
 	}
 	if len(published) != 1 || len(published[0]) != 1 || published[0][0] != hashToken(token) {
@@ -454,16 +455,16 @@ func TestU23_RevocationIsCompleteAndPlaneScoped(t *testing.T) {
 func TestU23b_RoleChangeRevokesSessions(t *testing.T) {
 	svc := storeFixture(t)
 	insertUserRow(t, svc, "demoted", mustHash(t, "Admin123!"), "admin")
-	token, ok, err := svc.Login("demoted", "Admin123!")
+	token, ok, err := svc.Login(context.Background(), "demoted", "Admin123!")
 	if err != nil || !ok {
 		t.Fatalf("login: %v", err)
 	}
 
 	id := userID(t, svc, "demoted")
-	if err := svc.UpdateUser(cmn.User{ID: id, Username: "demoted", Password: "Viewer99!", Role: "viewer"}); err != nil {
+	if err := svc.UpdateUser(context.Background(), cmn.User{ID: id, Username: "demoted", Password: "Viewer99!", Role: "viewer"}); err != nil {
 		t.Fatalf("UpdateUser: %v", err)
 	}
-	if _, err := svc.ValidateToken(token); err == nil {
+	if _, err := svc.ValidateToken(context.Background(), token); err == nil {
 		t.Error("a token issued as admin still authenticates after the account was demoted to viewer")
 	}
 }

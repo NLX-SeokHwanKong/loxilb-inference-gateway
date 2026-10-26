@@ -17,6 +17,7 @@
 package loxinet
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strconv"
@@ -89,7 +90,9 @@ func (na *NetAPIStruct) NetFcTenantSlotsWarning(lm *cmn.LbRuleMod) string {
 	if store == nil {
 		return ""
 	}
-	known, err := store.KnownTenantCount()
+	// No request to inherit from here: the rule apply runs on its own, so
+	// the operation budget alone bounds the count.
+	known, err := store.KnownTenantCount(context.Background())
 	if err != nil {
 		return ""
 	}

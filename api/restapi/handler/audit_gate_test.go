@@ -683,7 +683,7 @@ type loginStubHook struct {
 	valid bool
 }
 
-func (s *loginStubHook) NetUserLogin(um *cmn.User) (string, bool, error) {
+func (s *loginStubHook) NetUserLogin(_ context.Context, um *cmn.User) (string, bool, error) {
 	if !s.valid {
 		return "", false, nil
 	}

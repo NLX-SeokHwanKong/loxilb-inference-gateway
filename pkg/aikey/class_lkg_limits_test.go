@@ -17,6 +17,7 @@
 package aikey
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -190,12 +191,12 @@ func TestClassPublishNeverGoesBack(t *testing.T) {
 // it; 503 only when nothing was applied yet.
 func TestObjectiveListDuringAnOutage(t *testing.T) {
 	svc, dir := classFixture(t)
-	if _, err := svc.ObjectiveList(); !errors.Is(err, ErrDBUnavailable) {
+	if _, err := svc.ObjectiveList(context.Background()); !errors.Is(err, ErrDBUnavailable) {
 		t.Errorf("nothing applied, no store = %v, want unavailable", err)
 	}
 	svc.writeClassLKG(sampleWithLimits())
 	next := startedFromFile(t, dir)
-	got, err := next.ObjectiveList()
+	got, err := next.ObjectiveList(context.Background())
 	if err != nil {
 		t.Fatalf("applied list during an outage: %v", err)
 	}
@@ -215,7 +216,7 @@ func TestObjectiveListDuringAnOutage(t *testing.T) {
 	at := time.Date(2026, 10, 14, 5, 0, 0, 0, time.UTC)
 	next.publishClasses(&ClassSnapshot{Source: cmn.AIClassSourceStore, Gen: 9, ReadAt: at,
 		Objectives: map[string]cmn.AIObjectiveEntry{"only": {Name: "only"}}})
-	if got, err = next.ObjectiveList(); err != nil || got.Source != cmn.AIClassSourceStore ||
+	if got, err = next.ObjectiveList(context.Background()); err != nil || got.Source != cmn.AIClassSourceStore ||
 		!got.SourceTimestamp.Equal(at) || len(got.Objectives) != 1 || got.StoreReachable {
 		t.Errorf("applied store list = %+v, %v", got, err)
 	}
@@ -246,7 +247,7 @@ func TestStoreHealthFollowsTheLatestRead(t *testing.T) {
 	// store configured is a read that did not answer.
 	svc = &Service{}
 	svc.noteStoreRead(svc.class.readGen.Add(1), nil)
-	if err := svc.RefreshClasses(); err == nil {
+	if err := svc.RefreshClasses(context.Background()); err == nil {
 		t.Fatal("a refresh without a store answered")
 	}
 	if ok, _ := svc.StoreHealth(); ok {
@@ -282,19 +283,19 @@ func TestLimitWritesReachTheFileAtOnce(t *testing.T) {
 	svc.class.dir.Store(&dir)
 	// Each write is read back from the file before the next one: a later
 	// write's refresh must not stand in for an earlier write's own.
-	if err := svc.SetTenantRateLimit("t-new", 7, 700, 0); err != nil {
+	if err := svc.SetTenantRateLimit(context.Background(), "t-new", 7, 700, 0); err != nil {
 		t.Fatal(err)
 	}
 	if rps, tpm, _, err := startedFromFile(t, dir).GetTenantRateLimit("t-new"); err != nil || rps != 7 || tpm != 700 {
 		t.Errorf("a tenant limit written just before the restart = %d, %d, %v", rps, tpm, err)
 	}
-	if err := svc.SetTenantModelRateLimit("t-new", "m1", 70); err != nil {
+	if err := svc.SetTenantModelRateLimit(context.Background(), "t-new", "m1", 70); err != nil {
 		t.Fatal(err)
 	}
 	if tpm, err := startedFromFile(t, dir).GetTenantModelRateLimit("t-new", "m1"); err != nil || tpm != 70 {
 		t.Errorf("a model limit written just before the restart = %d, %v", tpm, err)
 	}
-	if err := svc.SetRateLimitDefaults(cmn.RateLimitDefaultsEntry{Scope: cmn.RateLimitScopeGlobal, DefaultTenantRPS: 2}); err != nil {
+	if err := svc.SetRateLimitDefaults(context.Background(), cmn.RateLimitDefaultsEntry{Scope: cmn.RateLimitScopeGlobal, DefaultTenantRPS: 2}); err != nil {
 		t.Fatal(err)
 	}
 	if g, ok, err := startedFromFile(t, dir).GetRateLimitDefaults(cmn.RateLimitScopeGlobal, ""); err != nil || !ok || g.DefaultTenantRPS != 2 {
@@ -308,7 +309,7 @@ func TestObjectiveListSaysTheStoreAnswered(t *testing.T) {
 	svc := storeFixture(t)
 	svc.noteStoreRead(svc.class.readGen.Add(1), ErrDBUnavailable)
 	before := time.Now().UTC()
-	got, err := svc.ObjectiveList()
+	got, err := svc.ObjectiveList(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}

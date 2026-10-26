@@ -282,3 +282,48 @@ func (o *PutAuthUsersIDServiceUnavailable) WriteResponse(rw http.ResponseWriter,
 		}
 	}
 }
+
+// PutAuthUsersIDGatewayTimeoutCode is the HTTP code returned for type PutAuthUsersIDGatewayTimeout
+const PutAuthUsersIDGatewayTimeoutCode int = 504
+
+/*
+PutAuthUsersIDGatewayTimeout Write outcome unknown (result store_outcome_unknown). The statement was handed to the management credential store and the store did not answer within the operation budget; the store may still apply it when it resumes. Not a 503: nothing says the write did not happen. Read the resource back before deciding whether to retry.
+
+swagger:response putAuthUsersIdGatewayTimeout
+*/
+type PutAuthUsersIDGatewayTimeout struct {
+
+	/*
+	  In: Body
+	*/
+	Payload *models.Error `json:"body,omitempty"`
+}
+
+// NewPutAuthUsersIDGatewayTimeout creates PutAuthUsersIDGatewayTimeout with default headers values
+func NewPutAuthUsersIDGatewayTimeout() *PutAuthUsersIDGatewayTimeout {
+
+	return &PutAuthUsersIDGatewayTimeout{}
+}
+
+// WithPayload adds the payload to the put auth users Id gateway timeout response
+func (o *PutAuthUsersIDGatewayTimeout) WithPayload(payload *models.Error) *PutAuthUsersIDGatewayTimeout {
+	o.Payload = payload
+	return o
+}
+
+// SetPayload sets the payload to the put auth users Id gateway timeout response
+func (o *PutAuthUsersIDGatewayTimeout) SetPayload(payload *models.Error) {
+	o.Payload = payload
+}
+
+// WriteResponse to the client
+func (o *PutAuthUsersIDGatewayTimeout) WriteResponse(rw http.ResponseWriter, producer runtime.Producer) {
+
+	rw.WriteHeader(504)
+	if o.Payload != nil {
+		payload := o.Payload
+		if err := producer.Produce(rw, payload); err != nil {
+			panic(err) // let the recovery middleware deal with this
+		}
+	}
+}
