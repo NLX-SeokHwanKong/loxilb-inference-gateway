@@ -94,7 +94,7 @@ const (
 	resultTimeout                             // the lookup budget expired
 	resultRefusedCircuit                      // refused: the circuit is open
 	resultRefusedInflight                     // refused: no slot inside the budget
-	resultUnavailable                         // another store failure, or not connected
+	resultUnavailable                         // the store could not be asked, answered with a server error, or is not connected
 	resultCount
 )
 
@@ -272,12 +272,16 @@ func (g *lookupGuard) pass() (lookupToken, bool) {
 // before the state last changed (its generation is stale) is counted and
 // nothing more, so a statement that completes late cannot re-open a circuit
 // that has since recovered, nor close one its peers have just opened.
-func (g *lookupGuard) report(tok lookupToken, res lookupResult, took time.Duration) {
+//
+// failure says whether the outcome counts toward opening the circuit: a
+// round trip the store did not answer. The caller decides it from the error,
+// not from res alone, because an `unavailable` sample covers both a store
+// that could not be reached and one that replied with a server-side error.
+func (g *lookupGuard) report(tok lookupToken, res lookupResult, failure bool, took time.Duration) {
 	if tok.slot {
 		<-g.sem
 	}
 	g.observe(res, took)
-	failure := res == resultTimeout || res == resultUnavailable
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if tok.gen != g.gen {
@@ -381,8 +385,30 @@ func (s *Service) dataPathRead(fn func(ctx context.Context, db DBTX) error) erro
 		return err
 	}
 	err = fn(ctx, db)
-	s.guard.report(tok, classifyLookup(ctx, err), s.guardNow().Sub(start))
+	res := classifyLookup(ctx, err)
+	s.guard.report(tok, res, circuitFailure(res, err), s.guardNow().Sub(start))
 	return err
+}
+
+// circuitFailure reports whether one outcome counts toward opening the
+// circuit. The circuit protects worker time: it exists for a store that
+// holds a statement until the budget expires, and for a connection that
+// cannot be made. Those are the two shapes that count: a timeout, and an
+// error that readErr classifies as the store being unavailable (pool, dial,
+// socket, a statement never sent). A server-side error, such as a permission
+// or schema error, is an answer: the store was reached and replied at once,
+// no worker was parked, and holding the circuit open through a cool-down
+// after such an answer would only delay recovery once the cause is fixed.
+// It stays an `unavailable` sample and is refused on the caller's own arm.
+func circuitFailure(res lookupResult, err error) bool {
+	switch res {
+	case resultTimeout:
+		return true
+	case resultUnavailable:
+		return errors.Is(readErr(err), ErrDBUnavailable)
+	default:
+		return false
+	}
 }
 
 func (s *Service) guardNow() time.Time {

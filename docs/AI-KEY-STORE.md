@@ -225,7 +225,11 @@ ping and the snapshot refresher do not consult them.
 
 **The circuit.** It is closed while the store answers. A failure is a round
 trip the store did not answer: the budget expired or the connection failed. A
-row, and the store's "no such row", are answers and reset the count. A store
+row, and the store's "no such row", are answers and reset the count. So is an
+error the server itself returned, such as a permission or schema error: the
+store was reached and replied at once, no worker was parked, and the request
+is refused on its own arm, but the count does not move, so the next read
+after the cause is fixed is served without waiting out a cool-down. A store
 that is not connected yet fails fast without a round trip; it shows as
 zero-duration `unavailable` samples and does not move the circuit, so a
 reconnect is used as soon as it lands. After `LLB_AI_KEY_LOOKUP_CIRCUIT_FAILURES` failures in a
@@ -266,7 +270,9 @@ slot and a budget per unknown key under a flood.
 **Metrics.** `loxilb_ai_key_store_lookup_seconds{result}` is the time a worker
 spent on one data-path round trip, by how it ended (`miss_found`,
 `miss_invalid`, `timeout`, `refused_circuit`, `refused_inflight`,
-`unavailable`; cache hits are not round trips and are not counted);
+`unavailable`, the last covering a connection that failed, a server-side error
+and a store not yet connected; cache hits are not round trips and are not
+counted);
 `loxilb_ai_key_store_circuit_open` and `loxilb_ai_key_store_lookup_inflight`
 are the two gauges. Samples piling up at the 0.3 s bucket edge are the stall
 signature; `refused_circuit` rising with `circuit_open` at 1 is the guard

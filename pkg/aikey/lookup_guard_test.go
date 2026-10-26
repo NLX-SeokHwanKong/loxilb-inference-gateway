@@ -20,6 +20,8 @@ import (
 
 	cmn "github.com/loxilb-io/loxilb/common"
 	"github.com/loxilb-io/loxilb/pkg/pgstore"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // fakeClock is the guard's clock in these tests.
@@ -159,6 +161,43 @@ func TestCircuitOpensAfterConsecutiveFailuresAndRefusesWithoutTheStore(t *testin
 	}
 }
 
+// 2b. A server-side error is an answer, not a failure. The store was reached
+// and replied at once; no worker was parked, so the circuit has nothing to
+// protect and must not hold the gateway at 503 for a cool-down after the
+// cause is fixed (the ai-jwtauth QOS-OUT-004 shape: USAGE on the schema
+// revoked, three credentialed misses refused, USAGE granted again, the next
+// miss must be served). A connection that cannot be made still counts.
+func TestServerErrorsAreAnswersAndLeaveTheCircuitClosed(t *testing.T) {
+	db := newScriptDB(t)
+	svc, _ := guardedService(t, db, 4, 3, 1000)
+	denied := &pgconn.PgError{Code: "42501", Message: "permission denied for schema aigw"}
+	for i := 0; i < 5; i++ {
+		var pgErr *pgconn.PgError
+		if err := svc.dataPathRead(outcome(denied)); !errors.As(err, &pgErr) {
+			t.Fatalf("server error %d came back as %v, want the PgError unchanged", i, err)
+		}
+	}
+	if stateOf(svc) != circuitClosed {
+		t.Fatalf("state after 5 server errors = %v, want closed", stateOf(svc))
+	}
+	ran := false
+	if err := svc.dataPathRead(func(context.Context, DBTX) error { ran = true; return nil }); err != nil || !ran {
+		t.Fatalf("the read after the cause was fixed: err=%v ran=%v, want served at once", err, ran)
+	}
+	st := svc.LookupStats()
+	if st.Count[resultUnavailable] != 5 || st.Count[resultRefusedCircuit] != 0 || st.CircuitOpen {
+		t.Fatalf("stats = %+v", st)
+	}
+
+	// The connection failing is the other shape that counts.
+	for i := 0; i < 3; i++ {
+		_ = svc.dataPathRead(outcome(driver.ErrBadConn))
+	}
+	if stateOf(svc) != circuitOpen {
+		t.Fatalf("state after 3 dead connections = %v, want open", stateOf(svc))
+	}
+}
+
 // 3. ErrNoRows is an answer, not a failure: it resets the counter.
 func TestNoRowsIsAnAnswerAndResetsTheFailureCount(t *testing.T) {
 	db := newScriptDB(t)
@@ -273,7 +312,7 @@ func TestLateOutcomesFromBeforeATransitionDoNotMoveTheCircuit(t *testing.T) {
 	if stateOf(svc) != circuitOpen {
 		t.Fatal("precondition: the circuit should be open")
 	}
-	svc.guard.report(early, resultMissFound, time.Millisecond) // the late success
+	svc.guard.report(early, resultMissFound, false, time.Millisecond) // the late success
 	if stateOf(svc) != circuitOpen {
 		t.Fatal("a success admitted before the circuit opened closed it")
 	}
@@ -289,14 +328,14 @@ func TestLateOutcomesFromBeforeATransitionDoNotMoveTheCircuit(t *testing.T) {
 		t.Fatalf("probe not admitted after the cool-down: err=%v tok=%+v", err, probe)
 	}
 	stale := lookupToken{gen: early.gen}
-	svc.guard.report(stale, resultTimeout, time.Millisecond)
+	svc.guard.report(stale, resultTimeout, true, time.Millisecond)
 	if stateOf(svc) != circuitHalfOpen {
 		t.Fatalf("a stale failure moved a half-open circuit to %v", stateOf(svc))
 	}
 	if _, _, err := svc.guard.admit(ctx); !errors.Is(err, ErrDBUnavailable) {
 		t.Fatal("a stale failure gave the probe back while it was still out")
 	}
-	svc.guard.report(probe, resultMissFound, time.Millisecond)
+	svc.guard.report(probe, resultMissFound, false, time.Millisecond)
 	if stateOf(svc) != circuitClosed {
 		t.Fatal("the probe's success did not close the circuit")
 	}
