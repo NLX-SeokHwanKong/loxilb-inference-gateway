@@ -870,9 +870,12 @@ func (na *NetAPIStruct) NetBFDAdd(bm *cmn.BFDMod) (int, error) {
 		return CIErrBase, cmn.ErrBFDUnsupported
 	}
 	mh.mtx.Lock()
-	defer mh.mtx.Unlock()
-
-	_, err := mh.has.CIBFDSessionAdd(*bm)
+	ch := mh.has
+	mh.mtx.Unlock()
+	// Protocol notifications take the global mutex while holding the BFD
+	// table lock, so the session add takes mh.mtx only around its
+	// own cluster state, never across the table.
+	_, err := ch.CIBFDSessionAdd(*bm)
 	if err != nil {
 		return -1, err
 	}
@@ -886,9 +889,12 @@ func (na *NetAPIStruct) NetBFDDel(bm *cmn.BFDMod) (int, error) {
 		return CIErrBase, cmn.ErrBFDUnsupported
 	}
 	mh.mtx.Lock()
-	defer mh.mtx.Unlock()
-
-	_, err := mh.has.CIBFDSessionDel(*bm)
+	ch := mh.has
+	mh.mtx.Unlock()
+	// Protocol notifications take the global mutex while holding the BFD
+	// table lock, so the session delete takes mh.mtx only around its
+	// own cluster state, never across the table.
+	_, err := ch.CIBFDSessionDel(*bm)
 	if err != nil {
 		return -1, err
 	}
