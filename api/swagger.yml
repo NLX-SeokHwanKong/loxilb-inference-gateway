@@ -8211,8 +8211,25 @@ paths:
   '/config/ai/apikey':
     post:
       summary: Create a new API key
-      description: Creates a new API key for a tenant. The raw key is returned ONLY in this response.
+      description: >-
+        Creates a new API key for a tenant. The raw key is returned ONLY in this
+        response. A create is not idempotent by itself: an answer lost to a
+        store stall (504) may have left an enabled key whose secret nobody
+        holds, and a blind retry creates a second one. Send client_op_id (or
+        the Idempotency-Key header) and a retry converges on one row per
+        (tenant_id, client_op_id): while the key has never authenticated the
+        secret is minted again and delivered with the same key_id and
+        reused=true; once it has, the retry answers 409
+        api_key_already_delivered naming the key_id. The row's other fields
+        are the first request's.
       parameters:
+        - name: Idempotency-Key
+          in: header
+          type: string
+          required: false
+          description: >-
+            Same meaning as client_op_id in the body; the body field wins when
+            both are sent. At most 128 printable non-space ASCII characters.
         - name: body
           in: body
           required: true
@@ -8220,7 +8237,7 @@ paths:
             $ref: '#/definitions/ApiKeyCreateRequest'
       responses:
         '201':
-          description: Created
+          description: Created (reused=true when a retry converged on the row an earlier request with the same client_op_id created)
           schema:
             $ref: '#/definitions/ApiKeyCreateResponse'
         '400':
@@ -8236,7 +8253,13 @@ paths:
           schema:
             $ref: '#/definitions/Error'
         '409':
-          description: Imported API key is already registered
+          description: >-
+            Imported API key is already registered; or, with a client_op_id,
+            the key this operation created has already authenticated (code
+            api_key_already_delivered, the key_id in the result): its secret is
+            not delivered again. Delete and recreate the key to issue a new one.
+            A concurrent create carrying the same client_op_id is also 409:
+            read the key back.
           schema:
             $ref: '#/definitions/Error'
         '500':
@@ -8253,8 +8276,10 @@ paths:
             statement was handed to the API-key store and the store did not
             answer within the operation budget; the store may still apply it
             when it resumes. Not a 503: nothing says the write did not happen.
-            Read the resource back (GET) before deciding whether to retry; a
-            blind retry of a non-idempotent write can create a second row.
+            Read the resource back (GET, filtering the listing by tenant_id and
+            matching client_op_id) before deciding whether to retry; a blind
+            retry without a client_op_id can create a second row, a retry with
+            the same client_op_id converges on one.
           schema:
             $ref: '#/definitions/Error'
       operationId: postConfigAiApikey
@@ -17264,6 +17289,18 @@ definitions:
         type: boolean
         x-nullable: true
         description: Whether the API key is active. Absent = enabled (optional, nullable to distinguish unset).
+      client_op_id:
+        type: string
+        description: >-
+          Optional idempotency handle, at most 128 printable non-space ASCII
+          characters, unique per tenant (a UUID the client minted for this
+          create). A retry carrying the same value converges on the row the
+          first request created instead of making a second key: while that key
+          has never authenticated, its secret is minted again and delivered
+          with the same key_id (reused=true); once it has, 409
+          api_key_already_delivered. Also accepted as the Idempotency-Key
+          header. Absent, the create behaves as before and a retry after a 504
+          must first read the listing back.
       priority_class:
         type: string
         enum:
@@ -17298,12 +17335,17 @@ definitions:
       HTTP 201 creation result. key_id is the management handle. raw_key contains
       a secret only for generated credentials and is currently empty for imports.
       Protect generated secrets from logs; subsequent reads expose metadata only.
+      reused=true says a retry with the same client_op_id converged on the row an
+      earlier request created: same key_id, a new secret, the earlier secret no
+      longer authenticates.
     required:
       - raw_key
       # key_id is always set by the create handler, so it must serialize
       # unconditionally; without 'required' go-swagger emits omitempty and a
       # client has to null-check a field the server never omits.
       - key_id
+      # reused is a claim made on every answer; false must serialize too.
+      - reused
     properties:
       raw_key:
         type: string
@@ -17311,6 +17353,9 @@ definitions:
       key_id:
         type: string
         description: Unique identifier of the created API key
+      reused:
+        type: boolean
+        description: True when this answer is a retry's, converged on the row an earlier request with the same client_op_id created; the secret in raw_key is new and the one that answer carried no longer authenticates.
 
   ApiKeySummary:
     type: object
@@ -17370,6 +17415,13 @@ definitions:
       enabled:
         type: boolean
         description: Whether this key is currently active
+      client_op_id:
+        type: string
+        x-omitempty: true
+        description: >-
+          The idempotency handle the create carried, when it carried one. It
+          is how a key left by a create whose answer was lost (504) is found
+          in the listing and reconciled.
       priority_class:
         type: string
         enum:
@@ -17404,8 +17456,9 @@ definitions:
       POST replaces aggregate rps, tokens_per_min, and burst_pct; omission becomes
       zero, not preservation. Supplied model_limits are individual upserts or
       removals; omitted/empty model_limits preserves existing model rows.
-      Aggregate and model writes are sequential, not one transaction, so failure
-      can leave partial changes. Blank identifiers and malformed model entries
+      The aggregate row and the model rows are written in one transaction: the
+      body is applied whole or not at all, and a 504 (outcome unknown) means the
+      whole body may land. Blank identifiers and malformed model entries
       are not consistently rejected as 400. Configuration alone does not enable
       enforcement on a service. The class fields (priority_class,
       default_objective, allowed_objectives) are written by their own

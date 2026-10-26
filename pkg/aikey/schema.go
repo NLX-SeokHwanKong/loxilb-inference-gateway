@@ -78,6 +78,17 @@ var (
 	createAPIKeysHashIndex = fmt.Sprintf(
 		`CREATE UNIQUE INDEX IF NOT EXISTS uq_api_keys_key_hash ON %s.api_keys (key_hash)`, Schema)
 
+	// The idempotent create (CreateKey): the caller's operation id, the
+	// moment the key first authenticated, and one row per (tenant, id). The
+	// index is partial so keys created without an id are not in it.
+	alterAPIKeysAddClientOp = fmt.Sprintf(
+		`ALTER TABLE %s.api_keys ADD COLUMN IF NOT EXISTS client_op_id VARCHAR(128)`, Schema)
+	alterAPIKeysAddFirstUsed = fmt.Sprintf(
+		`ALTER TABLE %s.api_keys ADD COLUMN IF NOT EXISTS first_used_at TIMESTAMPTZ`, Schema)
+	createAPIKeysClientOpIndex = fmt.Sprintf(
+		`CREATE UNIQUE INDEX IF NOT EXISTS uq_api_keys_client_op ON %s.api_keys (tenant_id, client_op_id)`+
+			` WHERE client_op_id IS NOT NULL`, Schema)
+
 	createTenantRateLimitsTable = fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s.tenant_rate_limits (
 	tenant_id      VARCHAR(128) PRIMARY KEY,
 	rps            INTEGER NOT NULL DEFAULT 0,
@@ -196,6 +207,9 @@ func ensureSchema(ctx context.Context, db *sql.DB) error {
 		{"api_keys table", createAPIKeysTable},
 		{"api_keys tenant index", createAPIKeysTenantIndex},
 		{"api_keys key_hash unique index", createAPIKeysHashIndex},
+		{"api_keys.client_op_id column", alterAPIKeysAddClientOp},
+		{"api_keys.first_used_at column", alterAPIKeysAddFirstUsed},
+		{"api_keys client_op_id unique index", createAPIKeysClientOpIndex},
 		{"tenant_rate_limits table", createTenantRateLimitsTable},
 		{"tenant_rate_limits.burst_pct column", alterTenantRateLimitsAddBurst},
 		{"tenant_model_rate_limits table", createTenantModelRateLimitsTable},

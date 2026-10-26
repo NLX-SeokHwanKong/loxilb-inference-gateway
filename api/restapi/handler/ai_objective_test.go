@@ -85,23 +85,28 @@ func (s *stubClassHook) NetTenantClassPatch(_ context.Context, _ string, p cmn.A
 func (s *stubClassHook) NetTenantRateLimitGet(context.Context, string) (*cmn.TenantRateLimitEntry, error) {
 	return s.tenantEntry, s.err
 }
-func (s *stubClassHook) NetAPIKeyCreate(_ context.Context, e cmn.ApiKeyEntry) (string, string, error) {
+func (s *stubClassHook) NetAPIKeyCreate(_ context.Context, e cmn.ApiKeyEntry) (cmn.ApiKeyCreated, error) {
 	s.created = &e
-	return "sk-raw", "kid-1", s.err
+	return cmn.ApiKeyCreated{RawKey: "sk-raw", KeyID: "kid-1"}, s.err
 }
 func (s *stubClassHook) NetAPIKeyGet(context.Context, string) (*cmn.ApiKeySummary, error) {
 	return s.summary, s.err
 }
-func (s *stubClassHook) NetAPIKeyPatch(context.Context, string, []string, *bool) error {
-	s.keyPatched++
-	return s.err
-}
-func (s *stubClassHook) NetAPIKeyRateLimitPatch(context.Context, string, *int, *int, *int) error {
-	s.limitPatched++
-	return s.err
-}
-func (s *stubClassHook) NetAPIKeyClassPatch(_ context.Context, _ string, p cmn.AIClassPatch) error {
-	s.keyPatch = &p
+
+// NetAPIKeyPatch records what one PATCH handed to the net layer, split the
+// way the old three hooks were counted: the key's own fields, its limits,
+// and its class.
+func (s *stubClassHook) NetAPIKeyPatch(_ context.Context, _ string, p cmn.ApiKeyPatch) error {
+	if p.AllowedModels != nil || p.Enabled != nil {
+		s.keyPatched++
+	}
+	if p.RateLimitRPS != nil || p.BurstSize != nil || p.TokensPerMin != nil {
+		s.limitPatched++
+	}
+	if !p.Class.IsZero() {
+		c := p.Class
+		s.keyPatch = &c
+	}
 	return s.err
 }
 

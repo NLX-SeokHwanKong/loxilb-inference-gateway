@@ -12,6 +12,7 @@ import (
 	"github.com/go-openapi/errors"
 	"github.com/go-openapi/runtime"
 	"github.com/go-openapi/runtime/middleware"
+	"github.com/go-openapi/strfmt"
 	"github.com/go-openapi/validate"
 
 	"github.com/loxilb-io/loxilb/api/models"
@@ -34,6 +35,10 @@ type PostConfigAiApikeyParams struct {
 	// HTTP Request Object
 	HTTPRequest *http.Request `json:"-"`
 
+	/*Same meaning as client_op_id in the body; the body field wins when both are sent. At most 128 printable non-space ASCII characters.
+	  In: header
+	*/
+	IdempotencyKey *string
 	/*
 	  Required: true
 	  In: body
@@ -49,6 +54,10 @@ func (o *PostConfigAiApikeyParams) BindRequest(r *http.Request, route *middlewar
 	var res []error
 
 	o.HTTPRequest = r
+
+	if err := o.bindIdempotencyKey(r.Header[http.CanonicalHeaderKey("Idempotency-Key")], true, route.Formats); err != nil {
+		res = append(res, err)
+	}
 
 	if runtime.HasBody(r) {
 		defer r.Body.Close()
@@ -80,5 +89,22 @@ func (o *PostConfigAiApikeyParams) BindRequest(r *http.Request, route *middlewar
 	if len(res) > 0 {
 		return errors.CompositeValidationError(res...)
 	}
+	return nil
+}
+
+// bindIdempotencyKey binds and validates parameter IdempotencyKey from header.
+func (o *PostConfigAiApikeyParams) bindIdempotencyKey(rawData []string, hasKey bool, formats strfmt.Registry) error {
+	var raw string
+	if len(rawData) > 0 {
+		raw = rawData[len(rawData)-1]
+	}
+
+	// Required: false
+
+	if raw == "" { // empty values pass all other validations
+		return nil
+	}
+	o.IdempotencyKey = &raw
+
 	return nil
 }

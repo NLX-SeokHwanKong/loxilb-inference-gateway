@@ -32,6 +32,9 @@ type APIKeyCreateRequest struct {
 	// Total request-bucket capacity, not additional capacity above RPS. Zero uses per-key RPS. Nonpositive RPS skips this limiter; negative-value validation remains incomplete.
 	BurstSize int64 `json:"burst_size,omitempty"`
 
+	// Optional idempotency handle, at most 128 printable non-space ASCII characters, unique per tenant (a UUID the client minted for this create). A retry carrying the same value converges on the row the first request created instead of making a second key: while that key has never authenticated, its secret is minted again and delivered with the same key_id (reused=true); once it has, 409 api_key_already_delivered. Also accepted as the Idempotency-Key header. Absent, the create behaves as before and a retry after a 504 must first read the listing back.
+	ClientOpID string `json:"client_op_id,omitempty"`
+
 	// The objective a request with this key gets when it names none, or one it may not use. Counts only when the tenant's allowed_objectives hold it.
 	DefaultObjective string `json:"default_objective,omitempty"`
 

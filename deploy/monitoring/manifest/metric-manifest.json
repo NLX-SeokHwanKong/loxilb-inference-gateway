@@ -1,18 +1,18 @@
 {
  "schema_version": 1,
  "provenance": {
-  "generated_at": "2026-10-26T11:50:00+00:00",
-  "source_revision": "82bbeaccc2b78f35149f0637f257f0bba10b83d9"
+  "generated_at": "2026-10-26T23:32:15+00:00",
+  "source_revision": "4002bde92bd7f2b121f84c23c5d6b71f5a607980"
  },
  "contract": {
-  "total": 348,
+  "total": 349,
   "owners": {
-   "loxilb": 325,
+   "loxilb": 326,
    "loxilb-ai-controller": 19,
    "loxilb-kv-agent": 4
   },
   "classes": {
-   "default": 292,
+   "default": 293,
    "dpu-doca": 24,
    "aictrl-bridge": 8,
    "kv-agent-health": 1,
@@ -21,11 +21,11 @@
   }
  },
  "coverage": {
-  "default_families": 292,
+  "default_families": 293,
   "default_referenced": 184,
   "default_waived": 21,
-  "default_unreferenced": 87,
-  "writer_classified": 292,
+  "default_unreferenced": 88,
+  "writer_classified": 293,
   "writer_unclassified": 0,
   "writer_unverified": 80
  },
@@ -4112,6 +4112,49 @@
     }
    ],
    "verification_evidence": "source verification 2026-10-20: the snapshot tail field is three-way lockstep; not reachable from a well-formed client after ROUTE-01, so the C unit (loxilb-ebpf test_route_hostless.py) is its proof, and gateway CI asserts it reads 0 after the P/D suite."
+  },
+  {
+   "name": "loxilb_ai_store_write_outcome_unknown_total",
+   "owner": "loxilb",
+   "class": "default",
+   "packaged": true,
+   "type": "counter",
+   "definition_mechanism": "desc",
+   "labels": [
+    "plane"
+   ],
+   "activation": "C",
+   "priority": "diagnostic",
+   "privacy": "none",
+   "consumers": [],
+   "waiver": "",
+   "source": "api/prometheus/ai_store_write_metrics.go:34",
+   "release_scope": "release",
+   "runtime_scope": "gateway-default",
+   "implementation_status": "verified-static",
+   "activation_precondition": "",
+   "writer_sources": [
+    {
+     "symbol": "Collect",
+     "kind": "method",
+     "receiver": "aiStoreWriteOutcomeCollector",
+     "file": "api/prometheus/ai_store_write_metrics.go",
+     "def_line": 60,
+     "writes": "aiStoreWriteOutcomeUnknownDesc",
+     "note": "read at scrape time from the source pkg/loxinet sets (ai_key_lookup_metrics.go aiStoreWriteOutcomeSnapshot: pkg/pgstore's per-plane atomics): one counter series per plane (aikey, mgmt), both present once the source is set so a first 504 shows in increase(). The store packages step the atomic in pgstore.ClassifyWriteErrFor when a write's error is newly classified as outcome unknown (the statement was sent and not answered within LLB_AI_STORE_OP_TIMEOUT_MS); a write that was never sent (503) or that the server answered is not counted"
+    },
+    {
+     "symbol": "init",
+     "kind": "func",
+     "file": "api/prometheus/ai_store_write_metrics.go",
+     "def_line": 71,
+     "call_line": 72,
+     "calls": "aiStoreWriteOutcomeCollector",
+     "entry_point": "registry-collector",
+     "note": "registry-mediated dispatch: the link is the receiver type handed to prometheus.MustRegister, not a direct call to Collect"
+    }
+   ],
+   "verification_evidence": "api/prometheus/ai_store_write_metrics_test.go TestAIStoreWriteOutcomeCollectorEmitsOneSeriesPerPlane gathers the collector from a stub source (one counter series per plane, nothing with no source). pkg/pgstore/outcome_counter_test.go TestOutcomeUnknownCounterMovesOncePerVerdict drives the counter the source reads (one step per newly classified unknown write on the plane named; not-sent, server-answered and already-classified errors move nothing). pkg/aikey/write_tx_test.go TestCommitFailureIsOutcomeUnknownAndCounted steps the aikey plane through a failed COMMIT. pkg/loxinet/ai_store_write_metrics_test.go TestAIStoreWriteOutcomeSnapshotSeedsEveryPlane pins the adapter. Live: cicd/ai-jwtauth QOS-STALL-003 reads the aikey series step across a management write under a paused store."
   },
   {
    "name": "loxilb_ai_stream_early_bytes_closed_total",

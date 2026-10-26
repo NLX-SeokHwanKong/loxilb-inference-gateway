@@ -14,7 +14,7 @@ import (
 	"github.com/go-openapi/validate"
 )
 
-// APIKeyCreateResponse HTTP 201 creation result. key_id is the management handle. raw_key contains a secret only for generated credentials and is currently empty for imports. Protect generated secrets from logs; subsequent reads expose metadata only.
+// APIKeyCreateResponse HTTP 201 creation result. key_id is the management handle. raw_key contains a secret only for generated credentials and is currently empty for imports. Protect generated secrets from logs; subsequent reads expose metadata only. reused=true says a retry with the same client_op_id converged on the row an earlier request created: same key_id, a new secret, the earlier secret no longer authenticates.
 //
 // swagger:model ApiKeyCreateResponse
 type APIKeyCreateResponse struct {
@@ -26,6 +26,10 @@ type APIKeyCreateResponse struct {
 	// Generated plaintext credential returned only at creation; currently an empty string, not omission, when the caller imported api_key.
 	// Required: true
 	RawKey *string `json:"raw_key"`
+
+	// True when this answer is a retry's, converged on the row an earlier request with the same client_op_id created; the secret in raw_key is new and the one that answer carried no longer authenticates.
+	// Required: true
+	Reused *bool `json:"reused"`
 }
 
 // Validate validates this Api key create response
@@ -37,6 +41,10 @@ func (m *APIKeyCreateResponse) Validate(formats strfmt.Registry) error {
 	}
 
 	if err := m.validateRawKey(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := m.validateReused(formats); err != nil {
 		res = append(res, err)
 	}
 
@@ -58,6 +66,15 @@ func (m *APIKeyCreateResponse) validateKeyID(formats strfmt.Registry) error {
 func (m *APIKeyCreateResponse) validateRawKey(formats strfmt.Registry) error {
 
 	if err := validate.Required("raw_key", "body", m.RawKey); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (m *APIKeyCreateResponse) validateReused(formats strfmt.Registry) error {
+
+	if err := validate.Required("reused", "body", m.Reused); err != nil {
 		return err
 	}
 
