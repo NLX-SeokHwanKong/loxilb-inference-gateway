@@ -1,9 +1,11 @@
 # common/k8s-inference — shared testbed for the k3d in-cluster inference scenarios
 
-Shared by [`k3d-incluster-inference-svc`](../../k3d-incluster-inference-svc) and
-[`k3d-incluster-inference-gwapi`](../../k3d-incluster-inference-gwapi): both run
-**loxilb-inference-gateway and kube-loxilb as Pods** inside a single-node k3d
-cluster and validate the inference-gateway control path end to end.
+Shared by [`k3d-incluster-inference-svc`](../../k3d-incluster-inference-svc),
+[`k3d-incluster-inference-gwapi`](../../k3d-incluster-inference-gwapi) and
+[`k3d-helm-inference-gwapi`](../../k3d-helm-inference-gwapi) (the same stack
+installed by the Helm chart in `deploy/helm/`): all run **loxilb-inference-gateway
+and kube-loxilb as Pods** inside a single-node k3d cluster and validate the
+inference-gateway control path end to end.
 
 | File | Role |
 |---|---|
@@ -19,7 +21,8 @@ Design decisions (found the hard way — see the scenario READMEs):
 - **k3s >= 1.33, k3d >= 5.7.** Gateway API v1.5.1 CRDs use CEL `isIP()`
   (Kubernetes >= 1.30); older k3d cannot boot that k3s. A private k3d is
   downloaded to `.bin/` when the system one is too old.
-- **kube-loxilb is built from `integration/inference-gateway`** at run time
+- **kube-loxilb is built from `feat/auth-annotation`** at run time (the branch with the
+  inference-gateway integration, the credential-policy annotations and the EPP integration)
   (no published image tag yet). Preset `KLB_IMAGE` to skip the build.
 
 Knobs: `IGW_IMAGE`, `KLB_IMAGE`, `KLB_REPO`, `KLB_REF`, `K3S_IMAGE`,

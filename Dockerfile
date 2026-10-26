@@ -5,7 +5,7 @@ FROM ubuntu:22.04 as build
 ARG DEBIAN_FRONTEND=noninteractive
 
 ARG TAG=main
-ARG LOXICMD_TAG=28832f0c60ab717d8cb5133114edf2c45e22a85c
+ARG LOXICMD_TAG=ad1e7776bc1be8f04510d4a08091d5963d96688f
 ARG OPENSSL_BUILD_CPUS=0
 ARG USE_DOCKER_BUILDX_ARM64=false
 
@@ -95,9 +95,9 @@ RUN mkdir -p /opt/loxilb && \
     cp /usr/local/sbin/loxilb /root/loxilb-io/loxilb/loxilb && rm /usr/local/sbin/loxilb && \
     # Build gobgp from source: the upstream prebuilt v3.29.0 binaries carry a
     # vulnerable Go stdlib and grpc; building with the toolchain above and a
-    # patched grpc keeps the exact gobgp version while clearing both CVEs.
-    git clone --depth 1 --branch v3.29.0 https://github.com/osrg/gobgp.git /tmp/gobgp && \
-    cd /tmp/gobgp && go get google.golang.org/grpc@v1.82.1 && go mod tidy && \
+    # patched grpc updates the identified vulnerable runtime dependency set.
+    git clone --depth 1 --branch v3.35.0 https://github.com/osrg/gobgp.git /tmp/gobgp && \
+    cd /tmp/gobgp && go get google.golang.org/grpc@v1.83.2 golang.org/x/net@v0.60.0 && go mod tidy && \
     go build -o /usr/sbin/gobgp ./cmd/gobgp && go build -o /usr/sbin/gobgpd ./cmd/gobgpd && \
     cd / && rm -rf /tmp/gobgp /root/go/pkg /root/.cache/go-build && \
     apt-get purge -y clang-14 llvm libelf-dev libpcap-dev libbsd-dev build-essential \
@@ -138,7 +138,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 ENV PATH="${PATH}:/usr/local/go/bin"
 ENV LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:/usr/lib64/"
 
-RUN apt-get update && apt-get install -y --no-install-recommends sudo wget \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends sudo wget \
     libbsd-dev iproute2 tcpdump bridge-utils net-tools libllvm14 ca-certificates curl libnghttp2-14 && \
     rm -rf /var/lib/apt/lists/* && apt clean
 

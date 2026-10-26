@@ -29,6 +29,6 @@ func ConfigGetVersion(params operations.GetVersionParams) middleware.Responder {
 	result.Version = cmn.Version
 	result.BuildInfo = cmn.BuildInfo
 	result.Product = cmn.Product
-	result.Features = append([]string(nil), cmn.Features...)
+	result.Features = cmn.VersionFeatures()
 	return operations.NewGetVersionOK().WithPayload(&result)
 }

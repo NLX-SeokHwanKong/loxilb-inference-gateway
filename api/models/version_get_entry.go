@@ -20,7 +20,7 @@ type VersionGetEntry struct {
 	// build info
 	BuildInfo string `json:"buildInfo,omitempty"`
 
-	// Optional capabilities this build serves, for clients that gate a feature on the gateway rather than on its version string. "epp" means loadbalancer rules accept the Endpoint Picker fields (eppEndpoint, eppFailureMode, eppTimeoutMs, eppPlaintext) and the data plane consults the picker. Builds predating the field omit it; clients treat an absent or empty list as "no optional feature".
+	// Gateway-only capabilities this build implements, as stable tokens a controller checks before it sends the matching rule fields; absent on builds that predate the field. "epp": loadbalancer rules accept the Endpoint Picker fields (eppEndpoint, eppFailureMode, eppTimeoutMs, eppPlaintext) and the data plane consults the picker. "api_key_auth": the serviceArguments api_key_auth credential-policy declaration is accepted and enforced. "jwt_auth_profile": the Bearer arm (api_key_auth "jwt" and "apikey-or-jwt") and the jwt_auth_profile reference are accepted and enforced. The REST layer ignores fields it does not know, so a build without a token would install a rule WITHOUT that policy and report success: a controller that does not find the token for a field it needs must not send the rule.
 	Features []string `json:"features"`
 
 	// Product identifier for API flavor detection. This gateway reports "loxilb-inference-gateway"; upstream loxilb (and gateway builds predating the field) omit it, which clients treat as plain loxilb.

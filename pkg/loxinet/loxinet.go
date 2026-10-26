@@ -28,8 +28,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"log"
 	"net"
 	"os"
 	"os/signal"
@@ -58,7 +56,6 @@ import (
 	"github.com/loxilb-io/loxilb/pkg/user"
 	utils "github.com/loxilb-io/loxilb/pkg/utils"
 	tk "github.com/loxilb-io/loxilib"
-	logrus "github.com/sirupsen/logrus"
 )
 
 // string constant representing root security zone
@@ -120,6 +117,10 @@ type loxiNetH struct {
 	// verifier runtime. Always initialized: profile configuration needs no
 	// external store, and a nil holder would turn config calls into panics.
 	JWTAuthProfiles *JWTAuthProfileH
+
+	// NetIdentity holds the network-identity bindings and the resolver the
+	// admission gate reads. Always initialized, as JWTAuthProfiles is.
+	NetIdentity *NetIdentityH
 
 	// HTTP/HTTPS Protocol Analyzer (Distributed Tracing)
 	tracingEnabled bool           // Whether tracing is enabled
@@ -227,6 +228,7 @@ func loxiNetTicker(bgpPeerMode bool) {
 		if mh.dp != nil {
 			mh.dp.DpHooks.DpEbpfUnInit()
 		}
+		opLogStop()
 		os.Exit(1)
 	}()
 
@@ -275,6 +277,7 @@ func loxiNetTicker(bgpPeerMode bool) {
 						tk.LogIt(tk.LogCritical, "[shutdown] eBPF cleanup timed out -- orphaned TC progs may remain\n")
 					}
 					cancel()
+					opLogStop()
 					os.Exit(1)
 				}
 
@@ -321,6 +324,8 @@ func loxiNetTicker(bgpPeerMode bool) {
 				mh.has.CIDestroy()
 				// Release tokenizer backend resources (Rust CGO objects must be freed before exit)
 				KvTokenizerClose()
+				// Write what the operational logs still hold.
+				opLogStop()
 				// Flush and close structured logger last (captures shutdown log messages from other subsystems)
 				loxilog.Close()
 				apiserver.ApiServerShutOk()
@@ -385,26 +390,17 @@ func loxiNetInit() {
 		Compress:   !opts.Opts.LogNoCompress,
 	}
 	if rw, err := logrotate.New(logfile, rotCfg); err == nil {
-		for _, lg := range []*log.Logger{
-			mh.logger.LogItEmer, mh.logger.LogItAlert, mh.logger.LogItCrit,
-			mh.logger.LogItErr, mh.logger.LogItWarn, mh.logger.LogItNotice,
-			mh.logger.LogItInfo, mh.logger.LogItDebug, mh.logger.LogItTrace,
-		} {
-			lg.SetOutput(rw)
-		}
-		// The AI subsystems (KV attest/subscriber, adapters) log through
-		// sirupsen/logrus, which writes to stderr only. Under any launcher
-		// that discards the process's stderr (docker exec -dt, detached
-		// supervisors) those lines vanish entirely. Tee them into the same
-		// rotated file the level writers use so /var/log/loxilb<host>.log
-		// carries the whole story regardless of how stderr is wired.
-		logrus.SetOutput(io.MultiWriter(os.Stderr, rw))
+		// Every level, and logrus, through one queue in front of the
+		// rotating file; see oplog.go.
+		opLogInstall(mh.logger, rw)
 	} else {
 		tk.LogIt(tk.LogWarning, "log rotation disabled for %s: %v\n", logfile, err)
 	}
-	// The eBPF data-plane C library appends to /var/log/loxilbdp.log with a
-	// FILE* we cannot wrap — rotate it copy-truncate style from a sweeper.
-	logrotate.StartSweeper("/var/log/loxilbdp.log", rotCfg, time.Minute)
+	// The eBPF data-plane C library writes /var/log/loxilbdp.log from its
+	// own writer thread, which also renames the file at the size limit
+	// (dpLogRotate, once the library is up); the sweeper compresses and
+	// prunes what it renamed.
+	logrotate.StartBackupSweeper("/var/log/loxilbdp.log", rotCfg, time.Minute)
 
 	// Initialize structured audit logging (coexists with tk.LogIt during-4 migration)
 	loxilogCfg := loxilog.Config{
@@ -560,6 +556,13 @@ func loxiNetInit() {
 
 		// Initialize the ebpf datapath subsystem
 		mh.dpEbpf = DpEbpfInit(clusterMode, mh.rssEn, mh.eHooks, mh.lSockPolicy, mh.sockMapEn, mh.ktlsEn, mh.self, mh.disBPF, logLevel, dpuMtraceEn)
+		// The data plane's workers exist from here on, and they log through
+		// cgo callbacks: no log call writes for itself any more. The
+		// data-plane log's writer thread rotates its own file.
+		if rotCfg.MaxSizeMB > 0 {
+			dpLogRotate(uint64(rotCfg.MaxSizeMB) << 20)
+		}
+		opLogStart()
 		// Operator maintenance reaches the data path: entering it makes the
 		// capacity admission gate refuse new inference requests and end the
 		// ones waiting for capacity; leaving it restores admission.
@@ -767,6 +770,11 @@ func loxiNetInit() {
 		return mh.zr.Rules.JwtProfileRuleRefs(name)
 	}
 
+	// Network-identity bindings: in memory as well, and read by every
+	// snapshot capture, plan and restore, so the holder is built before the
+	// REST server starts serving for the same reason.
+	mh.NetIdentity = NetIdentityInit()
+
 	// Initialize and spawn the api server subsystem
 	if !opts.Opts.NoAPI {
 		apiserver.RegisterAPIHooks(NetAPIInit(opts.Opts.BgpPeerMode))
@@ -774,7 +782,9 @@ func loxiNetInit() {
 		apiserver.WaitAPIServerReady()
 	}
 
-	// Initialize the nlp subsystem
+	// Initialize the nlp subsystem. The interface filter applies with --nonlp
+	// too: L3 reconciliation consults it either way.
+	nlp.NlpSetIntfFilter(opts.Opts.BlackList, opts.Opts.WhiteList)
 	if !opts.Opts.NoNlp {
 		nlp.NlpRegister(NetAPIInit(opts.Opts.BgpPeerMode))
 		nlp.NlpInit(opts.Opts.BgpPeerMode, opts.Opts.BlackList, opts.Opts.WhiteList, opts.Opts.IPVSCompat)
@@ -832,6 +842,12 @@ func loxiNetInit() {
 		// configured nothing while it is busy dialling what they configured.
 		svc := aikey.New()
 		mh.AIKeyService = svc
+		// Objectives and classes: one snapshot of the store's rows, kept
+		// current on its own goroutine, with the last one the store
+		// answered with kept in a file beside snapshot.json for a start
+		// during an outage.
+		svc.SetClassChangeHook(func(*aikey.ClassSnapshot) { aiClassRecompute() })
+		svc.StartClassRefresher(opts.Opts.ConfigPath)
 		// The dial runs in the background for the same reason the service is
 		// published before it: Connect retries with a doubling backoff and
 		// takes tens of seconds against a store that is down, and blocking
@@ -1160,6 +1176,7 @@ func loxiNetRun() {
 		if mh.dp != nil {
 			mh.dp.DpHooks.DpEbpfUnInit()
 		}
+		opLogStop()
 		os.Exit(1)
 	}()
 	mh.wg.Wait()

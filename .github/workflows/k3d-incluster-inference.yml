@@ -1,10 +1,11 @@
 name: K3d-InCluster-Inference-Sanity-CI
 
-# Runs the two k3d in-cluster inference-gateway scenarios: loxilb and
-# kube-loxilb (integration/inference-gateway, built from source) as Pods in a
-# single-node k3d cluster, exercised through Service annotations (svc) and
-# through Gateway API InferencePool (gwapi). Hosted runners suffice: the k3d
-# node is a privileged container, so nothing touches the runner's own network.
+# Runs the k3d in-cluster inference-gateway scenarios: loxilb and kube-loxilb
+# (feat/auth-annotation, built from source) as Pods in a single-node
+# k3d cluster, exercised through Service annotations (svc), through Gateway API
+# InferencePool (gwapi), and with the whole stack installed by the Helm chart
+# (helm-gwapi, which re-runs the gwapi assertions). Hosted runners suffice: the
+# k3d node is a privileged container, so nothing touches the runner's own network.
 
 on:
   schedule:
@@ -14,7 +15,7 @@ on:
       klbRef:
         description: 'kube-loxilb git ref to build'
         required: false
-        default: 'integration/inference-gateway'
+        default: 'feat/auth-annotation'
   push:
     branches: [ "main" ]
     paths:
@@ -22,6 +23,8 @@ on:
       - 'cicd/k3d-incluster-inference-svc/**'
       - 'cicd/k3d-incluster-inference-gwapi/**'
       - 'cicd/k3d-incluster-inference-epp/**'
+      - 'cicd/k3d-helm-inference-gwapi/**'
+      - 'deploy/helm/**'
       - '.github/workflows/k3d-incluster-inference.yml'
   pull_request:
     branches: [ "main" ]
@@ -30,6 +33,8 @@ on:
       - 'cicd/k3d-incluster-inference-svc/**'
       - 'cicd/k3d-incluster-inference-gwapi/**'
       - 'cicd/k3d-incluster-inference-epp/**'
+      - 'cicd/k3d-helm-inference-gwapi/**'
+      - 'deploy/helm/**'
       - '.github/workflows/k3d-incluster-inference.yml'
 
 jobs:
@@ -40,7 +45,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        scenario: [k3d-incluster-inference-svc, k3d-incluster-inference-gwapi, k3d-incluster-inference-epp]
+        scenario: [k3d-incluster-inference-svc, k3d-incluster-inference-gwapi, k3d-incluster-inference-epp, k3d-helm-inference-gwapi]
     steps:
       - uses: actions/checkout@v4
       - name: Install PyYAML (manifest renderer)
@@ -63,7 +68,7 @@ jobs:
           echo "IGW_IMAGE=ghcr.io/loxilb-io/loxilb-inference-gateway:k3d-epp-local" >> "$GITHUB_ENV"
       - name: Run the scenario
         env:
-          KLB_REF: ${{ github.event.inputs.klbRef || 'integration/inference-gateway' }}
+          KLB_REF: ${{ github.event.inputs.klbRef || 'feat/auth-annotation' }}
         run: |
           cd cicd/${{ matrix.scenario }}
           rc=0
@@ -77,3 +82,4 @@ jobs:
           KCFG=$(ls ~/.config/k3d/kubeconfig-*.yaml 2>/dev/null | head -1)
           [ -n "$KCFG" ] && KUBECONFIG=$KCFG kubectl get pods -A || true
           [ -n "$KCFG" ] && KUBECONFIG=$KCFG kubectl -n kube-system logs deploy/kube-loxilb --tail=80 || true
+          [ -n "$KCFG" ] && KUBECONFIG=$KCFG helm list -A || true

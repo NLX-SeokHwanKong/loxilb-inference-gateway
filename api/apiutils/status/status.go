@@ -1,3 +1,5 @@
+//go:build linux
+
 /*
  * Copyright (c) 2022 NetLOX Inc
  *
@@ -17,79 +19,11 @@
 package status
 
 import (
-	"fmt"
 	"os"
-	"os/exec"
-	"strings"
 
 	"github.com/loxilb-io/loxilb/api/models"
+	"golang.org/x/sys/unix"
 )
-
-// ProcessInfoGet- Get Process Status using "top -bn 1" command
-func ProcessInfoGet() []*models.ProcessInfoEntry {
-	var result []*models.ProcessInfoEntry
-	result = make([]*models.ProcessInfoEntry, 0)
-	app := "top"
-	arg0 := "-bn"
-	arg1 := "1"
-	cmd := exec.Command(app, arg0, arg1)
-	stdout, err := cmd.Output()
-	if err != nil {
-		fmt.Println(err.Error())
-	}
-	topResult := string(stdout)
-	pscmd := exec.Command("ps", "-eo", "pid,%cpu,%mem", "--sort=-%cpu", "--no-headers")
-	psstdout, err := pscmd.Output()
-	if err != nil {
-		fmt.Println(err.Error())
-	}
-	psResult := string(psstdout)
-	cpuMemPerPid := make(map[string]struct {
-		CPUUsage    string
-		MemoryUsage string
-	})
-	for _, cpumem := range strings.Split(psResult, "\n") {
-		fields := strings.Fields(cpumem)
-		if len(fields) < 3 {
-			continue
-		}
-		pid := fields[0]
-		cpu := fields[1]
-		mem := fields[2]
-		cpuMemPerPid[pid] = struct {
-			CPUUsage    string
-			MemoryUsage string
-		}{
-			CPUUsage:    cpu,
-			MemoryUsage: mem,
-		}
-	}
-
-	for _, processInfos := range strings.Split(topResult, "\n")[7:] {
-		tmpProcess := strings.Fields(processInfos)
-		if len(tmpProcess) == 12 {
-			tmpResult := &models.ProcessInfoEntry{
-				Pid:          tmpProcess[0],
-				User:         tmpProcess[1],
-				Priority:     tmpProcess[2],
-				Nice:         tmpProcess[3],
-				VirtMemory:   tmpProcess[4],
-				ResidentSize: tmpProcess[5],
-				SharedMemory: tmpProcess[6],
-				Status:       tmpProcess[7],
-				CPUUsage:     cpuMemPerPid[tmpProcess[0]].CPUUsage,    // CPU usage from ps command
-				MemoryUsage:  cpuMemPerPid[tmpProcess[0]].MemoryUsage, // Memory usage from ps command
-				Time:         tmpProcess[10],
-				Command:      tmpProcess[11],
-			}
-
-			result = append(result, tmpResult)
-		}
-
-	}
-
-	return result
-}
 
 // DeviceInfoGet - Get Device Status
 func DeviceInfoGet() (*models.DeviceInfoEntry, error) {
@@ -136,51 +70,30 @@ func DeviceInfoGet() (*models.DeviceInfoEntry, error) {
 	}
 	result.Uptime = string(uptime)
 
-	app := "uname"
-	arg0 := "-p"
-	cmd := exec.Command(app, arg0)
-	stdout, err := cmd.Output()
+	architecture, err := deviceArchitecture()
 	if err != nil {
 		return nil, err
 	}
-	result.Architecture = string(stdout)
+	result.Architecture = architecture
+
 	return result, nil
+}
+
+// deviceArchitecture reports the kernel machine architecture, without the
+// trailing newline formerly produced by the uname -p command.
+func deviceArchitecture() (string, error) {
+	var uts unix.Utsname
+	if err := unix.Uname(&uts); err != nil {
+		return "", err
+	}
+	return unix.ByteSliceToString(uts.Machine[:]), nil
 }
 
 // Get FileSystem Status
 func FileSystemInfoGet() ([]*models.FileSystemInfoEntry, error) {
-	var result []*models.FileSystemInfoEntry
-	result = make([]*models.FileSystemInfoEntry, 0)
-	app := "df"
-	arg0 := "-hT"
-	cmd := exec.Command(app, arg0)
-	stdout, err := cmd.Output()
+	data, err := os.ReadFile("/proc/self/mountinfo")
 	if err != nil {
 		return nil, err
 	}
-	dfResult := string(stdout)
-
-	if len(strings.Split(dfResult, "\n")) < 2 {
-		return nil, fmt.Errorf("no file system information found")
-	}
-	// Print the output
-	for _, dfInfos := range strings.Split(dfResult, "\n")[1:] {
-		tmpdf := strings.Fields(dfInfos)
-		if len(tmpdf) == 7 {
-			tmpResult := &models.FileSystemInfoEntry{
-				FileSystem: tmpdf[0],
-				Type:       tmpdf[1],
-				Size:       tmpdf[2],
-				Used:       tmpdf[3],
-				Avail:      tmpdf[4],
-				UsePercent: tmpdf[5],
-				MountedOn:  tmpdf[6],
-			}
-
-			result = append(result, tmpResult)
-		}
-
-	}
-
-	return result, nil
+	return filesystemInfoFromMounts(string(data), unix.Statfs)
 }

@@ -1,0 +1,16 @@
+{{- with .Values.inference.gatewayClass }}
+{{- if .create }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: {{ .name }}
+  labels:
+    {{- include "loxilb-inference-gateway.labels" $ | nindent 4 }}
+  {{- with .annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  controllerName: {{ .controllerName }}
+{{- end }}
+{{- end }}

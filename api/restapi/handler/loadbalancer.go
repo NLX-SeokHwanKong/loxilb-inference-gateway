@@ -84,7 +84,13 @@ func ConfigPostLoadbalancer(params operations.PostConfigLoadbalancerParams, prin
 	if err := pres.validateFcGateFields(params.Attr.ServiceArguments); err != nil {
 		return errorResponseWithCode(http.StatusBadRequest, err.Error())
 	}
+	if err := pres.validateFcBandFields(params.Attr.ServiceArguments); err != nil {
+		return errorResponseWithCode(http.StatusBadRequest, err.Error())
+	}
 	if err := pres.validateHalfCloseMode(params.Attr.ServiceArguments); err != nil {
+		return errorResponseWithCode(http.StatusBadRequest, err.Error())
+	}
+	if err := pres.validateAIDefaultReservation(params.Attr.ServiceArguments); err != nil {
 		return errorResponseWithCode(http.StatusBadRequest, err.Error())
 	}
 	if err := validateBackendTLSArguments(params.Attr.ServiceArguments); err != nil {
@@ -149,6 +155,8 @@ func ConfigPostLoadbalancer(params operations.PostConfigLoadbalancerParams, prin
 		lbRules.Serv.SockMapMode = *params.Attr.ServiceArguments.SockMapMode
 	}
 	pres.applyHalfCloseMode(&lbRules.Serv, params.Attr.ServiceArguments)
+	pres.applyAIDefaultReservation(&lbRules.Serv, params.Attr.ServiceArguments)
+	pres.applyAIObjectiveStrict(&lbRules.Serv, params.Attr.ServiceArguments)
 	lbRules.Serv.Egress = params.Attr.ServiceArguments.Egress
 	lbRules.Serv.TraceType = params.Attr.ServiceArguments.TraceType // Tracing catalog (independent from GPU routing)
 
@@ -184,6 +192,7 @@ func ConfigPostLoadbalancer(params operations.PostConfigLoadbalancerParams, prin
 	// replace can reset a depth to the process default with an explicit 0.
 	pres.applyFcQueue(&lbRules.Serv, params.Attr.ServiceArguments)
 	pres.applyFcGate(&lbRules.Serv, params.Attr.ServiceArguments)
+	pres.applyFcBand(&lbRules.Serv, params.Attr.ServiceArguments)
 
 	// Per-endpoint circuit breaker. Resolved HERE, in exactly one place, so
 	// create and update behave identically. An omitted field on a P/D rule
@@ -377,7 +386,25 @@ func ConfigPostLoadbalancer(params operations.PostConfigLoadbalancerParams, prin
 		tk.LogIt(tk.LogDebug, "api: Error occur : %v\n", err)
 		return &ErrorResponse{Payload: ResultErrorResponseError(err)}
 	}
+	// The rule is in. What is worth saying about it goes into the same
+	// reply and refuses nothing: a tenant share on a node that knows more
+	// tenants than a pool tracks.
+	var warnings []string
+	if w, ok := ApiHooks.(fcTenantSlotsWarner); ok {
+		if msg := w.NetFcTenantSlotsWarning(&lbRules); msg != "" {
+			warnings = append(warnings, msg)
+		}
+	}
+	if len(warnings) != 0 {
+		return &ResultResponse{Result: "Success; warning: " + strings.Join(warnings, "; warning: ")}
+	}
 	return &ResultResponse{Result: "Success"}
+}
+
+// fcTenantSlotsWarner is the part of the net layer that knows whether a
+// rule's tenant share outgrows the tenant table.
+type fcTenantSlotsWarner interface {
+	NetFcTenantSlotsWarning(*cmn.LbRuleMod) string
 }
 
 func ConfigDeleteLoadbalancer(params operations.DeleteConfigLoadbalancerHosturlHosturlExternalipaddressIPAddressPortPortProtocolProtoParams, principal interface{}) middleware.Responder {
@@ -737,29 +764,64 @@ func serializeLBRule(lb cmn.LbRuleMod) *models.LoadbalanceEntry {
 	tmpSvc.FcTtftTargetMs = int32(lb.Serv.FcTtftTargetMs)
 	tmpSvc.FcTenantMaxSharePct = int32(lb.Serv.FcTenantMaxSharePct)
 	tmpSvc.FcExposeHeaders = lb.Serv.FcExposeHeaders
+	tmpSvc.FcWakePolicy = lb.Serv.FcWakePolicy
+	tmpSvc.FcBandWeights = lb.Serv.FcBandWeights
+	tmpSvc.FcBandMinSharePct = lb.Serv.FcBandMinSharePct
+	tmpSvc.FcCriticalReservePct = int32(lb.Serv.FcCriticalReservePct)
+	tmpSvc.FcBandWaitMs = lb.Serv.FcBandWaitMs
+	tmpSvc.FcBandQueuePct = lb.Serv.FcBandQueuePct
+	tmpSvc.FcShedQueue = lb.Serv.FcShedQueue
+	tmpSvc.FcTenantWake = lb.Serv.FcTenantWake
+	tmpSvc.FcLlmdHeaders = lb.Serv.FcLlmdHeaders
+	tmpSvc.AiDefaultReservation = lb.Serv.AIDefaultReservation
+	tmpSvc.AiDefaultMaxTokens = int32(lb.Serv.AIDefaultMaxTokens)
+	tmpSvc.AiObjectiveStrict = lb.Serv.AIObjectiveStrict
 	if eff := lb.Serv.FcEffective; eff != nil {
 		tmpSvc.FcEffective = &models.LoadbalanceEntryServiceArgumentsFcEffective{
-			Mode:                    eff.Mode,
-			MaxOutstanding:          int32(eff.MaxOutstanding),
-			EpMaxInflight:           int32(eff.EpMaxInflight),
-			PrefillMaxInflight:      int32(eff.PrefillMaxInflight),
-			DecodeMaxInflight:       int32(eff.DecodeMaxInflight),
-			QueueDepth:              int32(eff.QueueDepth),
-			QueueWaitMs:             int32(eff.QueueWaitMs),
-			Inflight:                int32(eff.Inflight),
-			Queued:                  int32(eff.Queued),
-			QueueMemoryBoundMib:     int64(eff.QueueMemoryBoundMib),
-			TelemetryStaleMs:        int32(eff.TelemetryStaleMs),
-			Adaptive:                eff.Adaptive,
-			WarmupMs:                int32(eff.WarmupMs),
-			TtftTargetMs:            int32(eff.TtftTargetMs),
-			EffectiveMaxOutstanding: int32(eff.EffectiveMaxOutstanding),
-			AdaptState:              eff.AdaptState,
-			AdaptReason:             eff.AdaptReason,
-			WarmingEndpoints:        int32(eff.WarmingEndpoints),
-			TenantMaxSharePct:       int32(eff.TenantMaxSharePct),
-			TenantsActive:           int32(eff.TenantsActive),
-			ExposeHeaders:           eff.ExposeHeaders,
+			Mode:                     eff.Mode,
+			MaxOutstanding:           int32(eff.MaxOutstanding),
+			EpMaxInflight:            int32(eff.EpMaxInflight),
+			PrefillMaxInflight:       int32(eff.PrefillMaxInflight),
+			DecodeMaxInflight:        int32(eff.DecodeMaxInflight),
+			QueueDepth:               int32(eff.QueueDepth),
+			QueueWaitMs:              int32(eff.QueueWaitMs),
+			Inflight:                 int32(eff.Inflight),
+			Queued:                   int32(eff.Queued),
+			QueueMemoryBoundMib:      int64(eff.QueueMemoryBoundMib),
+			TelemetryStaleMs:         int32(eff.TelemetryStaleMs),
+			Adaptive:                 eff.Adaptive,
+			WarmupMs:                 int32(eff.WarmupMs),
+			TtftTargetMs:             int32(eff.TtftTargetMs),
+			EffectiveMaxOutstanding:  int32(eff.EffectiveMaxOutstanding),
+			AdaptState:               eff.AdaptState,
+			AdaptReason:              eff.AdaptReason,
+			WarmingEndpoints:         int32(eff.WarmingEndpoints),
+			TenantMaxSharePct:        int32(eff.TenantMaxSharePct),
+			TenantsActive:            int32(eff.TenantsActive),
+			TenantSlots:              int32(eff.TenantSlots),
+			ExposeHeaders:            eff.ExposeHeaders,
+			WakePolicy:               eff.WakePolicy,
+			WakePolicyEffective:      eff.WakePolicyEffective,
+			WeightsInUse:             eff.WeightsInUse,
+			ShedQueue:                eff.ShedQueue,
+			ShedQueueEffective:       eff.ShedQueueEffective,
+			TenantWake:               eff.TenantWake,
+			TenantWakeEffective:      eff.TenantWakeEffective,
+			BandFallbackReason:       eff.BandFallbackReason,
+			LlmdHeaders:              eff.LlmdHeaders,
+			BandsConfigured:          eff.BandsConfigured,
+			Bands:                    fcBandsModel(eff.Bands),
+			DefaultReservation:       eff.DefaultReservation,
+			DefaultMaxTokens:         int32(eff.DefaultMaxTokens),
+			ReservationClampedBurst:  int64(eff.ReservationClampedBurst),
+			ReservationClampedBudget: int64(eff.ReservationClampedBudget),
+			ReservationEpoch:         eff.ReservationEpoch,
+			ConfigSource:             eff.ConfigSource,
+			StoreReachable:           eff.StoreReachable,
+			StoreLastRead:            fcStoreLastRead(eff.StoreLastRead),
+			ReservationHeldClaims:    int64(eff.ReservationHeldClaims),
+			ReservationHeldTruncated: eff.ReservationHeldTruncated,
+			ReservationHeld:          fcReservationHeldModel(eff.ReservationHeld),
 			Source: &models.LoadbalanceEntryServiceArgumentsFcEffectiveSource{
 				Mode:               eff.Source.Mode,
 				MaxOutstanding:     eff.Source.MaxOutstanding,
@@ -774,6 +836,17 @@ func serializeLBRule(lb cmn.LbRuleMod) *models.LoadbalanceEntry {
 				TtftTargetMs:       eff.Source.TtftTargetMs,
 				TenantMaxSharePct:  eff.Source.TenantMaxSharePct,
 				ExposeHeaders:      eff.Source.ExposeHeaders,
+				DefaultReservation: eff.Source.DefaultReservation,
+				DefaultMaxTokens:   eff.Source.DefaultMaxTokens,
+				WakePolicy:         eff.Source.WakePolicy,
+				BandWeights:        eff.Source.BandWeights,
+				BandMinSharePct:    eff.Source.BandMinSharePct,
+				CriticalReservePct: eff.Source.CriticalReservePct,
+				BandWaitMs:         eff.Source.BandWaitMs,
+				BandQueuePct:       eff.Source.BandQueuePct,
+				ShedQueue:          eff.Source.ShedQueue,
+				TenantWake:         eff.Source.TenantWake,
+				LlmdHeaders:        eff.Source.LlmdHeaders,
 			},
 		}
 	}

@@ -25,7 +25,6 @@ import (
 
 	opts "github.com/loxilb-io/loxilb/options"
 
-	"github.com/go-openapi/errors"
 	"github.com/go-openapi/runtime"
 	"github.com/go-openapi/swag"
 
@@ -71,7 +70,7 @@ func configureFlags(api *operations.LoxilbRestAPIAPI) {
 
 func configureAPI(api *operations.LoxilbRestAPIAPI) http.Handler {
 	// configure the api here
-	api.ServeError = errors.ServeError
+	api.ServeError = handler.ServeAPIError
 
 	// Set your custom logger if needed. Default one is log.Printf
 	// Expected interface func(string, ...interface{})
@@ -445,6 +444,14 @@ func configureAPI(api *operations.LoxilbRestAPIAPI) http.Handler {
 	api.AiPostConfigAiJwtauthprofileHandler = ai.PostConfigAiJwtauthprofileHandlerFunc(handler.ConfigPostJWTAuthProfile)
 	api.AiGetConfigAiJwtauthprofileAllHandler = ai.GetConfigAiJwtauthprofileAllHandlerFunc(handler.ConfigGetJWTAuthProfileAll)
 	api.AiDeleteConfigAiJwtauthprofileNameHandler = ai.DeleteConfigAiJwtauthprofileNameHandlerFunc(handler.ConfigDeleteJWTAuthProfile)
+	// AI Gateway network-identity bindings (tenant by source network)
+	api.AiPostConfigAiNetidentityHandler = ai.PostConfigAiNetidentityHandlerFunc(handler.ConfigPostNetIdentity)
+	api.AiGetConfigAiNetidentityAllHandler = ai.GetConfigAiNetidentityAllHandlerFunc(handler.ConfigGetNetIdentityAll)
+	api.AiDeleteConfigAiNetidentityNameHandler = ai.DeleteConfigAiNetidentityNameHandlerFunc(handler.ConfigDeleteNetIdentity)
+	// AI Gateway objectives (named request priorities, in the key store)
+	api.AiPostConfigAiObjectiveHandler = ai.PostConfigAiObjectiveHandlerFunc(handler.ConfigPostAIObjective)
+	api.AiGetConfigAiObjectiveAllHandler = ai.GetConfigAiObjectiveAllHandlerFunc(handler.ConfigGetAIObjectiveAll)
+	api.AiDeleteConfigAiObjectiveNameHandler = ai.DeleteConfigAiObjectiveNameHandlerFunc(handler.ConfigDeleteAIObjective)
 
 	api.AiGetConfigAiModelProfilesHandler = ai.GetConfigAiModelProfilesHandlerFunc(handler.ConfigGetAIModelProfiles)
 	api.AiGetConfigAiModelProfilesProfileIDHandler = ai.GetConfigAiModelProfilesProfileIDHandlerFunc(handler.ConfigGetAIModelProfileByID)

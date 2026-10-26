@@ -316,6 +316,13 @@ done
 # declared case names, and the only way to see it is to spend nothing.
 cfg_both POST /config/ai/tenant/ratelimit \
   '{"tenant_id":"ha-phantom-tenant","rps":0,"tokens_per_min":100000}'
+# QOS-HA-007's feed: an identity the case spends at the MASTER while it asks
+# the standby, so the master's store holds entries and it pushes a snapshot on
+# every tick of the window (an A-P master skips a tick with nothing to send).
+# Without it the only pushes in the window were the tail of the previous
+# case's entries, and whether one landed there was timing.
+cfg_both POST /config/ai/tenant/ratelimit \
+  '{"tenant_id":"ha-phantom-feed","rps":0,"tokens_per_min":100000}'
 # QOS-HA-012's subject: spent at the node that is about to be killed, asked
 # again at the survivor after it promotes.
 cfg_both POST /config/ai/tenant/ratelimit \
@@ -430,6 +437,7 @@ mint_key ha-model-only-key   ha-model-only     0
 mint_key ha-ctl-005a-key     ha-ctl-005a       0
 mint_key ha-ctl-005b-key     ha-ctl-005b       0
 mint_key ha-phantom-key      ha-phantom-tenant 0
+mint_key ha-phantom-feed-key ha-phantom-feed   0
 mint_key ha-kill-key         ha-kill-tenant    0
 mint_key ha-ctl-012-key      ha-ctl-012        0
 mint_key ha-fresh-012-key    ha-fresh-012      0

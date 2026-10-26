@@ -59,6 +59,10 @@ type JWTAuthProfileEntry struct {
 	// Required: true
 	Name *string `json:"name"`
 
+	// The highest priority class a request admitted by this profile's tokens may have. It can only lower what the tenant allows (a tenant that sets no class allows standard). Omitted means no cap from the profile.
+	// Enum: [standard critical sheddable]
+	PriorityClass string `json:"priority_class,omitempty"`
+
 	// Periodic JWKS refresh interval in seconds (default 3600)
 	RefreshSec int64 `json:"refresh_sec,omitempty"`
 
@@ -88,6 +92,10 @@ func (m *JWTAuthProfileEntry) Validate(formats strfmt.Registry) error {
 	}
 
 	if err := m.validateName(formats); err != nil {
+		res = append(res, err)
+	}
+
+	if err := m.validatePriorityClass(formats); err != nil {
 		res = append(res, err)
 	}
 
@@ -151,6 +159,51 @@ func (m *JWTAuthProfileEntry) validateModelAuthz(formats strfmt.Registry) error 
 func (m *JWTAuthProfileEntry) validateName(formats strfmt.Registry) error {
 
 	if err := validate.Required("name", "body", m.Name); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+var jWTAuthProfileEntryTypePriorityClassPropEnum []interface{}
+
+func init() {
+	var res []string
+	if err := json.Unmarshal([]byte(`["standard","critical","sheddable"]`), &res); err != nil {
+		panic(err)
+	}
+	for _, v := range res {
+		jWTAuthProfileEntryTypePriorityClassPropEnum = append(jWTAuthProfileEntryTypePriorityClassPropEnum, v)
+	}
+}
+
+const (
+
+	// JWTAuthProfileEntryPriorityClassStandard captures enum value "standard"
+	JWTAuthProfileEntryPriorityClassStandard string = "standard"
+
+	// JWTAuthProfileEntryPriorityClassCritical captures enum value "critical"
+	JWTAuthProfileEntryPriorityClassCritical string = "critical"
+
+	// JWTAuthProfileEntryPriorityClassSheddable captures enum value "sheddable"
+	JWTAuthProfileEntryPriorityClassSheddable string = "sheddable"
+)
+
+// prop value enum
+func (m *JWTAuthProfileEntry) validatePriorityClassEnum(path, location string, value string) error {
+	if err := validate.EnumCase(path, location, value, jWTAuthProfileEntryTypePriorityClassPropEnum, true); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *JWTAuthProfileEntry) validatePriorityClass(formats strfmt.Registry) error {
+	if swag.IsZero(m.PriorityClass) { // not required
+		return nil
+	}
+
+	// value enum
+	if err := m.validatePriorityClassEnum("priority_class", "body", m.PriorityClass); err != nil {
 		return err
 	}
 

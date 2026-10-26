@@ -30,7 +30,7 @@ func TestFcEffectiveNumericZerosAreObservable(t *testing.T) {
 	if err := json.Unmarshal(fields["fc_effective"], &effective); err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"max_outstanding", "ep_max_inflight", "prefill_max_inflight", "decode_max_inflight", "queue_depth", "queue_wait_ms", "inflight", "queued", "queue_memory_bound_mib", "telemetry_stale_ms", "warmup_ms", "ttft_target_ms", "effective_max_outstanding", "warming_endpoints", "tenant_max_share_pct", "tenants_active"} {
+	for _, key := range []string{"max_outstanding", "ep_max_inflight", "prefill_max_inflight", "decode_max_inflight", "queue_depth", "queue_wait_ms", "inflight", "queued", "queue_memory_bound_mib", "telemetry_stale_ms", "warmup_ms", "ttft_target_ms", "effective_max_outstanding", "warming_endpoints", "tenant_max_share_pct", "tenants_active", "tenant_slots", "default_max_tokens", "reservation_clamped_burst", "reservation_clamped_budget", "reservation_epoch", "reservation_held_claims"} {
 		value, exists := effective[key]
 		if !exists || string(value) != "0" {
 			t.Errorf("installed %s=%s present=%t, want explicit zero", key, value, exists)

@@ -128,6 +128,10 @@ var (
 		` rate_limit_rps, burst_size, tokens_per_min, created_at, expires_at, enabled`+
 		` FROM %s.api_keys`, Schema)
 
+	sqlCountKnownTenants = fmt.Sprintf(`SELECT COUNT(*) FROM (`+
+		`SELECT tenant_id FROM %s.api_keys UNION SELECT tenant_id FROM %s.tenant_rate_limits) t`,
+		Schema, Schema)
+
 	sqlUpdateAPIKeyEnabled = fmt.Sprintf(`UPDATE %s.api_keys SET enabled = $1 WHERE key_id = $2`, Schema)
 
 	sqlUpdateAPIKeyAllowedModels = fmt.Sprintf(`UPDATE %s.api_keys SET allowed_models = $1 WHERE key_id = $2`, Schema)
@@ -217,6 +221,9 @@ type Service struct {
 	// answered for is refused. Bounded by the number of distinct tenants and
 	// tenant|model pairs this process has served.
 	rlLastKnown sync.Map
+
+	// class is the objective and class snapshot (class_snapshot.go).
+	class classState
 }
 
 // rememberRateLimit records a store-confirmed rate-limit value in both the
@@ -228,14 +235,17 @@ func (s *Service) rememberRateLimit(cacheKey string, e *rateLimitCacheEntry) {
 	s.rlLastKnown.Store(cacheKey, e)
 }
 
-// lastKnownRateLimit retrieves the outage-fallback value for a cache key.
+// lastKnownRateLimit retrieves the outage-fallback value for a cache key:
+// what the store confirmed to this process, else, while the process serves
+// the last-known-good file because the store has not answered since it
+// started, the file's row (class_lkg_limits.go).
 func (s *Service) lastKnownRateLimit(cacheKey string) (*rateLimitCacheEntry, bool) {
 	if v, ok := s.rlLastKnown.Load(cacheKey); ok {
 		if e, ok2 := v.(*rateLimitCacheEntry); ok2 {
 			return e, true
 		}
 	}
-	return nil, false
+	return s.lkgRateLimit(cacheKey)
 }
 
 // New returns a service with no store attached. Every store-backed method on
@@ -470,6 +480,10 @@ func (s *Service) CreateAPIKey(entry cmn.ApiKeyEntry) (string, string, error) {
 	if err := ValidateQoSIdentity("tenant_id", entry.TenantID); err != nil {
 		return "", "", err
 	}
+	class, err := ValidateClassPolicy(entry.AIClassPolicy)
+	if err != nil {
+		return "", "", err
+	}
 	db, err := s.store()
 	if err != nil {
 		return "", "", err
@@ -517,6 +531,21 @@ func (s *Service) CreateAPIKey(entry cmn.ApiKeyEntry) (string, string, error) {
 		}
 		tk.LogIt(tk.LogError, "[AIKey] Failed to create API key for tenant %s: %v\n", entry.TenantID, err)
 		return "", "", err
+	}
+
+	// The class fields have their own statement. A key that was asked for
+	// with a class and would exist without it is not left behind: its
+	// requests would run above the class its operator set.
+	if !class.IsZero() {
+		if _, err := db.Exec(sqlUpdateKeyClass, keyID, class.PriorityClass, class.DefaultObjective,
+			joinList(class.AllowedObjectives)); err != nil {
+			tk.LogIt(tk.LogError, "[AIKey] Failed to set class of new key %s, removing it: %v\n", keyID, err)
+			if _, dErr := db.Exec(sqlDeleteAPIKeyByID, keyID); dErr != nil {
+				tk.LogIt(tk.LogError, "[AIKey] New key %s could not be removed either: it exists without its class\n", keyID)
+			}
+			return "", "", errStoreUnavailable
+		}
+		s.refreshClassesAfterWrite()
 	}
 
 	tk.LogIt(tk.LogInfo, "[AIKey] Created API key %s for tenant %s (supplied=%t)\n",
@@ -704,6 +733,9 @@ func (s *Service) SetTenantRateLimit(tenantID string, rps, tokensPerMin, burstPc
 		&rateLimitCacheEntry{rps: rps, tokensPerMin: tokensPerMin, burstPct: burstPct})
 	tk.LogIt(tk.LogInfo, "[AIKey] Set rate limit for tenant %s: rps=%d tokensPerMin=%d burstPct=%d\n",
 		tenantID, rps, tokensPerMin, burstPct)
+	// The last-known-good file carries the limit rows: it follows the write
+	// at once, not one refresh interval later.
+	s.refreshClassesAfterWrite()
 	return nil
 }
 
@@ -796,6 +828,9 @@ func (s *Service) SetTenantModelRateLimit(tenantID, model string, tokensPerMin i
 		s.rememberRateLimit(cacheKey, &rateLimitCacheEntry{})
 		s.Cache.Delete(cacheKey)
 		tk.LogIt(tk.LogInfo, "[AIKey] Cleared model rate limit for tenant %s model %s\n", tenantID, model)
+		// The last-known-good file carries the limit rows: it follows the
+		// write at once, not one refresh interval later.
+		s.refreshClassesAfterWrite()
 		return nil
 	}
 	now := time.Now().UTC()
@@ -806,6 +841,9 @@ func (s *Service) SetTenantModelRateLimit(tenantID, model string, tokensPerMin i
 	s.rememberRateLimit(cacheKey, &rateLimitCacheEntry{tokensPerMin: tokensPerMin})
 	tk.LogIt(tk.LogInfo, "[AIKey] Set model rate limit for tenant %s model %s: tokensPerMin=%d\n",
 		tenantID, model, tokensPerMin)
+	// The last-known-good file carries the limit rows: it follows the write
+	// at once, not one refresh interval later.
+	s.refreshClassesAfterWrite()
 	return nil
 }
 
@@ -916,6 +954,20 @@ func (s *Service) GetAPIKeyByID(keyID string) (*cmn.ApiKeySummary, error) {
 	s.Cache.Set(cacheKey, &key, CacheExpirationTime*time.Minute)
 
 	return &key, nil
+}
+
+// KnownTenantCount returns how many distinct tenants the store knows: the
+// tenants that own an API key and the tenants that have a rate-limit row.
+func (s *Service) KnownTenantCount() (int, error) {
+	db, err := s.store()
+	if err != nil {
+		return 0, err
+	}
+	var n int
+	if err := db.QueryRow(sqlCountKnownTenants).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
 }
 
 // ListAPIKeys returns a summary of API keys. If tenantID is non-empty it

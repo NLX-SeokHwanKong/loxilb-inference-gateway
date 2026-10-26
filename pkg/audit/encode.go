@@ -86,6 +86,7 @@ func (e *encoder) encode(r *Record, st stamp) ([]byte, error) {
 	b = appendOptField(b, "user", r.Actor.User)
 	b = appendOptField(b, "role", r.Actor.Role)
 	b = appendOptField(b, "tenant", r.Actor.Tenant)
+	b = appendOptField(b, "net_identity", r.Actor.NetIdentity)
 	b = appendOptField(b, "remote", r.Actor.Remote)
 	b = appendOptField(b, "origin_ip", r.Actor.Origin)
 	// The hop count is written only where an origin was derived, so it
@@ -168,6 +169,17 @@ func appendDataDetail(b []byte, d *DataDetail) []byte {
 	b = appendOptField(b, "decision", d.Decision)
 	b = appendOptInt(b, "reserved", d.Reserved)
 	b = appendOptInt(b, "res_epoch", d.ResEpoch)
+	if d.PriorityClass != "" {
+		b = appendOptField(b, "priority_class", d.PriorityClass)
+		b = appendInt(b, "priority", d.Priority)
+		b = appendOptField(b, "objective", d.Objective)
+		if d.ObjectiveDenied {
+			b = appendBool(b, "objective_denied", true)
+		}
+		if d.HintNotApplied {
+			b = appendBool(b, "hint_not_applied", true)
+		}
+	}
 	return append(b, '}')
 }
 

@@ -1,0 +1,149 @@
+# loxilb-igw: loxilb-inference-gateway as an in-cluster DaemonSet.
+# Source of truth: cicd/common/k8s-inference/loxilb-incluster.yml (hostNetwork,
+# privileged, --egr-hooks, --blacklist, control-plane placement). The k3d
+# testbed's cgroup initContainer is deliberately absent.
+
+# Used by the umbrella chart's dependency condition; ignored when installed alone.
+enabled: true
+
+image:
+  # Interim default: the Endpoint Picker (ext_proc) client is not in
+  # loxilb-inference-gateway main yet. This build of the
+  # inhogog2/loxilb-inference-gateway fork (codex/epp-phase1) has it and lists
+  # only "epp" in its /version features, so kube-loxilb refuses pools that
+  # declare a credential policy on it (AuthNotSupported). linux/amd64 only.
+  # Do not use epp-cluster7: it aborts on deleting an L4 rule. Once main has
+  # the client, the default returns to ghcr.io/loxilb-io/loxilb-inference-gateway.
+  repository: nxinho/loxilb-epp
+  # Empty: the chart's appVersion.
+  tag: epp-cluster8
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+nameOverride: ""
+# The DaemonSet name. The testbed manifests call it loxilb-lb.
+fullnameOverride: ""
+
+# Headless Service for in-cluster discovery. kube-loxilb, started without
+# --loxiURL, lists the EndpointSlices of a Service with exactly this name (in any
+# namespace) and talks to every address it finds, so the name is not free.
+discoveryService:
+  name: loxilb-lb-service
+  annotations: {}
+
+# Optional ClusterIP in front of the management REST (one instance per call):
+# what the umbrella's hooks and `helm test` pods talk to.
+mgmtService:
+  enabled: true
+  name: loxilb-lb-mgmt
+  type: ClusterIP
+  port: 11111
+  annotations: {}
+
+ports:
+  api: 11111     # management REST
+  bgp: 179
+  gobgp: 50051
+
+# loxilb command-line flags, rendered straight into the container args.
+loxilb:
+  egrHooks: true                      # --egr-hooks
+  # --blacklist: interfaces loxilb must not attach to (CNI, veth, flannel, calico ...)
+  blacklist: "cni[0-9a-z]|veth.|flannel.|cali.|tunl.|vxlan[.]calico"
+  # --config-path: where snapshot.json and aigw-lkg.json persist (JWT profiles
+  # and the audit sink live in the snapshot, per instance).
+  configPath: /etc/loxilb/
+  audit:
+    dir: /var/log/loxilb/audit        # --audit-dir
+    # --audit-required: refuse to start when the audit directory cannot be
+    # prepared. Off, the gateway starts and answers every audited management
+    # call with 503 audit_unavailable instead.
+    required: false
+  # --mgmt-profile: legacy | appliance-local | remote-tls. Empty keeps loxilb's
+  # default (legacy). appliance-local serves the API on loopback only: disable
+  # the readinessProbe and mgmtService then.
+  mgmtProfile: ""
+  # e.g. ["--localsockpolicy", "--userservice"]. With --userservice kube-loxilb needs a token too.
+  extraArgs: []
+
+# Management TLS listener (--tls --tls-port): the certificate and key are mounted
+# file by file from an existing Secret (keys tls.crt / tls.key by default).
+tls:
+  enabled: false
+  port: 8091
+  existingSecret: ""
+  certKey: tls.crt
+  keyKey: tls.key
+
+# Node-local persistence. Both are hostPath (DirectoryOrCreate): the DaemonSet
+# runs one loxilb per node and each instance keeps its own snapshot and audit trail.
+persistence:
+  config:
+    enabled: true
+    hostPath: /etc/loxilb              # mounted at loxilb.configPath
+  audit:
+    enabled: true
+    # Mounted at the PARENT of loxilb.audit.dir, so that loxilb creates the
+    # audit directory itself with the 0700 mode its writer insists on. A
+    # directory kubelet pre-creates for a hostPath is 0755, and loxilb then
+    # refuses every audited management call ("audit: dir ... mode 0755, want
+    # 0700", HTTP 503 audit_unavailable) - kube-loxilb could program nothing.
+    # If the directory already exists on a node with another mode, fix it there.
+    hostPath: /var/log/loxilb
+
+# Public CA bundle (ConfigMap of PEM files) mounted read-only at mountPath and
+# added to SSL_CERT_DIR: JWKS fetches over TLS and the audit sink's
+# ca_bundle_path both read from here. Public certificates only.
+trust:
+  enabled: false
+  existingConfigMap: ""
+  mountPath: /run/integration-ca
+
+extraEnv: []
+extraVolumes: []
+extraVolumeMounts: []
+
+hostNetwork: true
+dnsPolicy: ClusterFirstWithHostNet
+priorityClassName: ""
+terminationGracePeriodSeconds: 30
+
+podLabels: {}
+podAnnotations: {}
+annotations: {}
+
+updateStrategy:
+  type: RollingUpdate
+
+readinessProbe:
+  httpGet:
+    path: /netlox/v1/version
+    port: api
+  initialDelaySeconds: 5
+  periodSeconds: 5
+  failureThreshold: 6
+livenessProbe: {}
+
+resources: {}
+
+securityContext:
+  privileged: true
+  runAsUser: 0
+  capabilities:
+    add:
+      - SYS_ADMIN
+
+# Placement: control-plane nodes, as the testbed manifest.
+nodeSelector: {}
+tolerations:
+  - key: node-role.kubernetes.io/master
+    operator: Exists
+  - key: node-role.kubernetes.io/control-plane
+    operator: Exists
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: node-role.kubernetes.io/control-plane
+              operator: Exists

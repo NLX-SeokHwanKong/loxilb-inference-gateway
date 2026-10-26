@@ -59,9 +59,18 @@ echo "T3: [DONE] detection — Prometheus loxilb_ai_requests_total increments"
 $hexec l3h1 curl -s -X POST http://10.10.10.254:11111/netlox/v1/config/metrics >/dev/null 2>&1
 sleep 2
 
+# The one series this stream must move: completed, 200, model sse-test (each label
+# matched on its own; the client renders them in sorted order).
+sse_count() {
+  $hexec l3h1 curl -s http://10.10.10.254:11111/netlox/v1/metrics 2>/dev/null \
+    | grep '^loxilb_ai_requests_total{' | grep 'outcome="completed"' \
+    | grep 'status="200"' | grep 'model="sse-test"' | awk '{s+=$NF} END{printf "%d", s+0}'
+}
+
 # Capture metrics before
 BEFORE=$($hexec l3h1 curl -s http://10.10.10.254:11111/netlox/v1/metrics 2>/dev/null \
   | grep '^loxilb_ai_requests_total' || echo "metric_not_found")
+SSE_N0=$(sse_count)
 
 # Complete one SSE stream
 $hexec l3h1 curl -s --max-time 15 -N -X POST \
@@ -84,8 +93,12 @@ if [[ "$AFTER" == "metric_not_found" ]]; then
   code=1
 elif [[ "$AFTER" != "$BEFORE" ]]; then
   # The series must carry the real backend status (200), not a hardcoded one,
-  # and the model label resolved from the X-Model header.
-  if [[ "$AFTER" == *'status="200"'* ]] && [[ "$AFTER" == *'model="sse-test"'* ]]; then
+  # and the model label resolved from the X-Model header, on one line, and it
+  # must be that series that moved (another series moving, an aborted one say,
+  # is not this stream completing).
+  SSE_N1=$(sse_count)
+  echo "  completed/200/sse-test: ${SSE_N0} -> ${SSE_N1}"
+  if [[ $((SSE_N1 - SSE_N0)) -ge 1 ]]; then
     echo "  loxilb_ai_requests_total incremented with status=200, model=sse-test [OK]"
   else
     echo "  loxilb_ai_requests_total incremented but labels unexpected [FAILED]"

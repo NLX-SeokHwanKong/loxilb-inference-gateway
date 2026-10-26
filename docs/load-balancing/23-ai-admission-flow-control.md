@@ -54,7 +54,7 @@ applies the new values to the live pool without touching executing
 requests: an omitted field keeps its stored value, an explicit `0` (or
 `inherit`) returns it to the environment or default, and JSON `null` is
 refused. When a change lets waiting requests through (a higher ceiling, or
-a mode that no longer enforces), they are woken at once, oldest first, one
+a mode that no longer enforces), they are woken at once, in wake order, one
 per free unit, or all of them when the pool no longer enforces, instead of
 one per second. PATCH does not reach FullProxy rules; on an AI service the
 runtime change is a replace `POST`.
@@ -84,7 +84,10 @@ When the pool is over a ceiling and has a queue depth, an HTTP/1.1 request
 whose body has arrived is parked instead of refused: its connection stays
 open with reads paused, and it holds no capacity unit and no backend
 connection. Each release of an executing unit on the pool wakes exactly one
-waiter, oldest first; a newcomer never jumps a non-empty queue. A woken
+waiter, the one the wake order chooses (see [Which waiter a freed unit
+wakes](#which-waiter-a-freed-unit-wakes); with every waiter in one band and
+`fifo`, the oldest); a newcomer never jumps a waiter of its own band that
+could take the unit. A woken
 request that loses the race for the unit goes back to the head, even when
 newcomers filled the queue to its depth meanwhile; one that fails an
 endpoint ceiling goes back without waking anyone, since the next waiter
@@ -158,6 +161,158 @@ connection). Size the depth from the memory you can spend, and read
 | HTTP/2 stream | refused on its own stream with `429`; streams never wait |
 | the prefill or decode leg of a P/D request | refused; role legs never wait, the request is answered once |
 
+## Priority floors and the reserve
+
+Two knobs protect a priority band's share of the service ceiling, and they are
+different mechanisms. Both are a percentage of the ceiling in force, so they
+follow the adaptive ceiling, in whole units.
+
+- **A floor** (`fc_band_min_share_pct`, `critical:standard:sheddable`) is a
+  guarantee under contention, not a reservation. It binds only while that band
+  has a waiter. With a 20 % sheddable floor and no sheddable demand, standard
+  takes 100 % of the units.
+- **The reserve** (`fc_critical_reserve_pct`) is the only true reservation:
+  units no other band may take, even when critical is idle.
+
+The rule the gate implements: when a unit frees, the highest-ranked band that
+is below its floor and has a runnable waiter takes it; when no band is below
+its floor, the wake policy chooses. On the admission side, a request of a band
+at or above its own floor takes a unit only if the units left after it still
+cover what every other band with a waiter is short of its floor, and what
+critical is short of its reserve. A band below its floor does not wait behind
+the other bands' waiters, only behind its own band's. Nothing already running is
+cut when a ceiling tightens.
+
+HTTP/2 streams and P/D role legs never wait. On a service that carries only
+HTTP/2, a floor therefore never binds, and only the reserve protects a band. A
+floor does bind against an HTTP/2 stream while HTTP/1.1 waiters of the floored
+band exist.
+
+A percentage becomes whole units rounded up, in the band's favour, but a share
+under 100 never rounds to the whole ceiling (a ceiling of 1 gives no floor). The
+claims never exceed the ceiling: where rounding would, they are clamped in rank
+order, critical, standard, then sheddable. Critical holds the larger of its
+floor and the reserve. `fc_effective.bands` reports each band's `floor_units`
+and, beside the bands, `critical_reserve_pct` and `critical_reserve_units`, as
+enforced.
+
+Declaring them is refused with `400` when the three floors sum to more than
+100 (`fc_band_min_share_pct`), when `fc_critical_reserve_pct` is above 100, or
+when the reserve plus the standard and sheddable floors is above 100
+(`fc_critical_reserve_pct`). A floor is independent of the wake policy and of the
+weights.
+
+## Which waiter a freed unit wakes
+
+Two knobs decide the order of the queue, one across the priority bands and one
+inside a band. Both act only with `fc_mode` enforce, and only on HTTP/1.1
+requests: streams and P/D role legs never queue.
+
+**Across the bands** (`fc_wake_policy`):
+
+- `strict` (the default) wakes the highest band that has a waiter able to take
+  the unit. While higher-band demand keeps the ceiling full, a lower band is
+  admitted nothing, and its waiters are refused when their wait window ends. A
+  newcomer waits only behind a waiter of its own band or a higher one.
+- `weighted` is a deficit round robin with unit cost over the bands, with the
+  weights of `fc_band_weights` (`critical:standard:sheddable`, each 1 to 62, at
+  most 64 together). A round gives each band that has a waiter able to take the
+  unit its weight in credits. The highest band with credit left is served
+  first, and one wake costs one credit: within a round bands are served
+  highest first, and the credit decides how many each band gets per round
+  (not the order in which the waiters arrived). A band with no such waiter forfeits its
+  turn in the round, and a band whose first waiter arrives in the middle of a
+  round waits for the next one. Over whole rounds the wakes split exactly as
+  the weights do: with `8:3:1`, every 12 wakes are 8 critical, 3 standard and 1
+  sheddable, in that order inside a round, whenever all three bands keep a
+  waiter. The share is of admissions, not of tokens, GPU time or latency, and no
+  band is promoted because it has waited long. A newcomer waits behind any
+  waiter that could run, in any band, so a steady stream of critical newcomers
+  cannot get past the weights. Weighted needs every weight at least 1 (a weight
+  of 0 would be strict under another name, so it is refused with `400`).
+
+With every waiter standard, both policies are the plain first come, first
+served queue. A floor comes first under either policy: a band below its floor
+that has a waiter takes the freed unit before the round is consulted (see
+[Priority floors and the reserve](#priority-floors-and-the-reserve)).
+
+**Inside a band** (`fc_tenant_wake`):
+
+- `fifo` (the default) wakes the oldest waiter that can run. Tenants are not
+  told apart.
+- `rr` rotates across the tenants that have a waiter able to take the unit,
+  oldest first inside one tenant. Each band keeps its own place in the
+  rotation, and a tenant with no waiter left is skipped. It needs no tenant
+  share (`fc_tenant_max_share_pct`) and holds with one.
+
+A wake that cannot be delivered (its connection is being closed) puts the
+request back at the head of the queue and gives the credit and the rotation
+turn back. Changing the policy, the weights or the tenant order while requests
+wait starts a new round and loses nobody: waiters keep their place and their
+band. `fc_effective` reports `wake_policy_effective`, `tenant_wake_effective`,
+and, when the weighted wake is in force, each band's `weight` and `weight_pct`
+(its share of the round).
+
+## Wait windows and queue shares per band
+
+Two knobs shape how long and how many a band may queue. Both are written as
+`critical:standard:sheddable`, and a band that is not named keeps the rule's
+own values.
+
+- **A wait window** (`fc_band_wait_ms`, milliseconds, 0 to 3600000). A band's
+  wait window is a cap inside the rule's window (`max_queue_wait_ms`), never
+  above it; 0 = the rule's window. A value above `fc_max_queue_wait_ms` runs at
+  `fc_max_queue_wait_ms`. A waiter whose window ends is answered
+  `504 admission_queue_timeout` at the window's end: the deadline is met by a
+  timer armed to the earliest pending deadline across the pools (25 ms
+  granularity), not by a periodic pass, so a 100 ms window is a 100 ms
+  window. `fc_effective.bands.<band>.wait_ms` reads back
+  the configured value (0 is the rule's window); `queue_wait_ms` is the rule's.
+- **A queue share** (`fc_band_queue_pct`, percent). A band's queue share bounds
+  that band's own occupancy of `max_queue_depth`, a ceiling and not a
+  reservation: what a band does not use stays open to every other band, and the
+  queue as a whole never holds more than `max_queue_depth`; 0 = the shared
+  depth. The share is rounded up to whole waiters, at least one. A band at its
+  share is refused with `429 admission_capacity` (the `queue_full` reason) even
+  while the queue has room, and nobody is evicted to make room for it. When
+  all three are non-zero they sum to at most 100.
+
+## The llm-d headers
+
+`fc_llmd_headers` (`on`, `off`, `inherit`; default off, process default
+`LLB_FC_LLMD_HEADERS`) lets the gateway speak the llm-d request headers. With it
+off, none of the following happens: the TTL header is ignored and every header is
+forwarded as sent. With it on:
+
+- **Refusals name their reason.** Every refusal of the gate carries
+  `x-llm-d-request-dropped-reason`:
+
+  | Refusal | `x-llm-d-request-dropped-reason` |
+  |---|---|
+  | `admission_capacity`, `admission_shed`, `admission_tenant_share` | `rejected-saturated` |
+  | `admission_queue_timeout`, `admission_ttl_expired` | `rejected-ttl-expired` |
+  | `admission_no_capacity` | `rejected-no-endpoints` |
+  | `gateway_draining`, `admission_drained` | `rejected-shutting-down` |
+
+- **The client's TTL can shorten a wait.** `x-llm-d-inference-ttl` is a
+  positive duration in Go syntax (`500ms`, `2s`, `1m30s`; held at one day). A
+  TTL shorter than the window that applies to the request's band shortens that
+  request's wait; a longer one never extends it. A wait the client's TTL ended is
+  answered `429 admission_ttl_expired`; a wait a window of the rule ended stays
+  `504 admission_queue_timeout`. A value that is not a duration is ignored. The
+  deadline is met by the queue's timer, so a TTL is honoured within 25 ms. The
+  TTL applies to HTTP/1.1 requests; HTTP/2 streams never wait.
+- **The forwarded identity is the gateway's.** The request the backend receives
+  carries `x-llm-d-inference-objective` set to the class the request was
+  admitted as (`critical`, `standard` or `sheddable`) and
+  `x-llm-d-inference-fairness-id` set to the authenticated tenant (none for a
+  request without a tenant). A client's copy of either, and of the deprecated
+  `x-gateway-inference-objective` and `x-gateway-inference-fairness-id`, is
+  removed first. On a chunked HTTP/1.1 request the client's copies are removed
+  and nothing is written. An HTTP/2 stream is forwarded with the same two
+  values in place of the client's, and its refusals carry the dropped reason
+  too.
+
 ## Scraped queue depth: how long it is trusted
 
 The P/D scorers weigh each endpoint by its scraped queue depth. A depth that
@@ -171,6 +326,16 @@ effectively rounded to them. The window in force is
 `fc_effective.telemetry_stale_ms`.
 
 The same window decides what the adaptive ceiling below may act on.
+
+The scrape that delivers the queue depth also delivers the endpoint's
+KV-cache usage (`vllm:kv_cache_usage_perc`, `vllm:gpu_cache_usage_perc` or
+`sglang:token_usage`). The gateway stores it beside the queue depth under the
+same freshness stamp, so the window above governs it too, and it keeps "not
+reported" apart from "0 %": an endpoint whose `/metrics` carries no usage
+family is unknown, never empty. Today only P/D decode selection reads it, when
+`LLB_PD_DECODE_KV_WEIGHT` is set (doc 10 §3.6). It is the shared signal the
+flow-control plan's E-11(c) will read; that work adds a reader, not a second
+store or scrape.
 
 ## The adaptive service ceiling
 
@@ -258,12 +423,29 @@ place. The share is a hard cap: it binds even when the service is otherwise
 idle. It needs a service ceiling (`fc_max_outstanding`); a share of `100`
 is no share.
 
-A pool tracks up to 64 tenants at a time. Tenants past that share one last
-slot and are held together to one share; each request placed there counts
+A pool tracks up to `LLB_FC_TENANT_SLOTS` tenants at a time: 256 by default,
+64 at least and 4096 at most (a value outside that range is held to it).
+The value is read from the gateway's environment when a pool is created and
+is the same for every pool; it is not a rule setting, and changing it takes a
+gateway restart. Tenants past the table share one last slot and are held
+together to one share; each request placed there counts
 `loxilb_ai_admission_anomalies_total{kind="tenant_table_full"}`. A tenant's
 slot is freed as soon as it holds nothing, so the table bounds the tenants
-active at once, not the tenants known. `fc_effective.tenants_active`
-counts them.
+active at once, not the tenants known: with a service ceiling in `enforce`
+mode that is never more than `fc_max_outstanding` plus `fc_max_queue_depth`.
+`fc_effective.tenants_active` counts them and `fc_effective.tenant_slots`
+is the size in force; Prometheus has both per service as
+`loxilb_ai_fc_tenant_slots` (`kind="used"`, `kind="max"`).
+
+When a rule with a tenant share is applied on a node whose key store knows
+more tenants (API-key owners and tenant rate-limit rows) than a pool tracks,
+the rule is applied and the reply reads `Success; warning: …`, with the same
+text at WARN level in the gateway log. It is advice and can be early: it
+compares the tenants known, not the tenants active at once.
+
+The table costs 24 bytes per slot and 4 for its lookup index, per model pool
+that has a tenant share: about 7 KiB at 256 slots and about 112 KiB at 4096.
+A pool without a tenant share allocates none.
 
 ## What the client sees
 
@@ -277,9 +459,11 @@ and the ceiling that refused. The body is JSON.
 |---|---|---|---|
 | `429` | `admission_capacity` | over a ceiling with no queue, or the queue at its depth (`X-Loxilb-Admission-Queued` then equals the depth); body carries `retry_after` and `jitter_hint_ms` | kept open when the request body was fully buffered, else closed |
 | `429` | `admission_tenant_share` | the request's tenant holds its share of the ceiling (and may not wait) or of the queue; the admission headers carry the pool's counts, not the tenant's | as `admission_capacity` |
+| `429` | `admission_shed` | a sheddable request at a ceiling that may not wait (`fc_shed_queue` off), or a sheddable waiter evicted for a request of a higher band at a full queue; an evicted waiter's body carries `queued_ms` | as `admission_capacity`; an evicted waiter keeps its connection, unless the 1 Hz pass writes its answer (`Connection: close`) |
 | `503` | `admission_no_capacity` | no healthy endpoint of the pool has capacity | closed |
 | `503` | `gateway_draining` | the gateway is in maintenance (see below) | closed |
-| `504` | `admission_queue_timeout` | the request waited the whole `fc_max_queue_wait_ms`; body carries `queued_ms`, the wait it spent | closed |
+| `504` | `admission_queue_timeout` | the request waited the whole `fc_max_queue_wait_ms`, or its band's wait window when that is shorter; body carries `queued_ms`, the wait it spent | closed |
+| `429` | `admission_ttl_expired` | with `fc_llmd_headers` on, the request's own `x-llm-d-inference-ttl` ended its wait; body carries `queued_ms` | closed |
 | `503` | `admission_drained` | the request was waiting when its pool was deleted or the gateway entered maintenance | closed |
 
 A client that keeps a `429` connection open may send its next request on the
@@ -333,15 +517,50 @@ pool key) and are emitted for every AI-gateway pool in every mode.
 | `loxilb_ai_admission_inflight{role}` | gauge | units held: `service` pool-wide, `normal`/`prefill`/`decode` summed over the endpoints |
 | `loxilb_ai_admission_limit{role}` | gauge | the ceiling in force per role; `role="queue"` is the depth |
 | `loxilb_ai_admission_queued` | gauge | requests waiting right now |
-| `loxilb_ai_admission_queue_wait_seconds` | histogram | how long resumed requests waited (buckets 10 ms to 5 s) |
-| `loxilb_ai_admission_decisions_total{reason}` | counter | `admitted`, `capacity_shed`, `no_healthy_capacity`, `observe_would_shed`, `bypass_non_inference`, `queued`, `queue_full`, `queue_timeout`, `cancelled`, `drained`, `observe_would_queue`, `draining`, `tenant_share` |
+| `loxilb_ai_admission_queue_wait_seconds` | histogram | how long requests waited in the queue (buckets 10 ms to 5 s): one sample per park, when it ends (admitted, expired, shed by eviction, cancelled), measured from the first park; a woken request that goes back to its place is one wait |
+| `loxilb_ai_admission_decisions_total{reason}` | counter | `admitted`, `capacity_shed`, `no_healthy_capacity`, `observe_would_shed`, `bypass_non_inference`, `queued` (once per park), `queue_full`, `queue_timeout`, `cancelled`, `drained`, `observe_would_queue`, `draining`, `tenant_share`, `shed` |
 | `loxilb_ai_admission_effective_limit` | gauge | the service ceiling in force now: the adaptive one while the pool adapts, else the configured one |
 | `loxilb_ai_admission_adapt_state{state}` | gauge | state set, `1` for the current one: `off`, `open`, `tightened`, `frozen` |
 | `loxilb_ai_admission_adapt_reason{reason}` | gauge | state set: `none`, `queued`, `ttft`, `clear`, `stale` |
 | `loxilb_ai_admission_adapt_moves_total{direction}` | counter | steps of the adaptive ceiling, `down` and `up` |
 | `loxilb_ai_admission_warming_endpoints` | gauge | endpoints inside their warm-up window |
 | `loxilb_ai_admission_tenants_active` | gauge | tenants holding a unit or waiting, while the pool has a tenant share |
-| `loxilb_ai_admission_anomalies_total{kind}` | counter | process-wide: `underflow` and `unknown_permit` are bookkeeping faults (any increase is a defect, not load); `tenant_table_full` counts requests whose tenant shared the overflow slot |
+| `loxilb_ai_fc_tenant_slots{service, kind}` | gauge | the tenant table, per service: `kind="max"` is the table size (`LLB_FC_TENANT_SLOTS`), `kind="used"` the tenants on the service's fullest pool right now. `used` above `max` means tenants past the table share one budget; alert before that, for example on `used / max > 0.8` |
+| `loxilb_ai_admission_anomalies_total{kind}` | counter | process-wide: `underflow` and `unknown_permit` are bookkeeping faults and `h2_deny_headers` an HTTP/2 refusal whose headers did not fit its frame (the stream is reset instead): any increase of these three is a defect, not load; `tenant_table_full` counts requests whose tenant shared the overflow slot |
+| `loxilb_ai_fc_band_total{service, band, outcome}` | counter | per service (its pools summed), by priority band (`critical`, `standard`, `sheddable`: the request's class) and outcome; fifteen series per service, zero included. The per-band split of five decisions above, counted where they are counted |
+
+A request's band is its class ([AI gateway controls](19-ai-gateway-controls.md)). `priority_class` is a cap, not a default: to run a tenant's un-hinted requests above `standard`, set its `default_objective` to an objective with a positive priority; `priority_class` only bounds what its requests may be raised to.
+
+The five outcomes of `loxilb_ai_fc_band_total`:
+
+- `admitted`: the request took a capacity unit (terminal).
+- `shed`: `429 admission_shed`, a sheddable request refused at a ceiling or evicted from the queue for a higher band (terminal). With `fc_shed_queue` on, a sheddable request may wait, and when the queue is full an arriving request of any higher band, `standard` as well as `critical`, takes the place of the youngest sheddable waiter; the evicted waiter is answered `429 admission_shed` on its own connection, with `queued_ms` in the body. That is what sheddable means. The connection stays open for the client's next request, as after a queue-full `429`: a `429` asks the client to retry, and closing on it would make every shed client reconnect while the gateway is shedding. The answer normally goes out at the eviction; it is never later than the second pass of the 1 Hz health check. Only an answer that pass writes (the waiter's wake was lost) ends the connection, and it says so with `Connection: close`. HTTP/2 streams never wait in the queue, so an eviction never touches an HTTP/2 connection. At most 16 evicted waiters per pool may be awaiting their answer at once: while 16 are, an arriving request evicts nobody and is refused as a full queue.
+- `expired`: `504 admission_queue_timeout`, its wait window ended while it waited, or, with `fc_llmd_headers` on, `429 admission_ttl_expired`, the client's own TTL ended it (terminal; both are `decisions_total{reason="queue_timeout"}`).
+- `cancelled`: its client left while it waited; nothing is written to it (terminal). Its request record in `loxilb_ai_requests_total` is `outcome="aborted"`, `cause="client"`, status none; a `shed` or `expired` request is one `outcome="denied"` record. The band counter is the split of the gate's decisions beside that record, not a second count of the request.
+- `queued`: it parked to wait; counted once per park, not an end (a woken request that goes back to its place is the same park).
+
+Each request lands in exactly one terminal outcome, so per band
+`admitted + shed + expired + cancelled` is the requests of that band, and
+`queued` equals the parked requests that ended admitted, expired, evicted or
+cancelled, unless a parked request was ended another way (a drain of its
+pool). A request refused for any other reason (a full queue, its tenant's
+share, no healthy capacity, a drain) is counted in
+`loxilb_ai_admission_decisions_total` only. The queue-wait histogram takes
+its sample when the same parks end, so over a window in which every park
+ended and none was drained, `queued` summed over the three bands equals the
+growth of `loxilb_ai_admission_queue_wait_seconds_count` for the service: the
+two are written at different points (the park and its end) and must agree.
+
+How the `standard` row is counted: a request with no class is `standard`, and
+counting it would add an atomic write on the busiest path (keyless and MCP
+traffic). The gateway therefore counts only `critical` and `sheddable` in
+their own rows, and reads `standard` for each outcome as
+`decisions_total{reason=R} − critical − sheddable`, where R is `admitted`,
+`queued`, `shed`, `queue_timeout` (outcome `expired`) or `cancelled`. Every
+increment of those five reasons is made together with its band's row, at the
+same point, so the difference is exact. A read that falls between the two
+writes of one request can come out one low; the next read is exact again,
+and the published value never goes down, so the series is a true counter.
 
 The process accept valve (`LLB_PD_MAX_TOTAL_INFLIGHT`) bounds connection
 contexts, not requests, before any pool sees them:
@@ -377,7 +596,7 @@ by reason.
 | `proxy_context_inflight` at `proxy_accept_bound`, or `proxy_accept_blocked_total` rising | the node is at its connection-context bound; new connections wait in the listen backlog | raise `LLB_PD_MAX_TOTAL_INFLIGHT` if memory allows, else add gateway instances |
 | `anomalies_total` above 0 | a bookkeeping defect | report it with the gateway log |
 | `decisions_total{reason="tenant_share"}` rising while `inflight` is below the limit | one tenant is at its share; the rest of the ceiling is left for others, as intended | raise `fc_tenant_max_share_pct` if one tenant should be allowed more of an idle pool |
-| `anomalies_total{kind="tenant_table_full"}` rising | more than 64 tenants active on one pool at once; the ones past the table share one budget | expected under a very wide tenant fan-out; split the pool if they need separate budgets |
+| `anomalies_total{kind="tenant_table_full"}` rising | more tenants active on one pool at once than `fc_effective.tenant_slots`; the ones past the table share one budget | raise `LLB_FC_TENANT_SLOTS` (up to 4096) and restart the gateway, or split the pool |
 
 The shipped alert rules (`deploy/monitoring/prometheus/rules/loxilb-alerts.yml`,
 group `loxilb-ai-admission`) fire on sustained shedding, queue timeouts, a
@@ -392,5 +611,5 @@ holding connections back, and any anomaly.
 - A `429` keeps the connection only when the request body was fully
   buffered before the decision; a streamed body closes it.
 - The queue is first come, first served within the tenant share; without a
-  share it is strictly FIFO. There are no priorities between tenants beyond
-  the share.
+  share it is FIFO inside a band unless `fc_tenant_wake` is `rr`. There are no
+  priorities between tenants beyond the share.

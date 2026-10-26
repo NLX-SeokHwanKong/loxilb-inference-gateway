@@ -193,7 +193,11 @@ def main() -> int:
         raise AssertionError("HTTP/2 header ownership still depends on ai_gw_mode")
 
     strip_h1 = code_only(function_body(h1, "ai_strip_upstream_api_key"))
-    if "ai_security_should_strip_api_key(node->val.ephash->apikey_auth)" not in strip_h1:
+    # The listener's first pool comes from the published index (sp_pool_first),
+    # the one place a worker may read it; its policy is the only one consulted.
+    if ("pool0 = sp_pool_first(node)" not in strip_h1
+            or "ai_security_should_strip_api_key(pool0->apikey_auth)" not in strip_h1
+            or strip_h1.count("apikey_auth") != 1):
         raise AssertionError("HTTP/1 header strip bypasses the shared policy-ownership predicate")
     if "ai_gw_mode" in strip_h1:
         raise AssertionError("HTTP/1 header ownership still depends on ai_gw_mode")

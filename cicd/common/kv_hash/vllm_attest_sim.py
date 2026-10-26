@@ -94,7 +94,7 @@ class Publisher:
         self.lock = threading.Lock()
         time.sleep(0.3)  # PUB/SUB slow-joiner guard
 
-    def emit_block_stored(self, hashes, token_ids):
+    def emit_block_stored(self, hashes, token_ids, block_size):
         # Full live-wire shape (captured from vLLM v0.28.0 on the GPU
         # testbed): extra_keys is one entry PER STORED BLOCK, null when that
         # block carries none — [null, null] on every plain event. A sim that
@@ -106,7 +106,7 @@ class Publisher:
             "block_hashes": [int(h) for h in hashes],
             "parent_block_hash": None,
             "token_ids": [int(t) for t in token_ids],
-            "block_size": 16,
+            "block_size": block_size,
             "lora_id": None,
             "medium": "GPU",
             "lora_name": None,
@@ -114,8 +114,6 @@ class Publisher:
             "group_idx": 0,
             "kv_cache_spec_kind": "full_attention",
         }
-        if hashes and len(token_ids) % len(hashes) == 0:
-            event["block_size"] = len(token_ids) // len(hashes)
         batch = [time.time(), [event], 0]
         with self.lock:
             frames = [
@@ -181,7 +179,7 @@ def main(argv):
                 if args.fail == "wrong-echo":
                     hashes = [h ^ 0xDEAD for h in hashes]
                 if args.fail != "no-echo" and hashes:
-                    pub.emit_block_stored(hashes, token_ids)
+                    pub.emit_block_stored(hashes, token_ids, args.block_size)
                 self._json(200, {
                     "id": "cmpl-sim", "object": "text_completion",
                     "model": args.model,

@@ -46,6 +46,12 @@ type Hooks interface {
 	NetJWTAuthProfileAdd(*cmn.JWTAuthProfileMod) (int, error)
 	NetJWTAuthProfileDel(name string) (int, error)
 
+	// netidentity (schema 1.11): network-identity bindings. Applied before
+	// loadbalancer (see Registry order). Add is an upsert.
+	NetAINetIdentityGet() ([]cmn.NetIdentityMod, error)
+	NetAINetIdentityAdd(*cmn.NetIdentityMod) (int, error)
+	NetAINetIdentityDel(name string) (int, error)
+
 	// loadbalancer (§4.1 #2)
 	NetLbRuleGet() ([]cmn.LbRuleMod, error)
 	NetLbRuleAdd(*cmn.LbRuleMod) (int, error)
@@ -111,11 +117,16 @@ type Hooks interface {
 	// NetGoBGPGCGet returns the zero value (LocalAs 0) when global config
 	// has not been set; it errors only on real failures (G-7).
 	NetGoBGPGCGet() (cmn.GoBGPGlobalConfig, error)
+	NetGoBGPGCReplace(*cmn.GoBGPGlobalConfig) (int, error)
 	NetGoBGPGCAdd(*cmn.GoBGPGlobalConfig) (int, error)
 	NetGoBGPPolicyDefinedSetGet(name string, definedTypeString string) ([]cmn.GoBGPPolicyDefinedSetMod, error)
 	NetGoBGPPolicyDefinedSetAdd(*cmn.GoBGPPolicyDefinedSetMod) (int, error)
 	NetGoBGPPolicyDefinedSetDel(*cmn.GoBGPPolicyDefinedSetMod) (int, error)
 	NetGoBGPPolicyDefinitionsGet() ([]cmn.GoBGPPolicyDefinitionsMod, error)
+	NetGoBGPPolicyApplyGet() ([]cmn.GoBGPPolicyApply, error)
+	NetGoBGPPolicyApplyReset(*cmn.GoBGPPolicyApply) (int, error)
+	NetGoBGPPolicyApplyAdd(*cmn.GoBGPPolicyApply) (int, error)
+	NetGoBGPPolicyApplyDel(*cmn.GoBGPPolicyApply) (int, error)
 	NetGoBGPPolicyDefinitionAdd(*cmn.GoBGPPolicyDefinitionsMod) (int, error)
 	NetGoBGPPolicyDefinitionDel(*cmn.GoBGPPolicyDefinitionsMod) (int, error)
 
@@ -228,6 +239,7 @@ var Registry = []DomainEntry{
 	{Name: DomainEndpoint, Get: getEndpoint, Apply: applyEndpoint, Delete: deleteEndpoint},
 	{Name: DomainJWTAuthProfile, Get: getJWTAuthProfile, Apply: applyJWTAuthProfile, Delete: deleteJWTAuthProfile},
 	{Name: DomainHalfClose, Get: getHalfClose, Apply: applyHalfClose, Delete: deleteHalfClose},
+	{Name: DomainNetIdentity, Get: getNetIdentity, Apply: applyNetIdentity, Delete: deleteNetIdentity},
 	{Name: DomainLoadBalancer, Get: getLoadBalancer, Apply: applyLoadBalancer, Delete: deleteLoadBalancer},
 	{Name: DomainKvExactBinding, Get: getKvExactBinding, Apply: applyKvExactBinding, Delete: deleteKvExactBinding},
 	{Name: DomainL7Policy, Get: getL7Policy, Apply: applyL7Policy, Delete: deleteL7Policy},
@@ -240,6 +252,7 @@ var Registry = []DomainEntry{
 	{Name: DomainSecurityRate, Get: getSecurityRate, Apply: applySecurityRate, Delete: deleteSecurityRate},
 	{Name: DomainBFD, Get: getBFD, Apply: applyBFD, Delete: deleteBFD},
 	{Name: DomainBGP, Get: getBGP, Apply: applyBGP, Delete: deleteBGP},
+	{Name: DomainBGPPolicyAssignment, Get: getBGPPolicyAssignment, Apply: applyBGPPolicyAssignment, Delete: deleteBGPPolicyAssignment},
 	{Name: DomainIPsec, Get: getIPsec, Apply: applyIPsec, Delete: deleteIPsec},
 	{Name: DomainCORS, Get: getCORS, Apply: applyCORS, Delete: deleteCORS},
 	{Name: DomainTracing, Get: getTracing, Apply: applyTracing, Delete: deleteTracing},
@@ -398,7 +411,7 @@ func isStartupMessage(m string) bool {
 
 // isSubsystemUnavailable reports whether err is an optional subsystem
 // (BFD, BGP, IPsec) telling us it is not running/enabled on this gateway
-// (loxinet nil-guard convention: "bfd session not running", "loxilb BGP
+// (typed BFD sentinels, or legacy loxinet nil-guard convention: "bfd session not running", "loxilb BGP
 // mode is disabled", "IPsec not initialized", "running in bgp only mode").
 // Capture and wipe treat such a domain as EMPTY -- a subsystem that is not
 // running has no configuration to snapshot or delete, and failing the whole
@@ -409,6 +422,9 @@ func isStartupMessage(m string) bool {
 func isSubsystemUnavailable(err error) bool {
 	if err == nil {
 		return false
+	}
+	if errors.Is(err, cmn.ErrBFDUnavailable) || errors.Is(err, cmn.ErrBFDUnsupported) {
+		return true
 	}
 	m := strings.ToLower(err.Error())
 	return strings.Contains(m, "not running") ||
@@ -549,6 +565,62 @@ func deleteJWTAuthProfile(hooks Hooks) (int, error) {
 		p := &profiles[i]
 		if _, err := hooks.NetJWTAuthProfileDel(p.Name); err != nil {
 			errs = append(errs, fmt.Errorf("delete jwtauthprofile %q: %w", p.Name, err))
+			continue
+		}
+		n++
+	}
+	return n, errors.Join(errs...)
+}
+
+// ---------------------------------------------------------------------
+// netidentity (schema 1.11)
+//
+// Bindings apply before loadbalancer, so a restored service is bound from
+// its first request, and via the reversed DeleteOrder are deleted after the
+// rules: a service never outlives its bindings on the way down either. The
+// apply is in name order, and a document's bindings were accepted together
+// once, so none of them can conflict with another.
+// ---------------------------------------------------------------------
+
+func getNetIdentity(hooks Hooks, doc *Document) error {
+	bindings, err := hooks.NetAINetIdentityGet()
+	if err != nil {
+		return fmt.Errorf("get netidentity: %w", err)
+	}
+	doc.Domains.NetIdentity = bindings
+	return nil
+}
+
+func applyNetIdentity(hooks Hooks, doc *Document, tolerateExists bool) (int, int, error) {
+	n, skipped := 0, 0
+	for i := range doc.Domains.NetIdentity {
+		b := &doc.Domains.NetIdentity[i]
+		if _, err := hooks.NetAINetIdentityAdd(b); err != nil {
+			// Add is an upsert, so an exists-shaped error should not
+			// occur; the guard keeps the domain uniform with the others
+			// under tolerateExists replays anyway.
+			if tolerateExists && isIdempotentExists(err) {
+				skipped++
+				continue
+			}
+			return n, skipped, fmt.Errorf("apply netidentity %q: %w", b.Name, err)
+		}
+		n++
+	}
+	return n, skipped, nil
+}
+
+func deleteNetIdentity(hooks Hooks) (int, error) {
+	bindings, err := hooks.NetAINetIdentityGet()
+	if err != nil {
+		return 0, fmt.Errorf("delete netidentity: get: %w", err)
+	}
+	n := 0
+	var errs []error
+	for i := range bindings {
+		b := &bindings[i]
+		if _, err := hooks.NetAINetIdentityDel(b.Name); err != nil {
+			errs = append(errs, fmt.Errorf("delete netidentity %q: %w", b.Name, err))
 			continue
 		}
 		n++
@@ -1303,25 +1375,6 @@ func deleteBGP(hooks Hooks) (int, error) {
 		n++
 	}
 
-	for _, ts := range bgpDefinedSetTypes {
-		sets, err := hooks.NetGoBGPPolicyDefinedSetGet("all", ts)
-		if isSubsystemUnavailable(err) {
-			continue // speaker (still) not up for this call: nothing to delete
-		}
-		if err != nil {
-			errs = append(errs, fmt.Errorf("delete bgp: get defined_sets (%s): %w", ts, err))
-			continue
-		}
-		for i := range sets {
-			ds := &sets[i]
-			if _, err := hooks.NetGoBGPPolicyDefinedSetDel(ds); err != nil {
-				errs = append(errs, fmt.Errorf("delete bgp defined_set %q: %w", ds.Name, err))
-				continue
-			}
-			n++
-		}
-	}
-
 	policyDefs, err := hooks.NetGoBGPPolicyDefinitionsGet()
 	if isSubsystemUnavailable(err) {
 		return n, errors.Join(errs...)
@@ -1342,6 +1395,25 @@ func deleteBGP(hooks Hooks) (int, error) {
 			continue
 		}
 		n++
+	}
+
+	for _, ts := range bgpDefinedSetTypes {
+		sets, err := hooks.NetGoBGPPolicyDefinedSetGet("all", ts)
+		if isSubsystemUnavailable(err) {
+			continue // speaker (still) not up for this call: nothing to delete
+		}
+		if err != nil {
+			errs = append(errs, fmt.Errorf("delete bgp: get defined_sets (%s): %w", ts, err))
+			continue
+		}
+		for i := range sets {
+			ds := &sets[i]
+			if _, err := hooks.NetGoBGPPolicyDefinedSetDel(ds); err != nil {
+				errs = append(errs, fmt.Errorf("delete bgp defined_set %q: %w", ds.Name, err))
+				continue
+			}
+			n++
+		}
 	}
 
 	// No delete hook exists for BGP global config (NetGoBGPGCAdd has no

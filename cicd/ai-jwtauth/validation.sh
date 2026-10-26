@@ -774,6 +774,97 @@ k_not_served "K5 credential-free request not served" "$r"
 chk_receipt  "K5 backend received nothing" 0 "$K5_NONCE"
 
 echo ""
+echo "== W: a request's bytes are the client's; only its header block is =="
+echo "   edited, once (port 2071: jwt, forward_identity, sse_mode). The"
+echo "   backend is a witness: it returns the body it received byte for"
+echo "   byte and keeps its own record of what reached it while it was"
+echo "   streaming an answer. A blank line in a body is not the end of a"
+echo "   header block, and bytes a client sends while its answer is still"
+echo "   running belong to no admitted request."
+
+W_DIR=$(mktemp -d /tmp/ai-jwtauth-w.XXXXXX)
+W_LOG=/tmp/ai-jwtauth-body-witness.jsonl
+W_PORT=2071
+# w_head <body file> <extra header lines> -> header block on stdout
+w_head() {
+  printf 'POST /v1/chat/completions HTTP/1.1\r\nHost: %s:%s\r\nContent-Type: application/json\r\nAuthorization: Bearer %s\r\nX-Auth-Tenant: spoof\r\n%sContent-Length: %d\r\n\r\n' \
+    "$VIP" "$W_PORT" "$TOK_ALICE" "$2" "$(stat -c %s "$1")"
+}
+w_chk() { # w_chk <name> <want (glob)> <got>
+  note_case "$1"
+  # shellcheck disable=SC2053
+  if [[ "$3" == $2 ]]; then
+    echo "  [PASS] $1 ($3)"; PASS=$((PASS + 1))
+  else
+    echo "  [FAIL] $1 — want '$2', got '$3'"; FAIL=$((FAIL + 1))
+  fi
+}
+# w_split <tag> <pause-ms> <pieces...> -> "<status> | <what the backend received, against the body sent>"
+w_split() {
+  local tag=$1 pause=$2 code; shift 2
+  code=$($hexec l3h1 python3 ./split_send.py "$VIP" "$W_PORT" "$W_DIR/$tag.json" "$pause" "$@" 2>/dev/null)
+  echo "$code | $(python3 ./body_verdict.py "$W_DIR/$tag.json.1" "$W_DIR/body.bin" 2>/dev/null)"
+}
+# w_stream <tag> <file sent while the answer streams> -> "<status> <1 = the stream reached its end at the client> | <the backend's own record>"
+w_stream() {
+  local tag=$1 r i
+  sed "s/WITNESS-ID/$tag/" "$W_DIR/streq.tmpl" > "$W_DIR/streq-$tag.bin"
+  r=$($hexec l3h1 python3 ./stream_send.py "$VIP" "$W_PORT" "$W_DIR/$tag.client.json" "$W_DIR/streq-$tag.bin" "$2" 2>/dev/null)
+  for i in $(seq 1 20); do
+    grep -q "\"id\": \"$tag\"" "$W_LOG" 2>/dev/null && break
+    sleep 0.5
+  done
+  grep "\"id\": \"$tag\"" "$W_LOG" 2>/dev/null | tail -1 > "$W_DIR/$tag.json"
+  echo "$r | $(python3 ./body_verdict.py "$W_DIR/$tag.json" "$W_DIR/stream-body.bin" "$2" 2>/dev/null)"
+}
+printf '{"model":"llama-70b",\r\n\r\n"messages":[{"role":"user","content":"hi"}],\r\n"max_tokens":8}' > "$W_DIR/body.bin"
+printf '{"model":"llama-70b","stream":true,"stream_options":{"include_usage":true},"messages":[{"role":"user","content":"hi"}],"max_tokens":8}' > "$W_DIR/stream-body.bin"
+w_head "$W_DIR/body.bin" $'Connection: close\r\n' > "$W_DIR/head.bin"
+{ w_head "$W_DIR/stream-body.bin" $'X-Witness-Stream: 3\r\nX-Witness-Id: WITNESS-ID\r\n'; cat "$W_DIR/stream-body.bin"; } > "$W_DIR/streq.tmpl"
+printf 'not a request\r\nX-Auth-Canary: 1\r\n\r\ntail\r\n' > "$W_DIR/mid-bytes.bin"
+# The request sent while the answer runs carries NO token: served, it is a
+# request no credential was checked for.
+{ printf 'POST /v1/chat/completions HTTP/1.1\r\nHost: %s:%s\r\nContent-Type: application/json\r\nX-Auth-Tenant: spoof\r\nContent-Length: %d\r\n\r\n' "$VIP" "$W_PORT" "$(stat -c %s "$W_DIR/body.bin")"; cat "$W_DIR/body.bin"; } > "$W_DIR/mid-request.bin"
+: > "$W_DIR/mid-none.bin"
+
+echo ""
+echo "W1: a body with a blank CRLF line, sent in a write of its own after the"
+echo "    header block → the verified tenant once in the header block, the"
+echo "    client's own X-Auth-Tenant gone, the body byte for byte"
+w_chk "W1 identity once, body as sent" "200 | hdr=1:tenant-a body=same extra=0 short=0 inbody=0" \
+  "$(w_split w1 300 "$W_DIR/head.bin" "$W_DIR/body.bin" READ)"
+
+echo ""
+echo "W2: control — a streamed answer with nothing sent while it runs → it"
+echo "    reaches its end, and the backend received nothing after the request"
+w_chk "W2 the stream runs to its end" "200 1 | hdr=1:tenant-a body=same after=none short=0 inbody=0 cut=0" \
+  "$(w_stream w2 "$W_DIR/mid-none.bin")"
+
+echo ""
+echo "W3: bytes with a blank CRLF line sent while the answer runs → none of"
+echo "    them reaches the backend and no identity is written into them; the"
+echo "    connection is closed"
+echo "    (BORN RED while the relay path took any read holding a blank line"
+echo "     for a header block: the backend received these bytes with"
+echo "     X-Auth-Tenant and X-Auth-User spliced in)"
+w_chk "W3 nothing relayed, connection closed" "200 0 | hdr=1:tenant-a body=same after=none short=0 inbody=0 cut=1" \
+  "$(w_stream w3 "$W_DIR/mid-bytes.bin")"
+
+echo ""
+echo "W4: a second request with NO token sent while the answer runs → it"
+echo "    does not reach the backend"
+echo "    (BORN RED: it reached the backend with the first request's verified"
+echo "     identity written into its header block — no credential checked)"
+w_chk "W4 the unadmitted request is not forwarded" "200 0 | hdr=1:tenant-a body=same after=none short=0 inbody=0 cut=1" \
+  "$(w_stream w4 "$W_DIR/mid-request.bin")"
+
+echo ""
+echo "W5: after them, a streamed request on a new connection runs to its end"
+w_chk "W5 the service still streams" "200 1 | hdr=1:tenant-a body=same after=none short=0 inbody=0 cut=0" \
+  "$(w_stream w5 "$W_DIR/mid-none.bin")"
+rm -rf "$W_DIR"
+
+echo ""
 echo "== X: repeated Authorization headers — deterministic, never a leak =="
 echo "   RFC 9110 defines no merge for a repeated singleton field. Pinned"
 echo "   contract: the LAST Authorization value decides admission, exactly"
@@ -3711,13 +3802,17 @@ echo "             behind that the next request can trip over."
 echo "             :2068's endpoint is a port nothing listens on, so every"
 echo "             dispatch is refused at connect(). The request was admitted"
 echo "             -- the gate ran and reserved -- and then never reached a"
-echo "             backend, so: no receipt, no completed-request record (no"
-echo "             status was ever seen), and the claim must come back."
+echo "             backend, so: no receipt, and the claim must come back."
+echo "             The 503 the gateway writes for it IS recorded, as every"
+echo "             answer the client received is (F-20): outcome completed,"
+echo "             status 503, nothing charged. A run that records the three"
+echo "             as anything else, or charges them, is a different defect."
 echo "             Three attempts rather than one, because a single stale"
 echo "             session is only dangerous to the request that follows it."
 h2l_tokens "H2-LIFE-007"
 qos_epoch_fresh
 h2l_sample; H2L_REQ0=$H2L_REQ; H2L_TOK0=$H2L_TOK
+H2L_503_0=$(metric_labeled loxilb_ai_requests_total "tenant=\"$H2L_T\"" 'status="503"')
 H2L_CONN_ERR0=$(gw_log_count "connect 31.31.31.1:8099")
 new_nonce; H2L_F1=$(last_nonce)
 new_nonce; H2L_F2=$(last_nonce)
@@ -3757,7 +3852,20 @@ h2_receipt_at l3ep1 "H2-LIFE-007 and the probe reached the backend, so the good 
 qos_epoch_ok "H2-LIFE-007 the failures and the probe stayed inside one quota epoch"
 sleep "$QOS_SETTLE_WAIT"
 h2l_sample
-h2l_delta_ok "H2-LIFE-007 only the probe was recorded and charged;" 1 12 "$H2L_REQ0" "$H2L_TOK0"
+# Four records, not one: the probe's 200 and the three 503s the gateway wrote
+# when connect() failed. An answer the client received is recorded whoever
+# wrote it (F-20, loxilb-ebpf-inference-gateway#125); before it these three
+# left no record. Only the probe is charged: a refusal has no usage.
+h2l_delta_ok "H2-LIFE-007 the probe and the three 503s were recorded, only the probe charged;" 4 12 "$H2L_REQ0" "$H2L_TOK0"
+H2L_503_1=$(metric_labeled loxilb_ai_requests_total "tenant=\"$H2L_T\"" 'status="503"')
+if [ "$H2L_503_0" = "unreadable" ] || [ "$H2L_503_1" = "unreadable" ]; then
+  note_case "H2-LIFE-007"
+  echo "  [FAIL] H2-LIFE-007 - the metric scrape failed; the three extra records cannot be"
+  echo "         told apart from a phantom record"
+  FAIL=$((FAIL + 1))
+else
+  chk_num "H2-LIFE-007 and the three extra records are the gateway's 503s" 3 $((H2L_503_1 - H2L_503_0))
+fi
 
 echo ""
 echo "== H2-LOAD: bounded-load units on an HTTP/2 connection are per STREAM =="
@@ -3879,7 +3987,7 @@ echo "   A deleted, renamed, or skipped block stops being tested silently:"
 echo "   the pass count simply gets smaller and the run still says OK. This"
 echo "   compares the case IDs that actually asserted against the declared"
 echo "   set, so coverage cannot shrink without turning the run RED."
-EXPECTED_CASES="A1 A2 A3 A4 A5 A6 A7 A8 B1 B2 B3 C1 C2 C3 C4 C5 C6 D1 D2 D3 D4 D5 D6 E1 E2 F1 F2 F3 F4 L1 L2 L3 L4 K1 K2 K3 K4 K5 X1 X2 M1 M2 M3 M4 N1 N2 N3 N4 G1 G2 H0 H1 H2 H3 H4 P1 P2 I0 I1 I2 I3 J1 T0 T1 T2 T3 T4 U1 U2 \
+EXPECTED_CASES="A1 A2 A3 A4 A5 A6 A7 A8 B1 B2 B3 C1 C2 C3 C4 C5 C6 D1 D2 D3 D4 D5 D6 E1 E2 F1 F2 F3 F4 L1 L2 L3 L4 K1 K2 K3 K4 K5 W1 W2 W3 W4 W5 X1 X2 M1 M2 M3 M4 N1 N2 N3 N4 G1 G2 H0 H1 H2 H3 H4 P1 P2 I0 I1 I2 I3 J1 T0 T1 T2 T3 T4 U1 U2 \
 QOS-RPS-001 QOS-RPS-002 QOS-RPS-003 QOS-RPS-004 QOS-RPS-005 \
 QOS-DEF-001 QOS-DEF-002 QOS-DEF-003 \
 QOS-VIP-001 QOS-VIP-004 \
@@ -3919,6 +4027,24 @@ else
   echo "  [PASS] Z2 no undeclared cases ran"
   PASS=$((PASS + 1))
 fi
+
+# The CLI half: loxicmd creates, reads and deletes a JWT auth profile with
+# the REST list as the oracle (validate_cli.sh); gated by jwtauth_cli_preflight
+# (CLI_TESTS), folded into the verdict.
+echo ""
+echo "Running CLI validation (validate_cli.sh)..."
+cli_log=$(mktemp)
+bash validate_cli.sh 2>&1 | tee "$cli_log"
+cli_code=${PIPESTATUS[0]}
+# 0 pass, 3 skipped by its preflight (never counted as a pass), anything
+# else a failure.
+case $cli_code in
+  0) echo "  [PASS] CLI half (validate_cli.sh)" ;;
+  3) echo "  [SKIPPED] CLI half (validate_cli.sh): $(grep -m1 -E 'SKIP: |CLI_TESTS=skip' "$cli_log" | sed 's/^ *//')" ;;
+  *) echo "  [FAIL] CLI half (validate_cli.sh) exit $cli_code"
+     FAIL=$((FAIL + 1)) ;;
+esac
+rm -f "$cli_log"
 
 echo ""
 if [ $FAIL -ne 0 ]; then

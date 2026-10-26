@@ -21,6 +21,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	prom "github.com/loxilb-io/loxilb/api/prometheus"
 	"github.com/loxilb-io/loxilb/pkg/audit"
 )
 
@@ -167,6 +168,40 @@ type aiCompleteRecord struct {
 	ClientIP    string
 	OriginIP    string
 	TrustedHops int
+	// AuthSrc and NetIdentity are what decided the tenant and the
+	// network-identity binding that matched, with the meanings aiNetActor
+	// documents.
+	AuthSrc     int
+	NetIdentity string
+	// Priority, ClassInfo and Objective are the class the admission gate
+	// gave the request: ClassInfo is the data plane's AI_GW_CLASSF_* bits
+	// and is 0 when the class stage did not run.
+	Priority  int
+	ClassInfo int
+	Objective string
+}
+
+// The class bits a completion carries, mirroring AI_GW_CLASSF_* in
+// sockproxy_ai_gw.h; the low two are the class (AI_GW_CLASS_*).
+const (
+	aiClassInfoMask       = 0x03
+	aiClassInfoSet        = 0x04
+	aiClassInfoDenied     = 0x08
+	aiClassInfoHintUnread = 0x10
+)
+
+// aiClassDetail writes the request's class into a data record. It writes
+// nothing for a request the class stage did not run for, so such a record
+// reads as it did before classes existed.
+func aiClassDetail(d *audit.DataDetail, priority, classInfo int, objective string) {
+	if classInfo&aiClassInfoSet == 0 {
+		return
+	}
+	d.PriorityClass = aiClassName(classInfo & aiClassInfoMask)
+	d.Priority = int64(priority)
+	d.Objective = objective
+	d.ObjectiveDenied = classInfo&aiClassInfoDenied != 0
+	d.HintNotApplied = classInfo&aiClassInfoHintUnread != 0
 }
 
 // emitAIComplete writes the data.ai.complete record for a request whose
@@ -181,11 +216,11 @@ func emitAIComplete(c aiCompleteRecord) bool {
 	r.Stream = audit.StreamData
 	r.EventType = eventAIComplete
 	r.RequestID = c.RequestID
-	r.Actor = aiAttribute(aiDataActor(c.TenantID, c.UserID, c.KeyID),
+	r.Actor = aiAttribute(aiNetActor(aiDataActor(c.TenantID, c.UserID, c.KeyID), c.AuthSrc, c.NetIdentity),
 		c.ClientIP, c.OriginIP, c.TrustedHops)
 	r.Outcome = audit.Outcome{
 		Status: c.StatusCode,
-		OK:     c.StatusCode > 0 && c.StatusCode < 400,
+		OK:     c.StatusCode > 0 && c.StatusCode < 400 && prom.AIEndCause(c.ErrorCode) == "",
 		Reason: aiCompleteReason(c.StatusCode, c.ErrorCode),
 	}
 	r.Data = &audit.DataDetail{
@@ -196,6 +231,7 @@ func emitAIComplete(c aiCompleteRecord) bool {
 		LatencyMs: c.LatencyMs,
 		Stream:    c.IsStream,
 	}
+	aiClassDetail(r.Data, c.Priority, c.ClassInfo, c.Objective)
 	return p.Emit(r)
 }
 
@@ -213,6 +249,10 @@ type aiSettleRecord struct {
 	ResEpoch  int64
 	Allowed   bool
 	WorkerID  int
+	// AuthSrc and NetIdentity: as on a completion, so the three records of
+	// one request name one actor.
+	AuthSrc     int
+	NetIdentity string
 }
 
 // emitAISettle writes the data.ai.settle record for a token charge. A
@@ -232,7 +272,7 @@ func emitAISettle(s aiSettleRecord) bool {
 	r.Stream = audit.StreamData
 	r.EventType = eventAISettle
 	r.RequestID = s.RequestID
-	r.Actor = aiDataActor(s.TenantID, s.UserID, s.KeyID)
+	r.Actor = aiNetActor(aiDataActor(s.TenantID, s.UserID, s.KeyID), s.AuthSrc, s.NetIdentity)
 	r.Outcome = audit.Outcome{OK: s.Allowed, Reason: reason}
 	r.Data = &audit.DataDetail{
 		Service:   s.SvcIdent,
@@ -263,6 +303,15 @@ type aiDenyRecord struct {
 	ClientIP    string
 	OriginIP    string
 	TrustedHops int
+	// AuthSrc and NetIdentity: as on a completion. A refusal a binding
+	// caused names the binding with the credential's own auth mode.
+	AuthSrc     int
+	NetIdentity string
+	// Priority, ClassInfo and Objective: as on a completion. ClassInfo is 0
+	// for a refusal made before the class stage ran.
+	Priority  int
+	ClassInfo int
+	Objective string
 }
 
 // emitAIDeny writes the sec.ai.deny record for a request the admission
@@ -282,7 +331,7 @@ func emitAIDeny(d aiDenyRecord) bool {
 	r.Class = audit.ClassSecurity
 	r.EventType = eventAIDeny
 	r.RequestID = d.RequestID
-	r.Actor = aiAttribute(aiDataActor(d.TenantID, d.UserID, d.KeyID),
+	r.Actor = aiAttribute(aiNetActor(aiDataActor(d.TenantID, d.UserID, d.KeyID), d.AuthSrc, d.NetIdentity),
 		d.ClientIP, d.OriginIP, d.TrustedHops)
 	r.Outcome = audit.Outcome{
 		Status: d.HTTPStatus,
@@ -295,6 +344,7 @@ func emitAIDeny(d aiDenyRecord) bool {
 		Stage:    aiDenyStage(d.Stage),
 		Decision: d.ErrorCode,
 	}
+	aiClassDetail(r.Data, d.Priority, d.ClassInfo, d.Objective)
 	return p.Emit(r)
 }
 
@@ -305,6 +355,40 @@ func aiDataActor(tenantID, userID, keyID string) audit.Actor {
 	a := audit.Actor{Auth: audit.AuthNone, Tenant: tenantID, User: userID, KeyID: keyID}
 	if keyID != "" {
 		a.Auth = audit.AuthAPIKey
+	}
+	return a
+}
+
+// What decided a request's tenant, mirroring AI_GW_AUTH_SRC_*.
+const (
+	aiAuthSrcCredential = 0
+	aiAuthSrcNetwork    = 1
+	aiAuthSrcBearer     = 2
+)
+
+// aiNetActor records, on a data-path actor, what the gate said decided the
+// tenant and the network-identity binding that matched the source.
+//
+// A bearer token the gateway validated reads as bearer: the token mints no
+// key id, so without this the actor would read as unauthenticated.
+//
+// netIdentity is the binding that matched the request's source and is
+// recorded whenever one did. authSrc says whether it decided the tenant:
+// only then does the actor read as network-authenticated. A binding that
+// matched beside a credential leaves the credential's own mode in place, so
+// "who vouched for this tenant" always has one answer. The network mode is
+// not written without a binding to name: a mode nothing can be traced to
+// would be a claim, not a record.
+func aiNetActor(a audit.Actor, authSrc int, netIdentity string) audit.Actor {
+	if authSrc == aiAuthSrcBearer {
+		a.Auth = audit.AuthBearer
+	}
+	if netIdentity == "" {
+		return a
+	}
+	a.NetIdentity = netIdentity
+	if authSrc == aiAuthSrcNetwork {
+		a.Auth = audit.AuthNetwork
 	}
 	return a
 }
@@ -340,6 +424,19 @@ const (
 	// aiStageCapacity is the service/endpoint capacity gate, which refuses
 	// after policy admitted the request and reports through its own frame.
 	aiStageCapacity
+	// aiStageObjective is the class stage on a rule that is strict about
+	// objectives: the request named one it may not use.
+	aiStageObjective
+	// aiStageRoute and aiStageFraming refuse outside the gate's verdict
+	// frame, before any backend is chosen: no pool serves the named model,
+	// no rule matches, or an L7 policy rejects (route); the request cannot
+	// be admitted as framed, an oversized body or a model out of reach
+	// (framing).
+	aiStageRoute
+	aiStageFraming
+	// aiStageSecurity is a content-security scanner's block (LlamaFirewall),
+	// also outside the verdict frame.
+	aiStageSecurity
 )
 
 // aiDenyStage names the gate stage that refused the request.
@@ -355,6 +452,14 @@ func aiDenyStage(stage int) string {
 		return "reserve"
 	case aiStageCapacity:
 		return "capacity"
+	case aiStageObjective:
+		return "objective"
+	case aiStageRoute:
+		return "route"
+	case aiStageFraming:
+		return "framing"
+	case aiStageSecurity:
+		return "security"
 	}
 	return "keyless"
 }
@@ -370,6 +475,12 @@ func aiDenyStage(stage int) string {
 // failure would put an infrastructure fault in front of the on-call
 // engineer as a break-in attempt.
 //
+// It also covers the two refusals a network-identity binding adds. A valid
+// credential used from a network bound to another tenant is the caller
+// being somewhere it may not be, not a credential that failed: authz. A
+// binding that could not be resolved on a service that fails closed is the
+// gateway's own fault, filed where the policy-store outage is.
+//
 // The rate-limit stage covers both a request-rate refusal and a token
 // quota that is already spent. They are different resources with different
 // remedies — one is throttling, the other is a budget — and the stage
@@ -378,9 +489,9 @@ func aiDenyReason(stage int, errorCode string) audit.Reason {
 	switch stage {
 	case aiStageAuth:
 		switch errorCode {
-		case "model_not_allowed":
+		case "model_not_allowed", "network_tenant_mismatch":
 			return audit.ReasonAuthz
-		case "policy_store_unavailable":
+		case "policy_store_unavailable", "netid_unavailable":
 			return audit.ReasonAdmission
 		}
 		return audit.ReasonAuth
@@ -397,6 +508,15 @@ func aiDenyReason(stage int, errorCode string) audit.Reason {
 		// Backend saturation, not the caller's budget and not throttling:
 		// an admission decision, and the decision field names which
 		// ceiling refused (admission_capacity, admission_no_capacity).
+		return audit.ReasonAdmission
+	case aiStageObjective:
+		// A caller asking for something it is not entitled to.
+		return audit.ReasonAuthz
+	case aiStageRoute, aiStageFraming, aiStageSecurity:
+		// Nothing serves the request as asked, or a scanner refused its
+		// content: an admission decision, and the decision field names
+		// which (model_unavailable, no_route, request_body_too_large,
+		// llamafirewall_block, ...).
 		return audit.ReasonAdmission
 	}
 	return audit.ReasonAdmission
@@ -415,15 +535,22 @@ func aiTokenQuotaCode(errorCode string) bool {
 // aiCompleteReason maps a finished response onto the reason vocabulary.
 // The datapath's error code is preferred where it names a transport
 // outcome, because the status alone cannot tell a backend that refused
-// from a client that walked away.
+// from a client that walked away. Every end code (prom.AIEndCodes, the
+// codes of an answer the client did not get whole) has its reason here:
+// the client's three are client_abort, a cut by a cap or a reaper is a
+// timeout, the engine dying ended the backend connection under the answer,
+// and the rule's listener going away is the gateway's own doing,
+// gateway_shutdown (the metric reads cause="gateway"; no backend failed).
 func aiCompleteReason(status int, errorCode string) audit.Reason {
 	switch errorCode {
-	case "client_abort":
+	case "client_abort", "client_stall", "client_abort_before_answer":
 		return audit.ReasonClientAbort
-	case "timeout":
+	case "timeout", "max_stream_duration_exceeded", "pd_decode_stream_timeout", "pd_idle_timeout":
 		return audit.ReasonTimeout
-	case "backend_conn":
+	case "backend_conn", "backend_died":
 		return audit.ReasonBackendConn
+	case "listener_closed":
+		return audit.ReasonGatewayShutdown
 	case "backend_tls":
 		return audit.ReasonBackendTLS
 	case "upstream_error":

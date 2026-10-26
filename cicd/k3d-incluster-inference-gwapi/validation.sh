@@ -3,6 +3,9 @@
 # Ported from kube-loxilb's test/e2e-inference-gwapi validation (same checks,
 # same reasons) onto the in-cluster topology: loxilb is a Pod, the gateway
 # address is the node IP, and the client is a container on the k3d network.
+# Checks 5 and 6 follow kube-loxilb feat/auth-annotation (EPP integration): a
+# pool that names an Endpoint Picker is accepted and the picker is the gateway's
+# to call; the pre-EPP controller refused it (NotSupportedByParent).
 # Sentinel: SCENARIO-k3d-incluster-inference-gwapi [OK] / [FAILED].
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -42,6 +45,13 @@ pool_reason() {
     jq -r '.status.parents[]? | select(.controllerName=="loxilb.io/kube-loxilb")
            | .conditions[]? | select(.type=="Accepted") | .reason' | head -1
 }
+pool_cond_reason() { # <pool> <conditionType> -> reason
+  kubectl -n llm get inferencepool "$1" -o json 2>/dev/null |
+    jq -r --arg t "$2" '.status.parents[]? | select(.controllerName=="loxilb.io/kube-loxilb")
+                        | .conditions[]? | select(.type==$t) | .reason' | head -1
+}
+epp_rules() { rules | jq '[.lbAttr[]? | select(.serviceArguments.name|startswith("llm_epp-required-inference"))] | length'; }
+gateway_has_epp() { curl -s --max-time 5 "http://$NODE_IP:11111/netlox/v1/version" | jq -e '.features[]? | select(.=="epp")' >/dev/null 2>&1; }
 
 echo "=== 1. the pool became a Service ==="
 if ! poll 90 kubectl -n llm get svc "$POOL_SVC"; then
@@ -116,35 +126,65 @@ else
   bad "status written" "no parents after 60s"
 fi
 
-echo "=== 5. an Endpoint Picker with FailClose is refused ==="
+echo "=== 5. an Endpoint Picker with FailClose is accepted; calling it is the gateway's job ==="
+# kube-loxilb (feat/auth-annotation, with the EPP integration) no longer refuses
+# a pool that names an Endpoint Picker: it accepts the pool, writes the picker's
+# address and failure mode on the derived Service, and leaves the call to the
+# gateway. The picker Service "some-epp" does not exist here, so the reference
+# does not resolve: ResolvedRefs says so, and FailClose points the rule at an
+# address that always refuses, so every request is answered 503 until the picker
+# appears - never served by a policy nobody asked for. Whether a rule reaches
+# loxilb depends on the gateway: one that lists "epp" in its /version features
+# installs it (eppFailureMode FailClose); one that does not gets no rule for the
+# pool, because FailClose cannot be served without the picker.
 kubectl apply -f "$HERE/fixtures/inferencepool-failclose.yaml" >/dev/null
 kubectl apply -f "$HERE/fixtures/httproute-failclose.yaml" >/dev/null
 if poll 60 bash -c "[[ \"\$(kubectl -n llm get inferencepool epp-required -o json | jq -r '.status.parents | length')\" != '0' ]]"; then
-  check "Accepted is False"   "$(pool_cond epp-required Accepted)" "False"
-  check "reason"              "$(pool_reason epp-required)"        "NotSupportedByParent"
-  if kubectl -n llm get svc epp-required-inference >/dev/null 2>&1; then
-    bad "no service for a refused pool" "epp-required-inference exists"
+  check "Accepted is True"      "$(pool_cond epp-required Accepted)"                  "True"
+  check "ResolvedRefs is False" "$(pool_cond epp-required ResolvedRefs)"              "False"
+  check "ResolvedRefs reason"   "$(pool_cond_reason epp-required ResolvedRefs)"       "InvalidExtensionRef"
+else
+  bad "accepted pool reports status" "no parents after 60s"
+fi
+if poll 60 kubectl -n llm get svc epp-required-inference; then
+  ok "service for the accepted pool"
+  EPP_SVC=$(svc_json epp-required-inference)
+  check "annotation epp-failure-mode" "$(jq -r '.metadata.annotations["loxilb.io/epp-failure-mode"]' <<<"$EPP_SVC")" "FailClose"
+  if [[ -n "$(jq -r '.metadata.annotations["loxilb.io/epp-endpoint"] // ""' <<<"$EPP_SVC")" ]]; then
+    ok "annotation epp-endpoint set (an unresolved FailClose picker is pointed at a refusing address)"
   else
-    ok "no service for a refused pool"
+    bad "annotation epp-endpoint" "absent on a FailClose pool whose picker does not resolve"
   fi
 else
-  bad "refused pool reports status" "no parents after 60s"
+  bad "service for the accepted pool" "epp-required-inference not found after 60s"
+fi
+# The gateway side. The fixture shares the listener with vllm-qwen3, so on one
+# VIP kube-loxilb's IPAM also keeps this Service without an address; the rule
+# table is the observation that holds either way.
+if gateway_has_epp; then
+  if poll 60 bash -c "[ \"\$(curl -s --max-time 5 http://$NODE_IP:11111/netlox/v1/config/loadbalancer/all | jq '[.lbAttr[]? | select(.serviceArguments.name|startswith(\"llm_epp-required-inference\"))] | length')\" != 0 ]"; then
+    check "rule carries eppFailureMode FailClose (gateway with epp)" \
+      "$(rules | jq -r '[.lbAttr[]? | select(.serviceArguments.name|startswith("llm_epp-required-inference"))][0].serviceArguments.eppFailureMode')" "FailClose"
+  else
+    bad "rule for the FailClose pool (gateway with epp)" "not found after 60s"
+  fi
+else
+  sleep 10
+  check "no rule for the FailClose pool on a gateway without epp" "$(epp_rules)" "0"
 fi
 
-echo "=== 6. switching that pool to FailOpen accepts it ==="
+echo "=== 6. switching that pool to FailOpen keeps it accepted; loxilb selects itself ==="
+# An unresolved FailOpen picker carries nothing: the picker annotations leave
+# the Service and the rule, where the gateway installs one, falls back to
+# loxilb's own endpoint selection - the pool's declared fallback.
 kubectl apply -f "$HERE/fixtures/inferencepool-failopen.yaml" >/dev/null
-if poll 90 kubectl -n llm get svc epp-required-inference; then
-  ok "service appears once FailOpen is set"
-  # The Service can appear a few seconds before the status write lands (a
-  # resourceVersion conflict requeues it once), so poll rather than read once.
-  if poll 30 bash -c "[[ \"\$(kubectl -n llm get inferencepool epp-required -o json | jq -r '.status.parents[]? | select(.controllerName==\"loxilb.io/kube-loxilb\") | .conditions[]? | select(.type==\"Accepted\") | .status' | head -1)\" == True ]]"; then
-    ok "Accepted turns True"
-  else
-    bad "Accepted turns True" "still $(pool_cond epp-required Accepted) after 30s"
-  fi
+if poll 60 bash -c "[[ \"\$(kubectl -n llm get svc epp-required-inference -o json | jq -r '.metadata.annotations[\"loxilb.io/epp-endpoint\"] // \"\"')\" == '' ]]"; then
+  ok "epp-endpoint leaves the Service under FailOpen"
 else
-  bad "service appears once FailOpen is set" "not found after 90s"
+  bad "epp-endpoint leaves the Service under FailOpen" "still $(svc_json epp-required-inference | jq -r '.metadata.annotations["loxilb.io/epp-endpoint"]') after 60s"
 fi
+check "epp-failure-mode leaves the Service under FailOpen" "$(svc_json epp-required-inference | jq -r '.metadata.annotations["loxilb.io/epp-failure-mode"] // ""')" ""
+check "Accepted stays True" "$(pool_cond epp-required Accepted)" "True"
 
 echo "=== 7. removing the route removes the Service (and its rule) ==="
 kubectl -n llm delete httproute epp-route >/dev/null 2>&1

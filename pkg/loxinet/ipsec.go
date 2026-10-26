@@ -516,6 +516,18 @@ func (h *IPsecH) NetIPsecTunnelGet(name string) (*cmn.IPsecTunnel, error) {
 	return &tunnelCopy, nil
 }
 
+// tunnelMark returns the mark of a configured tunnel: what its VTI
+// interface is named after. No state refresh, no copy: one map read.
+func (h *IPsecH) tunnelMark(name string) (uint32, bool) {
+	h.mutex.RLock()
+	defer h.mutex.RUnlock()
+	tunnel, exists := h.tunnels[name]
+	if !exists {
+		return 0, false
+	}
+	return tunnel.Mark, true
+}
+
 // NetIPsecTunnelGetAll - Get all tunnels
 func (h *IPsecH) NetIPsecTunnelGetAll() ([]*cmn.IPsecTunnel, error) {
 	h.refreshTunnelStates(false)

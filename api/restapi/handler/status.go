@@ -20,14 +20,24 @@ import (
 	"github.com/loxilb-io/loxilb/api/models"
 	"github.com/loxilb-io/loxilb/api/restapi/operations"
 	tk "github.com/loxilb-io/loxilib"
+	"net/http"
 
 	"github.com/go-openapi/runtime/middleware"
 )
 
 func ConfigGetProcess(params operations.GetStatusProcessParams, principal interface{}) middleware.Responder {
 	tk.LogIt(tk.LogTrace, "api: Status %s API called. url : %s\n", params.HTTPRequest.Method, params.HTTPRequest.URL)
-	//var result []*models.ProcessInfoEntry
-	process := status.ProcessInfoGet()
+	process, err := status.ProcessInfoGet()
+	return processStatusResponse(process, err)
+}
+
+// Process collection has no client-supplied selector. Any failure is a server
+// fault, regardless of the typed cause or its diagnostic wording.
+func processStatusResponse(process []*models.ProcessInfoEntry, err error) middleware.Responder {
+	if err != nil {
+		tk.LogIt(tk.LogDebug, "api: process status collection failed: %v\n", err)
+		return errorResponseWithCode(http.StatusInternalServerError, "Process status collection failed")
+	}
 
 	return operations.NewGetStatusProcessOK().WithPayload(&models.ProcessStatus{ProcessAttr: process})
 }

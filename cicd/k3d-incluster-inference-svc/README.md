@@ -1,6 +1,6 @@
 # k3d-incluster-inference-svc — inference gateway via Service annotations, in-cluster
 
-loxilb-inference-gateway and kube-loxilb (branch `integration/inference-gateway`)
+loxilb-inference-gateway and kube-loxilb (branch `feat/auth-annotation`)
 run **as Pods** in a single-node k3d cluster. An ordinary `LoadBalancer` Service
 annotated with `loxilb.io/lbmode=fullproxy`, `usepodnetwork`, `epselect=chwbl`,
 `chwbl-prefix-hash-level`, `sse-mode` and `model-name` must become a working
@@ -14,7 +14,7 @@ the delivery proof that says *which* endpoint served, which a 200 alone cannot.
 host ── docker network k3d-igw-svc
         ├── k3d-igw-svc-server-0        k3s v1.33 node (privileged container)
         │     ├── loxilb-lb DaemonSet   hostNetwork; REST :11111; VIP = node IP
-        │     ├── kube-loxilb           built from integration/inference-gateway
+        │     ├── kube-loxilb           built from feat/auth-annotation
         │     └── llm/vllm-qwen3 ×2     mock vLLM pods (10.42.0.0/16)
         └── igw-client-igw-svc          curl client
 ```

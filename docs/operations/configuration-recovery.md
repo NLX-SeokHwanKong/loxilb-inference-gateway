@@ -17,11 +17,21 @@ image digest, startup options, DB endpoints and password-file paths. Also retain
 | Resource | Recovery authority |
 |---|---|
 | Gateway services, certificate IDs/digests, Audit sink configuration | Snapshot |
-| API keys, per-key RPS/burst, management users/sessions | Separate PostgreSQL backup |
+| API key hashes/policies, quotas, objectives and management users | Separate PostgreSQL backup |
+| Management sessions | Do not restore; establish new sessions |
 | Managed certificate material, sink CA file, frontend keys | Separate filesystem backup/mount |
 | `snapshot-node.secret` | Separate recovery dependency for encrypted secrets |
 | Local Audit records/cursors | Separate Audit volume |
 | Binary/image identity and launch options | Deployment record |
+
+Schema 1.12 adds the `bgppolicyassignment` domain for operator BGP import/export
+bindings, including ordered policy names and the default action. Speaker-owned
+policies remain runtime managed. Restore BGP definitions and assignments together.
+A BGP-only replacement is refused before mutation if it would discard live
+unselected assignments. Older snapshots never gain coverage of this new domain.
+Changing a running speaker's ASN, router ID or listen port requires snapshot
+replacement; ordinary BGP global POST rejects it. When live load balancers
+advertise BGP routes, core replacement also requires `loadbalancer` coverage.
 
 A snapshot is not a complete system backup. Keep failed snapshots and original
 resources when investigating a failure. Teardown only scenario-owned objects.

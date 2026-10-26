@@ -45,7 +45,7 @@ Every document describes its own coverage:
 
 ## Captured domains
 
-Twenty domains, listed in apply order (dependencies first; teardown runs
+Twenty-one domains, listed in apply order (dependencies first; teardown runs
 in exact reverse). The `components` parameter and the `domains.*` JSON keys
 use these names verbatim.
 
@@ -54,23 +54,24 @@ use these names verbatim.
 | 1 | `endpoint` | Endpoint hosts and probe configuration |
 | 2 | `jwtauthprofile` | JWT auth profiles referenced by LB rules |
 | 3 | `halfclose` | Half-close hold settings (singleton) |
-| 4 | `loadbalancer` | LB rules and services, including AI/L7 service arguments |
-| 5 | `kvexactbinding` | Per-rule KV-exact composed-binding identity |
-| 6 | `l7policy` | Dedicated L7 policy resources, attached to rules by stable id |
-| 7 | `firewall` | Firewall rules |
-| 8 | `policy` | QoS policers / meters |
-| 9 | `mirror` | Traffic mirrors |
-| 10 | `session` | Subscriber sessions |
-| 11 | `sessionulcl` | Subscriber UL-CL classifiers |
-| 12 | `ipfilter` | IP allow/deny filter entries |
-| 13 | `securityrate` | Security rate-limit configuration (singleton) |
-| 14 | `bfd` | BFD sessions |
-| 15 | `bgp` | BGP global config, neighbors, defined sets, policy definitions and applies |
-| 16 | `ipsec` | IPsec config, tunnels, certificates and CA certificates |
-| 17 | `cors` | CORS origin allowlist and wildcard opt-in (singleton) |
-| 18 | `tracing` | OTLP trace-export product configuration (singleton) |
-| 19 | `cert` | Managed TLS certificates, as `{id, digest}` metadata |
-| 20 | `auditsink` | Audit sinks: receiver, certificate paths and, for a secondary sink, its selection |
+| 4 | `netidentity` | Network-identity bindings: the tenant of requests by source network or ingress interface. Node-local: a binding names this node's addresses and interfaces |
+| 5 | `loadbalancer` | LB rules and services, including AI/L7 service arguments |
+| 6 | `kvexactbinding` | Per-rule KV-exact composed-binding identity |
+| 7 | `l7policy` | Dedicated L7 policy resources, attached to rules by stable id |
+| 8 | `firewall` | Firewall rules |
+| 9 | `policy` | QoS policers / meters |
+| 10 | `mirror` | Traffic mirrors |
+| 11 | `session` | Subscriber sessions |
+| 12 | `sessionulcl` | Subscriber UL-CL classifiers |
+| 13 | `ipfilter` | IP allow/deny filter entries |
+| 14 | `securityrate` | Security rate-limit configuration (singleton) |
+| 15 | `bfd` | BFD sessions |
+| 16 | `bgp` | BGP global config, neighbors, defined sets, policy definitions and applies |
+| 17 | `ipsec` | IPsec config, tunnels, certificates and CA certificates |
+| 18 | `cors` | CORS origin allowlist and wildcard opt-in (singleton) |
+| 19 | `tracing` | OTLP trace-export product configuration (singleton) |
+| 20 | `cert` | Managed TLS certificates, as `{id, digest}` metadata |
+| 21 | `auditsink` | Audit sinks: receiver, certificate paths and, for a secondary sink, its selection |
 
 The document additionally carries `recovery_dependencies` — not a domain
 but a document-level manifest of the external stores the configuration
@@ -172,6 +173,8 @@ forward on read.
 | 1.7 | `halfclose` domain |
 | 1.8 | `auditsink` domain |
 | 1.9 | `halfclose` gains `defaultMode` |
+| 1.10 | a `loadbalancer` rule gains `ai_default_reservation` and `ai_default_max_tokens` |
+| 1.11 | `netidentity` domain; a `jwtauthprofile` gains `priority_class` and a `loadbalancer` rule `ai_objective_strict` (both absent when unset) |
 
 The resulting compatibility matrix, enforced by the version-gate and
 golden-document test suites (a golden document of every prior schema must

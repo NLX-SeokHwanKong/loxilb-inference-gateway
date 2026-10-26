@@ -133,6 +133,79 @@ pull_dockers() {
   docker pull ewindisch/quagga
 }
 
+## REST readiness probe for a loxilb container (issue #423).
+##
+## On hosted ubuntu-24.04 runners the first `loxicmd` of a scenario sometimes
+## times out against a loxilb spawned 17-27 s earlier, and the logs cannot tell
+## a slow start from a loxilb that died or hung. After spawning a loxilb this
+## polls GET /netlox/v1/version from inside the container and prints one
+## `[rest-probe]` line with the time to the first answer. If nothing answers
+## within the deadline it prints the container state, the loxilb process list
+## and the tails of /tmp/loxilb.err and /tmp/loxilb.out.
+##
+##   LOXILB_REST_PROBE       log  (default) wait, report, never fail
+##                           fail wait, report, exit 1 on timeout
+##                           off  skip the probe
+##   LOXILB_REST_PROBE_SECS  deadline in seconds (default 60)
+##
+## The URL follows the loxilb flags in extra_opts: --port N and --tls.
+## arg1 - loxilb instance name; arg2 - epoch seconds of its spawn
+probe_loxilb_rest() {
+  local name="$1" t0="$2" mode="${LOXILB_REST_PROBE:-log}"
+  local deadline="${LOXILB_REST_PROBE_SECS:-60}"
+  local port=11111 scheme=http curl_tls="" url now elapsed
+  [[ "$mode" == "off" ]] && return 0
+  if [[ "$extra_opts" =~ (^|[[:space:]])--port[=[:space:]]+([0-9]+) ]]; then
+    port="${BASH_REMATCH[2]}"
+  fi
+  case " $extra_opts " in
+    *" --tls "*|*" --tls="*) scheme=https; curl_tls="-k" ;;
+  esac
+  url="$scheme://127.0.0.1:$port/netlox/v1/version"
+  while :; do
+    if $dexec "$name" curl -sf -m 2 $curl_tls -o /dev/null "$url" 2>/dev/null; then
+      now=$(date +%s); elapsed=$(( now - t0 ))
+      echo "[rest-probe] name=$name ready=1 after=${elapsed}s url=$url image=$lxdocker kernel=$(uname -r)"
+      return 0
+    fi
+    now=$(date +%s); elapsed=$(( now - t0 ))
+    if (( elapsed >= deadline )); then
+      break
+    fi
+    sleep 1
+  done
+  echo "[rest-probe] name=$name ready=0 after=${elapsed}s url=$url image=$lxdocker kernel=$(uname -r) mode=$mode"
+  echo "[rest-probe] --- docker ps ($name)"
+  docker ps -a --filter "name=^/${name}\$" --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}' 2>&1 || true
+  echo "[rest-probe] --- processes and listeners in $name"
+  $dexec "$name" bash -c 'pgrep -a loxilb || echo "no loxilb process"; (ss -ltnp 2>/dev/null || netstat -ltnp 2>/dev/null) | head -n 20' 2>&1 || true
+  # A crashed process says why at the HEAD of its stderr (the signal, the
+  # cgo frame, the first goroutine); the tail is the end of the dump.
+  echo "[rest-probe] --- /tmp/loxilb.err (head) in $name"
+  $dexec "$name" head -n 80 /tmp/loxilb.err 2>&1 || true
+  echo "[rest-probe] --- /tmp/loxilb.err (tail) in $name"
+  $dexec "$name" tail -n 40 /tmp/loxilb.err 2>&1 || true
+  echo "[rest-probe] --- /tmp/loxilb.out (tail) in $name"
+  $dexec "$name" tail -n 20 /tmp/loxilb.out 2>&1 || true
+  echo "[rest-probe] --- end of dump ($name)"
+  if [[ "$mode" == "fail" ]]; then
+    echo "FATAL: loxilb REST API of $name never answered within ${deadline}s"
+    exit 1
+  fi
+  return 0
+}
+
+# Docker resolves short arguments as either names or ID prefixes. A missing
+# host named c1 must never resolve to a different container whose ID starts c1.
+# Verify the exact name, then mutate by full ID to avoid a second name lookup.
+loxi_exact_container_id() {
+  local record actual_name container_id
+  record=$(docker container inspect --format '{{.Name}} {{.Id}}' "$1" 2>/dev/null) || return 1
+  read -r actual_name container_id <<< "$record"
+  [[ "$actual_name" == "/$1" && "$container_id" =~ ^[a-f0-9]{64}$ ]] || return 1
+  printf '%s\n' "$container_id"
+}
+
 ## Creates a docker host
 ## arg1 - "loxilb"|"host"
 ## arg2 - instance-name
@@ -199,9 +272,10 @@ spawn_docker_host() {
   # that never restarts) and shows up as a long hang rather than a clear error.
   # Purge any stale namesake so every spawn starts from a clean slate; both
   # commands are no-ops when the environment is already clean.
-  if docker inspect "$dname" >/dev/null 2>&1; then
+  local stale_container_id
+  if stale_container_id=$(loxi_exact_container_id "$dname"); then
     echo "  (removing stale container $dname left by a previous run)" >&2
-    docker rm -f "$dname" >/dev/null 2>&1 || true
+    docker rm -f "$stale_container_id" >/dev/null 2>&1 || true
   fi
   if [ -f "$hexist/$dname" ]; then
     $hns del "$dname" >/dev/null 2>&1 || true
@@ -231,9 +305,11 @@ spawn_docker_host() {
       sudo mkdir -p /etc/shared/$dname/
       docker run -u root --cap-add SYS_ADMIN   --restart unless-stopped --privileged -dt $docker_extra_opts --entrypoint /bin/bash $bgp_conf -v /dev/log:/dev/log -v /etc/shared/$dname:/etc/shared $loxilb_config --name $dname $lxdocker
       get_llb_peerIP $dname
+      loxilb_spawn_t0=$(date +%s)
       docker exec -d $dname bash -c "/root/loxilb-io/loxilb/loxilb $bgp_opts $cluster_opts $ka_opts $prom_opts $extra_opts > /tmp/loxilb.out 2> /tmp/loxilb.err"
     else
       docker run -u root --cap-add SYS_ADMIN   --restart unless-stopped --privileged -dt $docker_extra_opts --entrypoint /bin/bash $bgp_conf -v /dev/log:/dev/log -v `pwd`/cert:/opt/loxilb/cert/ $loxilb_config --name $dname $lxdocker $bgp_opts
+      loxilb_spawn_t0=$(date +%s)
       docker exec -d $dname bash -c "/root/loxilb-io/loxilb/loxilb $bgp_opts $cluster_opts $prom_opts $extra_opts > /tmp/loxilb.out 2> /tmp/loxilb.err"
     fi
   elif [[ "$dtype" == "host" ]]; then
@@ -290,6 +366,9 @@ spawn_docker_host() {
   if [ -f /proc/sys/net/ipv4/conf/eth0/arp_ignore ]; then
     $hexec $dname sysctl net.ipv4.conf.eth0.arp_ignore=2 2>&1 >> /dev/null
   fi
+  if [[ "$dtype" == "loxilb" ]]; then
+    probe_loxilb_rest "$dname" "$loxilb_spawn_t0"
+  fi
 }
 
 ## Get loxilb peer docker IP
@@ -330,6 +409,8 @@ get_llb_peerIP() {
 ## Deletes a docker host
 ## arg1 - hostname 
 delete_docker_host() {
+  local target_container_id ka_container_id
+  target_container_id=$(loxi_exact_container_id "$1") || target_container_id=""
   dcmd="kill"
   if [[ $1 == "llb"* ]] || [[ $1 == "loxilb"* ]]; then
     dcmd="stop"
@@ -341,21 +422,22 @@ delete_docker_host() {
   #   Error response from daemon: cannot kill container: r1: No such container: r1
   # on every run where the optional (vrrp/HA) hosts were never spawned. `>/dev/null 2>&1`
   # is the intended order and keeps the same exit status the `if` below tests.
-  if docker $dcmd $1 >/dev/null 2>&1
+  if [[ -n "$target_container_id" ]] && docker "$dcmd" "$target_container_id" >/dev/null 2>&1
   then
     hd="true"
-    ka=`docker ps -f name=ka_$1| grep -w ka_$1 | cut  -d " "  -f 1 | grep -iv  "CONTAINER"`
     loxilbs=( "${loxilbs[@]/$1}" )
-    if [ "$ka" != "" ]; then
-      docker kill ka_$1 >/dev/null 2>&1
-      docker rm ka_$1 >/dev/null 2>&1
+    if ka_container_id=$(loxi_exact_container_id "ka_$1"); then
+      docker kill "$ka_container_id" >/dev/null 2>&1
+      docker rm "$ka_container_id" >/dev/null 2>&1
     fi
   fi
   if [ -f "$hexist/$1" ]; then
     $hns del $1 >/dev/null 2>&1 || true
     sudo rm -fr "$hexist/$1" >/dev/null 2>&1
   fi
-  docker rm $1 >/dev/null 2>&1 || true
+  if [[ -n "$target_container_id" ]]; then
+    docker rm "$target_container_id" >/dev/null 2>&1 || true
+  fi
 }
 
 ## Connects two docker hosts
@@ -768,6 +850,56 @@ function backend_tls_cli_preflight() {
     exit 1
   fi
   echo "  SKIP: loxicmd lacks --backend-ca-cert-id (image predates it) -> REST; set CLI_TESTS=required to enforce"
+  return 1
+}
+
+# bands_cli_preflight <container>
+# Returns 0 when the packaged loxicmd carries the priority-band surface of
+# loxicmd-inference-gateway #83 (create lb --fc-wake-policy and the objective
+# resource), so a scenario can drive the band knobs through the CLI; returns
+# 1 when the caller should skip that CLI half (auto/skip paths).
+# CLI_TESTS=skip forces the skip; CLI_TESTS=required makes a CLI without the
+# flags a failure (exit 1) instead of a skip.
+function bands_cli_preflight() {
+  local cont="${1:-llb1}"
+  local mode="${CLI_TESTS:-auto}"
+  if [[ "$mode" == "skip" ]]; then
+    echo "  Bands CLI preflight: CLI_TESTS=skip -> skipping CLI tests"
+    return 1
+  fi
+  if $dexec "$cont" loxicmd create lb --help 2>&1 | grep -q -- '--fc-wake-policy' \
+     && $dexec "$cont" loxicmd create objective --help >/dev/null 2>&1; then
+    echo "  Bands CLI preflight: loxicmd carries the band flags and the objective resource (CLI_TESTS=$mode) [OK]"
+    return 0
+  fi
+  if [[ "$mode" == "required" ]]; then
+    echo "  Bands CLI preflight: CLI_TESTS=required but loxicmd lacks --fc-wake-policy / create objective [FAIL]"
+    exit 1
+  fi
+  echo "  SKIP: loxicmd lacks --fc-wake-policy (image predates loxicmd #83); set CLI_TESTS=required to enforce"
+  return 1
+}
+
+# jwtauth_cli_preflight <container>
+# The same gate for the JWT auth profile resource of loxicmd-inference-gateway
+# #83 (create jwtauthprofile with its --priority-class cap); semantics as
+# bands_cli_preflight (CLI_TESTS=auto|required|skip).
+function jwtauth_cli_preflight() {
+  local cont="${1:-llb1}"
+  local mode="${CLI_TESTS:-auto}"
+  if [[ "$mode" == "skip" ]]; then
+    echo "  JWT profile CLI preflight: CLI_TESTS=skip -> skipping CLI tests"
+    return 1
+  fi
+  if $dexec "$cont" loxicmd create jwtauthprofile --help 2>&1 | grep -q -- '--priority-class'; then
+    echo "  JWT profile CLI preflight: loxicmd carries the jwtauthprofile resource (CLI_TESTS=$mode) [OK]"
+    return 0
+  fi
+  if [[ "$mode" == "required" ]]; then
+    echo "  JWT profile CLI preflight: CLI_TESTS=required but loxicmd lacks create jwtauthprofile --priority-class [FAIL]"
+    exit 1
+  fi
+  echo "  SKIP: loxicmd lacks create jwtauthprofile (image predates loxicmd #83); set CLI_TESTS=required to enforce"
   return 1
 }
 

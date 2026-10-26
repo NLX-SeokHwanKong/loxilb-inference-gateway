@@ -1834,7 +1834,12 @@ pd_req() {  # pd_req <phase> <status> — summed over models
 # back to "" while every other site used the four-source resolver, so a timed
 # out request was attributed to no model at all.
 pd_req_empty_model() {
-    metric_val "loxilb_ai_pd_requests_total\{model=\"\",[^}]*phase=\"$1\"[^}]*status=\"$2\""
+    # Each label matched on its own, so the order the client renders them in does not matter.
+    local v
+    v=$(llb_curl "${METRICS}" 2>/dev/null | grep -E '^loxilb_ai_pd_requests_total\{' \
+        | grep -E '[{,]model=""[,}]' | grep -E "[{,]phase=\"$1\"[,}]" | grep -E "[{,]status=\"$2\"[,}]" \
+        | awk '{s+=$NF} END{printf "%d", s}')
+    echo "${v:-0}"
 }
 
 pd_tax_ok=1

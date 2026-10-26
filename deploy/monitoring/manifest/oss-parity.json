@@ -1,17 +1,17 @@
 {
  "schema_version": 1,
  "provenance": {
-  "generated_at": "2026-10-11T09:21:18+00:00",
-  "source_revision": "25fd81eb05a966ed11c4846088e373b35718b898",
+  "generated_at": "2026-10-24T07:26:05+00:00",
+  "source_revision": "bd85e8a988292998fdf32750495e2940a21e7e55",
   "upstream_repository": "https://github.com/loxilb-io/loxilb",
-  "upstream_revision": "98487453eaf1853690de5928eab95a51817ba5d7"
+  "upstream_revision": "4fa515f08017e845470218990a0a8961f5426e7e"
  },
  "contract": {
-  "gateway_families": 325,
+  "gateway_families": 345,
   "upstream_families": 60,
   "present_identical": 35,
   "present_divergent": 0,
-  "absent": 290,
+  "absent": 310,
   "upstream_only": 25
  },
  "upstream_only": [
@@ -788,6 +788,17 @@
    }
   },
   {
+   "name": "loxilb_ai_class_config_lkg_intervals_total",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "counter",
+    "labels": []
+   }
+  },
+  {
    "name": "loxilb_ai_engine_info",
    "owner": "loxilb",
    "class": "default",
@@ -797,6 +808,35 @@
     "type": "gauge",
     "labels": [
      "engine",
+     "service"
+    ]
+   }
+  },
+  {
+   "name": "loxilb_ai_fc_band_total",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "counter",
+    "labels": [
+     "band",
+     "outcome",
+     "service"
+    ]
+   }
+  },
+  {
+   "name": "loxilb_ai_fc_tenant_slots",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "gauge",
+    "labels": [
+     "kind",
      "service"
     ]
    }
@@ -1011,6 +1051,34 @@
    }
   },
   {
+   "name": "loxilb_ai_netid_requests_total",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "counter",
+    "labels": [
+     "binding",
+     "outcome",
+     "tenant"
+    ]
+   }
+  },
+  {
+   "name": "loxilb_ai_netid_resolver_faults_total",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "counter",
+    "labels": [
+     "service"
+    ]
+   }
+  },
+  {
    "name": "loxilb_ai_normal_session_hits_total",
    "owner": "loxilb",
    "class": "default",
@@ -1020,6 +1088,46 @@
     "type": "counter",
     "labels": [
      "model"
+    ]
+   }
+  },
+  {
+   "name": "loxilb_ai_pd_decode_duration_seconds",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "histogram",
+    "labels": [
+     "model"
+    ]
+   }
+  },
+  {
+   "name": "loxilb_ai_pd_decode_kv_fill_total",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "counter",
+    "labels": [
+     "model"
+    ]
+   }
+  },
+  {
+   "name": "loxilb_ai_pd_decode_selected_total",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "counter",
+    "labels": [
+     "model",
+     "path"
     ]
    }
   },
@@ -1076,6 +1184,20 @@
    }
   },
   {
+   "name": "loxilb_ai_pd_prefill_fallback_total",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "counter",
+    "labels": [
+     "model",
+     "reason"
+    ]
+   }
+  },
+  {
    "name": "loxilb_ai_pd_requests_total",
    "owner": "loxilb",
    "class": "default",
@@ -1101,6 +1223,17 @@
     "labels": [
      "model"
     ]
+   }
+  },
+  {
+   "name": "loxilb_ai_pd_terminator_synthesized_total",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "counter",
+    "labels": []
    }
   },
   {
@@ -1143,6 +1276,17 @@
    }
   },
   {
+   "name": "loxilb_ai_reap_fallback_total",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "counter",
+    "labels": []
+   }
+  },
+  {
    "name": "loxilb_ai_request_duration_seconds",
    "owner": "loxilb",
    "class": "default",
@@ -1165,10 +1309,49 @@
    "gateway": {
     "type": "counter",
     "labels": [
+     "cause",
      "model",
      "outcome",
      "status",
      "tenant"
+    ]
+   }
+  },
+  {
+   "name": "loxilb_ai_reservation_clamped_total",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "counter",
+    "labels": [
+     "reason",
+     "service"
+    ]
+   }
+  },
+  {
+   "name": "loxilb_ai_route_host_missing_total",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "counter",
+    "labels": []
+   }
+  },
+  {
+   "name": "loxilb_ai_stream_early_bytes_closed_total",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "counter",
+    "labels": [
+     "service"
     ]
    }
   },
@@ -2373,6 +2556,19 @@
    }
   },
   {
+   "name": "loxilb_log_lines_dropped_total",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "counter",
+    "labels": [
+     "level"
+    ]
+   }
+  },
+  {
    "name": "loxilb_new_flows",
    "owner": "loxilb",
    "class": "default",
@@ -2682,6 +2878,17 @@
    }
   },
   {
+   "name": "loxilb_pd_decode_inflight",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "gauge",
+    "labels": []
+   }
+  },
+  {
    "name": "loxilb_pd_decode_zero_byte_eof_total",
    "owner": "loxilb",
    "class": "default",
@@ -2809,6 +3016,17 @@
    }
   },
   {
+   "name": "loxilb_pd_parked_connections",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "gauge",
+    "labels": []
+   }
+  },
+  {
    "name": "loxilb_pd_prefill_ep_died_total",
    "owner": "loxilb",
    "class": "default",
@@ -2816,6 +3034,17 @@
    "present_upstream": false,
    "gateway": {
     "type": "counter",
+    "labels": []
+   }
+  },
+  {
+   "name": "loxilb_pd_prefill_inflight",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "gauge",
     "labels": []
    }
   },
@@ -3534,6 +3763,28 @@
    "present_upstream": false,
    "gateway": {
     "type": "counter",
+    "labels": []
+   }
+  },
+  {
+   "name": "loxilb_proxy_pools_freed_total",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "counter",
+    "labels": []
+   }
+  },
+  {
+   "name": "loxilb_proxy_pools_live",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "gauge",
     "labels": []
    }
   },

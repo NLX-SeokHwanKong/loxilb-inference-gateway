@@ -121,7 +121,7 @@ func ConfigPostBGPGlobal(params operations.PostConfigBgpGlobalParams, principal 
 	_, err := ApiHooks.NetGoBGPGCAdd(&bgpG)
 	if err != nil {
 		tk.LogIt(tk.LogDebug, "api: Error occur : %v\n", err)
-		return &ErrorResponse{Payload: ResultErrorResponseErrorMessage(err.Error())}
+		return &ErrorResponse{Payload: ResultErrorResponseError(err)}
 	}
 	return &ResultResponse{Result: "Success"}
 }

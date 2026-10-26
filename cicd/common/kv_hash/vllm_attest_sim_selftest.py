@@ -49,14 +49,29 @@ TOKENIZER = os.path.join(
 PROBE_DIR = os.path.join(
     _HERE, "fixtures", "probefixtures", "qwen3-06b-completions-v1")
 MODEL = "Qwen/Qwen3-0.6B"
+
+# The probe-fixture dir holds both surfaces of the profile. The simulator
+# serves the completions surface only (/v1/tokenize reads "prompt"); the six
+# chat-shape fixtures ("messages") were banked after it (c8c12d64). The
+# gateway probes a rule only with the fixtures of the surfaces it declares
+# (kvFixturesForRule), so a completions rule never sends them. Both sets are
+# pinned by name: a new or renamed fixture of either kind fails the self-test.
+COMPLETIONS_FIXTURES = ("basic-ascii", "multiline-punct", "unicode-mix")
+CHAT_FIXTURES = ("chat-assistant-think", "chat-multi-turn", "chat-system-user",
+                 "chat-unicode-mix", "chat-user-only", "chat-whitespace-edges")
 BLOCK_SIZE = 16
 ALGO = "sha256_cbor"
 SEED = "0"
-# Long enough for >= 2 full blocks of 16 under the Qwen3 tokenizer.
+# 38 tokens under the Qwen3 tokenizer: 2 full blocks of 16 plus a partial
+# block of 6. The length is chosen so the token count divides evenly by the
+# full-block count (38 / 2 = 19): a simulator that derives block_size from
+# its token_ids (5f5babe4..e06ece11) sends 19 here, and the block_size check
+# below fails. At 39 tokens it divided unevenly, the derived path never ran
+# and the check passed against that simulator too.
 CHALLENGE_PROMPT = (
     "The quick brown fox jumps over the lazy dog. "
     "Pack my box with five dozen liquor jugs. "
-    "Sphinx of black quartz, judge my vow. "
+    "Sphinx of quartz, judge my vow. "
     "How vexingly quick daft zebras jump!")
 
 _fails = 0
@@ -140,17 +155,21 @@ def reference_blocks(prompt: str):
 
 
 def probe_fixtures():
-    out = []
+    """-> (completions fixtures to check byte-exact, names of skipped chat fixtures)"""
+    out, skipped = [], []
     for name in sorted(os.listdir(PROBE_DIR)):
         if not name.endswith(".request.json"):
             continue
         base = name[: -len(".request.json")]
         with open(os.path.join(PROBE_DIR, name)) as f:
             req = json.load(f)
+        if "messages" in req:
+            skipped.append(base)
+            continue
         with open(os.path.join(PROBE_DIR, base + ".expect.json")) as f:
             exp = json.load(f)
         out.append((base, req, exp))
-    return out
+    return out, skipped
 
 
 def run_positive():
@@ -165,8 +184,16 @@ def run_positive():
         chk("GET /v1/models serves the model", st == 200 and served == [MODEL],
             str(body))
 
-        fixtures = probe_fixtures()
+        fixtures, skipped = probe_fixtures()
+        print(f"skipped {len(skipped)} chat fixtures (simulator serves the "
+              "completions surface only; the gateway probes a completions rule "
+              "with kvFixturesForRule's subset)")
+        chk("skipped set is exactly the known chat fixtures",
+            skipped == sorted(CHAT_FIXTURES), f"skipped {skipped}")
         chk("committed probe fixtures present (3 pairs)", len(fixtures) == 3,
+            str([f[0] for f in fixtures]))
+        chk("completions fixtures checked byte-exact are exactly the 3 known pairs",
+            [f[0] for f in fixtures] == sorted(COMPLETIONS_FIXTURES),
             str([f[0] for f in fixtures]))
         for base, req, exp in fixtures:
             st, body = http_json("POST", sim.url("/tokenize"),
@@ -179,6 +206,11 @@ def run_positive():
         ref_ids, ref_hashes = reference_blocks(CHALLENGE_PROMPT)
         chk("challenge prompt spans >= 2 full blocks", len(ref_hashes) >= 2,
             f"only {len(ref_hashes)} full blocks of {len(ref_ids)} tokens")
+        chk("challenge prompt's token count divides evenly by its full blocks "
+            "into a value other than the block size (the block_size check guards)",
+            len(ref_hashes) > 0 and len(ref_ids) % len(ref_hashes) == 0
+            and len(ref_ids) // len(ref_hashes) != BLOCK_SIZE,
+            f"{len(ref_ids)} tokens over {len(ref_hashes)} full blocks")
         st, body = http_json("POST", sim.url("/v1/completions"),
                              {"model": MODEL, "prompt": CHALLENGE_PROMPT})
         chk("/v1/completions answers 200 with usage",
@@ -205,6 +237,8 @@ def run_positive():
                 str(ev.get("extra_keys")))
             chk("lora_id is null on plain events", ev.get("lora_id") is None)
             chk("event type is BlockStored", ev.get("type") == "BlockStored")
+            chk("block_size is the engine block size the simulator was started with",
+                ev.get("block_size") == BLOCK_SIZE, str(ev.get("block_size")))
             chk("block_hashes match the independent reference chain",
                 ev.get("block_hashes") == ref_hashes,
                 f"got {ev.get('block_hashes')} want {ref_hashes}")
@@ -219,7 +253,7 @@ def run_tokenize_drift():
     print("=== red twin: --fail tokenize-drift ===")
     sim = Sim(fail="tokenize-drift")
     try:
-        _base, req, exp = probe_fixtures()[0]
+        _base, req, exp = probe_fixtures()[0][0]
         st, body = http_json("POST", sim.url("/tokenize"),
                              {"model": req["model"], "prompt": req["prompt"]})
         got = body.get("tokens", [])

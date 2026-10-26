@@ -28,6 +28,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -138,7 +139,19 @@ func fullFieldLbRule() cmn.LbRuleMod {
 			FcTtftTargetMs:       800,
 			FcTenantMaxSharePct:  30,
 			FcExposeHeaders:      "on",
+			FcWakePolicy:         "weighted",
+			FcBandWeights:        "8:3:1",
+			FcBandMinSharePct:    "0:20:0",
+			FcCriticalReservePct: 10,
+			FcBandWaitMs:         "500:2000:1000",
+			FcBandQueuePct:       "30:50:20",
+			FcShedQueue:          "on",
+			FcTenantWake:         "rr",
+			FcLlmdHeaders:        "on",
 			HalfCloseMode:        "hold",
+			AIDefaultReservation: "on",
+			AIDefaultMaxTokens:   2000,
+			AIObjectiveStrict:    true,
 			MTLSFrontend: &cmn.MTLSFrontendConfig{
 				ClientCertMode:   "require",
 				ClientCAPath:     "/etc/loxilb/certs/frontend-ca.pem",
@@ -297,5 +310,49 @@ func TestLbSnapshotMCPNullDoesNotBecomeLegacy(t *testing.T) {
 	var rule cmn.LbRuleMod
 	if err := json.Unmarshal([]byte(`{"serviceArguments":{"mcp_protocol_version":null}}`), &rule); err == nil {
 		t.Fatal("snapshot MCP null decoded as legacy")
+	}
+}
+
+// A 1.12 document written before the priority band knobs existed applies
+// its load-balancer rule with every band field at its default: the
+// switches inherit, the triples and the reserve are none. The rule layer's
+// side, that such a rule resolves to the same declaration on every replay,
+// is pinned in pkg/loxinet (TestFcRuleBandAbsentIsDefault).
+func TestSchema112LbRuleWithoutBandKnobs(t *testing.T) {
+	raw, err := os.ReadFile("testdata/snapshot-v1.12.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := Decode(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyChecksum(doc); err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.Domains.LoadBalancer) == 0 {
+		t.Fatal("the 1.12 document carries no load-balancer rule")
+	}
+	// What a restore hands the rule layer is the decoded rule as is: the
+	// load-balancer apply forwards it to NetLbRuleAdd unchanged.
+	h := newMockHooks()
+	if _, _, err := applyLoadBalancer(h, doc, false); err != nil {
+		t.Fatalf("applyLoadBalancer: %v", err)
+	}
+	if len(h.lbRules) == 0 {
+		t.Fatal("the rule was not applied")
+	}
+	for _, r := range h.lbRules {
+		s := r.Serv
+		if s.FcWakePolicy != "" || s.FcBandWeights != "" || s.FcBandMinSharePct != "" ||
+			s.FcCriticalReservePct != 0 || s.FcBandWaitMs != "" || s.FcBandQueuePct != "" ||
+			s.FcShedQueue != "" || s.FcTenantWake != "" || s.FcLlmdHeaders != "" {
+			t.Fatalf("a rule without band knobs restored with %+v", s)
+		}
+		if s.FcWakePolicyPresent || s.FcBandWeightsPresent || s.FcBandMinSharePctPresent ||
+			s.FcCriticalReservePctPresent || s.FcBandWaitMsPresent || s.FcBandQueuePctPresent ||
+			s.FcShedQueuePresent || s.FcTenantWakePresent || s.FcLlmdHeadersPresent {
+			t.Fatalf("an absent band knob restored as present: %+v", s)
+		}
 	}
 }

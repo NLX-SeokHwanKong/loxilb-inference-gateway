@@ -56,8 +56,26 @@ plib_dump_domain() { # plib_dump_domain <llb> <domain> <outdir>
         url="$PLIB_API/config/endpoint/all"
         filter='[.Attr[]? | del(.minDelay,.avgDelay,.maxDelay,.currState)] | sort' ;;
     loadbalancer)
+        # fc_effective is a read-back: what is in force (kept, it follows
+        # from the configuration) beside what is happening now. The
+        # reservation ledger is the second kind: reservation_epoch is the
+        # current minute, so two dumps taken either side of a minute
+        # boundary differ with nothing changed, and the held and clamped
+        # figures are counts of requests, gone with the process. So is
+        # config_source: where the class configuration was read from says
+        # "none" until the first read after a restart; and so are
+        # store_reachable / store_last_read, the key store's latest answer.
         url="$PLIB_API/config/loadbalancer/all"
-        filter='[.lbAttr[]? | .endpoints = ([.endpoints[]? | del(.state,.counters,.counter)] | sort)
+        filter='[.lbAttr[]? | del(.serviceArguments.fc_effective.reservation_epoch,
+                                  .serviceArguments.fc_effective.reservation_held,
+                                  .serviceArguments.fc_effective.reservation_held_claims,
+                                  .serviceArguments.fc_effective.reservation_held_truncated,
+                                  .serviceArguments.fc_effective.reservation_clamped_budget,
+                                  .serviceArguments.fc_effective.reservation_clamped_burst,
+                                  .serviceArguments.fc_effective.config_source,
+                                  .serviceArguments.fc_effective.store_reachable,
+                                  .serviceArguments.fc_effective.store_last_read)
+                            | .endpoints = ([.endpoints[]? | del(.state,.counters,.counter)] | sort)
                             | .secondaryIPs = (.secondaryIPs | if . == null then [] else sort end)
                             | .allowedSources = (.allowedSources | if . == null then [] else sort end)] | sort' ;;
     firewall)

@@ -45,6 +45,7 @@
           "refId": "StandardVariableQuery"
         },
         "refresh": 2,
+        "allValue": ".*",
         "includeAll": true,
         "multi": true,
         "current": {

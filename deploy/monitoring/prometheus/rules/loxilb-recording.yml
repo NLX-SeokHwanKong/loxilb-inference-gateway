@@ -42,24 +42,41 @@ groups:
               (rate(loxilb_proxy_http_responses_by_status_total[5m])) > 0
           )
 
-      # AI gateway 5xx ratio per instance (status label carries HTTP codes).
-      # outcome="completed" on all three selectors: this ratio is about backends
-      # answering badly. The gate's own policy-store-unavailable arm answers 503
-      # and would otherwise land in this numerator, reporting a credential-store
-      # outage as backend 5xx and pointing an operator at the wrong subsystem.
-      - record: instance:loxilb_ai_5xx_ratio:rate5m
+      # AI gateway error ratio per instance: the requests that failed for the
+      # backend or the gateway, over the requests a backend was asked for.
+      #   numerator    completed with a 5xx, and aborted by the engine or
+      #                the gateway (the client got a 200 and a cut answer)
+      #   denominator  completed + aborted; denials are not in it: the gate's
+      #                own policy-store-unavailable arm answers 503 and would
+      #                otherwise report a credential-store outage as backend
+      #                5xx. A client cause (cancel, stall) is traffic, not an
+      #                error: it is in the denominator only.
+      # The same ratio as LoxilbAIErrorRatio, per instance. Each half of the
+      # numerator falls back to 0 where the instance has traffic but no
+      # series of its own.
+      - record: instance:loxilb_ai_error_ratio:rate5m
         expr: >-
           (
-            sum by (cluster, instance)
-              (rate(loxilb_ai_requests_total{outcome="completed",status=~"5.."}[5m]))
-            or
-            sum by (cluster, instance)
-              (rate(loxilb_ai_requests_total{outcome="completed"}[5m])) * 0
+            (
+              sum by (cluster, instance)
+                (rate(loxilb_ai_requests_total{outcome="completed",status=~"5.."}[5m]))
+              or
+              sum by (cluster, instance)
+                (rate(loxilb_ai_requests_total{outcome=~"completed|aborted"}[5m])) * 0
+            )
+            +
+            (
+              sum by (cluster, instance)
+                (rate(loxilb_ai_requests_total{outcome="aborted",cause=~"engine|gateway"}[5m]))
+              or
+              sum by (cluster, instance)
+                (rate(loxilb_ai_requests_total{outcome=~"completed|aborted"}[5m])) * 0
+            )
           )
           /
           (
             sum by (cluster, instance)
-              (rate(loxilb_ai_requests_total{outcome="completed"}[5m])) > 0
+              (rate(loxilb_ai_requests_total{outcome=~"completed|aborted"}[5m])) > 0
           )
 
       # KV subscriber health floor: 1 = every subscriber connected,

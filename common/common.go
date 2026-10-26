@@ -58,15 +58,24 @@ var BuildTags string = ""
 // upstream loxilb, so this must ship in any release the UI flavor-gates on.
 const Product = "loxilb-inference-gateway"
 
-// FeatureEpp is the GET /version feature flag for the Endpoint Picker
-// integration: loadbalancer rules accept the epp* fields and the data
-// plane consults the picker. kube-loxilb gates its EPP support on it.
+// FeatureEpp - the Endpoint Picker integration: loadbalancer rules accept the
+// epp* fields and the data plane consults the picker. kube-loxilb gates on it.
 const FeatureEpp = "epp"
 
-// Features lists the optional capabilities this build advertises on GET
-// /version. Clients gate on the flag, not on the version string, so a
-// build must only list what it really serves.
-var Features = []string{FeatureEpp}
+// Feature tokens GET /netlox/v1/version lists under "features": gateway-only
+// capabilities a controller checks for before it sends the matching rule fields.
+const (
+	// FeatureAPIKeyAuth - serviceArguments.api_key_auth is accepted and enforced.
+	FeatureAPIKeyAuth = "api_key_auth"
+	// FeatureJWTAuthProfile - the Bearer arm and serviceArguments.jwt_auth_profile.
+	FeatureJWTAuthProfile = "jwt_auth_profile"
+)
+
+// VersionFeatures - the features this build advertises, in a fixed order. A
+// fresh slice each call: callers may append to it.
+func VersionFeatures() []string {
+	return []string{FeatureEpp, FeatureAPIKeyAuth, FeatureJWTAuthProfile}
+}
 
 // This file defines the go interface implementation needed to interact with loxinet go module
 
@@ -1120,6 +1129,25 @@ type LbServiceArg struct {
 	HalfCloseMode string `json:"half_close_mode,omitempty"`
 	// HalfCloseModePresent is the presence bit for replace semantics.
 	HalfCloseModePresent bool `json:"-"`
+	// AIDefaultReservation - "on" makes the admission gate reserve a default
+	// number of completion tokens for a request that declares no max_tokens;
+	// "off" reserves the prompt estimate alone. Empty (or "inherit" on
+	// input) runs on LLB_AI_DEFAULT_RESERVATION, else off.
+	AIDefaultReservation string `json:"ai_default_reservation,omitempty"`
+	// AIDefaultReservationPresent is the presence bit for replace semantics.
+	AIDefaultReservationPresent bool `json:"-"`
+	// AIDefaultMaxTokens - the default reservation in tokens. 0 leaves
+	// LLB_AI_DEFAULT_MAX_TOKENS, else the built-in 512, in force.
+	AIDefaultMaxTokens uint32 `json:"ai_default_max_tokens,omitempty"`
+	// AIDefaultMaxTokensPresent is the presence bit for replace semantics.
+	AIDefaultMaxTokensPresent bool `json:"-"`
+	// AIObjectiveStrict - true refuses, with 403 objective_not_allowed, a
+	// request that names an objective or a tier it may not use (unknown, not
+	// for this service, or a raise it was not granted); false lets it fall
+	// to its default objective. Read where the admission gate runs.
+	AIObjectiveStrict bool `json:"ai_objective_strict,omitempty"`
+	// AIObjectiveStrictPresent is the presence bit for replace semantics.
+	AIObjectiveStrictPresent bool `json:"-"`
 	// Egress - Egress Rule
 	Egress bool `json:"egress"`
 	// Id - Stable opaque identifier for the LB rule (Octavia).
@@ -1249,6 +1277,60 @@ type LbServiceArg struct {
 	FcExposeHeaders string `json:"fc_expose_headers,omitempty"`
 	// FcExposeHeadersPresent is the presence bit for replace semantics.
 	FcExposeHeadersPresent bool `json:"-"`
+	// FcWakePolicy - which waiting priority band a freed unit wakes:
+	// "strict" (the highest band with a runnable waiter) or "weighted"
+	// (FcBandWeights shares of the wake-ups). Empty (or "inherit" on input)
+	// runs on LLB_FC_WAKE_POLICY, else strict.
+	FcWakePolicy string `json:"fc_wake_policy,omitempty"`
+	// FcWakePolicyPresent is the presence bit for replace semantics.
+	FcWakePolicyPresent bool `json:"-"`
+	// FcBandWeights - the weighted wake's weights, "c:s:b" (critical,
+	// standard, sheddable), each 1..62, at most 64 together. Empty or
+	// "0:0:0" is none; a zero beside non-zero weights is refused.
+	FcBandWeights string `json:"fc_band_weights,omitempty"`
+	// FcBandWeightsPresent is the presence bit for replace semantics.
+	FcBandWeightsPresent bool `json:"-"`
+	// FcBandMinSharePct - each band's floor, "c:s:b", in percent of the
+	// service ceiling in force, at most 100 together. A floor is a guarantee
+	// under contention, not a reservation: it binds only while that band has
+	// a waiter. Empty or "0:0:0" is no floor.
+	FcBandMinSharePct string `json:"fc_band_min_share_pct,omitempty"`
+	// FcBandMinSharePctPresent is the presence bit for replace semantics.
+	FcBandMinSharePctPresent bool `json:"-"`
+	// FcCriticalReservePct - the only true reservation: the percent of the
+	// ceiling in force that no other band may take, even when critical is
+	// idle. With the standard and sheddable floors, at most 100. 0 is none.
+	FcCriticalReservePct uint32 `json:"fc_critical_reserve_pct,omitempty"`
+	// FcCriticalReservePctPresent is the presence bit for replace semantics.
+	FcCriticalReservePctPresent bool `json:"-"`
+	// FcBandWaitMs - each band's wait window, "c:s:b", in milliseconds,
+	// each at most 3600000; 0 is FcMaxQueueWaitMs.
+	FcBandWaitMs string `json:"fc_band_wait_ms,omitempty"`
+	// FcBandWaitMsPresent is the presence bit for replace semantics.
+	FcBandWaitMsPresent bool `json:"-"`
+	// FcBandQueuePct - the most of the queue depth each band may hold,
+	// "c:s:b", in percent; 0 is the shared depth.
+	FcBandQueuePct string `json:"fc_band_queue_pct,omitempty"`
+	// FcBandQueuePctPresent is the presence bit for replace semantics.
+	FcBandQueuePctPresent bool `json:"-"`
+	// FcShedQueue - "on" lets a sheddable request at the ceiling wait in
+	// its band instead of 429 admission_shed. Empty (or "inherit" on input)
+	// runs on LLB_FC_SHED_QUEUE, else off.
+	FcShedQueue string `json:"fc_shed_queue,omitempty"`
+	// FcShedQueuePresent is the presence bit for replace semantics.
+	FcShedQueuePresent bool `json:"-"`
+	// FcTenantWake - the order inside one band: "fifo" (the oldest
+	// runnable entry) or "rr" (rotate across tenants). Empty (or "inherit"
+	// on input) runs on LLB_FC_TENANT_WAKE, else fifo.
+	FcTenantWake string `json:"fc_tenant_wake,omitempty"`
+	// FcTenantWakePresent is the presence bit for replace semantics.
+	FcTenantWakePresent bool `json:"-"`
+	// FcLlmdHeaders - "on" adds x-llm-d-request-dropped-reason to refusals
+	// and lets x-llm-d-inference-ttl shorten a request's wait. Empty (or
+	// "inherit" on input) runs on LLB_FC_LLMD_HEADERS, else off.
+	FcLlmdHeaders string `json:"fc_llmd_headers,omitempty"`
+	// FcLlmdHeadersPresent is the presence bit for replace semantics.
+	FcLlmdHeadersPresent bool `json:"-"`
 	// FcEffective - the capacity gate's resolved state on the rule's pool,
 	// read from the data plane for GET only. Never persisted, never read
 	// on input.
@@ -1733,6 +1815,9 @@ type JWTAuthProfileMod struct {
 	ForwardIdentity bool `json:"forward_identity,omitempty"`
 	// AuthorizationPassthrough - keep the Authorization header upstream
 	AuthorizationPassthrough bool `json:"authorization_passthrough,omitempty"`
+	// PriorityClass caps the class of the requests this profile's tokens
+	// authenticate: standard, critical or sheddable. Empty is no cap.
+	PriorityClass string `json:"priority_class,omitempty"`
 }
 
 // LbSecIPArg - Secondary IP
@@ -1796,15 +1881,133 @@ type FcEffectiveArg struct {
 	// WarmingEndpoints counts endpoints inside their warm-up window.
 	WarmingEndpoints uint32 `json:"warming_endpoints"`
 	// TenantMaxSharePct is the tenant share in force (0 or 100: none);
-	// TenantsActive counts tenants holding a unit or waiting right now.
+	// TenantsActive counts tenants holding a unit or waiting right now;
+	// TenantSlots is how many the pool tracks by name at once (tenants past
+	// it share one budget), fixed when the pool was created.
 	TenantMaxSharePct uint32 `json:"tenant_max_share_pct"`
 	TenantsActive     uint32 `json:"tenants_active"`
+	TenantSlots       uint32 `json:"tenant_slots"`
 	// ExposeHeaders is "on" when admitted responses carry the admission
 	// headers, else "off".
 	ExposeHeaders string `json:"expose_headers"`
+	// The priority bands. WakePolicy ("strict" or "weighted"), ShedQueue
+	// ("on" or "off") and TenantWake ("fifo" or "rr") are as configured,
+	// by the rule or inherited; the *Effective fields are what the gate
+	// runs. They differ only when BandFallbackReason is not "none": a
+	// combination the API refuses a rule to declare, reached by
+	// inheritance, runs on the defaults ("sockmap_request": every band knob,
+	// "zero_weight": strict, "no_queue": shed queue off). WeightsInUse is
+	// false unless the effective wake is weighted. LlmdHeaders is "on" or
+	// "off". BandsConfigured is true when any band knob in force differs
+	// from its default. Bands holds each band's live counts and the knobs
+	// in force.
+	WakePolicy          string     `json:"wake_policy"`
+	WakePolicyEffective string     `json:"wake_policy_effective"`
+	WeightsInUse        bool       `json:"weights_in_use"`
+	ShedQueue           string     `json:"shed_queue"`
+	ShedQueueEffective  string     `json:"shed_queue_effective"`
+	TenantWake          string     `json:"tenant_wake"`
+	TenantWakeEffective string     `json:"tenant_wake_effective"`
+	BandFallbackReason  string     `json:"band_fallback_reason"`
+	LlmdHeaders         string     `json:"llmd_headers"`
+	BandsConfigured     bool       `json:"bands_configured"`
+	Bands               FcBandsArg `json:"bands"`
+	// DefaultReservation is "on" when a request without max_tokens reserves
+	// a default for its completion, else "off"; DefaultMaxTokens is that
+	// default in tokens (0 while off). Both are what the gate runs the
+	// rule's VIP and port on, which is one value per listener: where the
+	// rule resolves to another, Source says "listener".
+	// ReservationClampedBurst and ReservationClampedBudget count the
+	// requests of the service (every model pool of its VIP and port) whose
+	// default was admitted smaller than DefaultMaxTokens, since the process
+	// started, by reason: Burst, the default beside the prompt is more
+	// than a quota bucket can ever hold; Budget, the bucket's budget was
+	// already taken.
+	DefaultReservation       string `json:"default_reservation"`
+	DefaultMaxTokens         uint32 `json:"default_max_tokens"`
+	ReservationClampedBurst  uint64 `json:"reservation_clamped_burst"`
+	ReservationClampedBudget uint64 `json:"reservation_clamped_budget"`
+	// The token reservations outstanding right now on the quota buckets
+	// the service's requests reserve on: what admitted requests hold and
+	// have not settled. ReservationEpoch is the minute the read is of; a
+	// claim does not outlive its minute. ReservationHeldClaims counts the
+	// claims: one for each bucket each request holds a reservation on, so
+	// a request whose ladder has three buckets is three claims. It is zero
+	// exactly when nothing is held and says nothing about tokens.
+	// ReservationHeld lists the buckets holding tokens, largest first, at
+	// most FcResvHeldMax of them (ReservationHeldTruncated says more
+	// exist). A tenant's bucket is shared by every service the tenant uses
+	// and reads the same on each. Management read-back only; not exported
+	// as metrics.
+	ReservationEpoch         int64           `json:"reservation_epoch"`
+	ReservationHeldClaims    uint64          `json:"reservation_held_claims"`
+	ReservationHeldTruncated bool            `json:"reservation_held_truncated"`
+	ReservationHeld          []FcResvHeldArg `json:"reservation_held"`
+	// ConfigSource is where the objectives and the tenant and key classes
+	// this gateway is applying came from: AIClassSourceStore, AIClassSourceLKG
+	// or AIClassSourceNone. The gateway's, the same on every rule.
+	ConfigSource string `json:"config_source,omitempty"`
+	// StoreReachable says whether the AI key store answered the latest
+	// read, and StoreLastRead when a read last answered, whatever
+	// ConfigSource says: nil and zero without a key store.
+	StoreReachable *bool      `json:"store_reachable,omitempty"`
+	StoreLastRead  *time.Time `json:"store_last_read,omitempty"`
 	// Source names where each value in force came from: "rule", "env" or
 	// "default".
 	Source FcEffectiveSource `json:"source"`
+}
+
+// FcResvHeldMax - the most buckets one read-back lists.
+const FcResvHeldMax = 64
+
+// The quota-bucket kinds of FcResvHeldArg.Kind: the levels of the ladder a
+// request's reservation lands on.
+const (
+	FcResvBucketTenant      = "tenant"
+	FcResvBucketTenantModel = "tenant_model"
+	FcResvBucketUser        = "user"
+	FcResvBucketUserModel   = "user_model"
+	FcResvBucketKey         = "key"
+	FcResvBucketService     = "service"
+)
+
+// FcResvHeldArg - one quota bucket holding a token reservation. Bucket is
+// the bucket's key as the quota store names it: identifiers (tenant, user,
+// model, key id, service), never a credential.
+type FcResvHeldArg struct {
+	Kind   string `json:"kind"`
+	Bucket string `json:"bucket"`
+	Tokens uint64 `json:"tokens"`
+}
+
+// FcBandArg - one priority band of a pool, as the data plane holds it:
+// the service units it executes and the requests it has waiting right now,
+// its wait window (0: the queue's), its share of the queue depth (0: the
+// shared depth), its floor in percent of the ceiling in force and in units
+// against that ceiling (a guarantee under contention, binding while the band
+// has a waiter; the units are clamped so the claims fit the ceiling), and its wake weight with the weight's share of the
+// round in percent (0 when no weight is set).
+type FcBandArg struct {
+	Inflight    uint32 `json:"inflight"`
+	Queued      uint32 `json:"queued"`
+	WaitMs      uint32 `json:"wait_ms"`
+	QueuePct    uint32 `json:"queue_pct"`
+	MinSharePct uint32 `json:"min_share_pct"`
+	FloorUnits  uint32 `json:"floor_units"`
+	Weight      uint32 `json:"weight"`
+	WeightPct   uint32 `json:"weight_pct"`
+}
+
+// FcBandsArg - the three priority bands of a pool, by name.
+type FcBandsArg struct {
+	// CriticalReservePct and CriticalReserveUnits - the reserve in percent of
+	// the ceiling in force and in units against it: units no other band may
+	// take, even when critical is idle.
+	CriticalReservePct   uint32    `json:"critical_reserve_pct"`
+	CriticalReserveUnits uint32    `json:"critical_reserve_units"`
+	Critical             FcBandArg `json:"critical"`
+	Standard             FcBandArg `json:"standard"`
+	Sheddable            FcBandArg `json:"sheddable"`
 }
 
 // FcEffectiveSource - the origin of each value in FcEffectiveArg.
@@ -1822,6 +2025,17 @@ type FcEffectiveSource struct {
 	TtftTargetMs       string `json:"ttft_target_ms"`
 	TenantMaxSharePct  string `json:"tenant_max_share_pct"`
 	ExposeHeaders      string `json:"expose_headers"`
+	DefaultReservation string `json:"default_reservation"`
+	DefaultMaxTokens   string `json:"default_max_tokens"`
+	WakePolicy         string `json:"wake_policy"`
+	BandWeights        string `json:"band_weights"`
+	BandMinSharePct    string `json:"band_min_share_pct"`
+	CriticalReservePct string `json:"critical_reserve_pct"`
+	BandWaitMs         string `json:"band_wait_ms"`
+	BandQueuePct       string `json:"band_queue_pct"`
+	ShedQueue          string `json:"shed_queue"`
+	TenantWake         string `json:"tenant_wake"`
+	LlmdHeaders        string `json:"llmd_headers"`
 }
 
 // LbRuleMod - Info related to a load-balancer entry
@@ -2649,6 +2863,15 @@ type NetHookInterface interface {
 	// NetJWTAuthProfileDel removes a profile; refused while any LB rule
 	// references it.
 	NetJWTAuthProfileDel(name string) (int, error)
+	// NetAINetIdentityGet returns every network-identity binding, in name
+	// order, as it was stored.
+	NetAINetIdentityGet() ([]NetIdentityMod, error)
+	// NetAINetIdentityAdd creates or replaces a binding by name. It is
+	// refused when another binding matches the same source on the same
+	// service as specifically and names another tenant.
+	NetAINetIdentityAdd(*NetIdentityMod) (int, error)
+	// NetAINetIdentityDel removes a binding.
+	NetAINetIdentityDel(name string) (int, error)
 	NetCIStateMod(*HASMod) (int, error)
 	NetCIStateGet() ([]HASMod, error)
 	NetFwRuleAdd(*FwRuleMod) (int, error)
@@ -2680,11 +2903,14 @@ type NetHookInterface interface {
 	NetGoBGPPolicyDefinitionAdd(nm *GoBGPPolicyDefinitionsMod) (int, error)
 	NetGoBGPPolicyDefinitionDel(nm *GoBGPPolicyDefinitionsMod) (int, error)
 
+	NetGoBGPPolicyApplyGet() ([]GoBGPPolicyApply, error)
+	NetGoBGPPolicyApplyReset(*GoBGPPolicyApply) (int, error)
 	NetGoBGPPolicyApplyAdd(nm *GoBGPPolicyApply) (int, error)
 
 	NetGoBGPPolicyApplyDel(nm *GoBGPPolicyApply) (int, error)
 	NetGoBGPGCAdd(gc *GoBGPGlobalConfig) (int, error)
 	NetGoBGPGCGet() (GoBGPGlobalConfig, error)
+	NetGoBGPGCReplace(*GoBGPGlobalConfig) (int, error)
 	NetBFDGet() ([]BFDMod, error)
 	NetBFDAdd(bm *BFDMod) (int, error)
 	NetBFDDel(bm *BFDMod) (int, error)
@@ -2779,6 +3005,14 @@ type NetHookInterface interface {
 	NetAPIKeyRateLimitPatch(keyID string, rps, burstSize, tokensPerMin *int) error
 	NetTenantRateLimitSet(tenantID string, rps, tokensPerMin, burstPct int, modelLimits []TenantModelRateLimit) error
 	NetTenantRateLimitGet(tenantID string) (*TenantRateLimitEntry, error)
+
+	// AI Gateway - objectives (named priorities) and the class fields of
+	// tenants and keys. All of it lives in the key store.
+	NetAIObjectiveGet() (AIObjectiveList, error)
+	NetAIObjectiveAdd(*AIObjectiveEntry) (int, error)
+	NetAIObjectiveDel(name string) (int, error)
+	NetTenantClassPatch(tenantID string, patch AIClassPatch) error
+	NetAPIKeyClassPatch(keyID string, patch AIClassPatch) error
 
 	// AI Gateway - QoS ladder: per-user limits and configurable defaults.
 	NetUserRateLimitSet(entry UserRateLimitEntry) error
@@ -3015,6 +3249,8 @@ type ApiKeyEntry struct {
 	CreatedAt     time.Time  `json:"created_at"`
 	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
 	Enabled       bool       `json:"enabled"`
+	// The key's class fields; they can only narrow its tenant's.
+	AIClassPolicy
 }
 
 // ApiKeySummary - API key summary without the secret hash
@@ -3029,6 +3265,8 @@ type ApiKeySummary struct {
 	CreatedAt     time.Time  `json:"created_at"`
 	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
 	Enabled       bool       `json:"enabled"`
+	// The key's class fields; they can only narrow its tenant's.
+	AIClassPolicy
 }
 
 // TenantModelRateLimit - one model's token quota inside a tenant's rate
@@ -3051,6 +3289,8 @@ type TenantRateLimitEntry struct {
 	BurstPct    int                    `json:"burst_pct"`
 	ModelLimits []TenantModelRateLimit `json:"model_limits,omitempty"`
 	UpdatedAt   time.Time              `json:"updated_at"`
+	// The tenant's class fields.
+	AIClassPolicy
 }
 
 // UserModelRateLimit - one model's token quota inside a user's rate limit

@@ -14,6 +14,14 @@ Endpoints:
   GET  /v1/models             a non-inference request on the same service
   GET  /health                readiness
   GET  /__receipts/<nonce>    requests that arrived carrying that X-Test-Nonce
+  GET  /__headers/<nonce>     the llm-d request headers and an x-vllm-priority of the last
+                              request carrying that nonce, as the backend received them
+                              ({"name": ["value", ...]})
+  GET  /__body/<nonce>        what the backend's JSON parser read from the last body
+                              carrying that nonce: its top-level "model", "service_tier",
+                              "priority" and "_gw_prio" ("absent" when the key is not there), so
+                              a scenario can tell a nulled tier from one that was never
+                              sent, in whichever spelling the client wrote the key
   GET  /__peak/<nonce>        the most requests with that nonce executing at
                               once, across every port, plus the per-port peaks
   GET  /__inflight            requests executing right now
@@ -41,6 +49,10 @@ Request headers that shape the answer:
   X-Test-Spoof-Admission: 1
                           the answer carries X-Loxilb-Admission-Inflight: 999
                           of its own, which the gateway must replace
+  X-Test-Engine: vllm|sglang|trtllm
+                          answer as that engine would a top-level body key
+                          it does not know: vllm allows it, sglang ignores
+                          it, trtllm refuses the request 400 naming it
 
 The receipt count is the honest oracle for a refused request: from the
 client side a refusal and a forwarded request whose answer was discarded
@@ -69,6 +81,20 @@ INFLIGHT_PORT = {}   # port -> executing right now
 PEAK = {}            # nonce -> most executing at once, every port
 PEAK_PORT = {}       # nonce -> {port: most executing at once on that port}
 ORDER = {}           # nonce -> request ids in arrival order
+SEEN_HDRS = {}       # nonce -> the llm-d headers of its last request
+SEEN_BODY = {}          # nonce -> what the parser read from the last body
+
+# The OpenAI chat request surface an engine with extra="forbid" accepts
+# (TensorRT-LLM's ChatCompletionRequest; it has no priority field). A
+# top-level key outside it is refused when X-Test-Engine names trtllm.
+ENGINE_CHAT_FIELDS = {
+    "model", "messages", "prompt", "max_tokens", "max_completion_tokens",
+    "min_tokens", "temperature", "top_p", "top_k", "n", "stream",
+    "stream_options", "stop", "seed", "frequency_penalty", "presence_penalty",
+    "logit_bias", "logprobs", "top_logprobs", "user", "tools", "tool_choice",
+    "response_format", "service_tier",
+}
+
 RELEASED = set()     # nonces whose holds were released
 RELEASE_ALL = 0      # generation: bumped by /__release_all
 COND = threading.Condition(LOCK)
@@ -113,13 +139,25 @@ class Handler(BaseHTTPRequestHandler):
         if getattr(self, "spoof", False):
             self.send_header("X-Loxilb-Admission-Inflight", "999")
 
-    def _enter(self, nonce):
+    def _enter(self, nonce, body=None):
         global INFLIGHT
         with LOCK:
             if nonce:
                 RECEIPTS[nonce] = RECEIPTS.get(nonce, 0) + 1
+                if body is not None:
+                    SEEN_BODY[nonce] = {"model": body.get("model", "absent"),
+                                        "service_tier": body.get("service_tier", "absent"),
+                                        "priority": body.get("priority", "absent"),
+                                        "_gw_prio": body.get("_gw_prio", "absent"),
+                                        "tools": body.get("tools", "absent")}
                 ORDER.setdefault(nonce, []).append(
                     self.headers.get("X-Request-Id", ""))
+                SEEN_HDRS[nonce] = {}
+                for k in self.headers.keys():
+                    if k.lower().startswith(("x-llm-d-", "x-gateway-inference-",
+                                             "x-vllm-priority")):
+                        SEEN_HDRS[nonce].setdefault(k.lower(), []).extend(
+                            self.headers.get_all(k))
             INFLIGHT += 1
             INFLIGHT_PORT[self.port] = INFLIGHT_PORT.get(self.port, 0) + 1
             if nonce:
@@ -208,6 +246,16 @@ class Handler(BaseHTTPRequestHandler):
             with LOCK:
                 self._send_json({"nonce": n, "count": RECEIPTS.get(n, 0)})
             return
+        if path.startswith("/__headers/"):
+            n = path[len("/__headers/"):]
+            with LOCK:
+                self._send_json({"nonce": n, "headers": SEEN_HDRS.get(n, {})})
+            return
+        if path.startswith("/__body/"):
+            n = path[len("/__body/"):]
+            with LOCK:
+                self._send_json({"nonce": n, "body": SEEN_BODY.get(n, {})})
+            return
         if path.startswith("/__peak/"):
             n = path[len("/__peak/"):]
             with LOCK:
@@ -252,10 +300,26 @@ class Handler(BaseHTTPRequestHandler):
         reset = self.headers.get("X-Test-Reset", "") == "1"
         forever = self.headers.get("X-Test-Forever", "") == "1"
         self.spoof = self.headers.get("X-Test-Spoof-Admission", "") == "1"
+        engine = self.headers.get("X-Test-Engine", "")
 
         body = self._body()          # read before anything else: a held
-        self._enter(nonce)           # request has fully arrived
+        self._enter(nonce, body)     # request has fully arrived
         try:
+            # Answer as the engine named would, on a top-level key it does
+            # not know (from the engines' request classes): vLLM's
+            # OpenAIBaseModel has extra="allow" (vllm/entrypoints/openai/
+            # engine/protocol.py), SGLang's ChatCompletionRequest is a plain
+            # pydantic BaseModel, extra="ignore" (sglang/srt/entrypoints/
+            # openai/protocol.py), TensorRT-LLM's OpenAIBaseModel has
+            # extra="forbid" (tensorrt_llm/serve/openai_protocol.py). With
+            # no engine named the mock is its own: everything is accepted.
+            if engine == "trtllm":
+                unknown = sorted(set(body.keys()) - ENGINE_CHAT_FIELDS)
+                if unknown:
+                    self._send_json({"error": {
+                        "message": "Extra inputs are not permitted: %s" % unknown,
+                        "type": "extra_forbidden"}}, 400)
+                    return
             if hold:
                 self._hold(nonce)
             if delay_ms > 0:

@@ -44,6 +44,34 @@ chk_not_has() { # chk_not_has <name> <forbidden> <haystack>
   fi
 }
 
+chk_eq() { # chk_eq <name> <want> <got>
+  if [ "$2" = "$3" ]; then
+    echo "  [PASS] $1 ($3)"; PASS=$((PASS + 1))
+  else
+    echo "  [FAIL] $1 — want '$2', got '$3'"; FAIL=$((FAIL + 1))
+  fi
+}
+
+# A refusal is one request in loxilb_ai_requests_total{outcome="denied"} with
+# the status the client got, and one response in the class counter. The class
+# counter is pulled every 10 s, so it is polled.
+msum() { # msum <family> <label-substr> [label-substr] -> sum of matching samples
+  $hexec l3h1 curl -s --max-time 8 "http://$VIP:11111/netlox/v1/metrics" 2>/dev/null \
+    | awk -v fam="$1" -v a="$2" -v b="${3:-}" '
+        $0 ~ "^" fam "[{ ]" && index($0, a) && (b == "" || index($0, b)) { s += $NF }
+        END { printf "%.0f", s + 0 }'
+}
+denied() { msum loxilb_ai_requests_total 'outcome="denied"' "status=\"$1\""; }
+completed() { msum loxilb_ai_requests_total 'outcome="completed"' "status=\"$1\""; }
+klass() { msum loxilb_proxy_http_responses_by_status_total "status_class=\"$1\""; }
+wait_delta() { # wait_delta <want> <before> <cmd...> -> the delta, once it reaches want or after 25 s
+  local want=$1 b=$2 got; shift 2
+  for _ in $(seq 1 25); do
+    got=$(( $("$@") - b )); [ "$got" -ge "$want" ] && break; sleep 1
+  done
+  echo "$got"
+}
+
 body_llama='{"model":"llama-70b","messages":[{"role":"user","content":"hi"}]}'
 
 req() { # req <port> <extra curl args...> — POST body_llama with the key
@@ -62,6 +90,7 @@ r=$(req 2030)
 chk_has     "T1 llama pool answers"      "server-llama" "$r"
 chk_not_has "T1 no conflict on agreement" "model_conflict" "$r"
 
+den400=$(denied 400); cmp400=$(completed 400); k4=$(klass 4xx)
 echo ""
 echo "T2: body llama-70b + X-Model mistral-7b (authorized model in body ONLY)"
 echo "    → 400 model_conflict; the llama-only key must never reach mistral"
@@ -77,6 +106,9 @@ r=$(req 2030 -H "X-Model: ghost-model")
 chk_has     "T3 400 status"          "400" "$(echo "$r" | head -1)"
 chk_has     "T3 model_conflict body" "model_conflict" "$r"
 chk_not_has "T3 no model_unavailable steer" "model_unavailable" "$r"
+chk_eq "T3 requests_total{denied,400} moved by the two conflicts" 2 "$(wait_delta 2 "$den400" denied 400)"
+chk_eq "T3 the 4xx class moved by two"                          2 "$(wait_delta 2 "$k4" klass 4xx)"
+chk_eq "T3 and neither conflict counted as completed"            0 "$(( $(completed 400) - cmp400 ))"
 
 echo ""
 echo "T4: body llama-70b + X-Model llama-70b (both present, equal) → no false conflict"
@@ -84,6 +116,7 @@ r=$(req 2030 -H "X-Model: llama-70b")
 chk_has     "T4 llama pool answers"  "server-llama" "$r"
 chk_not_has "T4 agreement is not a conflict" "model_conflict" "$r"
 
+den401=$(denied 401); cmp401=$(completed 401); k4=$(klass 4xx)
 echo ""
 echo "T5: no key on the enforcing VIP → 401 (conflict check never masks auth)"
 r=$($hexec l3h1 curl -s -i --max-time 8 -X POST \
@@ -92,6 +125,9 @@ r=$($hexec l3h1 curl -s -i --max-time 8 -X POST \
   -d "$body_llama" \
   "http://$VIP:2030/v1/chat/completions")
 chk_has "T5 401 status" "401" "$(echo "$r" | head -1)"
+chk_eq "T5 requests_total{denied,401} moved by one" 1 "$(wait_delta 1 "$den401" denied 401)"
+chk_eq "T5 the 4xx class moved by one"              1 "$(wait_delta 1 "$k4" klass 4xx)"
+chk_eq "T5 and not counted as completed"            0 "$(( $(completed 401) - cmp401 ))"
 
 echo ""
 echo "T6: non-enforcing VIP keeps LEGACY behavior — header steers, no 400"

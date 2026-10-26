@@ -30,6 +30,7 @@
         "datasource": { "type": "prometheus", "uid": "loxilb-prom" },
         "query": { "query": "label_values(up{job=\"loxilb\"}, instance)", "refId": "StandardVariableQuery" },
         "refresh": 2,
+        "allValue": ".*",
         "includeAll": true,
         "multi": true,
         "current": { "selected": true, "text": ["All"], "value": ["$__all"] },

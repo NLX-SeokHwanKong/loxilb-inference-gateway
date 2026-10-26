@@ -19,11 +19,12 @@ ENC_MODEL=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.ar
 GWLOG=${LOGD}/loxilb$(hostname).log
 case $ENG in
   vllm)   VER=$VLLM_VERSION; MSRC=$FIX/manifests/$PROF.yaml; FSUB=""
-          GWC='^loxilb_ai_pd_(prefill_duration|decode_ttft)_seconds_count'; GWMIN=6
+          GWC='^loxilb_ai_pd_(prefill_duration|decode_duration)_seconds_count'; GWMIN=6  # requests are not streamed: TTFT has no sample
           EREQ_P='^vllm:request_success_total'; EREQ_D='^vllm:request_success_total'; XFER='^vllm:nixl_xfer_time_seconds_count' ;;
   sglang) VER=$SGL_VERSION; MSRC=$FIX/manifests-sglang/$PROF.yaml; FSUB="/sglang"
-          # decode exposes no num_requests_total; each transferred request bootstraps once and allocates once
-          GWC='^loxilb_ai_pd_requests_total'; GWMIN=3
+          # decode exposes no num_requests_total; each transferred request bootstraps once and allocates once.
+          # Only the requests that completed count: an aborted or failed lifecycle is not a served one.
+          GWC='^loxilb_ai_pd_requests_total'; GWF='phase="complete"'; GWMIN=3
           EREQ_P='^sglang:num_requests_total'; EREQ_D='^sglang:kv_transfer_bootstrap_ms_count'; XFER='^sglang:kv_transfer_alloc_ms_count' ;;
   *) echo "usage: $0 vllm|sglang <profileId>"; exit 64 ;;
 esac
@@ -47,7 +48,8 @@ pd_rule() { curl -s -m 10 -o "${EV}/rule-create-$1.json" -w "%{http_code}" -X PO
                    { \"endpointIP\": \"${DECODE}\", \"targetPort\": ${EPORT}, \"weight\": 1, \"ep_role\": 2 } ] }"; }
 since() { tail -n +$(( $2 + 1 )) "$1"; }
 # msum <url> <regex>: sum of every sample whose name+labels match; EMPTY when none match (absent never reads as 0)
-msum() { curl -s -m 5 "$1" | grep -v "^#" | grep -E "$2" | awk '{s+=$NF; n++} END {if (n) printf "%d", s}'; }
+# msum <url> <regex> [fixed] — the sum of the series matching <regex> (and containing <fixed>, if given).
+msum() { curl -s -m 5 "$1" | grep -v "^#" | grep -E "$2" | grep -F -- "${3:-}" | awk '{s+=$NF; n++} END {if (n) printf "%d", s}'; }
 restore_manifest() { install -o root -g root -m 0644 "$FIX/manifests/$PROF.yaml" "$REG/manifests/$PROF.yaml"; }
 trap restore_manifest EXIT
 
@@ -100,7 +102,7 @@ echo "=== 2. chat x3 through the P/D split ==="
 CHAT_USER="${SALT} pd chat probe. Summarize prefill decode separation in one sentence. Filler: alpha bravo charlie delta echo foxtrot golf hotel india juliett kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu one two three four five six seven eight nine ten."
 h0=$(settle)
 MS=$(python3 -c "import sys; print(sys.argv[1].replace('/','_'))" "$MODEL")
-g0=$(msum "${MET}" "${GWC}\\{model=\"${MS}\"[,}]"); p0=$(msum "http://${PREFILL}:${EPORT}/metrics" "$EREQ_P")
+g0=$(msum "${MET}" "${GWC}\\{([^}]*,)?model=\"${MS}\"[,}]" "${GWF:-}"); p0=$(msum "http://${PREFILL}:${EPORT}/metrics" "$EREQ_P")
 d0=$(msum "http://${DECODE}:${EPORT}/metrics" "$EREQ_D"); x0=$(msum "http://${DECODE}:${EPORT}/metrics" "$XFER")
 # A Prometheus label child exists only after its first increment, and client_golang drops a family with no
 # child from the exposition entirely (no HELP line either): right after a gateway restart the family is
@@ -120,7 +122,7 @@ h1=""; for _ in $(seq 1 15); do h1=$(hits); [[ -n "$h1" && "$h1" -ge $((h0+2)) ]
 [[ -n "$h1" && "$h1" -ge $((h0+2)) ]] || { echo "PD_CHAT_NO_EXACT_HITS ${h0}->${h1}"; del_rule; exit 5; }
 h1=$(settle); echo "  tier15_hits ${h0}->${h1}"
 sleep 12
-g1=$(msum "${MET}" "${GWC}\\{model=\"${MS}\"[,}]"); p1=$(msum "http://${PREFILL}:${EPORT}/metrics" "$EREQ_P")
+g1=$(msum "${MET}" "${GWC}\\{([^}]*,)?model=\"${MS}\"[,}]" "${GWF:-}"); p1=$(msum "http://${PREFILL}:${EPORT}/metrics" "$EREQ_P")
 d1=$(msum "http://${DECODE}:${EPORT}/metrics" "$EREQ_D"); x1=$(msum "http://${DECODE}:${EPORT}/metrics" "$XFER")
 echo "  counters after:  gw_pd=${g1:-ABSENT} prefill_req=${p1:-ABSENT} decode_req=${d1:-ABSENT} decode_xfer=${x1:-ABSENT}"
 { curl -s -m5 "${MET}" | grep -E "loxilb_ai_pd_"; curl -s -m5 "http://${PREFILL}:${EPORT}/metrics" | grep -E "$EREQ_P"

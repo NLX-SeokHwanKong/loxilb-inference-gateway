@@ -52,11 +52,14 @@ Prometheus server is configured.
 - When loxilb runs --userservice, the metrics endpoint requires a bearer
   token; unauthenticated Prometheus scrapes receive 401. The bridge
   authenticates automatically, but external scrapers must be configured.
-- loxilb_ai_requests_total carries an outcome label: "completed" is traffic a
-  backend answered, "denied" is requests the policy gate refused before any
-  backend was dialled, and the unfiltered total is offered load. Any ratio
-  meant to describe backend behaviour must select outcome="completed", or a
-  rate-limit storm reads as a backend fault.
+- loxilb_ai_requests_total carries an outcome label: outcome="completed" is
+  traffic answered whole, outcome="aborted" is requests whose client did not
+  get the whole answer (cause "client" = a cancel or a stall, traffic;
+  "engine" or "gateway" = an error; status "none" when no status was sent),
+  outcome="denied" is requests the policy gate refused before any backend was
+  dialled, and the unfiltered total is offered load. The error ratio is (completed 5xx +
+  aborted engine/gateway) / (completed + aborted); any ratio must name the
+  outcome on every selector, or a rate-limit storm reads as a backend fault.
 - loxilb_ai_rate_limit_hits_total is not a duplicate of the denied series: it
   carries the reason. One request trips one gate but several reason counters
   exist, so expect hits <= requests_total{outcome="denied",status="429"}.

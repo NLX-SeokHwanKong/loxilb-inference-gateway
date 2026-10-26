@@ -56,6 +56,19 @@ curl -X POST http://127.0.0.1:11111/netlox/v1/config/metrics
 
 - Prometheus: `http://<host>:9090` — Grafana: `http://<host>:3000` (credentials from `.env`).
 - Dashboards are provisioned from `grafana/dashboards/` into the **LoxiLB** folder.
+- The AI dashboard's **Model** and **Tenant** variables list the label values of
+  `loxilb_ai_requests_total`, so a model or tenant becomes selectable only after its first
+  request has completed; until then the selection falls back to All, where its traffic
+  already shows. A `(all tenants)` or `(all models)` mark in a panel title names the
+  selection that panel does not apply (its family carries no such label); the narrow panels
+  carry the mark first so it stays visible in a small layout.
+- A series' first event is an increase: `prometheus.yml` has the loxilb job scrape the
+  protobuf exposition (`scrape_protocols: [PrometheusProto, …]`), which carries each
+  counter's creation time, and `docker-compose.yml` starts Prometheus with
+  `--enable-feature=created-timestamp-zero-ingestion`. Keep both on a Prometheus of your
+  own, or the first error of a new (model, tenant) pair — or of a freshly started
+  gateway — reads 1 in the raw counter and 0 or No data in every rate panel and alert
+  (see "AI request accounting"). `ci/lint-monitoring.py` fails the two files without them.
 
 ## Security notes
 
@@ -107,32 +120,108 @@ docker compose up -d
 ## AI request accounting: what counts as a request
 
 `loxilb_ai_requests_total` is the AI Gateway's request denominator. Read it by
-its `outcome` label, because the three readings answer different questions:
+its `outcome` label, because the readings answer different questions:
 
 | Selector | Population | Use it for |
 |---|---|---|
 | `loxilb_ai_requests_total` | offered load | total request rate; capacity |
-| `{outcome="completed"}` | answered by a backend | anything describing backend behaviour — error ratios, latency correlation |
-| `{outcome="denied"}` | refused by the policy gate | denial rate, without consulting a second family |
+| `{outcome="completed"}` | answered whole: by a backend, or by the gateway when no backend could take the request (outage, P/D timeout or leg failure, connect failure) or by a configured redirect | backend behaviour — latency correlation, the 5xx half of the error ratio |
+| `{outcome="aborted"}` | the client did not get a complete response; `cause` says why: `client` (it cancelled, reset or stopped reading), `engine` (the backend died under the answer), `gateway` (a duration cap, a reaper or the listener cut it). `status` is what the client got — `200` for a cut stream, `none` when no status was sent (the client left before any answer). A backend off P/D that closes before any answer gets the client a 502, counted `completed` | cancellations (`cause="client"`, traffic), and the engine/gateway half of the error ratio |
+| `{outcome="denied"}` | refused by the gateway before any backend was chosen: policy gate, capacity, routing, framing, L7-policy reject, content-security block | denial rate, without consulting a second family |
 
-The two outcomes are mutually exclusive per request, so `sum by (outcome)`
-reproduces the unfiltered total.
+The three outcomes are mutually exclusive per request, so `sum by (outcome)`
+reproduces the unfiltered total. `cause` is empty except on `aborted`. A
+graceful `[DONE]` the gateway wrote for a silent engine is `completed` (the
+client got a clean end; `loxilb_ai_pd_terminator_synthesized_total` counts it).
 
-**Any ratio meant to describe backend behaviour must select
-`outcome="completed"` on every selector, numerator and denominator alike.** A
-gate denial is non-2xx by construction, so an unfiltered error ratio starts
-counting rate-limiting as a backend fault, and one that filters only its
-numerator falls as denials rise — the reading moves the wrong way at exactly
-the wrong moment. `LoxilbAIErrorRatio` and `instance:loxilb_ai_5xx_ratio:rate5m`
-both filter; `deploy/monitoring/ci/lint-monitoring.py` fails any expression
-that filters some selectors of this family and not others.
+**Not counted: answers the kernel carries.** On a rule with a declared
+`api_key_auth` and `sockMapMode: response` (the one acceleration such a rule
+accepts, see `docs/sockmap-acceleration.md`), the kernel carries every answer
+past the proxy and no status is ever seen. Requests on such a rule reach
+**no** `loxilb_ai_requests_total` record: not completed, not aborted, not even
+a client leaving before its answer, because an answered request cannot be told
+from an unanswered one. Their refusals at the gate (`denied`) are still
+counted, since those are written before any backend is chosen. Read a flat
+`requests_total` on such a rule as "not measured", not as "no traffic", and
+measure it at the backend (the engine's own metrics). The daemon logs a warning naming this when it accepts the rule.
+
+The error ratio is
+
+```promql
+(completed 5xx + aborted{cause=~"engine|gateway"}) / (completed + aborted)
+```
+
+**Every selector of this family in a ratio must name its outcome, numerator and
+denominator alike.** A gate denial is non-2xx by construction, so an
+unfiltered error ratio starts counting rate-limiting as a backend fault, and
+one that filters only its numerator falls as denials rise — the reading moves
+the wrong way at exactly the wrong moment. A client cause is traffic, not an
+error: it belongs in the denominator only. `LoxilbAIErrorRatio` and
+`instance:loxilb_ai_error_ratio:rate5m` (this ratio per instance) both follow
+it; `deploy/monitoring/ci/lint-monitoring.py` fails any
+expression that filters some selectors of this family and not others.
+
+`instance:loxilb_ai_5xx_ratio:rate5m` (completed 5xx over completed, which
+did not see `aborted`) is **removed**; use
+`instance:loxilb_ai_error_ratio:rate5m`.
+
+The counted families are seeded at zero so a window's first error is an
+increase rather than a series appearing: the P/D lifecycle and fallback
+families per model at its registration, and `loxilb_ai_requests_total` per
+keyed (model, tenant) pair at its first record (the error statuses under
+`completed` and `denied`, `aborted` 200 for each cause, and `aborted` `none`
+for the client). `tenant=""` is never seeded.
+
+Seeding cannot reach the very first event of a pair: the series a cold pair's
+first 500 creates is born with that 500, and the first scrape of it already
+reads 1, so `rate()` and `increase()` see no 0 → 1 step while the raw counter
+reads 1 (QA 2026-10-21, MON-04; the same holds for every counter of a freshly
+started process). The exporter stamps every counter with its creation time,
+and the protobuf exposition carries the stamp (the text formats do not):
+`prometheus.yml` has the loxilb job scrape `PrometheusProto`, and
+`docker-compose.yml` starts Prometheus with
+`--enable-feature=created-timestamp-zero-ingestion`, under which Prometheus
+writes a 0 at the creation instant before the series' first sample. The first
+error is then a positive `rate()` and `increase()`, and the AI dashboard's
+error ratio reads it as 100 % of one request. Verified against Prometheus
+v2.53.4 on the testbed: a cold pair's first 500 recorded at 11:19:51.542 was
+stored as 0 at 11:19:51.542 and 1 at the next scrape, `increase(…[3m])` 1.01,
+for an anonymous and for a keyed pair alike. The acceptance reading is the raw
+counter's delta of exactly 1 with a positive `rate()` and `increase()`;
+`increase()` extrapolates to the edges of its window, so one event reads about
+1.0 to 1.4 (QA measured 1.14 to 1.31), not exactly 1. `ci/lint-monitoring.py`
+fails either file without its setting.
+
+What that contract does not cover, said plainly: a Prometheus without the flag,
+or one scraping the text exposition, is back to the series appearing at 1, and
+there the panel **AI 5xx observed (raw counter)** beside the ratio is the
+record of the event — the counter itself, not a rate. The ratio's `No AI
+traffic (5m)` is the no-traffic reading, not a healthy 0. A creation time
+older than the TSDB head's append window (a series that lived long before this
+Prometheus first scraped it) gets no zero, which is the right reading: its
+first event fell in no window this Prometheus had.
 
 Completed responses are recorded at SSE stream completion when streamed and at
-the response headers when not, sharing one per-request dedup guard. Denials are
-recorded where the gate decides them, labelled with the status the client
-received — note this is not derivable from the reason: the rate-limit stage
-answers **503**, not 429, when it finds a keyed identity with no policy store
-behind it.
+the response headers when not, sharing one per-request dedup guard; an aborted
+one where its answer was cut, by the same guard. An answer
+the gateway writes when no backend can take the request is recorded as a
+completion with the status it wrote, so an outage shows in the error ratio as a
+backend's own 5xx would. Refusals are recorded once each, by the deny record
+the data plane takes whatever stage refused, labelled with the status the
+client received — note this is not derivable from the reason: the rate-limit
+stage answers **503**, not 429, when it finds a keyed identity with no policy
+store behind it. The MCP framing refusals (400, 405, 413, as
+`mcp_invalid_request`, `mcp_method_not_allowed`, `mcp_request_too_large`) and
+the 400 that refuses an unparseable or ambiguously framed request before
+admission (`bad_request`) are refusals like any other, on both protocols; the
+503 an MCP route writes when no backend can take the request is an outage
+completion. The population is AI-gateway connections: an MCP service that is
+not an AI-gateway rule records nothing in this family.
+
+The model label of a routing or framing refusal is never a new label: the
+model it names may be one nobody serves, so it reads its own name only when a
+label for that model already exists, else `other`. A routing refusal of a
+request that named no model (no route matched, no rules) reads `model="none"`.
 
 `tenant=""` on a denied series means the request was refused before a
 credential resolved (missing or unknown key, or a store that could not answer),
@@ -146,11 +235,37 @@ request trips one gate but several reason counters exist, so the relation is
 `rate_limit_hits_total <= requests_total{outcome="denied",status="429"}`, not
 equality.
 
-**Not counted here.** Two gateway-generated refusals are answered entirely in
-the data plane and reach neither recording site: a LlamaFirewall block (403)
-and a P/D pool failure (502/503). The P/D failures are visible in the P/D
-lifecycle metrics; the LlamaFirewall blocks are visible only in
-`loxilb_llamafw_*`. Offered load therefore still excludes those two classes.
+**Do not sum these with `loxilb_ai_requests_total`.** Each counts some of the
+same requests from another angle, so adding it to the request total (or to its
+`denied` series) counts a request twice:
+
+| Family | What it counts | Overlap |
+|---|---|---|
+| `loxilb_proxy_http_responses_by_status_total` | every HTTP response the client received, by class, HTTP/1.1 and HTTP/2 alike: backend replies and the gateway's own answers | every request in `requests_total` that got a status, any outcome |
+| `loxilb_ai_netid_requests_total{outcome="denied"}` | refusals of a source with a network-identity binding | part of `{outcome="denied"}` |
+| `loxilb_ai_admission_decisions_total` (capacity_shed, queue_full, queue_timeout, drained, draining, no_healthy_capacity, tenant_share) | capacity-gate decisions | the capacity refusals in `{outcome="denied"}` |
+| `loxilb_ai_fc_band_total` | the capacity gate's decisions by priority band | `shed` and `expired` are part of `{outcome="denied"}`; `cancelled` is part of `{outcome="aborted",cause="client"}`; `admitted` requests end in any outcome |
+| `loxilb_pd_admission_shed_total`, `loxilb_pd_admission_overflow_shed_total` | the P/D in-flight 429 (`pd_overloaded`) | part of `{outcome="denied",status="429"}` |
+| `loxilb_ai_rate_limit_hits_total`, `loxilb_ai_token_quota_denied_total` | rate-limit and quota refusals, by reason | part of `{outcome="denied"}` (see the inequality above) |
+| `loxilb_ai_pd_requests_total` | every P/D request's lifecycle, failures included; `{phase="aborted",status="client"}` is the client leaving at any stage, 1:1 with the P/D requests in `{outcome="aborted",cause="client"}`; `{phase="complete",status="success"}` is HTTP completion of the decode answer (its last chunk, its Content-Length satisfied, or its EOF on an unframed answer), not semantic completion — `finish_reason`, `usage` and the SSE `[DONE]` event are not required, a stream the engine ended cleanly without them is a success here, one the gateway ended is `decode/truncated`, one the engine broke `decode/error` | the P/D requests in `requests_total` |
+
+The TTFB histogram (`loxilb_proxy_http_ttfb_seconds`) samples backend replies
+only, on HTTP/1.1 and HTTP/2 alike (an HTTP/2 stream samples at its backend's
+`:status`): a gateway's own answer reaches its first byte in microseconds and
+is not sampled. A backend's interim `1xx` (its own `100 Continue` when the gateway
+forwarded the client's `Expect`, a `103 Early Hints`) is not an answer either:
+neither the TTFB sample nor the responses-by-status class moves on it; the
+final status behind it is what both record. A `101` is the answer, it ends the
+exchange.
+
+The request duration histogram (`loxilb_ai_request_duration_seconds`) observes
+`completed` requests only. An aborted request's latency is the time to its cut,
+which would pull the served quantiles toward wherever the cuts land. Read the
+P/D decode TTFT (`loxilb_ai_pd_decode_ttft_seconds`) beside it with one
+difference in mind: TTFT samples every streamed decode leg that reached its
+first event, an aborted one included, because that event came before the cut.
+So a TTFT sample need not have a duration sample, and the two `_count` series
+are not expected to agree.
 
 ## Metric parity with upstream OSS loxilb
 
@@ -214,6 +329,13 @@ families, against 60 upstream families.
 ## Operational notes
 
 - Scrape interval is 10 s to match loxilb's internal stats sweep — don't lower it.
+- **`cluster` is set in two places, and per site in both:** `external_labels.cluster`
+  and the `labels: {cluster: ...}` of the `loxilb` scrape job in `prometheus.yml`.
+  External labels reach only what leaves Prometheus (alerts, federation, remote
+  write), never its own series, so without the scrape label every `cluster:` and
+  `instance:` recording-rule series and every `by (cluster)` alert would come out
+  without it. `lint-monitoring.py` fails when the two differ. The promtool tests
+  inject `cluster` into their inputs, so they cannot catch this on their own.
 - `up == 0` has two meanings: process/network down, or metrics collection disabled
   (HTTP 503). The `LoxilbScrapeDown` alert runbook covers both.
 - `loxilb_active_conntrack_entries`, `loxilb_requests_total`, and per-client/per-endpoint

@@ -605,8 +605,10 @@ type ruleEnt struct {
 	inst                        string
 	secMode                     cmn.LBSec
 	ppv2En                      bool
-	sockMapMode                 uint8 // Directional sockmap accel: 0=off,1=both,2=request,3=response
-	halfCloseMode               uint8 // half-close hold, enum sp_hold_mode: 0=unset,1=off,2=hold
+	sockMapMode                 uint8         // Directional sockmap accel: 0=off,1=both,2=request,3=response
+	halfCloseMode               uint8         // half-close hold, enum sp_hold_mode: 0=unset,1=off,2=hold
+	aiDefaultResv               aiDefaultResv // default reservation for a request without max_tokens, as declared
+	aiObjectiveStrict           bool          // a request naming an objective it may not use is refused, not defaulted
 	egress                      bool
 	traceType                   string // Tracing catalog name for deep inspection
 	tracingCatalogID            uint16 // Resolved catalog_id for tracing (0 = no tracing)
@@ -1260,13 +1262,23 @@ func (R *RuleH) GetLBRule() ([]cmn.LbRuleMod, error) {
 		ret.Serv.FcMaxQueueDepth = data.fcMaxQueueDepth
 		ret.Serv.FcMaxQueueWaitMs = data.fcMaxQueueWaitMs
 		data.fcCfg.toServ(&ret.Serv)
+		ret.Serv.AIDefaultReservation = cmn.AIDefaultReservationFromRule(data.aiDefaultResv.mode)
+		ret.Serv.AIDefaultMaxTokens = data.aiDefaultResv.maxTokens
+		ret.Serv.AIObjectiveStrict = data.aiObjectiveStrict
 		// The capacity gate's resolved state on the pool, for AI-gateway or
 		// modern MCP services: what the data plane holds, not what was posted.
-		// A read model beside configuration, never replayed into a POST.
-		if (data.aiGwMode() || data.mcpProtocolVersion != "") && mh.dpEbpf != nil {
+		// A read model beside configuration, never replayed into a POST. A
+		// rule whose request direction sockmap carries is read back too:
+		// its gate may run band settings other than the ones it inherits
+		// (fc_cfg_band_guard), and the read-back is where that shows.
+		sockMapReq, _ := sockMapDirs(data.sockMapMode)
+		if (data.aiGwMode() || data.mcpProtocolVersion != "" || sockMapReq) && mh.dpEbpf != nil {
 			if eff, ok := mh.dpEbpf.DpFcStateGet(data.tuples.l3Dst.addr.IP,
 				data.tuples.l4Dst.valMin, uint8(data.tuples.l4Prot.val),
 				data.tuples.path, data.tuples.pathPrefix, data.tuples.modelName); ok {
+				data.aiDefaultResv.fillEffective(&eff, data.tuples.l3Dst.addr.IP, data.tuples.l4Dst.valMin)
+				eff.ConfigSource = aiClassConfigSource()
+				aiClassStoreHealth(&eff)
 				ret.Serv.FcEffective = &eff
 			}
 		}
@@ -1771,7 +1783,12 @@ func (R *RuleH) resolveOpaqueID(supplied string, r *ruleEnt) (string, error) {
 	if R.opaqueID != nil {
 		if existing := R.opaqueID[supplied]; existing != nil && existing != r &&
 			existing.tuples.ruleKey() != r.tuples.ruleKey() {
-			return "", errors.New("lbrule-id conflict: id already bound to a different rule")
+			// The caller's input, not a gateway fault: typed so the REST layer
+			// answers 400 with this wording. An untyped error fell through the
+			// message classifier to 500 "Internal service error", which hid the
+			// reason and told a controller to keep retrying a request that can
+			// only succeed once the other rule gives the id up.
+			return "", &cmn.RuleArgumentError{Err: errors.New("lbrule-id conflict: id already bound to a different rule")}
 		}
 	}
 	return supplied, nil
@@ -1790,6 +1807,31 @@ func (R *RuleH) registerOpaqueID(r *ruleEnt) {
 		R.opaqueID = make(map[string]*ruleEnt)
 	}
 	R.opaqueID[r.id] = r
+}
+
+// rebindOpaqueID moves a live rule to the opaque id a replace supplied, when
+// that id differs from the one the rule carries: a controller that starts
+// sending deterministic ids, or re-sends after a restart restored the rule
+// under the id the snapshot kept. Only the id index and the rule's own id
+// change - nothing the data plane holds is touched - so the caller may answer
+// success without a rule re-create. Reports whether a rebinding happened; an
+// empty or identical id is a no-op. An id bound to another rule is refused
+// (resolveOpaqueID) and the rule keeps its id.
+//
+// WR-05 CONCURRENCY CONTRACT: reads and writes R.opaqueID; the CALLER holds the
+// rule-table lock, as for registerOpaqueID.
+func (R *RuleH) rebindOpaqueID(eRule *ruleEnt, supplied string) (bool, error) {
+	if supplied == "" || supplied == eRule.id {
+		return false, nil
+	}
+	if _, err := R.resolveOpaqueID(supplied, eRule); err != nil {
+		return false, err
+	}
+	R.unregisterOpaqueID(eRule)
+	eRule.id = supplied
+	R.registerOpaqueID(eRule)
+	eRule.lastUpdated = time.Now()
+	return true, nil
 }
 
 // unregisterOpaqueID - Octavia : remove a rule's id from the opaque-id index on delete.
@@ -4095,7 +4137,20 @@ func (R *RuleH) JwtProfileRuleRefs(name string) []string {
 	return refs
 }
 
+// canonicalLBPortMax makes an explicitly bounded singleton identical to an
+// omitted upper bound. Otherwise AddLbRule installs a range firewall mark,
+// while LB2DP installs the singleton key: packets follow the wrong NAT lookup
+// (and fullproxy has no NAT entry at all). Preserve real and invalid ranges so
+// their existing installation and validation paths remain authoritative.
+func canonicalLBPortMax(port, max uint16) uint16 {
+	if max == port {
+		return 0
+	}
+	return max
+}
+
 func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, servSecVIPs []cmn.LbSecVIPArg, allowedSources []cmn.LbAllowedSrcIPArg, servEndPoints []cmn.LbEndPointArg) (int, error) {
+	serv.ServPortMax = canonicalLBPortMax(serv.ServPort, serv.ServPortMax)
 	var lBActs ruleLBActs
 	var nSecIP []ruleLBSIP
 	var ipProto uint8
@@ -4576,6 +4631,24 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 	if jwtProfErr != nil {
 		return RuleArgsErr, &cmn.RuleArgumentError{Err: jwtProfErr}
 	}
+
+	// The admission gate reads the credential policy once per listener, before
+	// a request is matched to a rule, so a rule that declares another policy
+	// than the rules already on its listener would be served under theirs -
+	// unauthenticated, if the listener's rule declared nothing. Refused like a
+	// TLS disagreement above; a restored configuration is kept whole and the
+	// disagreement is logged instead.
+	if lBActs.mode == cmn.LBModeFullProxy {
+		want := listenerAuth{apiKeyAuth: nextApiKeyAuth, jwtAuthProfile: nextJwtAuthProfile}
+		if other, diff := R.lbListenerAuthConflict(eRule, &rt, want); other != nil {
+			conflict := listenerAuthConflictError(other, diff)
+			if !lbConfigReplay(&serv) {
+				return RuleArgsErr, &cmn.RuleArgumentError{Err: conflict}
+			}
+			tk.LogIt(tk.LogError, "lb-rule %s:%d restored on a listener it disagrees with, the listener's credential policy applies: %v\n",
+				serv.ServIP, serv.ServPort, conflict)
+		}
+	}
 	// The capacity queue's two fields resolve the same way, and their pair
 	// rule is judged on what will be stored.
 	nextFcMaxQueueDepth, nextFcMaxQueueWaitMs, fcQueueErr := fcQueueResolve(eRule, &serv)
@@ -4590,6 +4663,11 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 	if halfCloseErr != nil {
 		return RuleArgsErr, halfCloseErr
 	}
+	nextAIDefaultResv, aiDefaultResvErr := aiDefaultResvResolve(eRule, &serv)
+	if aiDefaultResvErr != nil {
+		return RuleArgsErr, aiDefaultResvErr
+	}
+	nextAIObjectiveStrict := aiObjectiveStrictResolve(eRule, &serv)
 	// Checked against the resolved api_key_auth, which a replace may have
 	// preserved, and against the listener's L7 attachment as it stands. The
 	// attachment is read from the index rather than the policy registry because
@@ -4603,6 +4681,14 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 		return RuleArgsErr, &cmn.RuleArgumentError{Err: err}
 	}
 	if err := fcExposeSockMapErr(&serv, nextFcCfg, sockMapCode); err != nil {
+		return RuleArgsErr, err
+	}
+	if err := fcBandSockMapErr(&serv, nextFcCfg, sockMapCode,
+		aiGwModeFor(serv.SSEMode, serv.PDDisaggMode, nextApiKeyAuth)); err != nil {
+		return RuleArgsErr, err
+	}
+	if err := netidRuleSockMapErr(mh.NetIdentity, aiServiceIdent(sNetAddr.IP, serv.ServPort),
+		aiGwModeFor(serv.SSEMode, serv.PDDisaggMode, nextApiKeyAuth), sockMapCode); err != nil {
 		return RuleArgsErr, err
 	}
 	if err := resolveCHWBLContract(&serv, eRule, lBActs.endPoints); err != nil {
@@ -4754,12 +4840,16 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 		// requests waiting in its queue and restart its counts. The data
 		// plane's in-place update applies it and wakes the waiters it lets
 		// through. The half-close mode is applied the same way: re-creating
-		// the entry would cut the clients held under the old mode.
+		// the entry would cut the clients held under the old mode. So is the
+		// default reservation: it sizes the claims of requests admitted
+		// from then on, and nothing in flight depends on it.
 		inPlaceOnlyChg := false
 		if !ruleChg && (eRule.fcMaxQueueDepth != nextFcMaxQueueDepth ||
 			eRule.fcMaxQueueWaitMs != nextFcMaxQueueWaitMs ||
 			eRule.fcCfg != nextFcCfg ||
-			eRule.halfCloseMode != nextHalfClose) {
+			eRule.halfCloseMode != nextHalfClose ||
+			eRule.aiDefaultResv != nextAIDefaultResv ||
+			eRule.aiObjectiveStrict != nextAIObjectiveStrict) {
 			ruleChg = true
 			inPlaceOnlyChg = true
 		}
@@ -4780,6 +4870,21 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 		}
 
 		if !ruleChg {
+			// An id-only replace: nothing the data plane holds differs, only the
+			// stable opaque id the client wants the rule known by. Rebind it in
+			// place and answer success. Refusing it as "exists" would leave
+			// GET /config/loadbalancer/id/{id} answering 404 for a rule that is
+			// there, with a delete and re-create - and the connections it drops -
+			// as the only way to the new id.
+			rebound, idErr := R.rebindOpaqueID(eRule, serv.Id)
+			if idErr != nil {
+				return RuleExistsErr, idErr
+			}
+			if rebound {
+				tk.LogIt(tk.LogInfo, "lb-rule %s:%d-%s id rebound to %s, nothing else changed\n",
+					serv.ServIP, serv.ServPort, serv.Proto, serv.Id)
+				return 0, nil
+			}
 			return RuleExistsErr, errors.New("lbrule-exists error")
 		}
 
@@ -4941,6 +5046,8 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 		eRule.fcMaxQueueWaitMs = nextFcMaxQueueWaitMs
 		eRule.fcCfg = nextFcCfg
 		eRule.halfCloseMode = nextHalfClose
+		eRule.aiDefaultResv = nextAIDefaultResv
+		eRule.aiObjectiveStrict = nextAIObjectiveStrict
 		eRule.cbEnable = serv.CbEnable
 		eRule.kvExactMode = serv.KvExactMode
 		eRule.kvBlockSize = serv.KvBlockSize
@@ -5029,13 +5136,8 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 		// keep the opaque id stable (set from a supplied id when
 		// present — same-rule no-op), resolve the effective admin_state, and bump the
 		// in-memory lastUpdated timestamp.
-		if serv.Id != "" && serv.Id != eRule.id {
-			if _, idErr := R.resolveOpaqueID(serv.Id, eRule); idErr != nil {
-				return RuleExistsErr, idErr
-			}
-			R.unregisterOpaqueID(eRule)
-			eRule.id = serv.Id
-			R.registerOpaqueID(eRule)
+		if _, idErr := R.rebindOpaqueID(eRule, serv.Id); idErr != nil {
+			return RuleExistsErr, idErr
 		}
 		// only an EXPLICIT admin_state in the
 		// request mutates the effective flag. A nil/absent AdminStateUp (a member-only
@@ -5314,6 +5416,10 @@ func (R *RuleH) AddLbRule(serv cmn.LbServiceArg, servSecIPs []cmn.LbSecIPArg, se
 
 	// Store the half-close hold mode
 	r.halfCloseMode = nextHalfClose
+
+	// Store the default reservation
+	r.aiDefaultResv = nextAIDefaultResv
+	r.aiObjectiveStrict = nextAIObjectiveStrict
 
 	// Store the per-endpoint circuit-breaker enable
 	r.cbEnable = serv.CbEnable
@@ -5704,6 +5810,7 @@ func (R *RuleH) deleteVIPSys(r *ruleEnt) {
 // On success, it will return 0 and nil error, else appropriate return code and
 // error string will be set
 func (R *RuleH) DeleteLbRule(serv cmn.LbServiceArg) (int, error) {
+	serv.ServPortMax = canonicalLBPortMax(serv.ServPort, serv.ServPortMax)
 	var ipProto uint8
 
 	service := ""
@@ -7222,7 +7329,20 @@ func (r *ruleEnt) LB2DP(work DpWorkT) int {
 	nWork.FcTtftTargetMs = r.fcCfg.ttftTargetMs
 	nWork.FcTenantSharePct = uint8(r.fcCfg.tenantSharePct)
 	nWork.FcExposeHeaders = r.fcCfg.exposeHeaders
+	nWork.FcWakePolicy = r.fcCfg.wakePolicy
+	nWork.FcShedQueue = r.fcCfg.shedQueue
+	nWork.FcTenantWake = r.fcCfg.tenantWake
+	nWork.FcLlmdHeaders = r.fcCfg.llmdHeaders
+	nWork.FcCriticalReservePct = uint8(r.fcCfg.criticalReservePct)
+	for b := 0; b < cmn.FcBands; b++ {
+		nWork.FcBandWeight[b] = uint8(r.fcCfg.bandWeight[b])
+		nWork.FcBandMinSharePct[b] = uint8(r.fcCfg.bandMinSharePct[b])
+		nWork.FcBandQueuePct[b] = uint8(r.fcCfg.bandQueuePct[b])
+		nWork.FcBandWaitMs[b] = r.fcCfg.bandWaitMs[b]
+	}
 	nWork.HalfCloseMode = r.halfCloseDpMode()
+	nWork.AIDefaultTokens = r.aiDefaultResv.tokensInForce()
+	nWork.AIObjectiveStrict = r.aiObjectiveStrict
 	nWork.CbEnable = r.cbEnable
 	nWork.KvExactMode = r.kvExactMode // KV-cache exact routing
 	nWork.KvBlockSize = r.kvBlockSize

@@ -47,6 +47,29 @@ func sampleDocument() *Document {
 			ForwardIdentity: true,
 		}},
 		HalfClose: &cmn.HalfCloseConfig{Allow: false, CapSeconds: 600, DefaultMode: cmn.HalfCloseModeHold},
+		NetIdentity: []cmn.NetIdentityMod{
+			{
+				Name:          "line-1",
+				Match:         cmn.NetIdentityMatch{CIDR: []string{"10.20.0.0/24", "10.20.4.0/22"}},
+				Services:      []string{"20.20.20.1:8080"},
+				Tenant:        "line-1",
+				AllowedModels: []string{"llama-3.1-8b"},
+				Enforce:       cmn.NetIdentityEnforceStrict,
+				Credential:    cmn.NetIdentityCredentialNone,
+				PriorityClass: cmn.NetIdentityClassCritical,
+				FailMode:      cmn.NetIdentityFailClosed,
+			},
+			{
+				Name:            "zone-b",
+				Match:           cmn.NetIdentityMatch{IngressIf: "vlan200"},
+				Tenant:          "zone-b",
+				Enforce:         cmn.NetIdentityEnforceAdvisory,
+				Credential:      cmn.NetIdentityCredentialNetwork,
+				ForwardIdentity: true,
+				PriorityClass:   cmn.NetIdentityClassStandard,
+				FailMode:        cmn.NetIdentityFailNeutral,
+			},
+		},
 		AuditSink: []cmn.AuditSinkConfig{
 			{
 				Name: cmn.AuditSinkCompliance, Address: "siem.example.net:6514",
@@ -102,8 +125,9 @@ func sampleDocument() *Document {
 		IPFilter: []cmn.IPFilterEntry{{
 			IPFilterMod: cmn.IPFilterMod{FilterType: "whitelist", CIDR: "10.0.0.0/8", Action: "allow"},
 		}},
-		SecurityRate: &cmn.SecurityRateState{Config: cmn.SecurityRateConfig{SYNEnabled: true, SYNThreshold: 100}},
-		BFD:          []cmn.BFDMod{{Instance: "bfd1", Port: 3784}},
+		SecurityRate:        &cmn.SecurityRateState{Config: cmn.SecurityRateConfig{SYNEnabled: true, SYNThreshold: 100}},
+		BFD:                 []cmn.BFDMod{{Instance: "bfd1", Port: 3784}},
+		BGPPolicyAssignment: []cmn.GoBGPPolicyApply{{NeighIPAddress: "10.0.0.2", PolicyType: "import", Polices: []string{"pd1"}, RouteAction: "reject"}},
 		BGP: BGPDomain{
 			Neighbors:         []cmn.GoBGPNeighGetMod{{Addr: "10.0.0.2", RemoteAS: 65001}},
 			DefinedSets:       []cmn.GoBGPPolicyDefinedSetMod{{Name: "set1", DefinedTypeString: "prefix"}},

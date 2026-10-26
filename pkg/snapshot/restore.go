@@ -23,6 +23,7 @@ package snapshot
 import (
 	"bytes"
 	"fmt"
+	"reflect"
 	"time"
 
 	cmn "github.com/loxilb-io/loxilb/common"
@@ -298,6 +299,57 @@ func (e *Engine) restore(raw []byte, opts RestoreOptions) (*Result, error) {
 	if err != nil {
 		result.Errors = []string{err.Error()}
 		return result, nil
+	}
+
+	// BGP teardown also removes neighbors/definitions referenced by bindings.
+	// A legacy or component-scoped document that never selected the binding
+	// domain must not destroy those live bindings as a side effect.
+	if !opts.Boot {
+		bgp, bindings := false, false
+		for _, entry := range selected {
+			bgp = bgp || entry.Name == DomainBGP
+			bindings = bindings || entry.Name == DomainBGPPolicyAssignment
+		}
+		if bgp && !bindings {
+			live, err := e.Hooks.NetGoBGPPolicyApplyGet()
+			if err != nil && !isSubsystemUnavailable(err) {
+				result.Errors = []string{fmt.Sprintf("verify unselected BGP assignments: %v", err)}
+				return result, nil
+			}
+			if len(live) > 0 {
+				result.Errors = []string{"BGP replacement would change unselected live policy assignments; capture and restore bgp and bgppolicyassignment together"}
+				return result, nil
+			}
+		}
+	}
+
+	if !opts.Boot && doc.Domains.BGP.GlobalConfig != nil {
+		bgp, lb := false, false
+		for _, entry := range selected {
+			bgp = bgp || entry.Name == DomainBGP
+			lb = lb || entry.Name == DomainLoadBalancer
+		}
+		if bgp && !lb {
+			current, err := e.Hooks.NetGoBGPGCGet()
+			if err != nil && !isSubsystemUnavailable(err) {
+				result.Errors = []string{err.Error()}
+				return result, nil
+			}
+			target := doc.Domains.BGP.GlobalConfig
+			if current.LocalAs != 0 && (current.LocalAs != target.LocalAs || current.RouterID != target.RouterID || (target.ListenPort != 0 && current.ListenPort != target.ListenPort)) {
+				rules, err := e.Hooks.NetLbRuleGet()
+				if err != nil {
+					result.Errors = []string{err.Error()}
+					return result, nil
+				}
+				for _, rule := range rules {
+					if rule.Serv.Bgp {
+						result.Errors = []string{"BGP core replacement requires loadbalancer coverage while live rules advertise BGP routes"}
+						return result, nil
+					}
+				}
+			}
+		}
 	}
 
 	// 3. PLAN -- ordered per-domain {to_delete (live), to_apply (doc)}.
@@ -675,6 +727,8 @@ func countDomain(name string, d *Domains) int {
 			return 1
 		}
 		return 0
+	case DomainNetIdentity:
+		return len(d.NetIdentity)
 	case DomainLoadBalancer:
 		return len(d.LoadBalancer)
 	case DomainFirewall:
@@ -700,6 +754,8 @@ func countDomain(name string, d *Domains) int {
 		return 0
 	case DomainBFD:
 		return len(d.BFD)
+	case DomainBGPPolicyAssignment:
+		return len(d.BGPPolicyAssignment)
 	case DomainBGP:
 		n := len(d.BGP.Neighbors) + len(d.BGP.DefinedSets) + len(d.BGP.PolicyDefinitions)
 		if d.BGP.GlobalConfig != nil {
@@ -811,6 +867,10 @@ func (e *Engine) stageApply(doc *Document, selected []DomainEntry, boot bool) ([
 		}
 	}
 
+	if err := e.prepareBGPGlobal(doc, selected); err != nil {
+		return []error{err}, nil
+	}
+
 	var errs []error
 	var skipped map[string]int
 	for _, entry := range selected {
@@ -856,6 +916,17 @@ func (e *Engine) stageVerify(doc *Document, selected []DomainEntry) []error {
 			errs = append(errs, fmt.Errorf("verify: get %s: %w", entry.Name, err))
 			continue
 		}
+		// Compare explicit singleton values as well as legacy item digests.
+		// An old document that never declared them still leaves them unverified.
+		if entry.Name == DomainBGP && doc.Domains.BGP.GlobalConfig != nil && !reflect.DeepEqual(doc.Domains.BGP.GlobalConfig, scratch.Domains.BGP.GlobalConfig) {
+			errs = append(errs, fmt.Errorf("verify: bgp global configuration differs after apply"))
+			continue
+		}
+		if entry.Name == DomainIPsec && doc.Domains.IPsec.Config != nil && (scratch.Domains.IPsec.Config == nil || !reflect.DeepEqual(ipsecConfigToMod(*doc.Domains.IPsec.Config), ipsecConfigToMod(*scratch.Domains.IPsec.Config))) {
+			errs = append(errs, fmt.Errorf("verify: ipsec global configuration differs after apply"))
+			continue
+		}
+
 		wantCount, wantDigest, err := DomainContent(entry.Name, &doc.Domains)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("verify: %s: %w", entry.Name, err))
@@ -903,6 +974,11 @@ func (e *Engine) rollback(preDoc *Document, selected []DomainEntry) []error {
 		errs = append(errs, fmt.Errorf("rollback wipe: %w", wipeErr))
 	}
 
+	if err := e.prepareBGPGlobal(preDoc, selected); err != nil {
+		errs = append(errs, err)
+		return errs
+	}
+
 	for _, entry := range selected {
 		if ferr := faultApplyError(entry.Name, true); ferr != nil {
 			errs = append(errs, fmt.Errorf("rollback apply %s: %w", entry.Name, ferr))
@@ -938,4 +1014,21 @@ func entryNames(entries []DomainEntry) []string {
 		out[i] = e.Name
 	}
 	return out
+}
+
+// Prepare the speaker after the wipe and before any LB can advertise routes.
+// Repeating the BGP domain apply later is idempotent and cannot reset it again.
+func (e *Engine) prepareBGPGlobal(doc *Document, selected []DomainEntry) error {
+	if doc.Domains.BGP.GlobalConfig == nil {
+		return nil
+	}
+	for _, entry := range selected {
+		if entry.Name == DomainBGP {
+			if _, err := e.Hooks.NetGoBGPGCReplace(doc.Domains.BGP.GlobalConfig); err != nil {
+				return fmt.Errorf("apply bgp: prepare global_config: %w", err)
+			}
+			break
+		}
+	}
+	return nil
 }

@@ -344,6 +344,12 @@ func (d *Deps) diagnoseAILatency() sdk.ToolHandlerFor[targetIn, diagnoseOut] {
 			if s := summarizeHistogram(byName["loxilb_ai_pd_decode_ttft_seconds"]); s != nil {
 				out.Evidence["pd_decode_ttft"] = s
 			}
+			if s := summarizeHistogram(byName["loxilb_ai_pd_decode_duration_seconds"]); s != nil {
+				out.Evidence["pd_decode_duration"] = s
+			}
+			if fb := sumFamily(byName["loxilb_ai_pd_prefill_fallback_total"]); fb > 0 {
+				out.Evidence["pd_prefill_fallback"] = fb
+			}
 			kvFound = sumFamily(byName["loxilb_ai_pd_kv_params_found_total"])
 			kvMissing = sumFamily(byName["loxilb_ai_pd_kv_params_missing_total"])
 			out.Evidence["kv_params_found"] = kvFound

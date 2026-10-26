@@ -48,6 +48,19 @@ loxilb_ai_request_duration_seconds_count{model="llama3",tenant="t1"} 100
 loxilb_ai_pd_kv_params_found_total{model="llama3"} 5
 # TYPE loxilb_ai_pd_kv_params_missing_total counter
 loxilb_ai_pd_kv_params_missing_total{model="llama3"} 25
+# TYPE loxilb_ai_pd_decode_ttft_seconds histogram
+loxilb_ai_pd_decode_ttft_seconds_bucket{model="llama3",le="0.1"} 4
+loxilb_ai_pd_decode_ttft_seconds_bucket{model="llama3",le="+Inf"} 4
+loxilb_ai_pd_decode_ttft_seconds_sum{model="llama3"} 0.2
+loxilb_ai_pd_decode_ttft_seconds_count{model="llama3"} 4
+# TYPE loxilb_ai_pd_decode_duration_seconds histogram
+loxilb_ai_pd_decode_duration_seconds_bucket{model="llama3",le="10"} 4
+loxilb_ai_pd_decode_duration_seconds_bucket{model="llama3",le="+Inf"} 4
+loxilb_ai_pd_decode_duration_seconds_sum{model="llama3"} 20
+loxilb_ai_pd_decode_duration_seconds_count{model="llama3"} 4
+# TYPE loxilb_ai_pd_prefill_fallback_total counter
+loxilb_ai_pd_prefill_fallback_total{model="llama3",reason="origin_5xx"} 2
+loxilb_ai_pd_prefill_fallback_total{model="llama3",reason="truncated"} 1
 # TYPE loxilb_l4_error_events_total counter
 loxilb_l4_error_events_total{proto="tcp",reason="rst_server"} 42
 # TYPE loxilb_active_conntrack_entries gauge
@@ -311,6 +324,16 @@ func TestPhase3AITrafficReport(t *testing.T) {
 	if got := dur["p50_seconds"].(float64); got != 0.5 {
 		t.Errorf("p50 = %v, want 0.5", got)
 	}
+	// P/D decode: TTFT (first streamed event) and the whole decode leg are
+	// two summaries; the fallbacks are listed by reason.
+	if out["pd_decode_ttft"] == nil || out["pd_decode_duration"] == nil {
+		t.Errorf("pd_decode_ttft / pd_decode_duration summary missing: %v / %v",
+			out["pd_decode_ttft"], out["pd_decode_duration"])
+	}
+	fb, _ := out["pd_prefill_fallback"].([]any)
+	if len(fb) != 2 {
+		t.Errorf("pd_prefill_fallback = %v, want two reasons", out["pd_prefill_fallback"])
+	}
 }
 
 // TestPhase3AITrafficReportOutcome pins how the report reads a gateway that
@@ -350,6 +373,41 @@ loxilb_ai_requests_total{model="llama3",tenant="",status="401",outcome="denied"}
 	}
 	if got := out["error_ratio"].(float64); got != 0.1 {
 		t.Errorf("error_ratio = %v, want 0.1 over completed traffic", got)
+	}
+}
+
+// TestPhase3AITrafficReportAborted pins the aborted outcome: an answer the
+// engine or the gateway cut is an error even with status 200, a client that
+// cancelled is traffic (denominator only), and neither is completed.
+func TestPhase3AITrafficReportAborted(t *testing.T) {
+	mock := newAIMock(t)
+	mock.metricsText = `# TYPE loxilb_ai_requests_total counter
+loxilb_ai_requests_total{cause="",model="llama3",outcome="completed",status="200",tenant="t1"} 80
+loxilb_ai_requests_total{cause="",model="llama3",outcome="completed",status="500",tenant="t1"} 5
+loxilb_ai_requests_total{cause="engine",model="llama3",outcome="aborted",status="200",tenant="t1"} 3
+loxilb_ai_requests_total{cause="gateway",model="llama3",outcome="aborted",status="200",tenant="t1"} 2
+loxilb_ai_requests_total{cause="client",model="llama3",outcome="aborted",status="200",tenant="t1"} 7
+loxilb_ai_requests_total{cause="client",model="llama3",outcome="aborted",status="none",tenant="t1"} 3
+loxilb_ai_requests_total{cause="",model="llama3",outcome="denied",status="429",tenant="t1"} 50
+`
+	b := aiTestBridge(t, mock)
+	cs := session(t, b, guard.RoleViewer)
+
+	out := callOut(t, callTool(t, cs, "ai_traffic_report", nil))
+	for k, want := range map[string]float64{
+		"requests_total":          150,
+		"requests_completed":      85,
+		"requests_aborted":        15,
+		"requests_aborted_errors": 5,
+		"requests_denied":         50,
+		"requests_5xx":            5,
+		"requests_non_2xx":        5,
+		// (5 + 5) / (85 + 15): the client's 10 aborts are in the denominator only.
+		"error_ratio": 0.1,
+	} {
+		if got := out[k].(float64); got != want {
+			t.Errorf("%s = %v, want %v", k, got, want)
+		}
 	}
 }
 
@@ -408,6 +466,12 @@ func TestPhase3DiagnoseTools(t *testing.T) {
 
 	out = callOut(t, callTool(t, cs, "diagnose_ai_latency", nil))
 	ev, _ = out["evidence"].(map[string]any)
+	if ev["pd_decode_ttft"] == nil || ev["pd_decode_duration"] == nil {
+		t.Errorf("diagnose_ai_latency: decode TTFT / duration evidence missing")
+	}
+	if got, _ := ev["pd_prefill_fallback"].(float64); got != 3 {
+		t.Errorf("pd_prefill_fallback = %v, want 3", ev["pd_prefill_fallback"])
+	}
 	if got := ev["kv_params_missing"].(float64); got != 25 {
 		t.Errorf("kv_params_missing = %v, want 25", got)
 	}

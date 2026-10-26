@@ -2,7 +2,7 @@
 
 The Gateway API path of the inference gateway, on the same in-cluster topology
 as [`k3d-incluster-inference-svc`](../k3d-incluster-inference-svc): loxilb and
-kube-loxilb (`integration/inference-gateway`, started with `--gatewayAPI
+kube-loxilb (`feat/auth-annotation`, started with `--gatewayAPI
 --inferenceExtension`) run as Pods in a single-node k3d cluster. An
 `InferencePool` referenced from an HTTPRoute must become a LoadBalancer Service,
 then an inference rule on loxilb, then served traffic.
@@ -16,8 +16,13 @@ loxilb as an external container) — same assertions, same reasons:
    `host`/`path_prefix`/`path_match_mode` lookup key — plus: exactly one rule on
    the listener, no `<gw>-ingress-service` for it, and a socket actually bound
 4. `status.parents[]` reports Accepted/ResolvedRefs under the right Gateway
-5. `endpointPickerRef` + `FailClose` is refused (`NotSupportedByParent`), no Service
-6. switching to `FailOpen` accepts it (status polled — it lands a moment after the Service)
+5. `endpointPickerRef` + `FailClose` is accepted (calling the picker is the gateway's
+   job): with the picker Service absent the pool reports `ResolvedRefs=False`
+   (`InvalidExtensionRef`), the Service carries `loxilb.io/epp-failure-mode: FailClose`
+   and a refusing `loxilb.io/epp-endpoint`, and a gateway without `epp` in its
+   `/version` features gets no rule for it (one with `epp` gets a rule that answers 503)
+6. switching to `FailOpen` keeps it accepted; the picker annotations leave the
+   Service and loxilb selects endpoints itself
 7. deleting the route deletes the Service **and its loxilb rule** (needs the
    kube-loxilb L7-keyed delete fix)
 8. a request naming the model is answered by a pool pod (`X-Served-By`), an

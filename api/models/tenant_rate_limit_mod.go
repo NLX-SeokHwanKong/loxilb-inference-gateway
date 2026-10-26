@@ -15,16 +15,25 @@ import (
 	"github.com/go-openapi/validate"
 )
 
-// TenantRateLimitMod POST replaces aggregate rps, tokens_per_min, and burst_pct; omission becomes zero, not preservation. Supplied model_limits are individual upserts or removals; omitted/empty model_limits preserves existing model rows. Aggregate and model writes are sequential, not one transaction, so failure can leave partial changes. Blank identifiers and malformed model entries are not consistently rejected as 400. Configuration alone does not enable enforcement on a service.
+// TenantRateLimitMod POST replaces aggregate rps, tokens_per_min, and burst_pct; omission becomes zero, not preservation. Supplied model_limits are individual upserts or removals; omitted/empty model_limits preserves existing model rows. Aggregate and model writes are sequential, not one transaction, so failure can leave partial changes. Blank identifiers and malformed model entries are not consistently rejected as 400. Configuration alone does not enable enforcement on a service. The class fields (priority_class, default_objective, allowed_objectives) are written by their own statement and only when the body names one of them, so a POST of limits leaves the tenant's class as it is. A body that names a class field and carries no limit (rps, tokens_per_min and burst_pct absent or zero, no model_limits) writes the class only and leaves the limits as they are.
 //
 // swagger:model TenantRateLimitMod
 type TenantRateLimitMod struct {
 
+	// The objectives a request of this tenant may raise itself to with the x-llm-d-inference-objective header, and the body tiers it may raise itself to by service_tier, named tier:priority, tier:fast and tier:flex; at most 64. Omitted leaves the stored list; an empty array clears it, and then only a hint at or below what the request gets without one is honoured (the list governs raises only).
+	AllowedObjectives []string `json:"allowed_objectives,omitempty"`
+
 	// Token bucket capacity as a percent of tokens_per_min; 0 uses the server default
 	BurstPct int64 `json:"burst_pct,omitempty"`
 
+	// The objective a request of this tenant gets when it names none, or one it may not use. Omitted leaves the stored value; an empty string clears it.
+	DefaultObjective *string `json:"default_objective,omitempty"`
+
 	// Per-model token quotas for the tenant
 	ModelLimits []*TenantModelRateLimit `json:"model_limits"`
+
+	// The highest priority class a request of this tenant may have: standard, critical or sheddable. Omitted leaves the stored value; an empty string clears it, and a tenant that sets no class is held at standard.
+	PriorityClass *string `json:"priority_class,omitempty"`
 
 	// Maximum requests per second for the tenant
 	Rps int64 `json:"rps,omitempty"`

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-// Lifecycle-registry guard: parses api/swagger.yml and enforces that every
+// Lifecycle-registry guard: parses api/swagger.yml and api/swagger-extras.yml and enforces that every
 // mutating route is classified in RouteLifecycles (lifecycle.go), in both
 // directions. A new mutating API cannot merge without an explicit
 // persistence-lifecycle decision, and a removed API cannot leave a stale
@@ -46,24 +46,26 @@ var mutatingMethods = map[string]bool{
 // declared in api/swagger.yml.
 func swaggerMutatingRoutes(t *testing.T) map[string]bool {
 	t.Helper()
-	raw, err := os.ReadFile(swaggerSpecPath)
-	if err != nil {
-		t.Fatalf("reading swagger spec: %v", err)
-	}
-	var spec struct {
-		Paths map[string]map[string]any `yaml:"paths"`
-	}
-	if err := yaml.Unmarshal(raw, &spec); err != nil {
-		t.Fatalf("parsing swagger spec: %v", err)
-	}
-	if len(spec.Paths) == 0 {
-		t.Fatalf("swagger spec has no paths -- wrong file or format drift")
-	}
 	routes := map[string]bool{}
-	for path, ops := range spec.Paths {
-		for method := range ops {
-			if mutatingMethods[method] {
-				routes[RouteKey(method, path)] = true
+	for _, specPath := range []string{swaggerSpecPath, "../../api/swagger-extras.yml"} {
+		raw, err := os.ReadFile(specPath)
+		if err != nil {
+			t.Fatalf("reading %s: %v", specPath, err)
+		}
+		var spec struct {
+			Paths map[string]map[string]any `yaml:"paths"`
+		}
+		if err := yaml.Unmarshal(raw, &spec); err != nil {
+			t.Fatalf("parsing %s: %v", specPath, err)
+		}
+		if len(spec.Paths) == 0 {
+			t.Fatalf("%s has no paths", specPath)
+		}
+		for path, ops := range spec.Paths {
+			for method := range ops {
+				if mutatingMethods[method] {
+					routes[RouteKey(method, path)] = true
+				}
 			}
 		}
 	}
@@ -165,6 +167,7 @@ func TestSnapshotDomainSetMatchesRegistry(t *testing.T) {
 func TestExcludedDomainsDerivation(t *testing.T) {
 	want := []string{
 		AreaAIKeys,
+		AreaAIObjective,
 		AreaAIRateLimit,
 		AreaAuthUsers,
 		AreaSNI,

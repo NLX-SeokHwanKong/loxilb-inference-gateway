@@ -99,6 +99,10 @@ type Producer struct {
 	// overflowSeen is the ring overflow count at the writer's last drain;
 	// owned by the writer goroutine.
 	overflowSeen uint64
+	// droppedSeen is the sum of the drop counters the last time the writer
+	// said in the log that this producer had dropped; owned by the writer
+	// goroutine.
+	droppedSeen uint64
 }
 
 // ID returns the producer identity written into producer_id.

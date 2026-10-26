@@ -110,7 +110,37 @@ import (
 // migration is restamp-only. Builds that predate it refuse 1.9 documents
 // via the minor-version gate - so a downgraded build cannot take a document
 // whose default is hold and quietly run its services off.
-const SchemaVersion = "1.9"
+//
+// 1.10: a load-balancer rule gained ai_default_reservation and
+// ai_default_max_tokens, the default token reservation of a request that
+// declares no max_tokens. A rule without them runs on the process default,
+// which is what absent values read as, so the 1.9->1.10 migration is
+// restamp-only. Builds that predate it refuse 1.10 documents via the
+// minor-version gate: their decoder does not know the two fields, and a
+// rule restored without them would reserve less than its operator set.
+//
+// 1.11: added the netidentity domain: the network-identity bindings, which
+// name the tenant of requests by the network they arrive from. Additive:
+// older documents carry none, and their included_domains never lists it, so
+// restoring them leaves the live bindings untouched. Builds that predate it
+// refuse 1.11 documents via the minor-version gate - a document whose
+// bindings admit or hold requests cannot be restored without them quietly.
+// Within 1.11, before any build that writes it was released: a JWT auth
+// profile gained priority_class and a load-balancer rule ai_objective_strict.
+// Both are absent in a document that does not set them, and absent reads as
+// what it was before (no cap from the profile, a request that names an
+// objective it may not use falls to its default).
+// 1.12: bgppolicyassignment captures operator BGP import/export bindings.
+// Older documents do not cover this domain; migration never widens coverage.
+// Within 1.12, before any build that writes it was released: a load-balancer
+// rule gained the priority band knobs (fc_wake_policy, fc_band_weights,
+// fc_band_min_share_pct, fc_critical_reserve_pct, fc_band_wait_ms,
+// fc_band_queue_pct, fc_shed_queue, fc_tenant_wake, fc_llmd_headers). All
+// are absent in a document that does not set them, and absent reads as the
+// default: the switches inherit the process default, the triples and the
+// reserve are none (strict wake, no floor, no reserve, the queue's window
+// and depth for every band).
+const SchemaVersion = "1.12"
 
 // DocKind identifies the document type, matching §4's "kind" field.
 const DocKind = "loxilb-snapshot"
@@ -133,26 +163,28 @@ const (
 // also the valid values for the REST `components` query parameter (task
 // G-3) and for Select (registry.go).
 const (
-	DomainEndpoint       = "endpoint"
-	DomainJWTAuthProfile = "jwtauthprofile"
-	DomainHalfClose      = "halfclose"
-	DomainLoadBalancer   = "loadbalancer"
-	DomainKvExactBinding = "kvexactbinding"
-	DomainL7Policy       = "l7policy"
-	DomainFirewall       = "firewall"
-	DomainPolicy         = "policy"
-	DomainMirror         = "mirror"
-	DomainSession        = "session"
-	DomainSessionUlCl    = "sessionulcl"
-	DomainIPFilter       = "ipfilter"
-	DomainSecurityRate   = "securityrate"
-	DomainBFD            = "bfd"
-	DomainBGP            = "bgp"
-	DomainIPsec          = "ipsec"
-	DomainCORS           = "cors"
-	DomainTracing        = "tracing"
-	DomainCert           = "cert"
-	DomainAuditSink      = "auditsink"
+	DomainEndpoint            = "endpoint"
+	DomainJWTAuthProfile      = "jwtauthprofile"
+	DomainHalfClose           = "halfclose"
+	DomainNetIdentity         = "netidentity"
+	DomainLoadBalancer        = "loadbalancer"
+	DomainKvExactBinding      = "kvexactbinding"
+	DomainL7Policy            = "l7policy"
+	DomainFirewall            = "firewall"
+	DomainPolicy              = "policy"
+	DomainMirror              = "mirror"
+	DomainSession             = "session"
+	DomainSessionUlCl         = "sessionulcl"
+	DomainIPFilter            = "ipfilter"
+	DomainSecurityRate        = "securityrate"
+	DomainBFD                 = "bfd"
+	DomainBGP                 = "bgp"
+	DomainBGPPolicyAssignment = "bgppolicyassignment"
+	DomainIPsec               = "ipsec"
+	DomainCORS                = "cors"
+	DomainTracing             = "tracing"
+	DomainCert                = "cert"
+	DomainAuditSink           = "auditsink"
 )
 
 // DefaultExcludedDomains lists the configuration areas deliberately never
@@ -194,8 +226,9 @@ type BGPDomain struct {
 // Known limitation: a private key uploaded WITH a passphrase is stored (and
 // therefore exported) as encrypted PEM, but the passphrase itself is never
 // persisted, so restore's NetIPsecCertificateAdd validation fails loudly on
-// it -- such certs need manual re-upload. Tunnel PSKs round-trip verbatim
-// via IPsecTunnelMod.
+// it -- such certs need manual re-upload. PSKs and exported private keys are node-secret sealed
+// by getIPsec before encoding and opened by applyIPsec; the node secret is
+// an external recovery dependency.
 type IPsecDomain struct {
 	Config         *cmn.IPsecConfig            `json:"config,omitempty"`
 	Tunnels        []*cmn.IPsecTunnel          `json:"tunnels,omitempty"`
@@ -220,7 +253,16 @@ type Domains struct {
 	// force (not configuration, not captured). Applied BEFORE loadbalancer,
 	// so that a restored block is in force before the rules that would hold
 	// come back. Added in schema 1.7; absent in older documents.
-	HalfClose    *cmn.HalfCloseConfig `json:"halfclose,omitempty"`
+	HalfClose *cmn.HalfCloseConfig `json:"halfclose,omitempty"`
+	// NetIdentity carries the network-identity bindings (the tenant of
+	// requests by source network). Applied BEFORE loadbalancer: a binding
+	// names its services by VIP and port and needs no rule to exist, and a
+	// service restored first would run its sources unattributed - outside
+	// their tenant's limits, or refused where the binding stands in for a
+	// credential - until its bindings followed. Node-local: a binding names
+	// this node's interfaces. Added in schema 1.11; absent in older
+	// documents.
+	NetIdentity  []cmn.NetIdentityMod `json:"netidentity,omitempty"`
 	LoadBalancer []cmn.LbRuleMod      `json:"loadbalancer"`
 	// KvExactBinding carries each rule's KV-exact composed-binding identity
 	// (model-profile ref, engine-contract ref, binding generation + digest,
@@ -241,10 +283,11 @@ type Domains struct {
 	IPFilter    []cmn.IPFilterEntry  `json:"ipfilter"`
 	// SecurityRate is a singleton (Set semantics on apply); nil means "not
 	// captured" (e.g. excluded via `components`).
-	SecurityRate *cmn.SecurityRateState `json:"securityrate,omitempty"`
-	BFD          []cmn.BFDMod           `json:"bfd"`
-	BGP          BGPDomain              `json:"bgp"`
-	IPsec        IPsecDomain            `json:"ipsec"`
+	SecurityRate        *cmn.SecurityRateState `json:"securityrate,omitempty"`
+	BFD                 []cmn.BFDMod           `json:"bfd"`
+	BGP                 BGPDomain              `json:"bgp"`
+	BGPPolicyAssignment []cmn.GoBGPPolicyApply `json:"bgppolicyassignment,omitempty"`
+	IPsec               IPsecDomain            `json:"ipsec"`
 	// CORS is the explicit origin allowlist + wildcard opt-in (singleton,
 	// Set semantics on apply). nil means "unconfigured" -- the factory
 	// default (open) is not configuration and is deliberately not

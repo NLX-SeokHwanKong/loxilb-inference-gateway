@@ -1,0 +1,130 @@
+{{- if .Values.tests.enabled }}
+{{- $t := .Values.tests }}
+# helm test: InferencePool -> Service -> loxilb rule, the first three assertions
+# of cicd/k3d-incluster-inference-gwapi for every pool and listener:
+#   1. kube-loxilb made the pool a Service with fullproxy/usepodnetwork imposed,
+#      the pool's selector, epselect and model-name, the listener port and the
+#      pool's targetPort;
+#   2. the Service was given the gateway's address;
+#   3. loxilb holds a rule for it: address, mode=4 (fullproxy), sel=8 for
+#      chwbl, model_name, the pool's pods as endpoints and the host/path lookup key.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "loxilb-inference-gateway.fullname" . }}-test-pool-rule
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "loxilb-inference-gateway.labels" . | nindent 4 }}
+    app.kubernetes.io/component: test
+  annotations:
+    "helm.sh/hook": test
+    # The pod stays after the run so `helm test --logs` can read it (a
+    # hook-succeeded policy deletes it first and the log read fails) and so a
+    # failure can be inspected; the next helm test replaces it. Hook resources
+    # are not part of the release, so the pre-delete drain removes test pods
+    # at uninstall.
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  restartPolicy: Never
+  {{- if $t.rbac.create }}
+  serviceAccountName: {{ include "loxilb-inference-gateway.fullname" . }}-test
+  {{- end }}
+  {{- with .Values.global.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  containers:
+    - name: pool-rule
+      image: "{{ $t.kubectlImage.repository }}:{{ $t.kubectlImage.tag }}"
+      imagePullPolicy: {{ $t.kubectlImage.pullPolicy }}
+      env:
+        - name: LOXILB_URL
+          value: {{ include "loxilb-inference-gateway.loxilbURL" . | quote }}
+        - name: POOLS
+          value: {{ include "loxilb-inference-gateway.poolTestSpec" . | quote }}
+      command: ["/bin/sh", "-u", "-c"]
+      args:
+        - |
+          fails=0
+          ok()    { echo "  [OK]   $1"; }
+          bad()   { echo "  [FAIL] $1${2:+ - $2}"; fails=$((fails+1)); }
+          check() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1" "got '$2', want '$3'"; fi; }
+          poll()  { t=$1; shift; i=0; while [ $i -lt $t ]; do "$@" >/dev/null 2>&1 && return 0; i=$((i+1)); sleep 1; done; return 1; }
+          rules() { curl -s --max-time 5 "$LOXILB_URL/netlox/v1/config/loadbalancer/all"; }
+
+          npools=$(echo "$POOLS" | jq 'length')
+          [ "$npools" -gt 0 ] || { echo "no pools in inference.pools - nothing to test"; exit 0; }
+          p=0
+          while [ $p -lt "$npools" ]; do
+            pool=$(echo "$POOLS" | jq -c ".[$p]"); p=$((p+1))
+            name=$(echo "$pool" | jq -r .name); ns=$(echo "$pool" | jq -r .namespace)
+            model=$(echo "$pool" | jq -r .modelName); epsel=$(echo "$pool" | jq -r .epselect)
+            tport=$(echo "$pool" | jq -r .targetPort)
+            selector=$(echo "$pool" | jq -cS .selector)
+            sel_label=$(echo "$pool" | jq -r '.selector | to_entries | map("\(.key)=\(.value)") | join(",")')
+            nhost=$(echo "$pool" | jq '.hostnames | length'); nmatch=$(echo "$pool" | jq '.matches | length')
+            nsvc=$(echo "$pool" | jq '.services | length')
+            s=0
+            while [ $s -lt "$nsvc" ]; do
+              svc=$(echo "$pool" | jq -r ".services[$s].name"); port=$(echo "$pool" | jq -r ".services[$s].port"); s=$((s+1))
+              echo "=== pool $ns/$name on listener port $port ==="
+
+              echo "--- 1. the pool became Service $svc ---"
+              if ! poll 90 kubectl -n "$ns" get svc "$svc"; then
+                bad "service $svc created" "not found after 90s"
+                kubectl -n "$ns" get inferencepool "$name" -o json 2>/dev/null | jq -c '.status.parents[]?.conditions[]? | {type,status,reason,message}'
+                continue
+              fi
+              ok "service $svc created"
+              SVC=$(kubectl -n "$ns" get svc "$svc" -o json)
+              check "annotation lbmode"        "$(echo "$SVC" | jq -r '.metadata.annotations["loxilb.io/lbmode"]')"        fullproxy
+              check "annotation usepodnetwork" "$(echo "$SVC" | jq -r '.metadata.annotations["loxilb.io/usepodnetwork"]')" yes
+              [ -z "$epsel" ] || check "annotation epselect"   "$(echo "$SVC" | jq -r '.metadata.annotations["loxilb.io/epselect"]')"   "$epsel"
+              [ -z "$model" ] || check "annotation model-name" "$(echo "$SVC" | jq -r '.metadata.annotations["loxilb.io/model-name"]')" "$model"
+              check "selector from the pool" "$(echo "$SVC" | jq -cS .spec.selector)"        "$selector"
+              check "listener port"          "$(echo "$SVC" | jq -r '.spec.ports[0].port')"       "$port"
+              check "pool targetPort"        "$(echo "$SVC" | jq -r '.spec.ports[0].targetPort')" "$tport"
+
+              echo "--- 2. the Service was given the gateway address ---"
+              vip=""
+              if poll 90 sh -c "kubectl -n '$ns' get svc '$svc' -o json | jq -e '.status.loadBalancer.ingress[0]' >/dev/null"; then
+                addr=$(kubectl -n "$ns" get svc "$svc" -o json | jq -r '.status.loadBalancer.ingress[0].hostname // .status.loadBalancer.ingress[0].ip')
+                vip=${addr#llb-}
+                ok "external address $addr"
+              else
+                bad "external address assigned" "still pending after 90s"
+              fi
+
+              echo "--- 3. loxilb programmed an inference rule ---"
+              rule_name="${ns}_${svc}"
+              if ! poll 60 sh -c "curl -s --max-time 5 '$LOXILB_URL/netlox/v1/config/loadbalancer/all' | jq -e --arg n '$rule_name' '.lbAttr[]? | select(.serviceArguments.name|startswith(\$n))' >/dev/null"; then
+                bad "rule $rule_name present" "not found after 60s"
+                rules | jq -c '.lbAttr[]?.serviceArguments | {name,externalIP,port}' 2>/dev/null | head -5
+                continue
+              fi
+              ok "rule $rule_name present"
+              RULE=$(rules | jq -c --arg n "$rule_name" '[.lbAttr[] | select(.serviceArguments.name|startswith($n))][0]')
+              [ -z "$vip" ] || check "rule address is the gateway's" "$(echo "$RULE" | jq -r .serviceArguments.externalIP)" "$vip"
+              # 4 = fullproxy, 8 = CHWBL: gateway-only values, so their presence
+              # proves the flavor was detected and the AI fields were not stripped.
+              check "mode is fullproxy(4)" "$(echo "$RULE" | jq -r .serviceArguments.mode)" 4
+              [ "$epsel" != chwbl ] || check "sel is chwbl(8)" "$(echo "$RULE" | jq -r .serviceArguments.sel)" 8
+              [ -z "$model" ] || check "model_name on the rule" "$(echo "$RULE" | jq -r .serviceArguments.model_name)" "$model"
+              EPS=$(echo "$RULE" | jq -r '[.endpoints[]?.endpointIP] | sort | join(",")')
+              PODS=$(kubectl -n "$ns" get pods -l "$sel_label" -o json | jq -r '[.items[].status.podIP | select(. != null)] | sort | join(",")')
+              check "endpoints are the pool's pods" "$EPS" "$PODS"
+              # Without the lookup key the rule reads back fine and answers every
+              # request with model_unavailable.
+              if [ "$nhost" = 0 ] && [ -n "$vip" ]; then
+                check "routing key host" "$(echo "$RULE" | jq -r .serviceArguments.host)" "$vip"
+              fi
+              if [ "$nmatch" = 0 ]; then
+                check "routing key path"       "$(echo "$RULE" | jq -r .serviceArguments.path_prefix)"     "/"
+                check "routing key match mode" "$(echo "$RULE" | jq -r .serviceArguments.path_match_mode)" prefix
+              fi
+            done
+          done
+          echo
+          if [ $fails -eq 0 ]; then echo "test-pool-rule [OK]"; exit 0; fi
+          echo "test-pool-rule [FAILED] ($fails check(s))"; exit 1
+{{- end }}

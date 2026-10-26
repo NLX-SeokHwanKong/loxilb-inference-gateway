@@ -304,13 +304,16 @@ assert "C11: a fresh create (delete/create=${rc}) lifts the fence (status '${st}
 kv_probe_a "C11 (fresh rule after the restore)"
 
 # ── C12 regression: the C unit layers of the touched code ──────────────────────────────────────
-echo "### C12 unit layers: fe_limit + hdr-deadline + pdi + fc + kv-exact C units"
+echo "### C12 unit layers: fe_limit + hdr-deadline + parser-once + pdi + fc + kv-exact C units"
 REPO_ROOT="$(cd "${CFGDIR}/../.." && pwd)"
 if [[ "${SKIP_C_LAYERS:-0}" == 1 ]]; then
     soft "C12: C units skipped (SKIP_C_LAYERS=1)" 1
 else
     ok=1
-    for t in test_felimit test_hdrdl test_pdi test_fc test_kv; do
+    # test_hdrdl and test_ponce run TSan binaries; TSan cannot map its shadow
+    # with the hosted runners' default 32-bit mmap randomisation.
+    sysctl -w vm.mmap_rnd_bits=28 >/dev/null 2>&1 || true
+    for t in test_felimit test_hdrdl test_ponce test_pdi test_fc test_kv; do
         if ( cd "${REPO_ROOT}/loxilb-ebpf/common" && make "$t" ) >"${CFGDIR}/.${t}.log" 2>&1; then
             echo "  make ${t} [OK]"
         else

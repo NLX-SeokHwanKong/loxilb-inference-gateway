@@ -190,7 +190,7 @@ def ds_uid(obj):
     return None
 
 
-def lint_dashboards(mon_dir, exporter, rep):
+def lint_dashboards(mon_dir, exporter, rep, activation=None):
     files = sorted(glob.glob(os.path.join(mon_dir, "grafana/dashboards/*.json")))
     if not files:
         rep.err("dashboards", "no dashboard JSON files found")
@@ -221,6 +221,14 @@ def lint_dashboards(mon_dir, exporter, rep):
 
         tvars = {v.get("name") for v in
                  d.get("templating", {}).get("list", [])}
+        for v in d.get("templating", {}).get("list", []):
+            if v.get("name") in ("instance", "model", "tenant") and \
+                    v.get("includeAll") and v.get("allValue") != ".*":
+                rep.err(name, f"variable ${v.get('name')} has All without "
+                              f"allValue \".*\": All is then an alternation "
+                              f"of discovered values, and an empty label "
+                              f"(tenant=\"\", a refusal before the key "
+                              f"resolved) matches none of them (MON-05)")
         # bootstrap dashboard is intentionally variable-free
         if "instance" not in tvars and uid != "loxilb-bootstrap":
             rep.warn(name, "no $instance template variable (§3.8)")
@@ -258,9 +266,13 @@ def lint_dashboards(mon_dir, exporter, rep):
                 all_exprs.append((name, expr))
                 check_legend(p.get("title"), t, exporter, rep, name)
                 for fam in PARTITIONED_FAMILIES:
-                    msg = outcome_partition_violation(expr, fam)
-                    if msg:
-                        rep.err(name, f"panel '{p.get('title')}' {msg}")
+                    for msg in (outcome_partition_violation(expr, fam),
+                                aborted_cause_violation(expr, fam)):
+                        if msg:
+                            rep.err(name, f"panel '{p.get('title')}' {msg}")
+                msg = lazy_increase_violation(expr, activation or {})
+                if msg:
+                    rep.err(name, f"panel '{p.get('title')}' {msg}")
                 for m in METRIC_TOKEN.finditer(expr):
                     ref = m.group(1)
                     if boundary_violation(ref):
@@ -279,6 +291,9 @@ def lint_dashboards(mon_dir, exporter, rep):
                     rep.warn(name, f"panel '{p.get('title')}' selector without "
                                    f"$instance filter")
 
+            for msg in filter_violations(p, tvars, exporter):
+                rep.err(name, f"panel '{p.get('title')}' {msg}")
+
             if lazy:
                 fc = (p.get("fieldConfig") or {}).get("defaults") or {}
                 if "noValue" not in fc:
@@ -291,12 +306,125 @@ def lint_dashboards(mon_dir, exporter, rep):
 
 
 # ---------------------------------------------------------------------------
+# increase() on a lazy family (MON-04)
+# ---------------------------------------------------------------------------
+# A lazy family's series does not exist until its first increment, and
+# increase() over a window counts only what happens after a series' first
+# sample: the first event a window sees reads as nothing, so a "> 0" alert
+# misses the first anomaly and a count panel shows 0 for it. A family the
+# manifest classes lazy (V lazy vector children, C sample-lazy collector,
+# Q quota-lazy collector, D+V) is counted with the form that also counts a
+# series' first value:
+#   clamp_min(X - X offset W, 0) or (X unless X offset W)
+LAZY_ACTIVATION = {"V", "C", "Q", "D+V"}
+INCREASE_TOKEN = re.compile(r"increase\(\s*((?:loxilb|doca|aictrl)_[a-z0-9_]+)")
+
+
+def load_activation(repo_root):
+    manifest = os.path.join(repo_root, "deploy", "monitoring", "manifest",
+                            "metric-manifest.json")
+    try:
+        data = json.load(open(manifest, encoding="utf-8"))
+        return {f["name"]: f.get("activation") for f in data["families"]}
+    except (OSError, KeyError, json.JSONDecodeError):
+        return {}
+
+
+def lazy_increase_violation(expr, activation):
+    """A message when expr takes increase() of a lazy family, else None."""
+    for m in INCREASE_TOKEN.finditer(expr):
+        if activation.get(m.group(1)) in LAZY_ACTIVATION:
+            return (f"takes increase() of {m.group(1)}, a lazy family "
+                    f"({activation[m.group(1)]}): its first event reads as "
+                    f"nothing; use clamp_min(X - X offset W, 0) or "
+                    f"(X unless X offset W)")
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Dashboard filters (MON-05)
+# ---------------------------------------------------------------------------
+# A dashboard with a $model or $tenant variable promises that every panel
+# obeys it. A selector on a family that carries the label but not the
+# variable ignores the filter silently: the panel shows every model while the
+# picker says one. So, on such a dashboard, every selector of a family with a
+# model (tenant) label carries $model ($tenant); and a panel none of whose
+# families carries either label says "(global)" in its title, so a reader
+# knows the filter does not reach it. With allValue ".*" on the variables,
+# "All" also matches the empty label (a refusal before the key resolved),
+# which an alternation of discovered values never did.
+FILTER_LABELS = (("model", "$model"), ("tenant", "$tenant"))
+# What a panel says when one of the two selections does not reach it.
+SCOPE_MARK = {"model": "(all models)", "tenant": "(all tenants)"}
+SELECTOR_TOKEN = re.compile(r"((?:loxilb|doca|aictrl)_[a-z0-9_]+)(\{[^}]*\})?")
+
+
+def family_labels(ref, exporter):
+    """The label set of the family `ref` names (histogram suffixes folded),
+    or None when it is not known with its labels."""
+    if not isinstance(exporter, dict):
+        return None
+    if ref in exporter:
+        return exporter[ref]
+    for suf in HIST_SUFFIXES:
+        if ref.endswith(suf) and ref[: -len(suf)] in exporter:
+            return exporter[ref[: -len(suf)]]
+    return None
+
+
+def filter_violations(panel, tvars, exporter):
+    """The MON-05 messages for one panel of a dashboard with variables tvars."""
+    wanted = [(lab, var) for lab, var in FILTER_LABELS if lab in tvars]
+    if not wanted:
+        return []
+    msgs = []
+    known = False
+    reach = {lab: False for lab, _ in wanted}
+    for t in panel.get("targets") or []:
+        for m in SELECTOR_TOKEN.finditer(t.get("expr") or ""):
+            labels = family_labels(m.group(1), exporter)
+            if labels is None:
+                continue
+            known = True
+            selector = m.group(2) or ""
+            for lab, var in wanted:
+                if lab in labels:
+                    reach[lab] = True
+                    if var not in selector:
+                        msgs.append(f"selects {m.group(1)} without {var}, so "
+                                    f"the {lab} filter does not reach it")
+    filterable = any(reach.values())
+    title = panel.get("title") or ""
+    if known and not filterable and "(global)" not in title:
+        msgs.append("queries no family the dashboard's filters reach; say "
+                    "(global) in its title")
+    if filterable and "(global)" in title:
+        msgs.append("says (global) but the dashboard's filters reach it")
+    # A panel one filter reaches and the other does not (a model-only
+    # family: the stream gauge, the P/D lifecycle, timing, fallback, tier and
+    # session families) shows every tenant's value whatever the tenant
+    # picker says, and read beside a tenant selection it passes B's stream
+    # off as A's (QA 2026-10-21). Its title says which selection does not
+    # reach it, and a panel the selection reaches never says it.
+    for lab, _ in wanted:
+        mark = SCOPE_MARK[lab]
+        if filterable and not reach[lab] and mark not in title:
+            msgs.append(f"queries no family with a {lab} label, so the "
+                        f"{lab} filter does not reach it; say {mark} in its "
+                        f"title")
+        if reach[lab] and mark in title:
+            msgs.append(f"says {mark} but the {lab} filter reaches it")
+    return sorted(set(msgs))
+
+
+# ---------------------------------------------------------------------------
 # Outcome-partitioned families
 # ---------------------------------------------------------------------------
 # loxilb_ai_requests_total is partitioned by an `outcome` label: "completed" is
-# a request a backend answered, "denied" is one the AI-gateway policy gate
-# refused before dialling a backend. Both live in one family so it can serve as
-# a denominator for offered load.
+# a request answered whole, "aborted" one whose client did not get the whole
+# answer (with a `cause`: client, engine or gateway), "denied" one the
+# AI-gateway policy gate refused before dialling a backend. All three live in
+# one family so it can serve as a denominator for offered load.
 #
 # That makes ONE mistake very easy and completely silent: filtering the
 # numerator of a ratio to completed traffic while leaving its denominator
@@ -312,6 +440,24 @@ def lint_dashboards(mon_dir, exporter, rep):
 # expr or one dashboard target, either every selector on a partitioned family
 # carries an outcome matcher, or none does.
 PARTITIONED_FAMILIES = ("loxilb_ai_requests_total",)
+
+
+# A second mistake the aborted outcome makes easy: selecting outcome="aborted"
+# with no cause matcher counts a client's cancel (traffic) together with the
+# engine's and the gateway's cuts (errors). A ratio built on it pages for
+# users closing their browser tabs. So a selector that narrows the family to
+# aborted alone must also name its cause.
+def aborted_cause_violation(expr, family):
+    """Return a message when a selector of `family` selects outcome="aborted"
+    without a cause matcher, else None."""
+    for m in re.finditer(re.escape(family) + r"(\{[^}]*\})?", expr):
+        selector = m.group(1) or ""
+        if re.search(r'outcome\s*=\s*"aborted"', selector) and "cause" not in selector:
+            return (f"selects {family}{{outcome=\"aborted\"}} without a cause "
+                    f"matcher -- that counts the client's cancels (traffic) "
+                    f"with the engine's and the gateway's cuts (errors); name "
+                    f"the cause")
+    return None
 
 
 def outcome_partition_violation(expr, family):
@@ -421,7 +567,7 @@ def iter_rule_exprs(rules_path):
     return out
 
 
-def lint_rules(mon_dir, exporter, title_to_panels, rep):
+def lint_rules(mon_dir, exporter, title_to_panels, rep, activation=None):
     rule_paths = sorted(glob.glob(os.path.join(mon_dir,
                                                "prometheus/rules/*.yml")))
     if not rule_paths:
@@ -443,9 +589,13 @@ def lint_rules(mon_dir, exporter, title_to_panels, rep):
 
         for rule_name, rule_expr in iter_rule_exprs(rules_path):
             for fam in PARTITIONED_FAMILIES:
-                msg = outcome_partition_violation(rule_expr, fam)
-                if msg:
-                    rep.err(fname, f"rule '{rule_name}' {msg}")
+                for msg in (outcome_partition_violation(rule_expr, fam),
+                            aborted_cause_violation(rule_expr, fam)):
+                    if msg:
+                        rep.err(fname, f"rule '{rule_name}' {msg}")
+            msg = lazy_increase_violation(rule_expr, activation or {})
+            if msg:
+                rep.err(fname, f"rule '{rule_name}' {msg}")
 
         for dash, panel in pairs:
             if dash not in title_to_panels:
@@ -520,6 +670,120 @@ def promtool_check_exprs(promtool, exprs, rep):
 
 
 # ---------------------------------------------------------------------------
+# MON-06: external_labels are attached only to what leaves Prometheus
+# (alerts, federation, remote write), never to its own series. The recording
+# rules group by (cluster, instance) and the KV alerts by cluster, so the
+# loxilb scrape job must put the same cluster on the series it scrapes, or
+# every cluster:/instance: series is produced without it. The promtool tests
+# inject cluster into their inputs, so they cannot see this; this check can.
+EXT_CLUSTER = re.compile(r"external_labels:\s*\n(?:[ \t]*#.*\n)*[ \t]+cluster:[ \t]*(\S+)")
+JOB_CLUSTER = re.compile(r"^[ \t]+cluster:[ \t]*(\S+)", re.M)
+
+
+def lint_scrape_cluster(mon_dir, rep):
+    path = os.path.join(mon_dir, "prometheus", "prometheus.yml")
+    try:
+        text = open(path, encoding="utf-8").read()
+    except OSError:
+        return
+    ext = EXT_CLUSTER.search(text)
+    m = re.search(r"^\s*- job_name:\s*loxilb\s*$", text, re.M)
+    if not ext or not m:
+        rep.err("prometheus.yml", "external_labels.cluster or the loxilb "
+                                  "scrape job not found")
+        return
+    nxt = re.search(r"^\s*- job_name:", text[m.end():], re.M)
+    job = text[m.end(): m.end() + nxt.start()] if nxt else text[m.end():]
+    job = "\n".join(l for l in job.splitlines() if not l.lstrip().startswith("#"))
+    got = JOB_CLUSTER.findall(job)
+    if not got:
+        rep.err("prometheus.yml", "the loxilb scrape job sets no cluster "
+                                  "label: the recording rules' by (cluster, "
+                                  "instance) produce series without it")
+    elif any(g != ext.group(1) for g in got):
+        rep.err("prometheus.yml", f"the loxilb scrape job's cluster {got} "
+                                  f"differs from external_labels.cluster "
+                                  f"'{ext.group(1)}'")
+
+
+# MON-04: the first event of a series is an increase. A counter series exists
+# from its first increment, so the first scrape of it already reads 1 and
+# rate() and increase() see no 0 -> 1 step: the first error of a new (model,
+# tenant) pair, or of a fresh process, was invisible to every rate panel and
+# alert while the raw counter read 1 (QA 2026-10-21). Seeding cannot reach
+# it: the series a first error creates is born with it. The exporter stamps
+# every counter with its creation time and the protobuf exposition carries
+# the stamp (the text formats do not); under
+# --enable-feature=created-timestamp-zero-ingestion Prometheus writes a 0 at
+# that instant before the series' first sample. So the loxilb scrape job
+# prefers PrometheusProto, and the compose file starts Prometheus with the
+# flag. Either one missing returns the first event to invisibility, silently.
+CT_FLAG = "--enable-feature=created-timestamp-zero-ingestion"
+
+
+def loxilb_job_text(text):
+    """The loxilb scrape job's block of prometheus.yml with its comment lines
+    removed, or None when the job is not there."""
+    m = re.search(r"^\s*- job_name:\s*loxilb\s*$", text, re.M)
+    if not m:
+        return None
+    nxt = re.search(r"^\s*- job_name:", text[m.end():], re.M)
+    job = text[m.end(): m.end() + nxt.start()] if nxt else text[m.end():]
+    return "\n".join(l for l in job.splitlines() if not l.lstrip().startswith("#"))
+
+
+def lint_first_event_contract(mon_dir, rep):
+    path = os.path.join(mon_dir, "prometheus", "prometheus.yml")
+    try:
+        text = open(path, encoding="utf-8").read()
+    except OSError:
+        return
+    job = loxilb_job_text(text)
+    if job is None:
+        rep.err("prometheus.yml", "the loxilb scrape job not found")
+    else:
+        m = re.search(r"^\s*scrape_protocols:\s*\[\s*([A-Za-z0-9.]+)", job, re.M)
+        if not m or m.group(1) != "PrometheusProto":
+            rep.err("prometheus.yml", "the loxilb scrape job must list "
+                                      "PrometheusProto first in "
+                                      "scrape_protocols: the created "
+                                      "timestamps that make a series' first "
+                                      "event an increase travel in the "
+                                      "protobuf exposition only (MON-04)")
+    path = os.path.join(mon_dir, "docker-compose.yml")
+    try:
+        text = open(path, encoding="utf-8").read()
+    except OSError:
+        return
+    live = "\n".join(l for l in text.splitlines()
+                     if not l.lstrip().startswith("#"))
+    if CT_FLAG not in live:
+        rep.err("docker-compose.yml", f"the prometheus service must start "
+                                      f"with {CT_FLAG}: without it the "
+                                      f"first event of a series is invisible "
+                                      f"to rate() and increase() (MON-04)")
+
+
+# The MCP module ships its own copy of the alert rules (it is released on its
+# own), which drifted from the default package's: an alert removed from one
+# lived on in the other, and a description fixed in one stayed wrong in the
+# other. The copy is a copy: byte for byte.
+MCP_ALERT_RULES_COPY = os.path.join("mcp", "deploy", "monitoring", "prometheus",
+                                    "rules", "loxilb-alerts.yml")
+
+
+def lint_mcp_rules_copy(repo_root, mon_dir, rep):
+    src = os.path.join(mon_dir, "prometheus", "rules", "loxilb-alerts.yml")
+    dst = os.path.join(repo_root, MCP_ALERT_RULES_COPY)
+    if not os.path.isfile(dst):
+        return
+    with open(src, "rb") as a, open(dst, "rb") as b:
+        if a.read() != b.read():
+            rep.err(MCP_ALERT_RULES_COPY,
+                    "differs from deploy/monitoring/prometheus/rules/"
+                    "loxilb-alerts.yml; copy it over (the MCP copy is a copy)")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--repo-root", default=None)
@@ -546,8 +810,12 @@ def main():
         rep.err("exporter", "suspiciously few metric names found — is the "
                             "api/prometheus source present and readable?")
 
-    title_to_panels, exprs = lint_dashboards(mon_dir, exporter, rep)
-    lint_rules(mon_dir, exporter, title_to_panels, rep)
+    activation = load_activation(repo_root)
+    title_to_panels, exprs = lint_dashboards(mon_dir, exporter, rep, activation)
+    lint_rules(mon_dir, exporter, title_to_panels, rep, activation)
+    lint_mcp_rules_copy(repo_root, mon_dir, rep)
+    lint_scrape_cluster(mon_dir, rep)
+    lint_first_event_contract(mon_dir, rep)
 
     promtool = find_promtool(args.promtool)
     if promtool:

@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
@@ -88,22 +89,22 @@ func tokensMissingAllReasons(model, tenant string) float64 {
 func TestRecordAIRequest(t *testing.T) {
 	tenant := "test-tenant-record"
 
-	beforeOK := getCounterValue(aiRequestsTotal, "m1", tenant, "200", AIOutcomeCompleted)
-	before429 := getCounterValue(aiRequestsTotal, "m1", tenant, "429", AIOutcomeCompleted)
+	beforeOK := getCounterValue(aiRequestsTotal, "m1", tenant, "200", AIOutcomeCompleted, "")
+	before429 := getCounterValue(aiRequestsTotal, "m1", tenant, "429", AIOutcomeCompleted, "")
 	beforeRL := getCounterValue(aiRateLimitHitsTotal, tenant, "rate_limit_exceeded")
 
-	RecordAIRequest(tenant, "m1", 200, 42)
-	RecordAIRequest(tenant, "m1", 429, 0)
+	RecordAIRequest(tenant, "m1", 200, 42, "")
+	RecordAIRequest(tenant, "m1", 429, 0, "")
 
-	if d := getCounterValue(aiRequestsTotal, "m1", tenant, "200", AIOutcomeCompleted) - beforeOK; d != 1.0 {
+	if d := getCounterValue(aiRequestsTotal, "m1", tenant, "200", AIOutcomeCompleted, "") - beforeOK; d != 1.0 {
 		t.Fatalf("expected requests_total{status=200} +1, got delta %f", d)
 	}
 	// A backend can answer 429 itself. This one is completed, not denied --
 	// which is precisely why status alone cannot carry the distinction.
-	if d := getCounterValue(aiRequestsTotal, "m1", tenant, "429", AIOutcomeCompleted) - before429; d != 1.0 {
+	if d := getCounterValue(aiRequestsTotal, "m1", tenant, "429", AIOutcomeCompleted, "") - before429; d != 1.0 {
 		t.Fatalf("expected requests_total{status=429} +1, got delta %f", d)
 	}
-	if d := getCounterValue(aiRequestsTotal, "m1", tenant, "429", AIOutcomeDenied); d != 0.0 {
+	if d := getCounterValue(aiRequestsTotal, "m1", tenant, "429", AIOutcomeDenied, ""); d != 0.0 {
 		t.Fatalf("RecordAIRequest must never write outcome=denied, got %f", d)
 	}
 	if d := getCounterValue(aiRateLimitHitsTotal, tenant, "rate_limit_exceeded") - beforeRL; d != 0.0 {
@@ -171,20 +172,24 @@ func getHistogramSampleCount(hv *prometheus.HistogramVec, lvs ...string) uint64 
 }
 
 // TestRecordPDRequest_Success verifies that RecordPDRequest with errorPhase=0
-// increments the success counter and records both histograms.
+// increments the success counter and records both durations. The decode
+// argument is the whole decode leg: it goes to the duration family, never to
+// TTFT (which only the record's second half writes).
 func TestRecordPDRequest_Success(t *testing.T) {
 	model := "pd-test-success"
 
 	beforeReqs := getCounterValue(aiPDRequestsTotal, model, "complete", "success")
 	beforePrefill := getHistogramSampleCount(aiPDPrefillDuration, model)
-	beforeDecode := getHistogramSampleCount(aiPDDecodeTTFT, model)
+	beforeDecode := getHistogramSampleCount(aiPDDecodeDuration, model)
+	beforeTTFT := getHistogramSampleCount(aiPDDecodeTTFT, model)
 	beforeKvFound := getCounterValue(aiPDKvParamsFound, model)
 
 	RecordPDRequest(model, 150, 50, 1, 0) // 150ms prefill, 50ms decode, kv found, success
 
 	afterReqs := getCounterValue(aiPDRequestsTotal, model, "complete", "success")
 	afterPrefill := getHistogramSampleCount(aiPDPrefillDuration, model)
-	afterDecode := getHistogramSampleCount(aiPDDecodeTTFT, model)
+	afterDecode := getHistogramSampleCount(aiPDDecodeDuration, model)
+	afterTTFT := getHistogramSampleCount(aiPDDecodeTTFT, model)
 	afterKvFound := getCounterValue(aiPDKvParamsFound, model)
 
 	if afterReqs-beforeReqs != 1.0 {
@@ -194,7 +199,10 @@ func TestRecordPDRequest_Success(t *testing.T) {
 		t.Errorf("expected prefill histogram +1 sample, got delta %d", afterPrefill-beforePrefill)
 	}
 	if afterDecode-beforeDecode != 1 {
-		t.Errorf("expected decode histogram +1 sample, got delta %d", afterDecode-beforeDecode)
+		t.Errorf("expected decode duration +1 sample, got delta %d", afterDecode-beforeDecode)
+	}
+	if afterTTFT != beforeTTFT {
+		t.Errorf("the decode argument must not reach TTFT, got +%d", afterTTFT-beforeTTFT)
 	}
 	if afterKvFound-beforeKvFound != 1.0 {
 		t.Errorf("expected kv_params_found +1, got delta %f", afterKvFound-beforeKvFound)
@@ -291,12 +299,12 @@ func TestRecordPDRequest_ZeroLatencySkipsHistograms(t *testing.T) {
 	model := "pd-test-zero-latency"
 
 	beforePrefill := getHistogramSampleCount(aiPDPrefillDuration, model)
-	beforeDecode := getHistogramSampleCount(aiPDDecodeTTFT, model)
+	beforeDecode := getHistogramSampleCount(aiPDDecodeDuration, model)
 
 	RecordPDRequest(model, 0, 0, 0, 0) // all zeros
 
 	afterPrefill := getHistogramSampleCount(aiPDPrefillDuration, model)
-	afterDecode := getHistogramSampleCount(aiPDDecodeTTFT, model)
+	afterDecode := getHistogramSampleCount(aiPDDecodeDuration, model)
 
 	if afterPrefill != beforePrefill {
 		t.Errorf("expected no prefill histogram sample when latency=0, got +%d", afterPrefill-beforePrefill)
@@ -671,6 +679,226 @@ func TestTokenQuotaCollectorScopedSeries(t *testing.T) {
 // Each row also pins whether the lifecycle may contribute to kv_params_missing.
 // Only a lifecycle that actually parsed a prefill response can report that
 // kv_transfer_params was absent from it.
+// TestRecordAIRequestAborted: an end code makes the request aborted with
+// its cause and never completed; a code that is not an end (a deny reason,
+// a code from a newer data plane) stays completed; a request no status was
+// sent for reads status="none"; the duration histogram sees completions
+// only.
+func TestRecordAIRequestAborted(t *testing.T) {
+	tenant := "test-tenant-aborted"
+	model := "m-aborted"
+	want := map[string]string{
+		"client_abort":                 AICauseClient,
+		"client_stall":                 AICauseClient,
+		"client_abort_before_answer":   AICauseClient,
+		"backend_died":                 AICauseEngine,
+		"max_stream_duration_exceeded": AICauseGateway,
+		"pd_decode_stream_timeout":     AICauseGateway,
+		"pd_idle_timeout":              AICauseGateway,
+		"listener_closed":              AICauseGateway,
+	}
+	if got := AIEndCodes(); len(got) != len(want) {
+		t.Fatalf("AIEndCodes() = %v, want the %d codes of sp_end_codes", got, len(want))
+	}
+	for code, cause := range want {
+		if got := AIEndCause(code); got != cause {
+			t.Errorf("AIEndCause(%q) = %q, want %q", code, got, cause)
+		}
+		before := getCounterValue(aiRequestsTotal, model, tenant, "200", AIOutcomeAborted, cause)
+		beforeDone := getCounterValue(aiRequestsTotal, model, tenant, "200", AIOutcomeCompleted, "")
+		RecordAIRequest(tenant, model, 200, 30, code)
+		if d := getCounterValue(aiRequestsTotal, model, tenant, "200", AIOutcomeAborted, cause) - before; d != 1.0 {
+			t.Errorf("%s: requests_total{outcome=aborted,cause=%s} delta %f, want 1", code, cause, d)
+		}
+		if d := getCounterValue(aiRequestsTotal, model, tenant, "200", AIOutcomeCompleted, "") - beforeDone; d != 0.0 {
+			t.Errorf("%s: an aborted request was also counted completed (delta %f)", code, d)
+		}
+	}
+	for _, code := range []string{"", "rate_limit_exceeded", "timeout", "some_future_code"} {
+		if AIEndCause(code) != "" {
+			t.Errorf("AIEndCause(%q) is a cause; only end codes are", code)
+		}
+		before := getCounterValue(aiRequestsTotal, model, tenant, "200", AIOutcomeCompleted, "")
+		RecordAIRequest(tenant, model, 200, 30, code)
+		if d := getCounterValue(aiRequestsTotal, model, tenant, "200", AIOutcomeCompleted, "") - before; d != 1.0 {
+			t.Errorf("%q: not an end code, want completed +1, got %f", code, d)
+		}
+	}
+	// The client left before any answer: no status was sent.
+	before := getCounterValue(aiRequestsTotal, model, tenant, AIStatusNone, AIOutcomeAborted, AICauseClient)
+	RecordAIRequest(tenant, model, 0, 5, "client_abort_before_answer")
+	if d := getCounterValue(aiRequestsTotal, model, tenant, AIStatusNone, AIOutcomeAborted, AICauseClient) - before; d != 1.0 {
+		t.Errorf("status 0: want requests_total{status=none,outcome=aborted,cause=client} +1, got %f", d)
+	}
+	if d := getCounterValue(aiRequestsTotal, model, tenant, "0", AIOutcomeAborted, AICauseClient); d != 0.0 {
+		t.Errorf("status 0 must read none, not \"0\" (got %f)", d)
+	}
+	// Completions only in the duration histogram.
+	h := aiRequestDurationSeconds.WithLabelValues("m-aborted-hist", tenant).(prometheus.Histogram)
+	beforeN := histogramCount(t, h)
+	RecordAIRequest(tenant, "m-aborted-hist", 200, 40, "backend_died")
+	RecordAIRequest(tenant, "m-aborted-hist", 200, 40, "")
+	if n := histogramCount(t, h) - beforeN; n != 1 {
+		t.Errorf("duration histogram observed %d samples, want 1 (the completion only)", n)
+	}
+}
+
+func histogramCount(t *testing.T, h prometheus.Histogram) uint64 {
+	t.Helper()
+	var m dto.Metric
+	if err := h.Write(&m); err != nil {
+		t.Fatalf("histogram write: %v", err)
+	}
+	return m.GetHistogram().GetSampleCount()
+}
+
+// seriesWith counts the series of cv whose labels include every pair in want.
+func seriesWith(t *testing.T, cv *prometheus.CounterVec, want map[string]string) int {
+	t.Helper()
+	ch := make(chan prometheus.Metric, 4096)
+	go func() { cv.Collect(ch); close(ch) }()
+	n := 0
+	for m := range ch {
+		var d dto.Metric
+		if err := m.Write(&d); err != nil {
+			t.Fatalf("metric write: %v", err)
+		}
+		got := map[string]string{}
+		for _, lp := range d.GetLabel() {
+			got[lp.GetName()] = lp.GetValue()
+		}
+		match := true
+		for k, v := range want {
+			if got[k] != v {
+				match = false
+				break
+			}
+		}
+		if match {
+			n++
+		}
+	}
+	return n
+}
+
+// TestSeedAIRequestPair (MON-04): the first record of a keyed (model,
+// tenant) pair seeds its 24 series at zero, once; the first error of a
+// window is then an increase, not a series appearing. tenant="" is never
+// seeded.
+func TestSeedAIRequestPair(t *testing.T) {
+	model, tenant := "m-seed", "t-seed"
+	RecordAIRequest(tenant, model, 200, 10, "")
+	pair := map[string]string{"model": model, "tenant": tenant}
+	// 31 seeded + the completed 200 the record itself wrote.
+	if n := seriesWith(t, aiRequestsTotal, pair); n != 32 {
+		t.Fatalf("pair has %d series after one record, want 31 seeded + 1", n)
+	}
+	if v := getCounterValue(aiRequestsTotal, model, tenant, "503", AIOutcomeCompleted, ""); v != 0 {
+		t.Errorf("a seeded series must read 0, got %f", v)
+	}
+	for _, c := range []string{AICauseClient, AICauseEngine, AICauseGateway} {
+		if n := seriesWith(t, aiRequestsTotal, map[string]string{"model": model, "tenant": tenant,
+			"status": "200", "outcome": AIOutcomeAborted, "cause": c}); n != 1 {
+			t.Errorf("aborted/200/%s not seeded", c)
+		}
+	}
+	for _, c := range []string{AICauseClient, AICauseEngine} {
+		if n := seriesWith(t, aiRequestsTotal, map[string]string{"model": model, "tenant": tenant,
+			"status": AIStatusNone, "outcome": AIOutcomeAborted, "cause": c}); n != 1 {
+			t.Errorf("aborted/none/%s not seeded", c)
+		}
+	}
+	// The listener going before any answer is not reached in the product (F-17).
+	if n := seriesWith(t, aiRequestsTotal, map[string]string{"model": model, "tenant": tenant,
+		"status": AIStatusNone, "outcome": AIOutcomeAborted, "cause": AICauseGateway}); n != 0 {
+		t.Error("aborted/none/gateway is seeded")
+	}
+	for _, st := range []string{"301", "302", "303", "307", "308"} {
+		if n := seriesWith(t, aiRequestsTotal, map[string]string{"model": model, "tenant": tenant,
+			"status": st, "outcome": AIOutcomeCompleted}); n != 1 {
+			t.Errorf("completed/%s (redirect) not seeded", st)
+		}
+	}
+	if n := seriesWith(t, aiRequestsTotal, map[string]string{"model": model, "tenant": tenant,
+		"status": "413", "outcome": AIOutcomeDenied}); n != 1 {
+		t.Error("denied/413 not seeded")
+	}
+	RecordAIRequestDenied(tenant, model, 401)
+	if n := seriesWith(t, aiRequestsTotal, pair); n != 32 {
+		t.Errorf("a second record seeded again: %d series, want 32", n)
+	}
+	RecordAIRequestDenied("", "m-seed-anon", 401)
+	if n := seriesWith(t, aiRequestsTotal, map[string]string{"model": "m-seed-anon"}); n != 1 {
+		t.Errorf("tenant=\"\" was seeded: %d series, want only the record's own", n)
+	}
+}
+
+// TestAIRequestsTotalCarriesCreatedTimestamp (MON-04, QA 2026-10-21): the
+// first event of a series is visible to rate() and increase() only if
+// Prometheus can place a 0 before the series' first sample, which it does
+// (created-timestamp-zero-ingestion, deploy/monitoring) from the creation
+// time the exporter stamps on every counter child and the protobuf
+// exposition carries. The stamp is the record's own instant: the series a
+// cold pair's first 500 creates is stamped at that 500, and a series seeded
+// alongside it at the same time. A family that drops the stamp (a custom
+// collector, a ConstMetric) would silently return the first event to
+// invisibility: this pins it on the request family.
+func TestAIRequestsTotalCarriesCreatedTimestamp(t *testing.T) {
+	model, tenant := "m-created-ts", "t-created-ts"
+	before := time.Now()
+	RecordAIRequest(tenant, model, 500, 10, "")
+	after := time.Now()
+	ch := make(chan prometheus.Metric, 4096)
+	go func() { aiRequestsTotal.Collect(ch); close(ch) }()
+	seen := 0
+	for m := range ch {
+		var d dto.Metric
+		if err := m.Write(&d); err != nil {
+			t.Fatalf("metric write: %v", err)
+		}
+		labels := map[string]string{}
+		for _, lp := range d.GetLabel() {
+			labels[lp.GetName()] = lp.GetValue()
+		}
+		if labels["model"] != model || labels["tenant"] != tenant {
+			continue
+		}
+		seen++
+		ct := d.GetCounter().GetCreatedTimestamp()
+		if ct == nil {
+			t.Fatalf("series %v carries no created timestamp", labels)
+		}
+		at := ct.AsTime()
+		if at.Before(before.Add(-time.Second)) || at.After(after.Add(time.Second)) {
+			t.Errorf("series %v created at %v, outside the record's instant [%v, %v]",
+				labels, at, before, after)
+		}
+	}
+	// The 31 series seeded with the record, the record's own completed/500
+	// among them (500 is a seeded status): every one stamped.
+	if seen != 31 {
+		t.Errorf("saw %d series of the pair, want 31", seen)
+	}
+}
+
+// TestSeedPDModel (MON-04): a model's P/D series exist at zero from its
+// registration: every phase pair and every fallback reason.
+func TestSeedPDModel(t *testing.T) {
+	model := boundModelLabel("m-seed-pd")
+	if n := seriesWith(t, aiPDRequestsTotal, map[string]string{"model": model}); n != pdPhaseCount {
+		t.Errorf("pd_requests_total has %d series for a new model, want %d", n, pdPhaseCount)
+	}
+	if n := seriesWith(t, aiPDPrefillFallbackTotal, map[string]string{"model": model}); n != len(pdFallbackReasons) {
+		t.Errorf("pd_prefill_fallback_total has %d series for a new model, want %d", n, len(pdFallbackReasons))
+	}
+	if n := seriesWith(t, aiPDRequestsTotal, map[string]string{"model": modelLabelOther}); n < pdPhaseCount {
+		t.Errorf("\"other\" is not seeded at init (%d series)", n)
+	}
+	if v := getCounterValue(aiPDRequestsTotal, model, "aborted", "client"); v != 0 {
+		t.Errorf("seeded phase 9 reads %f, want 0", v)
+	}
+}
+
 func TestRecordPDRequest_PhaseTaxonomy(t *testing.T) {
 	cases := []struct {
 		name          string
@@ -685,6 +913,10 @@ func TestRecordPDRequest_PhaseTaxonomy(t *testing.T) {
 		{"decode timeout", 3, "decode", "timeout", true},
 		{"prefill error", 4, "prefill", "error", false},
 		{"prefill rejected", 5, "prefill", "rejected", false},
+		{"decode rejected", 6, "decode", "rejected", true},
+		{"decode unknown", 7, "decode", "unknown", true},
+		{"decode truncated", 8, "decode", "truncated", true},
+		{"aborted by the client", 9, "aborted", "client", false},
 		{"unknown phase", 99, "unknown", "error", false},
 	}
 
@@ -769,5 +1001,65 @@ func TestRecordPDRequest_DecodeWedgeReportsKnownKv(t *testing.T) {
 	}
 	if afterMissing != beforeMissing {
 		t.Errorf("it must NOT also count as missing, got delta %f", afterMissing-beforeMissing)
+	}
+}
+
+// TestRecordPDRecordExtra covers the record's second half: TTFT arrives in
+// microseconds and lands in seconds on the TTFT family only; each fallback
+// code maps to its reason, an unknown code to "other", and 0 records nothing.
+// The model label is the one the first half registered: an unregistered name
+// is "other", so this half never mints a series of its own.
+func TestRecordPDRecordExtra(t *testing.T) {
+	model := "pd-extra"
+	RecordPDRequest(model, 0, 0, 0, 0) // the first half registers the label
+
+	beforeTTFT := getHistogramSampleCount(aiPDDecodeTTFT, model)
+	beforeDur := getHistogramSampleCount(aiPDDecodeDuration, model)
+	RecordPDRecordExtra(model, 250000, 0) // 250 ms to the first event
+	if got := getHistogramSampleCount(aiPDDecodeTTFT, model) - beforeTTFT; got != 1 {
+		t.Errorf("TTFT +%d samples, want 1", got)
+	}
+	if got := getHistogramSampleCount(aiPDDecodeDuration, model) - beforeDur; got != 0 {
+		t.Errorf("the extra half must not reach the duration family, got +%d", got)
+	}
+	m := &dto.Metric{}
+	if err := aiPDDecodeTTFT.WithLabelValues(model).(interface{ Write(*dto.Metric) error }).Write(m); err != nil {
+		t.Fatal(err)
+	}
+	if sum := m.GetHistogram().GetSampleSum(); sum < 0.2499 || sum > 0.2501 {
+		t.Errorf("TTFT sum %v s, want 0.25 (us -> s)", sum)
+	}
+
+	for code, want := range map[int]string{1: "origin_5xx", 2: "origin_408", 3: "origin_429",
+		4: "no_status", 5: "truncated", 6: "other", 42: "other", -1: "other"} {
+		before := getCounterValue(aiPDPrefillFallbackTotal, model, want)
+		RecordPDRecordExtra(model, 0, code)
+		if d := getCounterValue(aiPDPrefillFallbackTotal, model, want) - before; d != 1 {
+			t.Errorf("fallback code %d: reason %q +%v, want +1", code, want, d)
+		}
+	}
+
+	beforeTTFT = getHistogramSampleCount(aiPDDecodeTTFT, model)
+	before := 0.0
+	for _, r := range pdFallbackReasons {
+		before += getCounterValue(aiPDPrefillFallbackTotal, model, r)
+	}
+	RecordPDRecordExtra(model, 0, 0)
+	after := 0.0
+	for _, r := range pdFallbackReasons {
+		after += getCounterValue(aiPDPrefillFallbackTotal, model, r)
+	}
+	if after != before || getHistogramSampleCount(aiPDDecodeTTFT, model) != beforeTTFT {
+		t.Errorf("0/0 must record nothing")
+	}
+
+	unreg := "pd-extra-never-registered"
+	beforeOther := getCounterValue(aiPDPrefillFallbackTotal, modelLabelOther, "origin_5xx")
+	RecordPDRecordExtra(unreg, 0, 1)
+	if d := getCounterValue(aiPDPrefillFallbackTotal, modelLabelOther, "origin_5xx") - beforeOther; d != 1 {
+		t.Errorf("an unregistered model must land on %q, got +%v", modelLabelOther, d)
+	}
+	if knownModelLabel(unreg) != modelLabelOther {
+		t.Errorf("the extra half registered %q", unreg)
 	}
 }

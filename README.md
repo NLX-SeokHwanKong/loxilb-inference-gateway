@@ -84,7 +84,7 @@ curl -s -X POST http://127.0.0.1:11111/netlox/v1/config/loadbalancer \
 | `kvExactMode: 3` | Engine-exact routing over a single pool (`1` is the prefill/decode topology) |
 | `kvEngineType` | Which engine's cache contract to follow: `vllm` or `sglang` |
 | `kvZmqPort`, `kvBlockSize` | Must match the engine's event port and `--block-size` |
-| `sse_mode` | Stream-aware proxying for token streams |
+| `sse_mode` | Stream-aware proxying for token streams; always on for a `pd_disagg_mode` rule |
 
 Each vLLM replica publishes its cache events:
 
@@ -118,6 +118,7 @@ cleanup.
 Also in this repository:
 
 - [`docs/BUILD.md`](docs/BUILD.md) — build the gateway and its images from source
+- [`docs/HELM-INSTALL.md`](docs/HELM-INSTALL.md) — install the gateway, kube-loxilb and the Gateway API objects on Kubernetes with Helm
 - [`mcp/`](mcp/README.md) — `loxilb-mcp`, a bridge that lets an MCP client operate the gateway
 - [`deploy/monitoring/`](deploy/monitoring/README.md) — the Prometheus and Grafana stack
 - [`cicd/`](cicd/) — runnable scenarios for every feature; most need no GPU

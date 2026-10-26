@@ -1,0 +1,93 @@
+# promtool unit tests for the AI error ratio: LoxilbAIErrorRatio
+# (loxilb-alerts.yml) and instance:loxilb_ai_error_ratio:rate5m
+# (loxilb-recording.yml), which compute the same ratio:
+#
+#   (completed 5xx + aborted{cause=~"engine|gateway"}) / (completed + aborted)
+#
+# One case per property the ratio must keep:
+#   1. an answer the engine cut (aborted, cause=engine, status 200) is an error;
+#   2. a completed 5xx is an error;
+#   3. a client that cancels or stops reading (cause=client) is traffic: in the
+#      denominator only, never fires;
+#   4. a gate denial storm (outcome=denied) is in neither half.
+#
+# Run: promtool test rules tests/ai-error-ratio.test.yml
+
+rule_files:
+  - ../loxilb-alerts.yml
+  - ../loxilb-recording.yml
+
+evaluation_interval: 30s
+
+tests:
+  # ── 1: the engine cuts 10% of answers ────────────────────────────────────
+  - interval: 1m
+    input_series:
+      - series: 'loxilb_ai_requests_total{cluster="c1",instance="gw",model="m",tenant="t",status="200",outcome="completed",cause=""}'
+        values: '0+54x30'           # 0.9/s
+      - series: 'loxilb_ai_requests_total{cluster="c1",instance="gw",model="m",tenant="t",status="200",outcome="aborted",cause="engine"}'
+        values: '0+6x30'            # 0.1/s
+    promql_expr_test:
+      - expr: instance:loxilb_ai_error_ratio:rate5m
+        eval_time: 15m
+        exp_samples:
+          - labels: 'instance:loxilb_ai_error_ratio:rate5m{cluster="c1",instance="gw"}'
+            value: 0.1
+    alert_rule_test:
+      - alertname: LoxilbAIErrorRatio
+        eval_time: 15m
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "AI request error ratio above 5%"
+              description: "Completed 5xx plus answers the engine or the gateway cut (outcome=aborted, cause engine|gateway), over completed + aborted requests. Gateway refusals are excluded on purpose — they are tracked by LoxilbAIRateLimitSpike and by outcome=denied; a client cancel (cause=client) is traffic, not an error. The gateway's own outage answers are completions with their 5xx and count."
+              dashboard: "LoxiLB / AI Gateway"
+              panel: "AI requests/s by status"
+
+  # ── 2: completed 5xx, no aborted series at all ───────────────────────────
+  - interval: 1m
+    input_series:
+      - series: 'loxilb_ai_requests_total{cluster="c1",instance="gw",model="m",tenant="t",status="200",outcome="completed",cause=""}'
+        values: '0+48x30'           # 0.8/s
+      - series: 'loxilb_ai_requests_total{cluster="c1",instance="gw",model="m",tenant="t",status="500",outcome="completed",cause=""}'
+        values: '0+12x30'           # 0.2/s
+    promql_expr_test:
+      - expr: instance:loxilb_ai_error_ratio:rate5m
+        eval_time: 15m
+        exp_samples:
+          - labels: 'instance:loxilb_ai_error_ratio:rate5m{cluster="c1",instance="gw"}'
+            value: 0.2
+    alert_rule_test:
+      - alertname: LoxilbAIErrorRatio
+        eval_time: 15m
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "AI request error ratio above 5%"
+              description: "Completed 5xx plus answers the engine or the gateway cut (outcome=aborted, cause engine|gateway), over completed + aborted requests. Gateway refusals are excluded on purpose — they are tracked by LoxilbAIRateLimitSpike and by outcome=denied; a client cancel (cause=client) is traffic, not an error. The gateway's own outage answers are completions with their 5xx and count."
+              dashboard: "LoxiLB / AI Gateway"
+              panel: "AI requests/s by status"
+
+  # ── 3+4: half the clients cancel, a 503 denial storm: ratio 0, silent ────
+  - interval: 1m
+    input_series:
+      - series: 'loxilb_ai_requests_total{cluster="c1",instance="gw",model="m",tenant="t",status="200",outcome="completed",cause=""}'
+        values: '0+30x30'           # 0.5/s
+      - series: 'loxilb_ai_requests_total{cluster="c1",instance="gw",model="m",tenant="t",status="200",outcome="aborted",cause="client"}'
+        values: '0+24x30'           # 0.4/s cancelled mid-stream
+      - series: 'loxilb_ai_requests_total{cluster="c1",instance="gw",model="m",tenant="t",status="none",outcome="aborted",cause="client"}'
+        values: '0+6x30'            # 0.1/s left before any answer
+      - series: 'loxilb_ai_requests_total{cluster="c1",instance="gw",model="m",tenant="t",status="503",outcome="denied",cause=""}'
+        values: '0+600x30'          # 10/s refused by the gate
+    promql_expr_test:
+      - expr: instance:loxilb_ai_error_ratio:rate5m
+        eval_time: 15m
+        exp_samples:
+          - labels: 'instance:loxilb_ai_error_ratio:rate5m{cluster="c1",instance="gw"}'
+            value: 0
+    alert_rule_test:
+      - alertname: LoxilbAIErrorRatio
+        eval_time: 15m
+        exp_alerts: []

@@ -1,0 +1,142 @@
+name: AI-gateway sanity setup
+description: >
+  What every AI-gateway sanity job starts from, once, in one place: the
+  toolchain, the from-source build (Go + eBPF), minica, the python modules
+  the mocks import, the published gateway image with the fresh binary
+  overlaid on it (ghcr.io login first, against anonymous pull limits), and
+  the reflect-echo backend image. The checkout stays in the job: a local
+  action can only run from a tree that is already checked out.
+inputs:
+  ghcr-token:
+    description: token for ghcr.io (GHCR_TOKEN when present, else the workflow token)
+    required: true
+  loxicmd-pin:
+    description: >
+      "true" (the default) overlays the image's loxicmd with
+      loxicmd-inference-gateway built at the commit the Dockerfile pins (ARG
+      LOXICMD_TAG), as the Dockerfile builds it, so a job's CLI half runs the
+      CLI this tree ships rather than the one in the published image. "false"
+      keeps the published image's loxicmd.
+    required: false
+    default: "true"
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+    - uses: actions/setup-go@v5
+      with:
+        go-version: '>=1.18.0'
+    - run: sudo apt-get update
+      shell: bash
+    - run: sudo apt-get -y install clang llvm libelf-dev gcc-multilib libpcap-dev linux-tools-$(uname -r) elfutils dwarves git libbsd-dev bridge-utils unzip build-essential bison flex iperf iproute2 nodejs socat ethtool libjson-c-dev libnghttp2-dev
+      shell: bash
+    - name: Install libtokenizers (KV-router HF backend)
+      shell: bash
+      run: arch=$(dpkg --print-architecture) && wget -q https://github.com/daulet/tokenizers/releases/download/v1.27.0/libtokenizers.linux-${arch}.tar.gz -O /tmp/libtokenizers.tar.gz && sudo tar -xzf /tmp/libtokenizers.tar.gz -C /usr/local/lib/ && rm /tmp/libtokenizers.tar.gz
+    - name: Install KV publisher python deps (pyzmq/msgpack/cbor2/xxhash/transformers)
+      # The sglang/vllm KV scenarios drive kv_event_publisher.py, which imports these.
+      # A fresh runner has none of them and apt for the native modules is unreliable
+      # here, so install to the system site (visible to the root publisher launched via
+      # `ip netns exec`) from prebuilt manylinux wheels. config.sh re-probes as a fallback.
+      # The runner's system pip (22.0.2 on Ubuntu 22.04) crashes in its resolver
+      # (AssertionError in get_topological_weights) on transformers' current dependency
+      # set, while a current pip resolves it, so upgrade pip in the same system site
+      # first; a PEP 668 image needs --break-system-packages for that too.
+      shell: bash
+      run: |
+        sudo python3 -m pip install --upgrade pip || sudo python3 -m pip install --break-system-packages --upgrade pip
+        sudo python3 -m pip --version
+        sudo python3 -m pip install pyzmq msgpack cbor2 xxhash transformers || sudo python3 -m pip install --break-system-packages pyzmq msgpack cbor2 xxhash transformers
+    - name: Install python h2 (ai-jwtauth HTTP/2 client and echo backend)
+      # ai-jwtauth's h2c echo backend, multiplexed client and raw recorder all
+      # import h2, and config.sh fails closed when it is missing rather than
+      # quietly dropping the HTTP/2 legs. Install to the system site: the
+      # mocks are launched as root through `ip netns exec`.
+      shell: bash
+      run: sudo python3 -m pip install h2 || sudo python3 -m pip install --break-system-packages h2
+    - run: loxilb-ebpf/utils/mkllb_bpffs.sh
+      shell: bash
+    # The first build of the tree; it carries the product define too, or the
+    # later docker-cp (up to date by then) copies a binary built without it.
+    - run: sudo -E env "PATH=$PATH" make EXTRA_CFLAGS=-DHAVE_SOCKOPS
+      shell: bash
+    # minica (github.com/jsha/minica) is fetched on demand by the TLS scenarios' config.sh
+    - run: sudo -E env "PATH=$PATH" GOBIN=/usr/local/bin go install github.com/jsha/minica@latest
+      shell: bash
+    # Gateway image: pull the published one, or build locally when not yet published
+    # The GHCR image is public; authenticate anyway (GHCR_TOKEN when present,
+    # else the built-in token) to avoid anonymous pull rate limits and the
+    # fragile full from-source docker build fallback.
+    - name: Login to GitHub Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ inputs.ghcr-token }}
+    - run: docker pull ghcr.io/loxilb-io/loxilb-inference-gateway:latest || docker build -t ghcr.io/loxilb-io/loxilb-inference-gateway:latest .
+      shell: bash
+    # reflect-echo backend image (KV-cache scenarios) — always built from the local context
+    - run: bash cicd/common/reflect-echo/docker-build.sh
+      shell: bash
+    - run: docker run -u root --cap-add SYS_ADMIN --restart unless-stopped --privileged -dit -v /dev/log:/dev/log --name loxilb ghcr.io/loxilb-io/loxilb-inference-gateway:latest
+      shell: bash
+    # Built as the product image is (Dockerfile: EXTRA_CFLAGS="-DHAVE_SOCKOPS"):
+    # without the define a gateway started with --sockmapsupport aborts at
+    # init (llb_setup_kern_sockmap: "requires a build with -DHAVE_SOCKOPS"),
+    # which is how the tenant scheduling suite first failed here.
+    - run: pwd && ls && sudo -E env "PATH=$PATH" make docker-cp EXTRA_CFLAGS=-DHAVE_SOCKOPS
+      shell: bash
+    # loxicmd at the tree's pin (unless loxicmd-pin: "false"). The Dockerfile is
+    # the single source of the SHA; scripts/check-loxicmd-pin.sh keeps the
+    # other Dockerfiles equal to it. Built as the Dockerfile builds it (a
+    # checkout of exactly that commit, go get, make), cached per SHA and
+    # runner, and copied to where the Dockerfile installs it.
+    - name: Read the loxicmd pin
+      id: loxicmd-pin
+      if: inputs.loxicmd-pin == 'true'
+      shell: bash
+      run: |
+        sha=$(sed -n 's/^ARG LOXICMD_TAG=//p' Dockerfile)
+        echo "$sha" | grep -Eq '^[0-9a-f]{40}$' || { echo "::error::Dockerfile LOXICMD_TAG must be a full 40-hex commit SHA, got '$sha'"; exit 1; }
+        echo "sha=$sha" >> "$GITHUB_OUTPUT"
+        echo "arch=$(dpkg --print-architecture)" >> "$GITHUB_OUTPUT"
+    - name: Cache the pinned loxicmd
+      id: loxicmd-cache
+      if: inputs.loxicmd-pin == 'true'
+      uses: actions/cache@v4
+      with:
+        path: /tmp/loxicmd-pinned/loxicmd
+        key: loxicmd-${{ runner.os }}-${{ steps.loxicmd-pin.outputs.arch }}-${{ steps.loxicmd-pin.outputs.sha }}
+    - name: Build the pinned loxicmd
+      if: inputs.loxicmd-pin == 'true' && steps.loxicmd-cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        LOXICMD_TAG: ${{ steps.loxicmd-pin.outputs.sha }}
+      run: |
+        set -euo pipefail
+        # The CLI's Makefile reads its gateway contract with a ruby script.
+        command -v ruby >/dev/null || sudo apt-get -y install --no-install-recommends ruby
+        src=$(mktemp -d)
+        git -C "$src" init -q
+        git -C "$src" remote add origin https://github.com/loxilb-io/loxicmd-inference-gateway.git
+        git -C "$src" fetch -q --depth 1 origin "$LOXICMD_TAG"
+        git -C "$src" checkout -q FETCH_HEAD
+        [ "$(git -C "$src" rev-parse HEAD)" = "$LOXICMD_TAG" ] || { echo "::error::loxicmd checkout resolved to $(git -C "$src" rev-parse HEAD), not the pinned $LOXICMD_TAG"; exit 1; }
+        (cd "$src" && go get . && make)
+        mkdir -p /tmp/loxicmd-pinned
+        cp "$src/loxicmd" /tmp/loxicmd-pinned/loxicmd
+        rm -rf "$src"
+    - name: Install the pinned loxicmd in the gateway image
+      if: inputs.loxicmd-pin == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        docker cp /tmp/loxicmd-pinned/loxicmd loxilb:/usr/local/sbin/loxicmd
+        echo "loxicmd pinned ${{ steps.loxicmd-pin.outputs.sha }} installed (cache hit: ${{ steps.loxicmd-cache.outputs.cache-hit == 'true' }})"
+        echo "loxicmd create lb --help names --fc-wake-policy: $(docker exec loxilb loxicmd create lb --help 2>&1 | grep -c -- --fc-wake-policy || true)"
+    - run: docker exec -dit loxilb mkllb_bpffs
+      shell: bash
+    - run: id=`docker ps -f name=loxilb | cut -d " " -f 1 | grep -iv "CONTAINER"` && docker commit $id ghcr.io/loxilb-io/loxilb-inference-gateway:latest
+      shell: bash
+    - run: docker stop loxilb && docker rm loxilb
+      shell: bash

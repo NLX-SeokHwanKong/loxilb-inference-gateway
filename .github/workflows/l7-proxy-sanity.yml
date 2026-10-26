@@ -18,6 +18,8 @@ on:
       - 'cicd/common/http2/**'
       - 'pkg/**'
       - 'api/**'
+      # a datapath-only change arrives as the submodule pointer bump
+      - 'loxilb-ebpf'
       - '.github/workflows/l7-proxy-sanity.yml'
   pull_request:
     branches: [ "main" ]
@@ -28,6 +30,8 @@ on:
       - 'cicd/common/http2/**'
       - 'pkg/**'
       - 'api/**'
+      # a datapath-only change arrives as the submodule pointer bump
+      - 'loxilb-ebpf'
       - '.github/workflows/l7-proxy-sanity.yml'
   workflow_dispatch:
 

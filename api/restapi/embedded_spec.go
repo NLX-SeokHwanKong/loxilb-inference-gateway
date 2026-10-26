@@ -23,6 +23,39 @@ func init() {
     "application/json"
   ],
   "definitions": {
+    "AIObjectiveEntry": {
+      "description": "A named request priority. name is 1 to 63 characters of letters, digits, '-', '_' and '.', compared exactly (case-sensitive), and must not begin with tier:. services limits the objective to the listed services (\"VIP:port\"); empty or omitted means every service. priority is a signed integer - positive is the critical class, negative sheddable, zero standard; the order between two objectives of the same class is not kept.",
+      "properties": {
+        "name": {
+          "description": "Name of the objective, as a request's header names it",
+          "type": "string"
+        },
+        "priority": {
+          "description": "The priority a request with this objective has",
+          "format": "int32",
+          "type": "integer",
+          "x-omitempty": false
+        },
+        "services": {
+          "description": "Services the objective applies to, as \"VIP:port\"; at most 256. Empty means all",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-omitempty": true
+        },
+        "updated_at": {
+          "description": "When the objective was last written. Ignored on input",
+          "format": "date-time",
+          "readOnly": true,
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
     "AiModelProfileEntry": {
       "description": "One published model-prompt profile (list and detail representations are identical). Presence conveys validity by construction - publication is all-or-nothing, so every entry has already passed artifact digest verification and tokenizer load; there is no partial or invalid state. tokenizerSha256 is always present (publication requires it); templateSha256/templateContentFormat are present iff a chat template is bound. The sha256 digests are the immutable audit/drift identities of the profile's artifacts. Artifact locator paths, the registry root, and any host filesystem information are deliberately EXCLUDED from this representation.",
       "properties": {
@@ -157,6 +190,14 @@ func init() {
           },
           "type": "array"
         },
+        "allowed_objectives": {
+          "description": "The objectives a request with this key may ask for by header, and the body tiers (tier:priority, tier:fast, tier:flex) it may ask for by service_tier, out of the ones its tenant allows; at most 64. Empty means the key narrows nothing. The list governs raises only: a hint at or below what the request gets without one needs no entry.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-omitempty": true
+        },
         "api_key": {
           "description": "Optional imported credential; absent or empty generates a new key. Imports require 16-512 printable non-space ASCII bytes. GET/list never returns the credential. Create currently emits an empty raw_key string for imports, not omission. Length and invalid-character rejections both map to 400 with api_key validation fields.",
           "type": "string"
@@ -165,6 +206,10 @@ func init() {
           "description": "Total request-bucket capacity, not additional capacity above RPS. Zero uses per-key RPS. Nonpositive RPS skips this limiter; negative-value validation remains incomplete.",
           "format": "int64",
           "type": "integer"
+        },
+        "default_objective": {
+          "description": "The objective a request with this key gets when it names none, or one it may not use. Counts only when the tenant's allowed_objectives hold it.",
+          "type": "string"
         },
         "enabled": {
           "description": "Whether the API key is active. Absent = enabled (optional, nullable to distinguish unset).",
@@ -178,6 +223,15 @@ func init() {
         },
         "name": {
           "description": "Human-readable label for the API key",
+          "type": "string"
+        },
+        "priority_class": {
+          "description": "The highest priority class a request with this key may have. It can only lower what the key's tenant allows (a tenant that sets no class allows standard). Omitted means no cap from the key.",
+          "enum": [
+            "standard",
+            "critical",
+            "sheddable"
+          ],
           "type": "string"
         },
         "rate_limit_rps": {
@@ -228,6 +282,14 @@ func init() {
           },
           "type": "array"
         },
+        "allowed_objectives": {
+          "description": "The objectives a request with this key may ask for by header, and the body tiers (tier:priority, tier:fast, tier:flex) it may ask for by service_tier, out of the ones its tenant allows; at most 64. Empty means the key narrows nothing. The list governs raises only: a hint at or below what the request gets without one needs no entry.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-omitempty": true
+        },
         "burst_size": {
           "description": "Total request-bucket capacity, not additional capacity above RPS. Nonpositive burst uses per-key RPS; nonpositive RPS skips that limiter.",
           "format": "int64",
@@ -236,6 +298,10 @@ func init() {
         "created_at": {
           "description": "Timestamp when the key was created",
           "format": "date-time",
+          "type": "string"
+        },
+        "default_objective": {
+          "description": "The objective a request with this key gets when it names none, or one it may not use. Counts only when the tenant's allowed_objectives hold it.",
           "type": "string"
         },
         "enabled": {
@@ -253,6 +319,15 @@ func init() {
         },
         "name": {
           "description": "Human-readable label for the API key",
+          "type": "string"
+        },
+        "priority_class": {
+          "description": "The highest priority class a request with this key may have. It can only lower what the key's tenant allows (a tenant that sets no class allows standard). Omitted means no cap from the key.",
+          "enum": [
+            "standard",
+            "critical",
+            "sheddable"
+          ],
           "type": "string"
         },
         "rate_limit_rps": {
@@ -897,7 +972,7 @@ func init() {
       "type": "object"
     },
     "BGPGlobalConfig": {
-      "description": "BGP startup input, not an atomic general replacement. Local ASN narrows to uint32 and listenPort to uint16; omitted or zero listenPort selects 179. SetNextHopSelf is a case-sensitive wire field and triggers additional policy setup. Failure can occur after partial startup or policy creation.",
+      "description": "BGP startup input, not an atomic general replacement. An identical running core is reused and SetNextHopSelf is reconciled. Changes to a running ASN/router ID/listen port are refused with 400; use a scoped snapshot replacement, which prepares the speaker before LB re-application. Local ASN narrows to uint32 and listenPort to uint16; omitted or zero listenPort selects 179. SetNextHopSelf is a case-sensitive wire field and triggers additional policy setup. Failure can occur after partial startup or policy creation.",
       "properties": {
         "SetNextHopSelf": {
           "description": "Adds policy to set next hop as self, if enabled",
@@ -2027,7 +2102,8 @@ func init() {
           "description": "Nonzero port in 1..65535 requires epProto; zero or omission requires epProto empty for host-wide targeting.",
           "maximum": 65535,
           "minimum": 0,
-          "type": "integer"
+          "type": "integer",
+          "x-nullable": false
         },
         "epProto": {
           "description": "Generated monitor-key probe type: tcp, udp, sctp, http, https, ping, tls-hello or none. Supply together with nonzero epPort or omit both. This selector cannot resolve a custom monitor name and is not a universal transport-protocol selector.",
@@ -2187,6 +2263,61 @@ func init() {
         "dev",
         "macAddress"
       ],
+      "type": "object"
+    },
+    "FcBandEffective": {
+      "description": "One priority band of a model pool as the capacity gate holds it, read back in fc_effective.bands.",
+      "properties": {
+        "floor_units": {
+          "description": "The floor in service units against effective_max_outstanding, as the gate enforces it: rounded up in the band's favour but never to the whole ceiling for a share under 100, and clamped so the floors and the reserve never exceed the ceiling; 0 without a ceiling.",
+          "format": "int32",
+          "type": "integer",
+          "x-omitempty": false
+        },
+        "inflight": {
+          "description": "Service units the band holds right now.",
+          "format": "int32",
+          "type": "integer",
+          "x-omitempty": false
+        },
+        "min_share_pct": {
+          "description": "The band's floor in percent of the ceiling in force: a guarantee under contention, not a reservation; it binds only while that band has a waiter.",
+          "format": "int32",
+          "type": "integer",
+          "x-omitempty": false
+        },
+        "queue_pct": {
+          "description": "The most of the queue depth the band may hold, in percent; 0 is the shared depth. A ceiling on the band's own occupancy, not a reservation.",
+          "format": "int32",
+          "type": "integer",
+          "x-omitempty": false
+        },
+        "queued": {
+          "description": "Requests of the band waiting right now.",
+          "format": "int32",
+          "type": "integer",
+          "x-omitempty": false
+        },
+        "wait_ms": {
+          "description": "The band's configured wait window in milliseconds; 0 is the queue's (queue_wait_ms). A window above queue_wait_ms runs at queue_wait_ms.",
+          "format": "int32",
+          "type": "integer",
+          "x-omitempty": false
+        },
+        "weight": {
+          "description": "The band's credits per round under the weighted wake; 0 is not set.",
+          "format": "int32",
+          "type": "integer",
+          "x-omitempty": false
+        },
+        "weight_pct": {
+          "description": "The weight's share of the round (the sum of the three weights) in percent, rounded to the nearest; 0 when no weight is set.",
+          "format": "int32",
+          "type": "integer",
+          "x-omitempty": false
+        }
+      },
+      "readOnly": true,
       "type": "object"
     },
     "FileSystemInfoEntry": {
@@ -3517,6 +3648,15 @@ func init() {
           "description": "Profile name (the identity LB rules reference)",
           "type": "string"
         },
+        "priority_class": {
+          "description": "The highest priority class a request admitted by this profile's tokens may have. It can only lower what the tenant allows (a tenant that sets no class allows standard). Omitted means no cap from the profile.",
+          "enum": [
+            "standard",
+            "critical",
+            "sheddable"
+          ],
+          "type": "string"
+        },
         "refresh_sec": {
           "description": "Periodic JWKS refresh interval in seconds (default 3600)",
           "format": "int64",
@@ -3897,7 +4037,7 @@ func init() {
       "description": "Action selected by kind. FORWARD requires forward; REDIRECT requires redirect; REJECT permits an omitted reject object. Implementation warning: validation does not reject extra objects for other kinds. H1 synthetic REJECT/REDIRECT responses use raw socket writes without an SSL write branch; encrypted H1 response correctness is not established. H2 uses a separate framed responder.",
       "properties": {
         "forward": {
-          "description": "Target within the listener's base endpoint pool. With no references the resolver returns the base pool; with references it constructs a subset using RR or WRR selection. Implementation warnings: poolId is not used to resolve an independent pool, and allocation failure can return the whole base pool instead of the subset. The fallback is a safety defect, not a promised routing policy.",
+          "description": "Target within the listener's base endpoint pool. With no references the request is selected as the base pool selects. With references it selects only among the referenced members of the base pool, round-robin, or weighted round-robin when the references' weights differ, skipping members that are down or circuit-broken; no copy of the pool is made, so member health and per-member accounting are the base pool's. On an AI-gateway pool the request passes the pool's capacity gate. Implementation warning: poolId is not used to resolve an independent pool.",
           "properties": {
             "backendRefs": {
               "description": "Endpoint-slot references within the base pool. Empty means the whole base pool. Invalid indices are skipped at resolution; admission does not check pool membership or enforce the 32-reference C limit.",
@@ -4753,6 +4893,31 @@ func init() {
               "description": "Service lifecycle flag. In the domain, absent/true enables new selection and false pauses new selection while retaining members. Implementation gap: POST drops this property, so false does not create a paused rule. The restricted L4 PATCH path handles explicit changes and GET reports effective state. Source behavior does not prove established-connection preservation.",
               "type": "boolean"
             },
+            "ai_default_max_tokens": {
+              "default": 0,
+              "description": "The default reservation in tokens, used while ai_default_reservation is in force as on. 0 or omitted leaves the process default (LLB_AI_DEFAULT_MAX_TOKENS) in force, else the built-in 512, which is an estimate of a typical completion and not a measured one; at most 100000000. Changeable at runtime by a replace POST (the stored value is kept when omitted, an explicit 0 resets to the process default). Explicit JSON null is rejected. The value in force and its source are read back in fc_effective.",
+              "format": "int32",
+              "maximum": 100000000,
+              "minimum": 0,
+              "type": "integer",
+              "x-nullable": false
+            },
+            "ai_default_reservation": {
+              "description": "Whether a request that declares no completion ceiling (no max_tokens or max_completion_tokens, or a value that is not a positive whole number: negative, 0, a string, a float, an object or an array) reserves a default number of completion tokens against the token quotas at admission. off reserves the prompt estimate alone, so leaving the field out is the cheaper choice at admission. on reserves ai_default_max_tokens beside the prompt estimate, as a claim each quota bucket may shrink: it is cut to what the bucket can hold beside the prompt estimate and to what is left of it, down to nothing, and it is never the reason a request is refused - only the prompt estimate and a declared ceiling are. A request admitted with less than the default is counted in fc_effective.reservation_clamped_burst or reservation_clamped_budget and in loxilb_ai_reservation_clamped_total, by reason: burst (the default is more than a bucket can ever hold beside the prompt) or budget (the bucket's budget was already taken). The claim is released when the response is settled, as a declared ceiling's is. Nothing is written into the forwarded request, and a declared ceiling is never replaced. inherit, or omitted on create, runs on the process default (LLB_AI_DEFAULT_RESERVATION, else off). Replace and null semantics as fc_mode; a replace that changes nothing else applies in place, to requests admitted from then on. Read back only when declared; what is in force is fc_effective.default_reservation. The gate reserves before a rule is selected by host, path or model, so the value is per listener: on a VIP and port that several rules share, the value of the rule installed first on it is the one in force for all of them (api_key_auth is read per listener too, but a disagreeing api_key_auth or jwt_auth_profile is refused rather than warned about; see api_key_auth). Declare the same value on each. A rule applied on a VIP and port whose rules resolve to different values is accepted, and the reply and the log carry a warning that names the value in effect; fc_effective shows that value on every rule.",
+              "enum": [
+                "on",
+                "off",
+                "inherit"
+              ],
+              "type": "string",
+              "x-nullable": false
+            },
+            "ai_objective_strict": {
+              "default": false,
+              "description": "What happens to a request that names, with the x-llm-d-inference-objective header, an objective it may not use (unknown, not for this service, or above what the request gets without a hint and not in its tenant's allowed_objectives). false (the default) - the request falls to its default objective and is admitted; the record says the objective was denied. true - the request is refused with 403 objective_not_allowed. Stored on any rule; it has an effect only where the admission gate runs (an AI-gateway service) and while a class is configured. The admission gate reads it per listener, as api_key_auth: declare the same value on each rule of a VIP and port. Changeable at runtime by a replace POST (the stored value is kept when omitted). Explicit JSON null is rejected.",
+              "type": "boolean",
+              "x-nullable": false
+            },
             "alpn_protocols": {
               "description": "HTTP ALPN capability list, typically [h2, http/1.1], [h2] or [http/1.1]. Recognized values override backend_protocol through a shared capability used by listener and backend TLS setup; list order is not preserved as preference order. Empty leaves backend_protocol in use. Implementation limitations: unknown tokens are ignored, an entirely unrecognized list falls back to backend_protocol, and the H1/both listener callback can select H1 without a common advertised protocol. This is not strict ALPN allow-list enforcement. See shared readback/update warnings.",
               "items": {
@@ -4768,7 +4933,7 @@ func init() {
               "type": "object"
             },
             "api_key_auth": {
-              "description": "Data-plane credential enforcement declaration for this service. Omission is a state of its own. OMITTED declares nothing: the service is not marked AI-facing, proxying stays byte-identical, and a backend-owned X-Api-Key header passes through untouched. An explicit \"disabled\" declares the service AI-facing without enforcement: no key is validated, but X-Api-Key is the gateway's credential namespace and the header is stripped before dispatch. \"required\" makes the data plane validate the X-Api-Key header against the API-key store before the request reaches a backend, fails closed when the policy cannot be evaluated, and likewise strips the header. \"jwt\" validates an Authorization Bearer JWT against the service's jwt_auth_profile instead; X-Api-Key is not consulted. \"apikey-or-jwt\" accepts either credential with a fixed precedence: a present X-Api-Key decides alone (its rejection is final, with no JWT fallback), otherwise a Bearer token decides, and a request carrying neither is refused. Both JWT modes require jwt_auth_profile to name a configured profile. Reading a service back preserves the declaration exactly: an omitted policy reads back with this field absent, never resolved to a value. On a replace of an existing service, omitting this field leaves the declared policy unchanged — it never silently turns enforcement off; to clear a declared policy, send \"disabled\" explicitly. Independent of sse_mode and pd_disagg_mode, and independent of the management-plane authentication mode.",
+              "description": "Data-plane credential enforcement declaration for this service. Omission is a state of its own. OMITTED declares nothing: the service is not marked AI-facing, proxying stays byte-identical, and a backend-owned X-Api-Key header passes through untouched. An explicit \"disabled\" declares the service AI-facing without enforcement: no key is validated, but X-Api-Key is the gateway's credential namespace and the header is stripped before dispatch. \"required\" makes the data plane validate the X-Api-Key header against the API-key store before the request reaches a backend, fails closed when the policy cannot be evaluated, and likewise strips the header. \"jwt\" validates an Authorization Bearer JWT against the service's jwt_auth_profile instead; X-Api-Key is not consulted. \"apikey-or-jwt\" accepts either credential with a fixed precedence: a present X-Api-Key decides alone (its rejection is final, with no JWT fallback), otherwise a Bearer token decides, and a request carrying neither is refused. Both JWT modes require jwt_auth_profile to name a configured profile. Reading a service back preserves the declaration exactly: an omitted policy reads back with this field absent, never resolved to a value. On a replace of an existing service, omitting this field leaves the declared policy unchanged — it never silently turns enforcement off; to clear a declared policy, send \"disabled\" explicitly. Independent of sse_mode and pd_disagg_mode, and independent of the management-plane authentication mode. Rules that share a listener (address, port and protocol) share its credential policy, because the admission gate runs before a request is matched to a rule by host, path or model: a create or replace whose api_key_auth or jwt_auth_profile differs from the rules already on the listener is refused with 400 (an unset policy and an explicit \"disabled\" are different values), and a restored configuration is kept whole with the disagreement logged, as for the listener's TLS settings.",
               "enum": [
                 "disabled",
                 "required",
@@ -4957,6 +5122,35 @@ func init() {
               "type": "string",
               "x-nullable": false
             },
+            "fc_band_min_share_pct": {
+              "description": "Each band's floor, critical:standard:sheddable, in percent of the service ceiling in force (rounded up to whole units, and following the adaptive ceiling). A floor is a guarantee under contention, not a reservation: it binds only while that band has a waiter, so with no demand in the band the other bands take every unit. When a unit frees, the highest-ranked band that is below its floor and has a runnable waiter takes it; when no band is below its floor, the wake policy chooses. HTTP/2 streams and role legs never wait, so on a service that carries only HTTP/2 a floor never binds. Each 0 to 100, at most 100 together (400 naming fc_band_min_share_pct). 0:0:0 (the default) is no floor. A floor is independent of the wake policy and of the weights. Replace and null semantics as fc_band_weights.",
+              "type": "string",
+              "x-nullable": false
+            },
+            "fc_band_queue_pct": {
+              "description": "The most of the queue depth each band may hold, critical:standard:sheddable, in percent, rounded up to whole waiters and at least one; 0 is the shared depth. It bounds that band's own occupancy of fc_max_queue_depth and is a ceiling, not a reservation: what a band does not use stays open to every other band, and the queue as a whole never holds more than fc_max_queue_depth. A band at its share is refused with 429 admission_capacity (reason queue_full); nobody is evicted to make room for it. At most 100 together when all three are non-zero. 0:0:0 (the default) is no share. Replace and null semantics as fc_band_weights.",
+              "type": "string",
+              "x-nullable": false
+            },
+            "fc_band_wait_ms": {
+              "description": "Each band's wait window, critical:standard:sheddable, in milliseconds, each 0 to 3600000. A band's window is a cap inside the rule's window (fc_max_queue_wait_ms), never above it: a larger value runs at the rule's window, and 0 is the rule's window. A waiter whose window ends is answered 504 admission_queue_timeout. 0:0:0 (the default) resets every band to the queue's window. Replace and null semantics as fc_band_weights.",
+              "type": "string",
+              "x-nullable": false
+            },
+            "fc_band_weights": {
+              "description": "The weighted wake's weights, written critical:standard:sheddable (for example 8:3:1): three whole numbers, each 1 to 62, at most 64 together, or 0:0:0 for none (a zero weight beside non-zero ones is refused, 400). Each is the band's credits per round. Declared under strict they are stored and reported as not in use in fc_effective, so a later switch to weighted finds them. A change of weights starts a new round. Not three whole numbers separated by ':' is refused (400). 0:0:0 resets to none; omitted on a replace keeps the stored value; explicit JSON null is rejected.",
+              "type": "string",
+              "x-nullable": false
+            },
+            "fc_critical_reserve_pct": {
+              "default": 0,
+              "description": "The only true reservation: the percent of the ceiling in force (rounded up to whole units) that no other band may take, even when critical is idle. It holds on HTTP/2 and role legs as well, which never wait. Together with the standard and sheddable entries of fc_band_min_share_pct at most 100 (400 naming fc_critical_reserve_pct); the critical entry of fc_band_min_share_pct is a separate floor, and critical holds the larger of the two. 0 or omitted on create is none. Replace and null semantics as fc_max_outstanding.",
+              "format": "int32",
+              "maximum": 100,
+              "minimum": 0,
+              "type": "integer",
+              "x-nullable": false
+            },
             "fc_decode_max_inflight": {
               "default": 0,
               "description": "The per-endpoint ceiling on decode legs of disaggregated requests. 0 or omitted leaves the process default (LLB_FC_DECODE_MAX_INFLIGHT) in force; at most 100000. Changeable at runtime by a replace POST (the stored value is kept when omitted, an explicit 0 resets to the process default). Explicit JSON null is rejected. The value in force and its source are read back in fc_effective.",
@@ -4997,11 +5191,76 @@ func init() {
                   ],
                   "type": "string"
                 },
+                "band_fallback_reason": {
+                  "description": "Why the gate runs band settings other than the configured ones: a combination the API refuses a rule to declare, reached by inheriting the environment (LLB_FC_*) or by a restore replay, runs on the defaults and is logged once at apply time. sockmap_request - sockMapMode request or both on a rule that is not an AI-gateway service: every band knob at its default (the request direction never reaches the gate). zero_weight - weighted with a zero weight: strict. no_queue - shed queue on with no queue depth: off. none - the configuration runs as configured.",
+                  "enum": [
+                    "none",
+                    "sockmap_request",
+                    "zero_weight",
+                    "no_queue"
+                  ],
+                  "type": "string"
+                },
+                "bands": {
+                  "description": "Each priority band's live counts and the knobs in force (after any fallback). min_share_pct and floor_units are the floor alone; the critical reserve is reported beside the bands.",
+                  "properties": {
+                    "critical": {
+                      "$ref": "#/definitions/FcBandEffective"
+                    },
+                    "critical_reserve_pct": {
+                      "description": "The critical reserve in percent of the ceiling in force - units no other band may take, even when critical is idle.",
+                      "format": "int32",
+                      "type": "integer",
+                      "x-omitempty": false
+                    },
+                    "critical_reserve_units": {
+                      "description": "The reserve in service units against effective_max_outstanding, as the gate enforces it; 0 without a ceiling.",
+                      "format": "int32",
+                      "type": "integer",
+                      "x-omitempty": false
+                    },
+                    "sheddable": {
+                      "$ref": "#/definitions/FcBandEffective"
+                    },
+                    "standard": {
+                      "$ref": "#/definitions/FcBandEffective"
+                    }
+                  },
+                  "type": "object"
+                },
+                "bands_configured": {
+                  "description": "true when any band knob in force differs from its default.",
+                  "type": "boolean",
+                  "x-omitempty": false
+                },
+                "config_source": {
+                  "description": "Where the objectives and the tenant and key classes this gateway is applying came from. store - the AI key store answered the last read. lkg - the store has not answered since the gateway started and the last-known-good file (aigw-lkg.json under the configuration path) is being served; writes are refused with 503 meanwhile and loxilb_ai_class_config_lkg_intervals_total counts. none - nothing was read (no store configured, or a store that has not answered and no file); every request is standard. The same value on every rule - it is the gateway's, not the rule's.",
+                  "enum": [
+                    "store",
+                    "lkg",
+                    "none"
+                  ],
+                  "type": "string"
+                },
                 "decode_max_inflight": {
                   "description": "Per-endpoint ceiling for decode legs; 0 is unlimited.",
                   "format": "int32",
                   "type": "integer",
                   "x-omitempty": false
+                },
+                "default_max_tokens": {
+                  "description": "The default reservation in tokens in force for requests that route to this rule; 0 while default_reservation is off.",
+                  "format": "int32",
+                  "type": "integer",
+                  "x-omitempty": false
+                },
+                "default_reservation": {
+                  "description": "Whether a request without a declared max_tokens that routes to this rule reserves a default for its completion. Each rule of a VIP and port has its own value - the gate takes it from the rule the request's host, path and model select.",
+                  "enum": [
+                    "on",
+                    "off"
+                  ],
+                  "type": "string"
                 },
                 "effective_max_outstanding": {
                   "description": "The service ceiling in force now; below max_outstanding while an adaptive pool is tightened.",
@@ -5028,6 +5287,14 @@ func init() {
                   "format": "int32",
                   "type": "integer",
                   "x-omitempty": false
+                },
+                "llmd_headers": {
+                  "description": "Whether refusals carry x-llm-d-request-dropped-reason and x-llm-d-inference-ttl may shorten a wait.",
+                  "enum": [
+                    "on",
+                    "off"
+                  ],
+                  "type": "string"
                 },
                 "max_outstanding": {
                   "description": "Pool-wide ceiling on executing inference requests; 0 is unlimited.",
@@ -5069,6 +5336,82 @@ func init() {
                   "type": "integer",
                   "x-omitempty": false
                 },
+                "reservation_clamped_budget": {
+                  "description": "Requests admitted with less than default_max_tokens reserved, since the process started, because the bucket's budget was already taken by other claims or by spend. Transient - it passes as the window refills. Counted per service, as reservation_clamped_burst. Never a refusal.",
+                  "format": "int64",
+                  "type": "integer",
+                  "x-omitempty": false
+                },
+                "reservation_clamped_burst": {
+                  "description": "Requests admitted with less than default_max_tokens reserved, since the process started, because default_max_tokens beside the prompt is more than a quota bucket can ever hold, so the request is clamped on an idle bucket too. A configuration to fix - lower the default or raise the quota or its burst. A request this applies to is counted here whatever the budgets held. Counted per service - every model pool of the same VIP and port reads the same number. Never a refusal.",
+                  "format": "int64",
+                  "type": "integer",
+                  "x-omitempty": false
+                },
+                "reservation_epoch": {
+                  "description": "The minute (Unix time divided by 60) the reservation_held_* fields below are a reading of. A token reservation belongs to the minute it was made in and does not outlive it - a request that ended without settling leaves its claim until the minute turns, and no longer. Compare two readings only when this value is the same in both.",
+                  "format": "int64",
+                  "type": "integer",
+                  "x-omitempty": false
+                },
+                "reservation_held": {
+                  "description": "The quota buckets holding reserved tokens right now, largest first, at most 64. Empty when nothing is held. A bucket not listed holds nothing unless reservation_held_truncated is true.",
+                  "items": {
+                    "properties": {
+                      "bucket": {
+                        "description": "The bucket's key in the quota store. It is built from identifiers only (tenant, user, model, key id, service) and never holds a credential.",
+                        "type": "string"
+                      },
+                      "kind": {
+                        "description": "Which quota the bucket belongs to - the tenant's, the tenant's for one model, a user's, a user's for one model, an API key's own, or the service's shared keyless quota.",
+                        "enum": [
+                          "tenant",
+                          "tenant_model",
+                          "user",
+                          "user_model",
+                          "key",
+                          "service"
+                        ],
+                        "type": "string"
+                      },
+                      "tokens": {
+                        "description": "Tokens reserved on the bucket and not yet settled.",
+                        "format": "int64",
+                        "type": "integer",
+                        "x-omitempty": false
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "reservation_held_claims": {
+                  "description": "How many token reservations are held right now on the quota buckets this service's requests reserve on, counted one per request and bucket - a request holds one claim on every quota bucket that applies to it (tenant, tenant and model, user, user and model, key, service), so one in-flight request on three buckets is three claims. Zero exactly when nothing is held. It is a count of claims and says nothing about tokens - the tokens each bucket holds are in reservation_held. A tenant's bucket is shared by every service the tenant uses, and its claims are counted on each of them. Read from the quota store's own counters. Management read-back only - not exported as a metric.",
+                  "format": "int64",
+                  "type": "integer",
+                  "x-omitempty": false
+                },
+                "reservation_held_truncated": {
+                  "description": "true when reservation_held does not list every bucket holding a reservation - more than 64 hold one, or the service has reserved on more buckets than the gateway tracks for it (4096). reservation_held_claims covers the tracked buckets in either case.",
+                  "type": "boolean",
+                  "x-omitempty": false
+                },
+                "shed_queue": {
+                  "description": "As configured: whether a sheddable request at the ceiling waits in its band instead of 429 admission_shed.",
+                  "enum": [
+                    "on",
+                    "off"
+                  ],
+                  "type": "string"
+                },
+                "shed_queue_effective": {
+                  "description": "The shed queue the gate runs.",
+                  "enum": [
+                    "on",
+                    "off"
+                  ],
+                  "type": "string"
+                },
                 "source": {
                   "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default).",
                   "properties": {
@@ -5080,7 +5423,63 @@ func init() {
                       ],
                       "type": "string"
                     },
+                    "band_min_share_pct": {
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ],
+                      "type": "string"
+                    },
+                    "band_queue_pct": {
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ],
+                      "type": "string"
+                    },
+                    "band_wait_ms": {
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ],
+                      "type": "string"
+                    },
+                    "band_weights": {
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ],
+                      "type": "string"
+                    },
+                    "critical_reserve_pct": {
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ],
+                      "type": "string"
+                    },
                     "decode_max_inflight": {
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ],
+                      "type": "string"
+                    },
+                    "default_max_tokens": {
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ],
+                      "type": "string"
+                    },
+                    "default_reservation": {
                       "enum": [
                         "rule",
                         "env",
@@ -5097,6 +5496,14 @@ func init() {
                       "type": "string"
                     },
                     "expose_headers": {
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ],
+                      "type": "string"
+                    },
+                    "llmd_headers": {
                       "enum": [
                         "rule",
                         "env",
@@ -5144,6 +5551,14 @@ func init() {
                       ],
                       "type": "string"
                     },
+                    "shed_queue": {
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ],
+                      "type": "string"
+                    },
                     "telemetry_stale_ms": {
                       "enum": [
                         "rule",
@@ -5160,7 +5575,23 @@ func init() {
                       ],
                       "type": "string"
                     },
+                    "tenant_wake": {
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ],
+                      "type": "string"
+                    },
                     "ttft_target_ms": {
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ],
+                      "type": "string"
+                    },
+                    "wake_policy": {
                       "enum": [
                         "rule",
                         "env",
@@ -5179,6 +5610,17 @@ func init() {
                   },
                   "type": "object"
                 },
+                "store_last_read": {
+                  "description": "When a read of the AI key store last answered in this process. A gateway started from the last-known-good file shows, until the store answers, the read that last CHANGED that file: the store may have answered later with nothing changed (the file is written only on a change). Absent when neither happened or no key store is configured.",
+                  "format": "date-time",
+                  "type": "string",
+                  "x-nullable": true
+                },
+                "store_reachable": {
+                  "description": "Whether the AI key store answered the gateway's latest read of it, whatever config_source says (a configuration read earlier stays in force through an outage). Absent when no key store is configured. The gateway's, the same on every rule.",
+                  "type": "boolean",
+                  "x-nullable": true
+                },
                 "telemetry_stale_ms": {
                   "description": "The P/D scorers' trust window for scraped queue depth, in milliseconds.",
                   "format": "int32",
@@ -5191,6 +5633,28 @@ func init() {
                   "type": "integer",
                   "x-omitempty": false
                 },
+                "tenant_slots": {
+                  "description": "Tenants the pool tracks by name at once for the tenant share; tenants past it share one budget. Fixed when the pool is created (LLB_FC_TENANT_SLOTS).",
+                  "format": "int32",
+                  "type": "integer",
+                  "x-omitempty": false
+                },
+                "tenant_wake": {
+                  "description": "The order inside one band, as configured (fifo, or rr across tenants).",
+                  "enum": [
+                    "fifo",
+                    "rr"
+                  ],
+                  "type": "string"
+                },
+                "tenant_wake_effective": {
+                  "description": "The order inside one band the gate runs (fifo, or rr across tenants).",
+                  "enum": [
+                    "fifo",
+                    "rr"
+                  ],
+                  "type": "string"
+                },
                 "tenants_active": {
                   "description": "Tenants holding a unit or waiting on the pool now, while it holds tenants to a share.",
                   "format": "int32",
@@ -5202,6 +5666,22 @@ func init() {
                   "type": "integer",
                   "x-omitempty": false
                 },
+                "wake_policy": {
+                  "description": "The wake policy as configured, by the rule or inherited (source.wake_policy); wake_policy_effective is the one the gate runs. strict - while higher-band demand keeps the ceiling full, a lower band is admitted zero requests; each waiter is refused when its band's wait window ends. weighted - a deficit round robin: while several bands have waiters, each receives its weight's share of wake-ups, exactly over whole rounds (8:3:1 is 8, 3, 1 in every 12); the share is of admissions, not of tokens, GPU time or latency. No band is promoted because it has waited long.",
+                  "enum": [
+                    "strict",
+                    "weighted"
+                  ],
+                  "type": "string"
+                },
+                "wake_policy_effective": {
+                  "description": "The wake policy the gate runs. Differs from wake_policy only when band_fallback_reason is not none.",
+                  "enum": [
+                    "strict",
+                    "weighted"
+                  ],
+                  "type": "string"
+                },
                 "warming_endpoints": {
                   "description": "Endpoints inside their warm-up window.",
                   "format": "int32",
@@ -5211,6 +5691,11 @@ func init() {
                 "warmup_ms": {
                   "format": "int32",
                   "type": "integer",
+                  "x-omitempty": false
+                },
+                "weights_in_use": {
+                  "description": "true when wake_policy_effective is weighted and the weights decide the wake; declared weights are stored but not in use otherwise.",
+                  "type": "boolean",
                   "x-omitempty": false
                 }
               },
@@ -5228,6 +5713,16 @@ func init() {
             },
             "fc_expose_headers": {
               "description": "on puts X-Loxilb-Admission-Inflight, X-Loxilb-Admission-Queued and X-Loxilb-Admission-Limit on the head of every admitted inference response (HTTP/1 and HTTP/2, streamed ones included), the same three a capacity refusal carries: the pool's executing units and waiting requests as the response head goes out, and the service ceiling in force (0 is none). Fields of those names from the backend are replaced. off leaves responses as the backend sent them; inherit, or omitted on create, runs on the process default (LLB_FC_EXPOSE_HEADERS). Refused (400) with sockMapMode both or response, where the gateway never sees the response. Replace and null semantics as fc_mode.",
+              "enum": [
+                "on",
+                "off",
+                "inherit"
+              ],
+              "type": "string",
+              "x-nullable": false
+            },
+            "fc_llmd_headers": {
+              "description": "on: adds x-llm-d-request-dropped-reason to the admission refusals (HTTP/1.1 answers and HTTP/2 stream refusals); lets a valid x-llm-d-inference-ttl on an HTTP/1.1 request (Go duration syntax, positive, held at one day) shorter than the window that applies shorten that request's wait, never extend it, where a wait the client's TTL ended is answered 429 admission_ttl_expired and a wait a window of the rule ended stays 504 admission_queue_timeout; and forwards the gateway's resolved values in x-llm-d-inference-objective (the class the request was admitted as) and x-llm-d-inference-fairness-id (the authenticated tenant, none for a request without one), removing the client's copy of either name and of the deprecated x-gateway-inference-* names, on HTTP/1.1 and HTTP/2 alike (on a chunked HTTP/1.1 request the copies are removed and nothing is written; HTTP/2 streams never wait, so the TTL does not apply to them). off leaves all of it out: the TTL header is ignored and every header is forwarded as sent. inherit, or omitted on create, runs on the process default (LLB_FC_LLMD_HEADERS, else off). Replace and null semantics as fc_mode.",
               "enum": [
                 "on",
                 "off",
@@ -5283,6 +5778,16 @@ func init() {
               "type": "integer",
               "x-nullable": false
             },
+            "fc_shed_queue": {
+              "description": "off refuses a sheddable request at the ceiling at once with 429 admission_shed; on lets it wait in its band, and when the queue is full an arriving request of any higher band (standard or critical) evicts the youngest sheddable waiter, which is answered 429 admission_shed. on is refused (400) while the queue depth in force (fc_max_queue_depth, else LLB_FC_MAX_QUEUE_DEPTH) is 0. inherit, or omitted on create, runs on the process default (LLB_FC_SHED_QUEUE, else off). Replace and null semantics as fc_mode.",
+              "enum": [
+                "on",
+                "off",
+                "inherit"
+              ],
+              "type": "string",
+              "x-nullable": false
+            },
             "fc_telemetry_stale_ms": {
               "default": 0,
               "description": "How long an endpoint's scraped queue depth is trusted by the P/D scorers without a refresh, in milliseconds; an older value is replaced by the candidates' average. 0 or omitted leaves the process default (LLB_FC_TELEMETRY_STALE_MS, else 30000) in force. The scraper stamps whole seconds, so the window is effectively rounded to them. Replace and null semantics as fc_max_outstanding.",
@@ -5301,6 +5806,16 @@ func init() {
               "type": "integer",
               "x-nullable": false
             },
+            "fc_tenant_wake": {
+              "description": "The order inside one band. fifo wakes the oldest runnable waiter and does not tell tenants apart; rr rotates across the tenants with a runnable waiter in the band, oldest first inside one tenant, each band keeping its own place in the rotation. rr needs no fc_tenant_max_share_pct. inherit, or omitted on create, runs on the process default (LLB_FC_TENANT_WAKE, else fifo). Replace and null semantics as fc_mode.",
+              "enum": [
+                "fifo",
+                "rr",
+                "inherit"
+              ],
+              "type": "string",
+              "x-nullable": false
+            },
             "fc_ttft_target_ms": {
               "default": 0,
               "description": "With fc_adaptive on: an endpoint whose streamed responses take longer than this from admission to their first data event (an eighth-weighted average, trusted for fc_telemetry_stale_ms) is backpressure. Only streamed responses are measured: a buffered response's first byte comes with the whole completion. 0 or omitted leaves the process default (LLB_FC_TTFT_TARGET_MS, else TTFT unused) in force. Replace and null semantics as fc_max_outstanding.",
@@ -5308,6 +5823,16 @@ func init() {
               "maximum": 3600000,
               "minimum": 0,
               "type": "integer",
+              "x-nullable": false
+            },
+            "fc_wake_policy": {
+              "description": "Which priority band a freed service unit wakes when requests of several bands wait (critical, standard, sheddable: the class the request's objective resolved to). Bands act only with fc_mode enforce, below the ceiling every band is admitted at once, and HTTP/2 streams and P/D role legs never queue (for them the band decides the refusal only). strict wakes the highest band with a runnable waiter: while higher-band demand keeps the ceiling full, a lower band is admitted zero requests, and each waiter is refused when its band's wait window ends. weighted is a deficit round robin by fc_band_weights: each band with a runnable waiter gets its weight in credits per round, the highest band with credit left is served first, one wake costs one credit, and a band with no runnable waiter forfeits its turn; over whole rounds the wake-ups split exactly as the weights do (8:3:1 is 8 critical, 3 standard, 1 sheddable in every 12). The share is of admissions, not of tokens or latency, and a floor is served before the round. weighted needs every weight at least 1 (400 otherwise). inherit, or omitted on create, runs on the process default (LLB_FC_WAKE_POLICY, else strict). Refused (400) beside sockMapMode both or request on a rule that is not an AI-gateway service, as is every band knob other than its default. Such a rule that INHERITS weighted (or another band setting it would be refused for declaring) runs every band knob at its default instead, logs one warning at apply time and reads back fc_effective.wake_policy_effective with band_fallback_reason; so does weighted without a weight for every band. A change of policy starts a new round and loses no waiter. Replace and null semantics as fc_mode.",
+              "enum": [
+                "strict",
+                "weighted",
+                "inherit"
+              ],
+              "type": "string",
               "x-nullable": false
             },
             "fc_warmup_ms": {
@@ -5374,7 +5899,7 @@ func init() {
               "type": "boolean"
             },
             "id": {
-              "description": "Opaque LB identifier, supplied by the client or minted as UUIDv4 when absent. Collisions with another rule are rejected. The update path can replace an ID when another change is applied; do not assume immutable identity or automatic L7 reference migration.",
+              "description": "Opaque LB identifier, supplied by the client or minted as UUIDv4 when absent. An id already bound to another rule is refused with 400 (lbrule-id conflict). A replace that differs from the stored rule in this field alone rebinds the id to the existing rule in place, without touching the data plane, and answers success; a replace that changes other fields carries the new id along. Do not assume immutable identity or automatic L7 reference migration.",
               "type": "string"
             },
             "inactiveTimeOut": {
@@ -5383,7 +5908,7 @@ func init() {
               "type": "integer"
             },
             "jwt_auth_profile": {
-              "description": "Name of the JWT auth profile (config/ai/jwtauthprofile) that decides this service's Bearer arm. Required by, and only valid with, api_key_auth \"jwt\" and \"apikey-or-jwt\"; a create or replace naming a profile that is not configured is rejected. On a replace, omitting this field preserves the existing reference, in lockstep with api_key_auth's replace semantics. While a service references a profile, deleting that profile is refused.",
+              "description": "Name of the JWT auth profile (config/ai/jwtauthprofile) that decides this service's Bearer arm. Required by, and only valid with, api_key_auth \"jwt\" and \"apikey-or-jwt\"; a create or replace naming a profile that is not configured is rejected. On a replace, omitting this field preserves the existing reference, in lockstep with api_key_auth's replace semantics. While a service references a profile, deleting that profile is refused. Rules that share a listener must name the same profile; a disagreement is refused like a differing api_key_auth.",
               "maxLength": 63,
               "type": "string"
             },
@@ -5782,7 +6307,7 @@ func init() {
             },
             "sse_mode": {
               "default": false,
-              "description": "Enable detection of text/event-stream responses and the associated streaming idle-timeout protection. This flag controls Gateway SSE handling, not whether the backend implements an OpenAI API. Active detected streams remain subject to max_stream_duration_sec and the system stream cap; enabling SSE does not make them unbounded.",
+              "description": "Enable detection of text/event-stream responses and the associated streaming idle-timeout protection. A rule with pd_disagg_mode always has it, whether or not sse_mode is set. This flag controls Gateway SSE handling, not whether the backend implements an OpenAI API. Active detected streams remain subject to max_stream_duration_sec and the system stream cap; enabling SSE does not make them unbounded.",
               "type": "boolean",
               "x-nullable": false
             },
@@ -6269,6 +6794,114 @@ func init() {
         "dev",
         "ipAddress",
         "macAddress"
+      ],
+      "type": "object"
+    },
+    "NetIdentityEntry": {
+      "description": "A network-identity binding: the tenant of the requests that reach an AI service from a network. A cidr match says where a request came from; it does not prove who sent it, and any host that can send from the range is attributed to the tenant. Use it for limits, fairness and records, never in place of a credential. An ingress_if match is as strong as the network boundary behind the interface. Where several bindings match a request, an ingress_if match wins over a cidr match, the longest prefix wins among cidr matches, and a binding that names the service wins over one that names none.",
+      "properties": {
+        "allowed_models": {
+          "description": "The models a request admitted or held by this binding may name, compared exactly. Empty or omitted allows any. At most 256.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-omitempty": true
+        },
+        "credential": {
+          "description": "none (default): the binding never stands in for a credential. network: on a service that requires a credential, a request that presents none is admitted as the binding's tenant. Accepted with an interface match only (ingress_if, vlan, vni or ipsec_tunnel); refused with a cidr match. Also refused when a named service has a rule that is not an AI-gateway service and runs sockMapMode request or both: the gateway does not see every request on it.",
+          "enum": [
+            "none",
+            "network"
+          ],
+          "type": "string"
+        },
+        "enforce": {
+          "description": "advisory (default): a request that presents a credential is decided by it and the binding is only noted. strict: a credential whose tenant is not the binding's is refused with 403 network_tenant_mismatch, and the model must also pass allowed_models. In both, a request with no credential on a service that does not require one is admitted as the binding's tenant.",
+          "enum": [
+            "advisory",
+            "strict"
+          ],
+          "type": "string"
+        },
+        "fail_mode": {
+          "description": "What the binding's services do with a request while the binding lookup itself cannot answer (an internal fault, counted in loxilb_ai_netid_resolver_faults_total). neutral (default): the request is decided as if the service had no binding - it is never admitted by its network, and a valid credential is not refused, so a strict binding is not enforced during the fault. closed: every request the lookup would have decided is refused with 503 netid_unavailable until it answers again. The setting is per service in effect, not per binding: a service fails closed when any binding that applies to it says closed, whether that binding names the service or names none, and then it does so for every source. When the bindings that apply to a service disagree, the reply to the POST is \"Success; warning: fail_mode: ...\" and names them.",
+          "enum": [
+            "neutral",
+            "closed"
+          ],
+          "type": "string"
+        },
+        "forward_identity": {
+          "description": "Forward the request's tenant upstream as X-Auth-Tenant, and its user as X-Auth-User when it has one, on a request whose source matched this binding. Needs a non-empty services list, and is refused without one. The services the binding names then also drop every header whose name starts with X-Auth- that a client sends, on every request and whatever the rule's api_key_auth, whether or not the request's source matched a binding. A service no such binding applies to is unchanged. The identity is injected only on an AI-gateway service, where the admission gate decides it, and not into a chunked HTTP/1.1 request. Refused when a service the binding names has a rule that is not an AI-gateway service and runs sockMapMode request or both: the gateway does not see every request on it. Such a rule is refused in turn while the binding exists. Default false.",
+          "type": "boolean"
+        },
+        "match": {
+          "description": "The source the binding applies to. Exactly one of cidr, ingress_if, vlan, vni and ipsec_tunnel. All but cidr match on the interface the connection arrived on.",
+          "properties": {
+            "cidr": {
+              "description": "IPv4 networks in a.b.c.d/len form, without host bits, that the socket peer of the request is in. At most 256.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array",
+              "x-omitempty": true
+            },
+            "ingress_if": {
+              "description": "Name of the interface the connection arrived on, at most 15 characters: the logical device, which for a tagged VLAN is its bridge (vlan\u003cid\u003e), for a VXLAN its device (vxlan\u003cvni\u003e) and for an IPsec tunnel its VTI. The name is stored, never an index, so an interface that is removed and created again keeps its binding. A name that does not exist on the node is accepted with a warning in the reply and matches nothing until it exists; an interface that is removed later is logged and matches nothing until it is back. The interface is that of the connection's first packet and holds for the life of the connection.",
+              "type": "string"
+            },
+            "ipsec_tunnel": {
+              "description": "Name of an IPsec tunnel configured on this node (/config/ipsec/tunnel). Another spelling of ingress_if: the tunnel's VTI interface, vti\u003cmark\u003e. A tunnel that is not configured, or has no mark, is accepted with a warning and matches nothing until it has one.",
+              "type": "string"
+            },
+            "vlan": {
+              "description": "A VLAN ID. Another spelling of ingress_if: the VLAN's bridge interface on this node, vlan\u003cid\u003e.",
+              "maximum": 4094,
+              "minimum": 1,
+              "type": "integer",
+              "x-omitempty": true
+            },
+            "vni": {
+              "description": "A VXLAN network identifier. Another spelling of ingress_if: the interface vxlan\u003cvni\u003e on this node.",
+              "maximum": 16777215,
+              "minimum": 1,
+              "type": "integer",
+              "x-omitempty": true
+            }
+          },
+          "type": "object"
+        },
+        "name": {
+          "description": "Binding name, 1 to 63 characters of letters, digits, '-', '_' and '.', starting with a letter or digit. It is what request records carry.",
+          "type": "string"
+        },
+        "priority_class": {
+          "description": "The highest priority class a request the binding names the tenant of may have. It can only lower what the tenant allows (a tenant that sets no class allows standard). Default standard - a binding that should not cap its requests says critical.",
+          "enum": [
+            "standard",
+            "critical",
+            "sheddable"
+          ],
+          "type": "string"
+        },
+        "services": {
+          "description": "The AI services the binding applies to, each as VIP:port (IPv4). Empty or omitted applies it to every AI service. A service does not have to exist yet. At most 256.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-omitempty": true
+        },
+        "tenant": {
+          "description": "The tenant a matching request is attributed to, 1 to 127 bytes. The same namespace as API-key and JWT tenants: its limits are the ones configured for that tenant.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "match",
+        "tenant"
       ],
       "type": "object"
     },
@@ -7921,10 +8554,22 @@ func init() {
     "TenantRateLimitEntry": {
       "description": "Stored quotas, not enforcement status. Missing aggregate and model records produce 404; model-only state may lack an aggregate update timestamp. Zero aggregate rates disable their limiter while model quotas remain separate. burst_pct controls token capacity, not request-rate burst; zero uses the server default and positive values are clamped to 1-1000.",
       "properties": {
+        "allowed_objectives": {
+          "description": "The objectives a request of this tenant may raise itself to by header, and the body tiers (tier:priority, tier:fast, tier:flex); a hint at or below what the request gets without one needs no entry",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-omitempty": true
+        },
         "burst_pct": {
           "description": "Token bucket capacity as a percent of tokens_per_min; 0 uses the server default",
           "format": "int64",
           "type": "integer"
+        },
+        "default_objective": {
+          "description": "The objective a request of this tenant gets when it names none, or one it may not use",
+          "type": "string"
         },
         "model_limits": {
           "description": "Per-model token quotas for the tenant",
@@ -7932,6 +8577,10 @@ func init() {
             "$ref": "#/definitions/TenantModelRateLimit"
           },
           "type": "array"
+        },
+        "priority_class": {
+          "description": "The highest priority class a request of this tenant may have; absent when none is set, which holds the tenant at standard",
+          "type": "string"
         },
         "rps": {
           "description": "Maximum requests per second for the tenant",
@@ -7959,12 +8608,25 @@ func init() {
       "type": "object"
     },
     "TenantRateLimitMod": {
-      "description": "POST replaces aggregate rps, tokens_per_min, and burst_pct; omission becomes zero, not preservation. Supplied model_limits are individual upserts or removals; omitted/empty model_limits preserves existing model rows. Aggregate and model writes are sequential, not one transaction, so failure can leave partial changes. Blank identifiers and malformed model entries are not consistently rejected as 400. Configuration alone does not enable enforcement on a service.",
+      "description": "POST replaces aggregate rps, tokens_per_min, and burst_pct; omission becomes zero, not preservation. Supplied model_limits are individual upserts or removals; omitted/empty model_limits preserves existing model rows. Aggregate and model writes are sequential, not one transaction, so failure can leave partial changes. Blank identifiers and malformed model entries are not consistently rejected as 400. Configuration alone does not enable enforcement on a service. The class fields (priority_class, default_objective, allowed_objectives) are written by their own statement and only when the body names one of them, so a POST of limits leaves the tenant's class as it is. A body that names a class field and carries no limit (rps, tokens_per_min and burst_pct absent or zero, no model_limits) writes the class only and leaves the limits as they are.",
       "properties": {
+        "allowed_objectives": {
+          "description": "The objectives a request of this tenant may raise itself to with the x-llm-d-inference-objective header, and the body tiers it may raise itself to by service_tier, named tier:priority, tier:fast and tier:flex; at most 64. Omitted leaves the stored list; an empty array clears it, and then only a hint at or below what the request gets without one is honoured (the list governs raises only).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "x-omitempty": true
+        },
         "burst_pct": {
           "description": "Token bucket capacity as a percent of tokens_per_min; 0 uses the server default",
           "format": "int64",
           "type": "integer"
+        },
+        "default_objective": {
+          "description": "The objective a request of this tenant gets when it names none, or one it may not use. Omitted leaves the stored value; an empty string clears it.",
+          "type": "string",
+          "x-nullable": true
         },
         "model_limits": {
           "description": "Per-model token quotas for the tenant",
@@ -7972,6 +8634,11 @@ func init() {
             "$ref": "#/definitions/TenantModelRateLimit"
           },
           "type": "array"
+        },
+        "priority_class": {
+          "description": "The highest priority class a request of this tenant may have: standard, critical or sheddable. Omitted leaves the stored value; an empty string clears it, and a tenant that sets no class is held at standard.",
+          "type": "string",
+          "x-nullable": true
         },
         "rps": {
           "description": "Maximum requests per second for the tenant",
@@ -8297,7 +8964,7 @@ func init() {
           "type": "string"
         },
         "features": {
-          "description": "Optional capabilities this build serves, for clients that gate a feature on the gateway rather than on its version string. \"epp\" means loadbalancer rules accept the Endpoint Picker fields (eppEndpoint, eppFailureMode, eppTimeoutMs, eppPlaintext) and the data plane consults the picker. Builds predating the field omit it; clients treat an absent or empty list as \"no optional feature\".",
+          "description": "Gateway-only capabilities this build implements, as stable tokens a controller checks before it sends the matching rule fields; absent on builds that predate the field. \"epp\": loadbalancer rules accept the Endpoint Picker fields (eppEndpoint, eppFailureMode, eppTimeoutMs, eppPlaintext) and the data plane consults the picker. \"api_key_auth\": the serviceArguments api_key_auth credential-policy declaration is accepted and enforced. \"jwt_auth_profile\": the Bearer arm (api_key_auth \"jwt\" and \"apikey-or-jwt\") and the jwt_auth_profile reference are accepted and enforced. The REST layer ignores fields it does not know, so a build without a token would install a rule WITHOUT that policy and report success: a controller that does not find the token for a field it needs must not send the rule.",
           "items": {
             "type": "string"
           },
@@ -9804,6 +10471,346 @@ func init() {
         ]
       }
     },
+    "/config/ai/netidentity": {
+      "get": {
+        "description": "Returns every network-identity binding in name order, as stored: enumerated fields spelled out, addresses and services in their canonical form.",
+        "operationId": "getConfigAiNetidentityAll",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "properties": {
+                "netIdentityAttr": {
+                  "items": {
+                    "$ref": "#/definitions/NetIdentityEntry"
+                  },
+                  "type": "array"
+                }
+              },
+              "type": "object"
+            }
+          },
+          "401": {
+            "description": "Invalid authentication credentials",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "$ref": "#/responses/ManagementForbidden"
+          },
+          "500": {
+            "description": "Internal service error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Maintenance mode",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        },
+        "summary": "List network-identity bindings",
+        "tags": [
+          "ai"
+        ]
+      },
+      "post": {
+        "description": "Binds the requests that reach AI services from a network to a tenant. Posting an existing name replaces the binding. A binding applies from the next request, on connections that are already open as well. It is refused with 409 when another binding matches the same source on the same service as specifically and names another tenant. A binding is the configuration of the node it is posted to: it is not replicated to a high-availability peer.",
+        "operationId": "postConfigAiNetidentity",
+        "parameters": [
+          {
+            "description": "Attributes of the network-identity binding",
+            "in": "body",
+            "name": "attr",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/NetIdentityEntry"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/OperationResult"
+            }
+          },
+          "400": {
+            "description": "Malformed arguments for API call",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "401": {
+            "description": "Invalid authentication credentials",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "$ref": "#/responses/ManagementForbidden"
+          },
+          "409": {
+            "description": "Resource Conflict. Another binding maps the same source on the same service to another tenant",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "500": {
+            "description": "Internal service error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Maintenance mode",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        },
+        "summary": "Create or replace a network-identity binding",
+        "tags": [
+          "ai"
+        ]
+      }
+    },
+    "/config/ai/netidentity/{name}": {
+      "delete": {
+        "description": "Removes the named binding. Requests from its network are decided without it from the next request.",
+        "operationId": "deleteConfigAiNetidentityName",
+        "parameters": [
+          {
+            "description": "Name of the network-identity binding",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/OperationResult"
+            }
+          },
+          "401": {
+            "description": "Invalid authentication credentials",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "$ref": "#/responses/ManagementForbidden"
+          },
+          "404": {
+            "description": "Resource not found",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "500": {
+            "description": "Internal service error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Maintenance mode",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        },
+        "summary": "Delete a network-identity binding",
+        "tags": [
+          "ai"
+        ]
+      }
+    },
+    "/config/ai/objective": {
+      "get": {
+        "description": "Returns every objective in name order, read from the AI key store (source store). While the store does not answer, returns the objectives this gateway applies instead: the last it read from the store in this process (source store, with the time of that read), or the last-known-good file it started from (source lkg, with the time the store had answered with them). 503 only when the store does not answer and the gateway has applied nothing yet.",
+        "operationId": "getConfigAiObjectiveAll",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "properties": {
+                "objectiveAttr": {
+                  "items": {
+                    "$ref": "#/definitions/AIObjectiveEntry"
+                  },
+                  "type": "array"
+                },
+                "source": {
+                  "description": "Where the list came from: store (the key store answered) or lkg (the last-known-good file this gateway started from, while the store has not answered since)",
+                  "enum": [
+                    "store",
+                    "lkg"
+                  ],
+                  "type": "string"
+                },
+                "source_timestamp": {
+                  "description": "When the key store answered with this list: now for a list read now, earlier for an applied list served during an outage",
+                  "format": "date-time",
+                  "type": "string"
+                },
+                "store_last_read": {
+                  "description": "When a read of the key store last answered: now when it answered this one; during an outage, the last read in this process. A gateway started from the last-known-good file shows the read that last CHANGED that file (the store may have answered later with nothing changed). Absent when neither happened",
+                  "format": "date-time",
+                  "type": "string",
+                  "x-nullable": true
+                },
+                "store_reachable": {
+                  "description": "Whether the key store answered this request's read of it: false during an outage, whatever source says",
+                  "type": "boolean",
+                  "x-omitempty": false
+                }
+              },
+              "type": "object"
+            }
+          },
+          "401": {
+            "description": "Invalid authentication credentials",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "$ref": "#/responses/ManagementForbidden"
+          },
+          "500": {
+            "description": "Internal service error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Maintenance mode, no AI key store configured, or the store does not answer and nothing was applied yet",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        },
+        "summary": "List objectives",
+        "tags": [
+          "ai"
+        ]
+      },
+      "post": {
+        "description": "An objective is a named priority a request can ask for with the x-llm-d-inference-objective header, or get as its tenant's or key's default. A positive priority is the critical class, a negative one sheddable, zero standard. Posting an existing name replaces the objective. Objectives live in the AI key store, so every gateway that shares the store applies a change within one refresh interval (LLB_AI_OBJECTIVE_REFRESH_SEC, default 10 s), this one at once. Without a key store, or while it does not answer, the call is refused with 503 and nothing changes.",
+        "operationId": "postConfigAiObjective",
+        "parameters": [
+          {
+            "description": "Attributes of the objective",
+            "in": "body",
+            "name": "attr",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/AIObjectiveEntry"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/OperationResult"
+            }
+          },
+          "400": {
+            "description": "Malformed arguments for API call",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "401": {
+            "description": "Invalid authentication credentials",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "$ref": "#/responses/ManagementForbidden"
+          },
+          "500": {
+            "description": "Internal service error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Maintenance mode, no AI key store configured (ai_key_store_unconfigured), or the store does not answer (ai_key_store_unavailable)",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        },
+        "summary": "Create or replace an objective",
+        "tags": [
+          "ai"
+        ]
+      }
+    },
+    "/config/ai/objective/{name}": {
+      "delete": {
+        "description": "Removes the named objective. A tenant or key that still names it keeps the name; a request that asks for it is then treated as one that asked for an unknown objective.",
+        "operationId": "deleteConfigAiObjectiveName",
+        "parameters": [
+          {
+            "description": "Name of the objective",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/OperationResult"
+            }
+          },
+          "401": {
+            "description": "Invalid authentication credentials",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "$ref": "#/responses/ManagementForbidden"
+          },
+          "404": {
+            "description": "Resource not found",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "500": {
+            "description": "Internal service error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Maintenance mode, no AI key store configured, or the store does not answer",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        },
+        "summary": "Delete an objective",
+        "tags": [
+          "ai"
+        ]
+      }
+    },
     "/config/ai/ratelimit/defaults": {
       "post": {
         "description": "Creates or replaces one defaults row (QoS ladder level 3). Scope 'global' takes no rule_ident and applies everywhere; scope 'rule' names one service and overrides the global row field-wise on it. A zero field falls through; an entry whose limit fields are all zero is rejected.",
@@ -10336,7 +11343,7 @@ func init() {
     },
     "/config/bfd": {
       "post": {
-        "description": "Create or update a BFD session for an existing cluster instance. New sessions require a valid remote address, interval at least 100000 microseconds, and retryCount greater than zero; first setup also validates source IP. Existing-session zero interval/retryCount preserves that value, while unchanged submissions conflict and source-IP changes are not applied. Interval narrows from uint64 to uint32. First creation is asynchronous and can fail after HTTP success.",
+        "description": "Create or update a BFD session for an existing cluster instance. New sessions require a valid remote address, interval at least 100000 microseconds, and retryCount greater than zero; first setup also validates source IP. Existing-session zero interval/retryCount preserves that value, while unchanged submissions conflict and source-IP changes are not applied. Interval narrows from uint64 to uint32. First creation is asynchronous and can fail after HTTP success. BGP-only mode returns 400; an uninitialized BFD subsystem returns 503.",
         "parameters": [
           {
             "description": "Attributes for Vlan Interface",
@@ -10356,7 +11363,7 @@ func init() {
             }
           },
           "400": {
-            "description": "Malformed arguments for API call",
+            "description": "Malformed arguments for API call or BFD unavailable in BGP-only mode",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -10392,7 +11399,7 @@ func init() {
             }
           },
           "503": {
-            "description": "Maintenance mode",
+            "description": "Maintenance mode or BFD subsystem unavailable",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -10403,7 +11410,7 @@ func init() {
     },
     "/config/bfd/all": {
       "get": {
-        "description": "Return BFD sessions when the cluster BFD running flag is set. Current IPv6 host/port parsing can corrupt readback. A session accepted for asynchronous creation may not yet appear; the global running flag can also become inconsistent after deletion.",
+        "description": "Return the initialized BFD session table. No configured sessions (including keepalive disabled or after deleting the last session) returns 200 with Attr: []. BGP-only mode returns 400 and an uninitialized BFD subsystem returns 503. Current IPv6 host/port parsing can corrupt readback.",
         "responses": {
           "200": {
             "description": "OK",
@@ -10417,6 +11424,12 @@ func init() {
                 }
               },
               "type": "object"
+            }
+          },
+          "400": {
+            "description": "BFD is unavailable in BGP-only mode",
+            "schema": {
+              "$ref": "#/definitions/Error"
             }
           },
           "401": {
@@ -10435,7 +11448,7 @@ func init() {
             }
           },
           "503": {
-            "description": "Maintenance mode",
+            "description": "Maintenance mode or BFD subsystem unavailable",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -10446,7 +11459,7 @@ func init() {
     },
     "/config/bfd/remoteIP/{remote_ip}": {
       "delete": {
-        "description": "Request deletion of a BFD session by remote IP. Supply an existing instance explicitly; omission does not default to the default instance. Safety limitation: instance existence is checked but session ownership is not, and successful deletion clears a global running flag even if other sessions remain. Do not assume instance-scoped isolation or complete BFD shutdown.",
+        "description": "Request deletion of a BFD session by remote IP. Supply an existing instance explicitly; omission does not default to the default instance. Successful deletion retains the keepalive running hint while any sessions remain and clears it only after the last session is removed. Safety limitation: instance existence is checked but session ownership is not; do not assume instance-scoped isolation or complete BFD shutdown. BGP-only mode returns 400; an uninitialized BFD subsystem returns 503.",
         "parameters": [
           {
             "description": "Remote IP address",
@@ -10471,7 +11484,7 @@ func init() {
             }
           },
           "400": {
-            "description": "Malformed arguments for API call",
+            "description": "Malformed arguments for API call or BFD unavailable in BGP-only mode",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -10507,7 +11520,7 @@ func init() {
             }
           },
           "503": {
-            "description": "Maintenance mode",
+            "description": "Maintenance mode or BFD subsystem unavailable",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -18385,10 +19398,10 @@ func init() {
     },
     "/config/snapshot": {
       "get": {
-        "description": "Returns a versioned, checksummed snapshot document using schema 1.5. Supported snapshot domains exclude some runtime-only state and externally stored secrets. Replaces deprecated /config/export. Response carries Content-Disposition and X-Snapshot-Checksum headers.",
+        "description": "Returns a versioned, checksummed snapshot document using schema 1.12. Supported snapshot domains exclude some runtime-only state and externally stored secrets. Replaces deprecated /config/export. Response carries Content-Disposition and X-Snapshot-Checksum headers.",
         "parameters": [
           {
-            "description": "Comma-separated domains (endpoint, loadbalancer, kvexactbinding, l7policy, firewall, policy, mirror, session, sessionulcl, ipfilter, securityrate, bfd, bgp, ipsec, cors, tracing, cert). Omitted or empty selection captures all supported domains. Inspect included_domains and excluded_domains for actual coverage; certificate material and OTLP header values remain external.",
+            "description": "Comma-separated domains (endpoint, jwtauthprofile, halfclose, netidentity, loadbalancer, kvexactbinding, l7policy, firewall, policy, mirror, session, sessionulcl, ipfilter, securityrate, bfd, bgp, bgppolicyassignment, ipsec, cors, tracing, cert, auditsink). Omitted or empty selection captures all supported domains. Inspect included_domains and excluded_domains for actual coverage; certificate material and OTLP header values remain external.",
             "in": "query",
             "name": "components",
             "type": "string"
@@ -20868,7 +21881,7 @@ func init() {
     },
     "/status/process": {
       "get": {
-        "description": "Returns Linux process observations assembled from top, with CPU and memory percentages from ps. Values depend on command availability and output format; the current parser incompletely handles failed or short command output.",
+        "description": "Read Linux procfs directly without top or ps. CPUUsage is cumulative user plus system CPU time divided by elapsed process lifetime, as a percentage that can exceed 100 for multithreaded processes. MemoryUsage is resident bytes divided by MemTotal. Virtual, resident and shared sizes are decimal KiB strings; CPU time is minutes:seconds.centiseconds. Command is the kernel comm name (normally limited to 15 bytes), with embedded whitespace preserved. Effective UID uses the first matching passwd entry or its numeric value. Rows sort by displayed CPU usage descending, then PID ascending. Exited, inaccessible and malformed individual PID records are skipped; reads are not an atomic snapshot. Missing or invalid global procfs data, or no readable processes, returns 500 with a generic collection-failure response, never a message-inferred 400/404 or fabricated healthy empty list.",
         "responses": {
           "200": {
             "description": "OK",
@@ -20886,7 +21899,7 @@ func init() {
             "$ref": "#/responses/ManagementForbidden"
           },
           "500": {
-            "description": "Internal service error",
+            "description": "Internal service error, including missing or invalid global process data or no readable processes",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -22868,7 +23881,365 @@ func init() {
             }
           },
           "503": {
-            "description": "Credential store unavailable \u2014 the credential was never examined; retry after a moment",
+            "description": "Credential store unavailable — the credential was never examined; retry after a moment",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        }
+      }
+    },
+    "/config/ai/netidentity": {
+      "get": {
+        "description": "Returns every network-identity binding in name order, as stored: enumerated fields spelled out, addresses and services in their canonical form.",
+        "tags": [
+          "ai"
+        ],
+        "summary": "List network-identity bindings",
+        "operationId": "getConfigAiNetidentityAll",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "netIdentityAttr": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/definitions/NetIdentityEntry"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid authentication credentials",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "description": "Authenticated principal is not authorized for this operation",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "500": {
+            "description": "Internal service error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Maintenance mode",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        }
+      },
+      "post": {
+        "description": "Binds the requests that reach AI services from a network to a tenant. Posting an existing name replaces the binding. A binding applies from the next request, on connections that are already open as well. It is refused with 409 when another binding matches the same source on the same service as specifically and names another tenant. A binding is the configuration of the node it is posted to: it is not replicated to a high-availability peer.",
+        "tags": [
+          "ai"
+        ],
+        "summary": "Create or replace a network-identity binding",
+        "operationId": "postConfigAiNetidentity",
+        "parameters": [
+          {
+            "description": "Attributes of the network-identity binding",
+            "name": "attr",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/NetIdentityEntry"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/OperationResult"
+            }
+          },
+          "400": {
+            "description": "Malformed arguments for API call",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "401": {
+            "description": "Invalid authentication credentials",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "description": "Authenticated principal is not authorized for this operation",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "409": {
+            "description": "Resource Conflict. Another binding maps the same source on the same service to another tenant",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "500": {
+            "description": "Internal service error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Maintenance mode",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        }
+      }
+    },
+    "/config/ai/netidentity/{name}": {
+      "delete": {
+        "description": "Removes the named binding. Requests from its network are decided without it from the next request.",
+        "tags": [
+          "ai"
+        ],
+        "summary": "Delete a network-identity binding",
+        "operationId": "deleteConfigAiNetidentityName",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "Name of the network-identity binding",
+            "name": "name",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/OperationResult"
+            }
+          },
+          "401": {
+            "description": "Invalid authentication credentials",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "description": "Authenticated principal is not authorized for this operation",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "500": {
+            "description": "Internal service error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Maintenance mode",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        }
+      }
+    },
+    "/config/ai/objective": {
+      "get": {
+        "description": "Returns every objective in name order, read from the AI key store (source store). While the store does not answer, returns the objectives this gateway applies instead: the last it read from the store in this process (source store, with the time of that read), or the last-known-good file it started from (source lkg, with the time the store had answered with them). 503 only when the store does not answer and the gateway has applied nothing yet.",
+        "tags": [
+          "ai"
+        ],
+        "summary": "List objectives",
+        "operationId": "getConfigAiObjectiveAll",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "objectiveAttr": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/definitions/AIObjectiveEntry"
+                  }
+                },
+                "source": {
+                  "description": "Where the list came from: store (the key store answered) or lkg (the last-known-good file this gateway started from, while the store has not answered since)",
+                  "type": "string",
+                  "enum": [
+                    "store",
+                    "lkg"
+                  ]
+                },
+                "source_timestamp": {
+                  "description": "When the key store answered with this list: now for a list read now, earlier for an applied list served during an outage",
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "store_last_read": {
+                  "description": "When a read of the key store last answered: now when it answered this one; during an outage, the last read in this process. A gateway started from the last-known-good file shows the read that last CHANGED that file (the store may have answered later with nothing changed). Absent when neither happened",
+                  "type": "string",
+                  "format": "date-time",
+                  "x-nullable": true
+                },
+                "store_reachable": {
+                  "description": "Whether the key store answered this request's read of it: false during an outage, whatever source says",
+                  "type": "boolean",
+                  "x-omitempty": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid authentication credentials",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "description": "Authenticated principal is not authorized for this operation",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "500": {
+            "description": "Internal service error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Maintenance mode, no AI key store configured, or the store does not answer and nothing was applied yet",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        }
+      },
+      "post": {
+        "description": "An objective is a named priority a request can ask for with the x-llm-d-inference-objective header, or get as its tenant's or key's default. A positive priority is the critical class, a negative one sheddable, zero standard. Posting an existing name replaces the objective. Objectives live in the AI key store, so every gateway that shares the store applies a change within one refresh interval (LLB_AI_OBJECTIVE_REFRESH_SEC, default 10 s), this one at once. Without a key store, or while it does not answer, the call is refused with 503 and nothing changes.",
+        "tags": [
+          "ai"
+        ],
+        "summary": "Create or replace an objective",
+        "operationId": "postConfigAiObjective",
+        "parameters": [
+          {
+            "description": "Attributes of the objective",
+            "name": "attr",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/AIObjectiveEntry"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/OperationResult"
+            }
+          },
+          "400": {
+            "description": "Malformed arguments for API call",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "401": {
+            "description": "Invalid authentication credentials",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "description": "Authenticated principal is not authorized for this operation",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "500": {
+            "description": "Internal service error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Maintenance mode, no AI key store configured (ai_key_store_unconfigured), or the store does not answer (ai_key_store_unavailable)",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          }
+        }
+      }
+    },
+    "/config/ai/objective/{name}": {
+      "delete": {
+        "description": "Removes the named objective. A tenant or key that still names it keeps the name; a request that asks for it is then treated as one that asked for an unknown objective.",
+        "tags": [
+          "ai"
+        ],
+        "summary": "Delete an objective",
+        "operationId": "deleteConfigAiObjectiveName",
+        "parameters": [
+          {
+            "type": "string",
+            "description": "Name of the objective",
+            "name": "name",
+            "in": "path",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": {
+              "$ref": "#/definitions/OperationResult"
+            }
+          },
+          "401": {
+            "description": "Invalid authentication credentials",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "403": {
+            "description": "Authenticated principal is not authorized for this operation",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "500": {
+            "description": "Internal service error",
+            "schema": {
+              "$ref": "#/definitions/Error"
+            }
+          },
+          "503": {
+            "description": "Maintenance mode, no AI key store configured, or the store does not answer",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -23406,7 +24777,7 @@ func init() {
     },
     "/config/bfd": {
       "post": {
-        "description": "Create or update a BFD session for an existing cluster instance. New sessions require a valid remote address, interval at least 100000 microseconds, and retryCount greater than zero; first setup also validates source IP. Existing-session zero interval/retryCount preserves that value, while unchanged submissions conflict and source-IP changes are not applied. Interval narrows from uint64 to uint32. First creation is asynchronous and can fail after HTTP success.",
+        "description": "Create or update a BFD session for an existing cluster instance. New sessions require a valid remote address, interval at least 100000 microseconds, and retryCount greater than zero; first setup also validates source IP. Existing-session zero interval/retryCount preserves that value, while unchanged submissions conflict and source-IP changes are not applied. Interval narrows from uint64 to uint32. First creation is asynchronous and can fail after HTTP success. BGP-only mode returns 400; an uninitialized BFD subsystem returns 503.",
         "summary": "Create vlan interface in the device",
         "parameters": [
           {
@@ -23427,7 +24798,7 @@ func init() {
             }
           },
           "400": {
-            "description": "Malformed arguments for API call",
+            "description": "Malformed arguments for API call or BFD unavailable in BGP-only mode",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -23463,7 +24834,7 @@ func init() {
             }
           },
           "503": {
-            "description": "Maintenance mode",
+            "description": "Maintenance mode or BFD subsystem unavailable",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -23473,7 +24844,7 @@ func init() {
     },
     "/config/bfd/all": {
       "get": {
-        "description": "Return BFD sessions when the cluster BFD running flag is set. Current IPv6 host/port parsing can corrupt readback. A session accepted for asynchronous creation may not yet appear; the global running flag can also become inconsistent after deletion.",
+        "description": "Return the initialized BFD session table. No configured sessions (including keepalive disabled or after deleting the last session) returns 200 with Attr: []. BGP-only mode returns 400 and an uninitialized BFD subsystem returns 503. Current IPv6 host/port parsing can corrupt readback.",
         "summary": "Get BFD session inforrmation in the device",
         "responses": {
           "200": {
@@ -23488,6 +24859,12 @@ func init() {
                   }
                 }
               }
+            }
+          },
+          "400": {
+            "description": "BFD is unavailable in BGP-only mode",
+            "schema": {
+              "$ref": "#/definitions/Error"
             }
           },
           "401": {
@@ -23509,7 +24886,7 @@ func init() {
             }
           },
           "503": {
-            "description": "Maintenance mode",
+            "description": "Maintenance mode or BFD subsystem unavailable",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -23519,7 +24896,7 @@ func init() {
     },
     "/config/bfd/remoteIP/{remote_ip}": {
       "delete": {
-        "description": "Request deletion of a BFD session by remote IP. Supply an existing instance explicitly; omission does not default to the default instance. Safety limitation: instance existence is checked but session ownership is not, and successful deletion clears a global running flag even if other sessions remain. Do not assume instance-scoped isolation or complete BFD shutdown.",
+        "description": "Request deletion of a BFD session by remote IP. Supply an existing instance explicitly; omission does not default to the default instance. Successful deletion retains the keepalive running hint while any sessions remain and clears it only after the last session is removed. Safety limitation: instance existence is checked but session ownership is not; do not assume instance-scoped isolation or complete BFD shutdown. BGP-only mode returns 400; an uninitialized BFD subsystem returns 503.",
         "summary": "Delete a BFD session",
         "parameters": [
           {
@@ -23544,7 +24921,7 @@ func init() {
             }
           },
           "400": {
-            "description": "Malformed arguments for API call",
+            "description": "Malformed arguments for API call or BFD unavailable in BGP-only mode",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -23580,7 +24957,7 @@ func init() {
             }
           },
           "503": {
-            "description": "Maintenance mode",
+            "description": "Maintenance mode or BFD subsystem unavailable",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -32131,7 +33508,7 @@ func init() {
             "BearerAuth": []
           }
         ],
-        "description": "Removes the catalog \u2192 parser mapping, causing the system to fall back to:\n1. URL path-based routing (e.g., /v1/chat/completions \u2192 openai)\n2. Default mock parser\n\nRemoval is runtime-only and succeeds with 204 even when no mapping exists. Registry unavailability can produce 500. This does not edit YAML or guarantee that later catalog synchronization will preserve the removal.\n",
+        "description": "Removes the catalog → parser mapping, causing the system to fall back to:\n1. URL path-based routing (e.g., /v1/chat/completions → openai)\n2. Default mock parser\n\nRemoval is runtime-only and succeeds with 204 even when no mapping exists. Registry unavailability can produce 500. This does not edit YAML or guarantee that later catalog synchronization will preserve the removal.\n",
         "tags": [
           "Tracing"
         ],
@@ -32913,7 +34290,7 @@ func init() {
     },
     "/config/vlan": {
       "post": {
-        "description": "Create Linux bridge vlan<ID> with MTU 9000. The REST helper does not consistently enforce the VLAN range documented elsewhere, and successful creation does not prove completion of subsequent link setup.",
+        "description": "Create Linux bridge vlan\u003cID\u003e with MTU 9000. The REST helper does not consistently enforce the VLAN range documented elsewhere, and successful creation does not prove completion of subsequent link setup.",
         "summary": "Create vlan interface in the device",
         "parameters": [
           {
@@ -33026,7 +34403,7 @@ func init() {
     },
     "/config/vlan/{vlan_id}": {
       "delete": {
-        "description": "Delete Linux bridge vlan<ID>. The REST helper does not enforce a no-members precondition; do not assume a populated bridge will be rejected. Downstream failures are not guaranteed to use the documented conflict or not-found status.",
+        "description": "Delete Linux bridge vlan\u003cID\u003e. The REST helper does not enforce a no-members precondition; do not assume a populated bridge will be rejected. Downstream failures are not guaranteed to use the documented conflict or not-found status.",
         "summary": "Delete vlan in the device",
         "parameters": [
           {
@@ -33091,7 +34468,7 @@ func init() {
     },
     "/config/vlan/{vlan_id}/member": {
       "post": {
-        "description": "Attach a member to bridge vlan<ID>. Omitted tagged means false and attaches the named interface; tagged true creates and attaches <interface>.<ID>. The helper does not enforce existing-master ownership or the documented VLAN range, and failures can leave partial state. Verify existing membership before submission; automatic reparenting must not be treated as a safe update contract.",
+        "description": "Attach a member to bridge vlan\u003cID\u003e. Omitted tagged means false and attaches the named interface; tagged true creates and attaches \u003cinterface\u003e.\u003cID\u003e. The helper does not enforce existing-master ownership or the documented VLAN range, and failures can leave partial state. Verify existing membership before submission; automatic reparenting must not be treated as a safe update contract.",
         "summary": "Add a physical port to a vlan interface",
         "parameters": [
           {
@@ -33166,7 +34543,7 @@ func init() {
     },
     "/config/vlan/{vlan_id}/member/{if_name}/tagged/{tagged}": {
       "delete": {
-        "description": "Request removal of a member from bridge vlan<ID>; tagged deletion also deletes <interface>.<ID>. Safety limitation: the helper checks that the requested bridge exists but does not verify that it owns the member before unmastering it. Verify membership before submission; wrong-bridge deletion is an implementation gap.",
+        "description": "Request removal of a member from bridge vlan\u003cID\u003e; tagged deletion also deletes \u003cinterface\u003e.\u003cID\u003e. Safety limitation: the helper checks that the requested bridge exists but does not verify that it owns the member before unmastering it. Verify membership before submission; wrong-bridge deletion is an implementation gap.",
         "summary": "Remove a vlan member from a vlan interface",
         "parameters": [
           {
@@ -34645,7 +36022,7 @@ func init() {
     },
     "/status/process": {
       "get": {
-        "description": "Returns Linux process observations assembled from top, with CPU and memory percentages from ps. Values depend on command availability and output format; the current parser incompletely handles failed or short command output.",
+        "description": "Read Linux procfs directly without top or ps. CPUUsage is cumulative user plus system CPU time divided by elapsed process lifetime, as a percentage that can exceed 100 for multithreaded processes. MemoryUsage is resident bytes divided by MemTotal. Virtual, resident and shared sizes are decimal KiB strings; CPU time is minutes:seconds.centiseconds. Command is the kernel comm name (normally limited to 15 bytes), with embedded whitespace preserved. Effective UID uses the first matching passwd entry or its numeric value. Rows sort by displayed CPU usage descending, then PID ascending. Exited, inaccessible and malformed individual PID records are skipped; reads are not an atomic snapshot. Missing or invalid global procfs data, or no readable processes, returns 500 with a generic collection-failure response, never a message-inferred 400/404 or fabricated healthy empty list.",
         "summary": "Get a process based on CPU usage info in the device",
         "responses": {
           "200": {
@@ -34667,7 +36044,7 @@ func init() {
             }
           },
           "500": {
-            "description": "Internal service error",
+            "description": "Internal service error, including missing or invalid global process data or no readable processes",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -34751,6 +36128,39 @@ func init() {
     }
   },
   "definitions": {
+    "AIObjectiveEntry": {
+      "description": "A named request priority. name is 1 to 63 characters of letters, digits, '-', '_' and '.', compared exactly (case-sensitive), and must not begin with tier:. services limits the objective to the listed services (\"VIP:port\"); empty or omitted means every service. priority is a signed integer - positive is the critical class, negative sheddable, zero standard; the order between two objectives of the same class is not kept.",
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "description": "Name of the objective, as a request's header names it",
+          "type": "string"
+        },
+        "priority": {
+          "description": "The priority a request with this objective has",
+          "type": "integer",
+          "format": "int32",
+          "x-omitempty": false
+        },
+        "services": {
+          "description": "Services the objective applies to, as \"VIP:port\"; at most 256. Empty means all",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-omitempty": true
+        },
+        "updated_at": {
+          "description": "When the objective was last written. Ignored on input",
+          "type": "string",
+          "format": "date-time",
+          "readOnly": true
+        }
+      }
+    },
     "AiModelProfileEntry": {
       "description": "One published model-prompt profile (list and detail representations are identical). Presence conveys validity by construction - publication is all-or-nothing, so every entry has already passed artifact digest verification and tokenizer load; there is no partial or invalid state. tokenizerSha256 is always present (publication requires it); templateSha256/templateContentFormat are present iff a chat template is bound. The sha256 digests are the immutable audit/drift identities of the profile's artifacts. Artifact locator paths, the registry root, and any host filesystem information are deliberately EXCLUDED from this representation.",
       "type": "object",
@@ -34889,6 +36299,14 @@ func init() {
             "type": "string"
           }
         },
+        "allowed_objectives": {
+          "description": "The objectives a request with this key may ask for by header, and the body tiers (tier:priority, tier:fast, tier:flex) it may ask for by service_tier, out of the ones its tenant allows; at most 64. Empty means the key narrows nothing. The list governs raises only: a hint at or below what the request gets without one needs no entry.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-omitempty": true
+        },
         "api_key": {
           "description": "Optional imported credential; absent or empty generates a new key. Imports require 16-512 printable non-space ASCII bytes. GET/list never returns the credential. Create currently emits an empty raw_key string for imports, not omission. Length and invalid-character rejections both map to 400 with api_key validation fields.",
           "type": "string"
@@ -34897,6 +36315,10 @@ func init() {
           "description": "Total request-bucket capacity, not additional capacity above RPS. Zero uses per-key RPS. Nonpositive RPS skips this limiter; negative-value validation remains incomplete.",
           "type": "integer",
           "format": "int64"
+        },
+        "default_objective": {
+          "description": "The objective a request with this key gets when it names none, or one it may not use. Counts only when the tenant's allowed_objectives hold it.",
+          "type": "string"
         },
         "enabled": {
           "description": "Whether the API key is active. Absent = enabled (optional, nullable to distinguish unset).",
@@ -34911,6 +36333,15 @@ func init() {
         "name": {
           "description": "Human-readable label for the API key",
           "type": "string"
+        },
+        "priority_class": {
+          "description": "The highest priority class a request with this key may have. It can only lower what the key's tenant allows (a tenant that sets no class allows standard). Omitted means no cap from the key.",
+          "type": "string",
+          "enum": [
+            "standard",
+            "critical",
+            "sheddable"
+          ]
         },
         "rate_limit_rps": {
           "description": "Maximum requests per second allowed for this key",
@@ -34960,6 +36391,14 @@ func init() {
             "type": "string"
           }
         },
+        "allowed_objectives": {
+          "description": "The objectives a request with this key may ask for by header, and the body tiers (tier:priority, tier:fast, tier:flex) it may ask for by service_tier, out of the ones its tenant allows; at most 64. Empty means the key narrows nothing. The list governs raises only: a hint at or below what the request gets without one needs no entry.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-omitempty": true
+        },
         "burst_size": {
           "description": "Total request-bucket capacity, not additional capacity above RPS. Nonpositive burst uses per-key RPS; nonpositive RPS skips that limiter.",
           "type": "integer",
@@ -34969,6 +36408,10 @@ func init() {
           "description": "Timestamp when the key was created",
           "type": "string",
           "format": "date-time"
+        },
+        "default_objective": {
+          "description": "The objective a request with this key gets when it names none, or one it may not use. Counts only when the tenant's allowed_objectives hold it.",
+          "type": "string"
         },
         "enabled": {
           "description": "Whether this key is currently active",
@@ -34986,6 +36429,15 @@ func init() {
         "name": {
           "description": "Human-readable label for the API key",
           "type": "string"
+        },
+        "priority_class": {
+          "description": "The highest priority class a request with this key may have. It can only lower what the key's tenant allows (a tenant that sets no class allows standard). Omitted means no cap from the key.",
+          "type": "string",
+          "enum": [
+            "standard",
+            "critical",
+            "sheddable"
+          ]
         },
         "rate_limit_rps": {
           "description": "Maximum requests per second allowed for this key",
@@ -36456,7 +37908,7 @@ func init() {
       }
     },
     "BfdEntry": {
-      "description": "BFD session input for an existing cluster instance. New sessions require interval >= 100000 microseconds and retryCount > 0. Interval narrows from uint64 to uint32 without an upper-bound check. On an existing session, zero interval/retryCount preserves the current value, source-IP changes are not applied, and an unchanged request conflicts. Initial setup can return success before asynchronous creation fails.",
+      "description": "BFD session input for an existing cluster instance. New sessions require interval \u003e= 100000 microseconds and retryCount \u003e 0. Interval narrows from uint64 to uint32 without an upper-bound check. On an existing session, zero interval/retryCount preserves the current value, source-IP changes are not applied, and an unchanged request conflicts. Initial setup can return success before asynchronous creation fails.",
       "type": "object",
       "properties": {
         "instance": {
@@ -37409,6 +38861,61 @@ func init() {
           "type": "string"
         }
       }
+    },
+    "FcBandEffective": {
+      "description": "One priority band of a model pool as the capacity gate holds it, read back in fc_effective.bands.",
+      "type": "object",
+      "properties": {
+        "floor_units": {
+          "description": "The floor in service units against effective_max_outstanding, as the gate enforces it: rounded up in the band's favour but never to the whole ceiling for a share under 100, and clamped so the floors and the reserve never exceed the ceiling; 0 without a ceiling.",
+          "type": "integer",
+          "format": "int32",
+          "x-omitempty": false
+        },
+        "inflight": {
+          "description": "Service units the band holds right now.",
+          "type": "integer",
+          "format": "int32",
+          "x-omitempty": false
+        },
+        "min_share_pct": {
+          "description": "The band's floor in percent of the ceiling in force: a guarantee under contention, not a reservation; it binds only while that band has a waiter.",
+          "type": "integer",
+          "format": "int32",
+          "x-omitempty": false
+        },
+        "queue_pct": {
+          "description": "The most of the queue depth the band may hold, in percent; 0 is the shared depth. A ceiling on the band's own occupancy, not a reservation.",
+          "type": "integer",
+          "format": "int32",
+          "x-omitempty": false
+        },
+        "queued": {
+          "description": "Requests of the band waiting right now.",
+          "type": "integer",
+          "format": "int32",
+          "x-omitempty": false
+        },
+        "wait_ms": {
+          "description": "The band's configured wait window in milliseconds; 0 is the queue's (queue_wait_ms). A window above queue_wait_ms runs at queue_wait_ms.",
+          "type": "integer",
+          "format": "int32",
+          "x-omitempty": false
+        },
+        "weight": {
+          "description": "The band's credits per round under the weighted wake; 0 is not set.",
+          "type": "integer",
+          "format": "int32",
+          "x-omitempty": false
+        },
+        "weight_pct": {
+          "description": "The weight's share of the round (the sum of the three weights) in percent, rounded to the nearest; 0 when no weight is set.",
+          "type": "integer",
+          "format": "int32",
+          "x-omitempty": false
+        }
+      },
+      "readOnly": true
     },
     "FileSystemInfoEntry": {
       "type": "object",
@@ -38760,6 +40267,15 @@ func init() {
           "description": "Profile name (the identity LB rules reference)",
           "type": "string"
         },
+        "priority_class": {
+          "description": "The highest priority class a request admitted by this profile's tokens may have. It can only lower what the tenant allows (a tenant that sets no class allows standard). Omitted means no cap from the profile.",
+          "type": "string",
+          "enum": [
+            "standard",
+            "critical",
+            "sheddable"
+          ]
+        },
         "refresh_sec": {
           "description": "Periodic JWKS refresh interval in seconds (default 3600)",
           "type": "integer",
@@ -39139,7 +40655,7 @@ func init() {
       ],
       "properties": {
         "forward": {
-          "description": "Target within the listener's base endpoint pool. With no references the resolver returns the base pool; with references it constructs a subset using RR or WRR selection. Implementation warnings: poolId is not used to resolve an independent pool, and allocation failure can return the whole base pool instead of the subset. The fallback is a safety defect, not a promised routing policy.",
+          "description": "Target within the listener's base endpoint pool. With no references the request is selected as the base pool selects. With references it selects only among the referenced members of the base pool, round-robin, or weighted round-robin when the references' weights differ, skipping members that are down or circuit-broken; no copy of the pool is made, so member health and per-member accounting are the base pool's. On an AI-gateway pool the request passes the pool's capacity gate. Implementation warning: poolId is not used to resolve an independent pool.",
           "type": "object",
           "properties": {
             "backendRefs": {
@@ -39213,7 +40729,7 @@ func init() {
       }
     },
     "L7ActionForward": {
-      "description": "Target within the listener's base endpoint pool. With no references the resolver returns the base pool; with references it constructs a subset using RR or WRR selection. Implementation warnings: poolId is not used to resolve an independent pool, and allocation failure can return the whole base pool instead of the subset. The fallback is a safety defect, not a promised routing policy.",
+      "description": "Target within the listener's base endpoint pool. With no references the request is selected as the base pool selects. With references it selects only among the referenced members of the base pool, round-robin, or weighted round-robin when the references' weights differ, skipping members that are down or circuit-broken; no copy of the pool is made, so member health and per-member accounting are the base pool's. On an AI-gateway pool the request passes the pool's capacity gate. Implementation warning: poolId is not used to resolve an independent pool.",
       "type": "object",
       "properties": {
         "backendRefs": {
@@ -39965,6 +41481,31 @@ func init() {
               "description": "Service lifecycle flag. In the domain, absent/true enables new selection and false pauses new selection while retaining members. Implementation gap: POST drops this property, so false does not create a paused rule. The restricted L4 PATCH path handles explicit changes and GET reports effective state. Source behavior does not prove established-connection preservation.",
               "type": "boolean"
             },
+            "ai_default_max_tokens": {
+              "description": "The default reservation in tokens, used while ai_default_reservation is in force as on. 0 or omitted leaves the process default (LLB_AI_DEFAULT_MAX_TOKENS) in force, else the built-in 512, which is an estimate of a typical completion and not a measured one; at most 100000000. Changeable at runtime by a replace POST (the stored value is kept when omitted, an explicit 0 resets to the process default). Explicit JSON null is rejected. The value in force and its source are read back in fc_effective.",
+              "type": "integer",
+              "format": "int32",
+              "default": 0,
+              "maximum": 100000000,
+              "minimum": 0,
+              "x-nullable": false
+            },
+            "ai_default_reservation": {
+              "description": "Whether a request that declares no completion ceiling (no max_tokens or max_completion_tokens, or a value that is not a positive whole number: negative, 0, a string, a float, an object or an array) reserves a default number of completion tokens against the token quotas at admission. off reserves the prompt estimate alone, so leaving the field out is the cheaper choice at admission. on reserves ai_default_max_tokens beside the prompt estimate, as a claim each quota bucket may shrink: it is cut to what the bucket can hold beside the prompt estimate and to what is left of it, down to nothing, and it is never the reason a request is refused - only the prompt estimate and a declared ceiling are. A request admitted with less than the default is counted in fc_effective.reservation_clamped_burst or reservation_clamped_budget and in loxilb_ai_reservation_clamped_total, by reason: burst (the default is more than a bucket can ever hold beside the prompt) or budget (the bucket's budget was already taken). The claim is released when the response is settled, as a declared ceiling's is. Nothing is written into the forwarded request, and a declared ceiling is never replaced. inherit, or omitted on create, runs on the process default (LLB_AI_DEFAULT_RESERVATION, else off). Replace and null semantics as fc_mode; a replace that changes nothing else applies in place, to requests admitted from then on. Read back only when declared; what is in force is fc_effective.default_reservation. The gate reserves before a rule is selected by host, path or model, so the value is per listener: on a VIP and port that several rules share, the value of the rule installed first on it is the one in force for all of them (api_key_auth is read per listener too, but a disagreeing api_key_auth or jwt_auth_profile is refused rather than warned about; see api_key_auth). Declare the same value on each. A rule applied on a VIP and port whose rules resolve to different values is accepted, and the reply and the log carry a warning that names the value in effect; fc_effective shows that value on every rule.",
+              "type": "string",
+              "enum": [
+                "on",
+                "off",
+                "inherit"
+              ],
+              "x-nullable": false
+            },
+            "ai_objective_strict": {
+              "description": "What happens to a request that names, with the x-llm-d-inference-objective header, an objective it may not use (unknown, not for this service, or above what the request gets without a hint and not in its tenant's allowed_objectives). false (the default) - the request falls to its default objective and is admitted; the record says the objective was denied. true - the request is refused with 403 objective_not_allowed. Stored on any rule; it has an effect only where the admission gate runs (an AI-gateway service) and while a class is configured. The admission gate reads it per listener, as api_key_auth: declare the same value on each rule of a VIP and port. Changeable at runtime by a replace POST (the stored value is kept when omitted). Explicit JSON null is rejected.",
+              "type": "boolean",
+              "default": false,
+              "x-nullable": false
+            },
             "alpn_protocols": {
               "description": "HTTP ALPN capability list, typically [h2, http/1.1], [h2] or [http/1.1]. Recognized values override backend_protocol through a shared capability used by listener and backend TLS setup; list order is not preserved as preference order. Empty leaves backend_protocol in use. Implementation limitations: unknown tokens are ignored, an entirely unrecognized list falls back to backend_protocol, and the H1/both listener callback can select H1 without a common advertised protocol. This is not strict ALPN allow-list enforcement. See shared readback/update warnings.",
               "type": "array",
@@ -39980,7 +41521,7 @@ func init() {
               }
             },
             "api_key_auth": {
-              "description": "Data-plane credential enforcement declaration for this service. Omission is a state of its own. OMITTED declares nothing: the service is not marked AI-facing, proxying stays byte-identical, and a backend-owned X-Api-Key header passes through untouched. An explicit \"disabled\" declares the service AI-facing without enforcement: no key is validated, but X-Api-Key is the gateway's credential namespace and the header is stripped before dispatch. \"required\" makes the data plane validate the X-Api-Key header against the API-key store before the request reaches a backend, fails closed when the policy cannot be evaluated, and likewise strips the header. \"jwt\" validates an Authorization Bearer JWT against the service's jwt_auth_profile instead; X-Api-Key is not consulted. \"apikey-or-jwt\" accepts either credential with a fixed precedence: a present X-Api-Key decides alone (its rejection is final, with no JWT fallback), otherwise a Bearer token decides, and a request carrying neither is refused. Both JWT modes require jwt_auth_profile to name a configured profile. Reading a service back preserves the declaration exactly: an omitted policy reads back with this field absent, never resolved to a value. On a replace of an existing service, omitting this field leaves the declared policy unchanged \u2014 it never silently turns enforcement off; to clear a declared policy, send \"disabled\" explicitly. Independent of sse_mode and pd_disagg_mode, and independent of the management-plane authentication mode.",
+              "description": "Data-plane credential enforcement declaration for this service. Omission is a state of its own. OMITTED declares nothing: the service is not marked AI-facing, proxying stays byte-identical, and a backend-owned X-Api-Key header passes through untouched. An explicit \"disabled\" declares the service AI-facing without enforcement: no key is validated, but X-Api-Key is the gateway's credential namespace and the header is stripped before dispatch. \"required\" makes the data plane validate the X-Api-Key header against the API-key store before the request reaches a backend, fails closed when the policy cannot be evaluated, and likewise strips the header. \"jwt\" validates an Authorization Bearer JWT against the service's jwt_auth_profile instead; X-Api-Key is not consulted. \"apikey-or-jwt\" accepts either credential with a fixed precedence: a present X-Api-Key decides alone (its rejection is final, with no JWT fallback), otherwise a Bearer token decides, and a request carrying neither is refused. Both JWT modes require jwt_auth_profile to name a configured profile. Reading a service back preserves the declaration exactly: an omitted policy reads back with this field absent, never resolved to a value. On a replace of an existing service, omitting this field leaves the declared policy unchanged — it never silently turns enforcement off; to clear a declared policy, send \"disabled\" explicitly. Independent of sse_mode and pd_disagg_mode, and independent of the management-plane authentication mode. Rules that share a listener (address, port and protocol) share its credential policy, because the admission gate runs before a request is matched to a rule by host, path or model: a create or replace whose api_key_auth or jwt_auth_profile differs from the rules already on the listener is refused with 400 (an unset policy and an explicit \"disabled\" are different values), and a restored configuration is kept whole with the disagreement logged, as for the listener's TLS settings.",
               "type": "string",
               "enum": [
                 "disabled",
@@ -40169,6 +41710,35 @@ func init() {
               ],
               "x-nullable": false
             },
+            "fc_band_min_share_pct": {
+              "description": "Each band's floor, critical:standard:sheddable, in percent of the service ceiling in force (rounded up to whole units, and following the adaptive ceiling). A floor is a guarantee under contention, not a reservation: it binds only while that band has a waiter, so with no demand in the band the other bands take every unit. When a unit frees, the highest-ranked band that is below its floor and has a runnable waiter takes it; when no band is below its floor, the wake policy chooses. HTTP/2 streams and role legs never wait, so on a service that carries only HTTP/2 a floor never binds. Each 0 to 100, at most 100 together (400 naming fc_band_min_share_pct). 0:0:0 (the default) is no floor. A floor is independent of the wake policy and of the weights. Replace and null semantics as fc_band_weights.",
+              "type": "string",
+              "x-nullable": false
+            },
+            "fc_band_queue_pct": {
+              "description": "The most of the queue depth each band may hold, critical:standard:sheddable, in percent, rounded up to whole waiters and at least one; 0 is the shared depth. It bounds that band's own occupancy of fc_max_queue_depth and is a ceiling, not a reservation: what a band does not use stays open to every other band, and the queue as a whole never holds more than fc_max_queue_depth. A band at its share is refused with 429 admission_capacity (reason queue_full); nobody is evicted to make room for it. At most 100 together when all three are non-zero. 0:0:0 (the default) is no share. Replace and null semantics as fc_band_weights.",
+              "type": "string",
+              "x-nullable": false
+            },
+            "fc_band_wait_ms": {
+              "description": "Each band's wait window, critical:standard:sheddable, in milliseconds, each 0 to 3600000. A band's window is a cap inside the rule's window (fc_max_queue_wait_ms), never above it: a larger value runs at the rule's window, and 0 is the rule's window. A waiter whose window ends is answered 504 admission_queue_timeout. 0:0:0 (the default) resets every band to the queue's window. Replace and null semantics as fc_band_weights.",
+              "type": "string",
+              "x-nullable": false
+            },
+            "fc_band_weights": {
+              "description": "The weighted wake's weights, written critical:standard:sheddable (for example 8:3:1): three whole numbers, each 1 to 62, at most 64 together, or 0:0:0 for none (a zero weight beside non-zero ones is refused, 400). Each is the band's credits per round. Declared under strict they are stored and reported as not in use in fc_effective, so a later switch to weighted finds them. A change of weights starts a new round. Not three whole numbers separated by ':' is refused (400). 0:0:0 resets to none; omitted on a replace keeps the stored value; explicit JSON null is rejected.",
+              "type": "string",
+              "x-nullable": false
+            },
+            "fc_critical_reserve_pct": {
+              "description": "The only true reservation: the percent of the ceiling in force (rounded up to whole units) that no other band may take, even when critical is idle. It holds on HTTP/2 and role legs as well, which never wait. Together with the standard and sheddable entries of fc_band_min_share_pct at most 100 (400 naming fc_critical_reserve_pct); the critical entry of fc_band_min_share_pct is a separate floor, and critical holds the larger of the two. 0 or omitted on create is none. Replace and null semantics as fc_max_outstanding.",
+              "type": "integer",
+              "format": "int32",
+              "default": 0,
+              "maximum": 100,
+              "minimum": 0,
+              "x-nullable": false
+            },
             "fc_decode_max_inflight": {
               "description": "The per-endpoint ceiling on decode legs of disaggregated requests. 0 or omitted leaves the process default (LLB_FC_DECODE_MAX_INFLIGHT) in force; at most 100000. Changeable at runtime by a replace POST (the stored value is kept when omitted, an explicit 0 resets to the process default). Explicit JSON null is rejected. The value in force and its source are read back in fc_effective.",
               "type": "integer",
@@ -40210,11 +41780,76 @@ func init() {
                     "off"
                   ]
                 },
+                "band_fallback_reason": {
+                  "description": "Why the gate runs band settings other than the configured ones: a combination the API refuses a rule to declare, reached by inheriting the environment (LLB_FC_*) or by a restore replay, runs on the defaults and is logged once at apply time. sockmap_request - sockMapMode request or both on a rule that is not an AI-gateway service: every band knob at its default (the request direction never reaches the gate). zero_weight - weighted with a zero weight: strict. no_queue - shed queue on with no queue depth: off. none - the configuration runs as configured.",
+                  "type": "string",
+                  "enum": [
+                    "none",
+                    "sockmap_request",
+                    "zero_weight",
+                    "no_queue"
+                  ]
+                },
+                "bands": {
+                  "description": "Each priority band's live counts and the knobs in force (after any fallback). min_share_pct and floor_units are the floor alone; the critical reserve is reported beside the bands.",
+                  "type": "object",
+                  "properties": {
+                    "critical": {
+                      "$ref": "#/definitions/FcBandEffective"
+                    },
+                    "critical_reserve_pct": {
+                      "description": "The critical reserve in percent of the ceiling in force - units no other band may take, even when critical is idle.",
+                      "type": "integer",
+                      "format": "int32",
+                      "x-omitempty": false
+                    },
+                    "critical_reserve_units": {
+                      "description": "The reserve in service units against effective_max_outstanding, as the gate enforces it; 0 without a ceiling.",
+                      "type": "integer",
+                      "format": "int32",
+                      "x-omitempty": false
+                    },
+                    "sheddable": {
+                      "$ref": "#/definitions/FcBandEffective"
+                    },
+                    "standard": {
+                      "$ref": "#/definitions/FcBandEffective"
+                    }
+                  }
+                },
+                "bands_configured": {
+                  "description": "true when any band knob in force differs from its default.",
+                  "type": "boolean",
+                  "x-omitempty": false
+                },
+                "config_source": {
+                  "description": "Where the objectives and the tenant and key classes this gateway is applying came from. store - the AI key store answered the last read. lkg - the store has not answered since the gateway started and the last-known-good file (aigw-lkg.json under the configuration path) is being served; writes are refused with 503 meanwhile and loxilb_ai_class_config_lkg_intervals_total counts. none - nothing was read (no store configured, or a store that has not answered and no file); every request is standard. The same value on every rule - it is the gateway's, not the rule's.",
+                  "type": "string",
+                  "enum": [
+                    "store",
+                    "lkg",
+                    "none"
+                  ]
+                },
                 "decode_max_inflight": {
                   "description": "Per-endpoint ceiling for decode legs; 0 is unlimited.",
                   "type": "integer",
                   "x-omitempty": false,
                   "format": "int32"
+                },
+                "default_max_tokens": {
+                  "description": "The default reservation in tokens in force for requests that route to this rule; 0 while default_reservation is off.",
+                  "type": "integer",
+                  "format": "int32",
+                  "x-omitempty": false
+                },
+                "default_reservation": {
+                  "description": "Whether a request without a declared max_tokens that routes to this rule reserves a default for its completion. Each rule of a VIP and port has its own value - the gate takes it from the rule the request's host, path and model select.",
+                  "type": "string",
+                  "enum": [
+                    "on",
+                    "off"
+                  ]
                 },
                 "effective_max_outstanding": {
                   "description": "The service ceiling in force now; below max_outstanding while an adaptive pool is tightened.",
@@ -40239,8 +41874,15 @@ func init() {
                 "inflight": {
                   "description": "Inference requests executing on the pool right now.",
                   "type": "integer",
-                  "x-omitempty": false,
                   "format": "int32"
+                },
+                "llmd_headers": {
+                  "description": "Whether refusals carry x-llm-d-request-dropped-reason and x-llm-d-inference-ttl may shorten a wait.",
+                  "type": "string",
+                  "enum": [
+                    "on",
+                    "off"
+                  ]
                 },
                 "max_outstanding": {
                   "description": "Pool-wide ceiling on executing inference requests; 0 is unlimited.",
@@ -40279,8 +41921,60 @@ func init() {
                 "queued": {
                   "description": "Inference requests waiting for a unit right now.",
                   "type": "integer",
-                  "x-omitempty": false,
-                  "format": "int32"
+                  "format": "int32",
+                  "x-omitempty": false
+                },
+                "reservation_clamped_budget": {
+                  "description": "Requests admitted with less than default_max_tokens reserved, since the process started, because the bucket's budget was already taken by other claims or by spend. Transient - it passes as the window refills. Counted per service, as reservation_clamped_burst. Never a refusal.",
+                  "type": "integer",
+                  "format": "int64",
+                  "x-omitempty": false
+                },
+                "reservation_clamped_burst": {
+                  "description": "Requests admitted with less than default_max_tokens reserved, since the process started, because default_max_tokens beside the prompt is more than a quota bucket can ever hold, so the request is clamped on an idle bucket too. A configuration to fix - lower the default or raise the quota or its burst. A request this applies to is counted here whatever the budgets held. Counted per service - every model pool of the same VIP and port reads the same number. Never a refusal.",
+                  "type": "integer",
+                  "format": "int64",
+                  "x-omitempty": false
+                },
+                "reservation_epoch": {
+                  "description": "The minute (Unix time divided by 60) the reservation_held_* fields below are a reading of. A token reservation belongs to the minute it was made in and does not outlive it - a request that ended without settling leaves its claim until the minute turns, and no longer. Compare two readings only when this value is the same in both.",
+                  "type": "integer",
+                  "format": "int64",
+                  "x-omitempty": false
+                },
+                "reservation_held": {
+                  "description": "The quota buckets holding reserved tokens right now, largest first, at most 64. Empty when nothing is held. A bucket not listed holds nothing unless reservation_held_truncated is true.",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/definitions/LoadbalanceEntryServiceArgumentsFcEffectiveReservationHeldItems0"
+                  }
+                },
+                "reservation_held_claims": {
+                  "description": "How many token reservations are held right now on the quota buckets this service's requests reserve on, counted one per request and bucket - a request holds one claim on every quota bucket that applies to it (tenant, tenant and model, user, user and model, key, service), so one in-flight request on three buckets is three claims. Zero exactly when nothing is held. It is a count of claims and says nothing about tokens - the tokens each bucket holds are in reservation_held. A tenant's bucket is shared by every service the tenant uses, and its claims are counted on each of them. Read from the quota store's own counters. Management read-back only - not exported as a metric.",
+                  "type": "integer",
+                  "format": "int64",
+                  "x-omitempty": false
+                },
+                "reservation_held_truncated": {
+                  "description": "true when reservation_held does not list every bucket holding a reservation - more than 64 hold one, or the service has reserved on more buckets than the gateway tracks for it (4096). reservation_held_claims covers the tracked buckets in either case.",
+                  "type": "boolean",
+                  "x-omitempty": false
+                },
+                "shed_queue": {
+                  "description": "As configured: whether a sheddable request at the ceiling waits in its band instead of 429 admission_shed.",
+                  "type": "string",
+                  "enum": [
+                    "on",
+                    "off"
+                  ]
+                },
+                "shed_queue_effective": {
+                  "description": "The shed queue the gate runs.",
+                  "type": "string",
+                  "enum": [
+                    "on",
+                    "off"
+                  ]
                 },
                 "source": {
                   "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default).",
@@ -40294,7 +41988,63 @@ func init() {
                         "default"
                       ]
                     },
+                    "band_min_share_pct": {
+                      "type": "string",
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ]
+                    },
+                    "band_queue_pct": {
+                      "type": "string",
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ]
+                    },
+                    "band_wait_ms": {
+                      "type": "string",
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ]
+                    },
+                    "band_weights": {
+                      "type": "string",
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ]
+                    },
+                    "critical_reserve_pct": {
+                      "type": "string",
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ]
+                    },
                     "decode_max_inflight": {
+                      "type": "string",
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ]
+                    },
+                    "default_max_tokens": {
+                      "type": "string",
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ]
+                    },
+                    "default_reservation": {
                       "type": "string",
                       "enum": [
                         "rule",
@@ -40311,6 +42061,14 @@ func init() {
                       ]
                     },
                     "expose_headers": {
+                      "type": "string",
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ]
+                    },
+                    "llmd_headers": {
                       "type": "string",
                       "enum": [
                         "rule",
@@ -40358,6 +42116,14 @@ func init() {
                         "default"
                       ]
                     },
+                    "shed_queue": {
+                      "type": "string",
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ]
+                    },
                     "telemetry_stale_ms": {
                       "type": "string",
                       "enum": [
@@ -40374,7 +42140,23 @@ func init() {
                         "default"
                       ]
                     },
+                    "tenant_wake": {
+                      "type": "string",
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ]
+                    },
                     "ttft_target_ms": {
+                      "type": "string",
+                      "enum": [
+                        "rule",
+                        "env",
+                        "default"
+                      ]
+                    },
+                    "wake_policy": {
                       "type": "string",
                       "enum": [
                         "rule",
@@ -40392,6 +42174,17 @@ func init() {
                     }
                   }
                 },
+                "store_last_read": {
+                  "description": "When a read of the AI key store last answered in this process. A gateway started from the last-known-good file shows, until the store answers, the read that last CHANGED that file: the store may have answered later with nothing changed (the file is written only on a change). Absent when neither happened or no key store is configured.",
+                  "type": "string",
+                  "format": "date-time",
+                  "x-nullable": true
+                },
+                "store_reachable": {
+                  "description": "Whether the AI key store answered the gateway's latest read of it, whatever config_source says (a configuration read earlier stays in force through an outage). Absent when no key store is configured. The gateway's, the same on every rule.",
+                  "type": "boolean",
+                  "x-nullable": true
+                },
                 "telemetry_stale_ms": {
                   "description": "The P/D scorers' trust window for scraped queue depth, in milliseconds.",
                   "type": "integer",
@@ -40404,6 +42197,27 @@ func init() {
                   "x-omitempty": false,
                   "format": "int32"
                 },
+                "tenant_slots": {
+                  "description": "Tenants the pool tracks by name at once for the tenant share; tenants past it share one budget. Fixed when the pool is created (LLB_FC_TENANT_SLOTS).",
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "tenant_wake": {
+                  "description": "The order inside one band, as configured (fifo, or rr across tenants).",
+                  "type": "string",
+                  "enum": [
+                    "fifo",
+                    "rr"
+                  ]
+                },
+                "tenant_wake_effective": {
+                  "description": "The order inside one band the gate runs (fifo, or rr across tenants).",
+                  "type": "string",
+                  "enum": [
+                    "fifo",
+                    "rr"
+                  ]
+                },
                 "tenants_active": {
                   "description": "Tenants holding a unit or waiting on the pool now, while it holds tenants to a share.",
                   "type": "integer",
@@ -40412,8 +42226,23 @@ func init() {
                 },
                 "ttft_target_ms": {
                   "type": "integer",
-                  "x-omitempty": false,
                   "format": "int32"
+                },
+                "wake_policy": {
+                  "description": "The wake policy as configured, by the rule or inherited (source.wake_policy); wake_policy_effective is the one the gate runs. strict - while higher-band demand keeps the ceiling full, a lower band is admitted zero requests; each waiter is refused when its band's wait window ends. weighted - a deficit round robin: while several bands have waiters, each receives its weight's share of wake-ups, exactly over whole rounds (8:3:1 is 8, 3, 1 in every 12); the share is of admissions, not of tokens, GPU time or latency. No band is promoted because it has waited long.",
+                  "type": "string",
+                  "enum": [
+                    "strict",
+                    "weighted"
+                  ]
+                },
+                "wake_policy_effective": {
+                  "description": "The wake policy the gate runs. Differs from wake_policy only when band_fallback_reason is not none.",
+                  "type": "string",
+                  "enum": [
+                    "strict",
+                    "weighted"
+                  ]
                 },
                 "warming_endpoints": {
                   "description": "Endpoints inside their warm-up window.",
@@ -40423,8 +42252,11 @@ func init() {
                 },
                 "warmup_ms": {
                   "type": "integer",
-                  "x-omitempty": false,
                   "format": "int32"
+                },
+                "weights_in_use": {
+                  "description": "true when wake_policy_effective is weighted and the weights decide the wake; declared weights are stored but not in use otherwise.",
+                  "type": "boolean"
                 }
               },
               "readOnly": true
@@ -40440,6 +42272,16 @@ func init() {
             },
             "fc_expose_headers": {
               "description": "on puts X-Loxilb-Admission-Inflight, X-Loxilb-Admission-Queued and X-Loxilb-Admission-Limit on the head of every admitted inference response (HTTP/1 and HTTP/2, streamed ones included), the same three a capacity refusal carries: the pool's executing units and waiting requests as the response head goes out, and the service ceiling in force (0 is none). Fields of those names from the backend are replaced. off leaves responses as the backend sent them; inherit, or omitted on create, runs on the process default (LLB_FC_EXPOSE_HEADERS). Refused (400) with sockMapMode both or response, where the gateway never sees the response. Replace and null semantics as fc_mode.",
+              "type": "string",
+              "enum": [
+                "on",
+                "off",
+                "inherit"
+              ],
+              "x-nullable": false
+            },
+            "fc_llmd_headers": {
+              "description": "on: adds x-llm-d-request-dropped-reason to the admission refusals (HTTP/1.1 answers and HTTP/2 stream refusals); lets a valid x-llm-d-inference-ttl on an HTTP/1.1 request (Go duration syntax, positive, held at one day) shorter than the window that applies shorten that request's wait, never extend it, where a wait the client's TTL ended is answered 429 admission_ttl_expired and a wait a window of the rule ended stays 504 admission_queue_timeout; and forwards the gateway's resolved values in x-llm-d-inference-objective (the class the request was admitted as) and x-llm-d-inference-fairness-id (the authenticated tenant, none for a request without one), removing the client's copy of either name and of the deprecated x-gateway-inference-* names, on HTTP/1.1 and HTTP/2 alike (on a chunked HTTP/1.1 request the copies are removed and nothing is written; HTTP/2 streams never wait, so the TTL does not apply to them). off leaves all of it out: the TTL header is ignored and every header is forwarded as sent. inherit, or omitted on create, runs on the process default (LLB_FC_LLMD_HEADERS, else off). Replace and null semantics as fc_mode.",
               "type": "string",
               "enum": [
                 "on",
@@ -40495,6 +42337,16 @@ func init() {
               "minimum": 0,
               "x-nullable": false
             },
+            "fc_shed_queue": {
+              "description": "off refuses a sheddable request at the ceiling at once with 429 admission_shed; on lets it wait in its band, and when the queue is full an arriving request of any higher band (standard or critical) evicts the youngest sheddable waiter, which is answered 429 admission_shed. on is refused (400) while the queue depth in force (fc_max_queue_depth, else LLB_FC_MAX_QUEUE_DEPTH) is 0. inherit, or omitted on create, runs on the process default (LLB_FC_SHED_QUEUE, else off). Replace and null semantics as fc_mode.",
+              "type": "string",
+              "enum": [
+                "on",
+                "off",
+                "inherit"
+              ],
+              "x-nullable": false
+            },
             "fc_telemetry_stale_ms": {
               "description": "How long an endpoint's scraped queue depth is trusted by the P/D scorers without a refresh, in milliseconds; an older value is replaced by the candidates' average. 0 or omitted leaves the process default (LLB_FC_TELEMETRY_STALE_MS, else 30000) in force. The scraper stamps whole seconds, so the window is effectively rounded to them. Replace and null semantics as fc_max_outstanding.",
               "type": "integer",
@@ -40513,6 +42365,16 @@ func init() {
               "minimum": 0,
               "x-nullable": false
             },
+            "fc_tenant_wake": {
+              "description": "The order inside one band. fifo wakes the oldest runnable waiter and does not tell tenants apart; rr rotates across the tenants with a runnable waiter in the band, oldest first inside one tenant, each band keeping its own place in the rotation. rr needs no fc_tenant_max_share_pct. inherit, or omitted on create, runs on the process default (LLB_FC_TENANT_WAKE, else fifo). Replace and null semantics as fc_mode.",
+              "type": "string",
+              "enum": [
+                "fifo",
+                "rr",
+                "inherit"
+              ],
+              "x-nullable": false
+            },
             "fc_ttft_target_ms": {
               "description": "With fc_adaptive on: an endpoint whose streamed responses take longer than this from admission to their first data event (an eighth-weighted average, trusted for fc_telemetry_stale_ms) is backpressure. Only streamed responses are measured: a buffered response's first byte comes with the whole completion. 0 or omitted leaves the process default (LLB_FC_TTFT_TARGET_MS, else TTFT unused) in force. Replace and null semantics as fc_max_outstanding.",
               "type": "integer",
@@ -40520,6 +42382,16 @@ func init() {
               "default": 0,
               "maximum": 3600000,
               "minimum": 0,
+              "x-nullable": false
+            },
+            "fc_wake_policy": {
+              "description": "Which priority band a freed service unit wakes when requests of several bands wait (critical, standard, sheddable: the class the request's objective resolved to). Bands act only with fc_mode enforce, below the ceiling every band is admitted at once, and HTTP/2 streams and P/D role legs never queue (for them the band decides the refusal only). strict wakes the highest band with a runnable waiter: while higher-band demand keeps the ceiling full, a lower band is admitted zero requests, and each waiter is refused when its band's wait window ends. weighted is a deficit round robin by fc_band_weights: each band with a runnable waiter gets its weight in credits per round, the highest band with credit left is served first, one wake costs one credit, and a band with no runnable waiter forfeits its turn; over whole rounds the wake-ups split exactly as the weights do (8:3:1 is 8 critical, 3 standard, 1 sheddable in every 12). The share is of admissions, not of tokens or latency, and a floor is served before the round. weighted needs every weight at least 1 (400 otherwise). inherit, or omitted on create, runs on the process default (LLB_FC_WAKE_POLICY, else strict). Refused (400) beside sockMapMode both or request on a rule that is not an AI-gateway service, as is every band knob other than its default. Such a rule that INHERITS weighted (or another band setting it would be refused for declaring) runs every band knob at its default instead, logs one warning at apply time and reads back fc_effective.wake_policy_effective with band_fallback_reason; so does weighted without a weight for every band. A change of policy starts a new round and loses no waiter. Replace and null semantics as fc_mode.",
+              "type": "string",
+              "enum": [
+                "strict",
+                "weighted",
+                "inherit"
+              ],
               "x-nullable": false
             },
             "fc_warmup_ms": {
@@ -40586,7 +42458,7 @@ func init() {
               "type": "boolean"
             },
             "id": {
-              "description": "Opaque LB identifier, supplied by the client or minted as UUIDv4 when absent. Collisions with another rule are rejected. The update path can replace an ID when another change is applied; do not assume immutable identity or automatic L7 reference migration.",
+              "description": "Opaque LB identifier, supplied by the client or minted as UUIDv4 when absent. An id already bound to another rule is refused with 400 (lbrule-id conflict). A replace that differs from the stored rule in this field alone rebinds the id to the existing rule in place, without touching the data plane, and answers success; a replace that changes other fields carries the new id along. Do not assume immutable identity or automatic L7 reference migration.",
               "type": "string"
             },
             "inactiveTimeOut": {
@@ -40595,7 +42467,7 @@ func init() {
               "format": "int32"
             },
             "jwt_auth_profile": {
-              "description": "Name of the JWT auth profile (config/ai/jwtauthprofile) that decides this service's Bearer arm. Required by, and only valid with, api_key_auth \"jwt\" and \"apikey-or-jwt\"; a create or replace naming a profile that is not configured is rejected. On a replace, omitting this field preserves the existing reference, in lockstep with api_key_auth's replace semantics. While a service references a profile, deleting that profile is refused.",
+              "description": "Name of the JWT auth profile (config/ai/jwtauthprofile) that decides this service's Bearer arm. Required by, and only valid with, api_key_auth \"jwt\" and \"apikey-or-jwt\"; a create or replace naming a profile that is not configured is rejected. On a replace, omitting this field preserves the existing reference, in lockstep with api_key_auth's replace semantics. While a service references a profile, deleting that profile is refused. Rules that share a listener must name the same profile; a disagreement is refused like a differing api_key_auth.",
               "type": "string",
               "maxLength": 63
             },
@@ -40640,7 +42512,7 @@ func init() {
               "x-nullable": false
             },
             "kvExactMode": {
-              "description": "KV-cache exact (Tier 1.5) routing mode. Selects the ENDPOINT TOPOLOGY only \u2014 the serving framework is chosen independently by kvEngineType, and engine support for each mode is bounded by the per-engine capability matrix in the kvEngineType description (NOT every mode works with every engine). 0 = off. 1 = exact routing over a P/D role-partitioned pool: requires pd_disagg_mode=true (rejected otherwise) and endpoints tagged ep_role 1/2; only ep_role=1 (prefill) endpoints are subscribed and scored, and Tier 1.5 sits between Tier 1 (trie) and Tier 2 (min-load) in the P/D ladder. 2 = reserved and rejected; no NATS implementation is available. 3 = single-pool exact routing: requires mode=4 (fullproxy) and pd_disagg_mode=false (both rejected otherwise); ALL endpoints are subscribed and scored. Mode 3 does NOT reproduce the P/D ladder \u2014 there is no Tier-0 P/D session-affinity stage, no Tier-1 P/D trie and no P/D backpressure admission stage on this path; management admission and strict binding enforcement still apply. A Tier-1.5 miss falls back to the rule's own sel selector. vllm/sglang consume ZMQ events; trtllm consumes HTTP-polled events. All enabled exact modes require model_name and a loadable tokenizer. vLLM Exact additionally requires the Gateway process to have been launched with a non-empty LLB_KV_NONE_HASH_SEED of at most 23 bytes, matching the engine's PYTHONHASHSEED: it is a property of the Gateway's deployment, not of this request, so on a Gateway launched without it EVERY vLLM Exact rule is refused and no request body can succeed. Query the Gateway's readiness rather than discovering this by submitting. See kvHashAlgo for what the seed governs. Profile/API-surface constraints apply independently; see kvModelProfile and kvExactApiMode.",
+              "description": "KV-cache exact (Tier 1.5) routing mode. Selects the ENDPOINT TOPOLOGY only — the serving framework is chosen independently by kvEngineType, and engine support for each mode is bounded by the per-engine capability matrix in the kvEngineType description (NOT every mode works with every engine). 0 = off. 1 = exact routing over a P/D role-partitioned pool: requires pd_disagg_mode=true (rejected otherwise) and endpoints tagged ep_role 1/2; only ep_role=1 (prefill) endpoints are subscribed and scored, and Tier 1.5 sits between Tier 1 (trie) and Tier 2 (min-load) in the P/D ladder. 2 = reserved and rejected; no NATS implementation is available. 3 = single-pool exact routing: requires mode=4 (fullproxy) and pd_disagg_mode=false (both rejected otherwise); ALL endpoints are subscribed and scored. Mode 3 does NOT reproduce the P/D ladder — there is no Tier-0 P/D session-affinity stage, no Tier-1 P/D trie and no P/D backpressure admission stage on this path; management admission and strict binding enforcement still apply. A Tier-1.5 miss falls back to the rule's own sel selector. vllm/sglang consume ZMQ events; trtllm consumes HTTP-polled events. All enabled exact modes require model_name and a loadable tokenizer. vLLM Exact additionally requires the Gateway process to have been launched with a non-empty LLB_KV_NONE_HASH_SEED of at most 23 bytes, matching the engine's PYTHONHASHSEED: it is a property of the Gateway's deployment, not of this request, so on a Gateway launched without it EVERY vLLM Exact rule is refused and no request body can succeed. Query the Gateway's readiness rather than discovering this by submitting. See kvHashAlgo for what the seed governs. Profile/API-surface constraints apply independently; see kvModelProfile and kvExactApiMode.",
               "type": "integer",
               "format": "int64",
               "default": 0,
@@ -40660,7 +42532,7 @@ func init() {
               "x-nullable": false
             },
             "kvModelProfile": {
-              "description": "ID of the ModelPromptProfile this rule binds to. Naming a profile makes the rule STRICT: the profile must be published in the gateway's profile registry, its alias policy must admit the rule's model_name, its pinned tokenizer artifacts must load and digest-match, and a composed KV-exact binding (model-profile@generation + engine-contract@generation) is allocated at create time \u2014 admission fails closed while no engine-contract registry is available. Absent = legacy profile-less rule (no binding; documented migration behavior). Immutable after create (delete+recreate to change), with ONE sanctioned exception: the migration attach. A replace-POST that names a profile on a live profile-less rule is admitted and re-runs the full strict bring-up (admission checks run BEFORE any mutation, so a refused attach leaves the rule, binding, and data plane untouched; enforcement reports pending until the data-plane contract installs and is acknowledged). The reverse transitions \u2014 dropping the profile or changing it to another \u2014 stay refused, as does any kvExactApiMode change during the attach (raw-string equality; an undeclared apiMode must stay undeclared in the attach POST). CAVEAT operators must be shown: attaching changes the rule's EFFECTIVE surface from the legacy both-surfaces default to the profile's declared supportedApis \u2014 attaching a completions-only profile to a rule that was serving chat traffic narrows the served surface. Scalar by schema \u2014 exactly one profile per rule; arrays are rejected representations. Requires kvExactMode=1 or 3; a profile declaration with Exact disabled is rejected. Snapshot restore has a separate recovery contract: it may preserve an unresolved profile declaration while fencing Exact routing; consult kvexactstatus rather than treating restored storage as a successful fresh admission.",
+              "description": "ID of the ModelPromptProfile this rule binds to. Naming a profile makes the rule STRICT: the profile must be published in the gateway's profile registry, its alias policy must admit the rule's model_name, its pinned tokenizer artifacts must load and digest-match, and a composed KV-exact binding (model-profile@generation + engine-contract@generation) is allocated at create time — admission fails closed while no engine-contract registry is available. Absent = legacy profile-less rule (no binding; documented migration behavior). Immutable after create (delete+recreate to change), with ONE sanctioned exception: the migration attach. A replace-POST that names a profile on a live profile-less rule is admitted and re-runs the full strict bring-up (admission checks run BEFORE any mutation, so a refused attach leaves the rule, binding, and data plane untouched; enforcement reports pending until the data-plane contract installs and is acknowledged). The reverse transitions — dropping the profile or changing it to another — stay refused, as does any kvExactApiMode change during the attach (raw-string equality; an undeclared apiMode must stay undeclared in the attach POST). CAVEAT operators must be shown: attaching changes the rule's EFFECTIVE surface from the legacy both-surfaces default to the profile's declared supportedApis — attaching a completions-only profile to a rule that was serving chat traffic narrows the served surface. Scalar by schema — exactly one profile per rule; arrays are rejected representations. Requires kvExactMode=1 or 3; a profile declaration with Exact disabled is rejected. Snapshot restore has a separate recovery contract: it may preserve an unresolved profile declaration while fencing Exact routing; consult kvexactstatus rather than treating restored storage as a successful fresh admission.",
               "type": "string",
               "x-nullable": false
             },
@@ -40692,6 +42564,15 @@ func init() {
               "format": "int32",
               "default": 0,
               "minimum": 0,
+              "x-nullable": false
+            },
+            "mcp_protocol_version": {
+              "description": "Explicit stateless MCP transport mode. Omitted or empty on create preserves legacy behavior. Omitted replace preserves the existing value; changing it requires delete and recreate. Requires TCP FullProxy (mode=4), round-robin (sel=0) or weighted round-robin (sel=2), and sockMapMode=off. Session affinity, model routing, P/D disaggregation and KV routing are rejected. Configuration readback does not prove request validation or backend delivery.",
+              "type": "string",
+              "enum": [
+                "",
+                "2026-07-28"
+              ],
               "x-nullable": false
             },
             "mode": {
@@ -40963,7 +42844,6 @@ func init() {
                 10
               ]
             },
-            "mcp_protocol_version": {"type": "string", "x-nullable": false, "enum": ["", "2026-07-28"], "description": "Explicit stateless MCP transport mode. Omitted create is legacy; omitted replace preserves. Immutable after create: delete and recreate to change. Requires TCP FullProxy mode=4, sel=0 or 2, sockMapMode=off. No session affinity, model, P/D or KV routing."},
             "session_header_name": {
               "description": "Session-key extraction setting for proxy affinity. Use a header name such as X-Session-ID, cookie:NAME for one cookie, query:NAME for one query parameter, or basic-auth for the Basic Authorization username. RR (sel=0) and persistence (sel=3) paths contain handling; a missing usable key follows their RR or IP-based fallback respectively. This setting is not authentication. GET includes it only for those selectors. The server accepts at most 127 UTF-8 bytes and rejects embedded NUL or invalid UTF-8 before changing rule state. This byte limit reserves the terminator in the 128-byte data-plane field; UI validation must count encoded bytes rather than characters. Cross-mode interaction with L7 HTTP_COOKIE remains unresolved.",
               "type": "string",
@@ -40985,7 +42865,7 @@ func init() {
               ]
             },
             "sse_mode": {
-              "description": "Enable detection of text/event-stream responses and the associated streaming idle-timeout protection. This flag controls Gateway SSE handling, not whether the backend implements an OpenAI API. Active detected streams remain subject to max_stream_duration_sec and the system stream cap; enabling SSE does not make them unbounded.",
+              "description": "Enable detection of text/event-stream responses and the associated streaming idle-timeout protection. A rule with pd_disagg_mode always has it, whether or not sse_mode is set. This flag controls Gateway SSE handling, not whether the backend implements an OpenAI API. Active detected streams remain subject to max_stream_duration_sec and the system stream cap; enabling SSE does not make them unbounded.",
               "type": "boolean",
               "default": false,
               "x-nullable": false
@@ -41154,6 +43034,31 @@ func init() {
           "description": "Service lifecycle flag. In the domain, absent/true enables new selection and false pauses new selection while retaining members. Implementation gap: POST drops this property, so false does not create a paused rule. The restricted L4 PATCH path handles explicit changes and GET reports effective state. Source behavior does not prove established-connection preservation.",
           "type": "boolean"
         },
+        "ai_default_max_tokens": {
+          "description": "The default reservation in tokens, used while ai_default_reservation is in force as on. 0 or omitted leaves the process default (LLB_AI_DEFAULT_MAX_TOKENS) in force, else the built-in 512, which is an estimate of a typical completion and not a measured one; at most 100000000. Changeable at runtime by a replace POST (the stored value is kept when omitted, an explicit 0 resets to the process default). Explicit JSON null is rejected. The value in force and its source are read back in fc_effective.",
+          "type": "integer",
+          "format": "int32",
+          "default": 0,
+          "maximum": 100000000,
+          "minimum": 0,
+          "x-nullable": false
+        },
+        "ai_default_reservation": {
+          "description": "Whether a request that declares no completion ceiling (no max_tokens or max_completion_tokens, or a value that is not a positive whole number: negative, 0, a string, a float, an object or an array) reserves a default number of completion tokens against the token quotas at admission. off reserves the prompt estimate alone, so leaving the field out is the cheaper choice at admission. on reserves ai_default_max_tokens beside the prompt estimate, as a claim each quota bucket may shrink: it is cut to what the bucket can hold beside the prompt estimate and to what is left of it, down to nothing, and it is never the reason a request is refused - only the prompt estimate and a declared ceiling are. A request admitted with less than the default is counted in fc_effective.reservation_clamped_burst or reservation_clamped_budget and in loxilb_ai_reservation_clamped_total, by reason: burst (the default is more than a bucket can ever hold beside the prompt) or budget (the bucket's budget was already taken). The claim is released when the response is settled, as a declared ceiling's is. Nothing is written into the forwarded request, and a declared ceiling is never replaced. inherit, or omitted on create, runs on the process default (LLB_AI_DEFAULT_RESERVATION, else off). Replace and null semantics as fc_mode; a replace that changes nothing else applies in place, to requests admitted from then on. Read back only when declared; what is in force is fc_effective.default_reservation. The gate reserves before a rule is selected by host, path or model, so the value is per listener: on a VIP and port that several rules share, the value of the rule installed first on it is the one in force for all of them (api_key_auth is read per listener too, but a disagreeing api_key_auth or jwt_auth_profile is refused rather than warned about; see api_key_auth). Declare the same value on each. A rule applied on a VIP and port whose rules resolve to different values is accepted, and the reply and the log carry a warning that names the value in effect; fc_effective shows that value on every rule.",
+          "type": "string",
+          "enum": [
+            "on",
+            "off",
+            "inherit"
+          ],
+          "x-nullable": false
+        },
+        "ai_objective_strict": {
+          "description": "What happens to a request that names, with the x-llm-d-inference-objective header, an objective it may not use (unknown, not for this service, or above what the request gets without a hint and not in its tenant's allowed_objectives). false (the default) - the request falls to its default objective and is admitted; the record says the objective was denied. true - the request is refused with 403 objective_not_allowed. Stored on any rule; it has an effect only where the admission gate runs (an AI-gateway service) and while a class is configured. The admission gate reads it per listener, as api_key_auth: declare the same value on each rule of a VIP and port. Changeable at runtime by a replace POST (the stored value is kept when omitted). Explicit JSON null is rejected.",
+          "type": "boolean",
+          "default": false,
+          "x-nullable": false
+        },
         "alpn_protocols": {
           "description": "HTTP ALPN capability list, typically [h2, http/1.1], [h2] or [http/1.1]. Recognized values override backend_protocol through a shared capability used by listener and backend TLS setup; list order is not preserved as preference order. Empty leaves backend_protocol in use. Implementation limitations: unknown tokens are ignored, an entirely unrecognized list falls back to backend_protocol, and the H1/both listener callback can select H1 without a common advertised protocol. This is not strict ALPN allow-list enforcement. See shared readback/update warnings.",
           "type": "array",
@@ -41169,7 +43074,7 @@ func init() {
           }
         },
         "api_key_auth": {
-          "description": "Data-plane credential enforcement declaration for this service. Omission is a state of its own. OMITTED declares nothing: the service is not marked AI-facing, proxying stays byte-identical, and a backend-owned X-Api-Key header passes through untouched. An explicit \"disabled\" declares the service AI-facing without enforcement: no key is validated, but X-Api-Key is the gateway's credential namespace and the header is stripped before dispatch. \"required\" makes the data plane validate the X-Api-Key header against the API-key store before the request reaches a backend, fails closed when the policy cannot be evaluated, and likewise strips the header. \"jwt\" validates an Authorization Bearer JWT against the service's jwt_auth_profile instead; X-Api-Key is not consulted. \"apikey-or-jwt\" accepts either credential with a fixed precedence: a present X-Api-Key decides alone (its rejection is final, with no JWT fallback), otherwise a Bearer token decides, and a request carrying neither is refused. Both JWT modes require jwt_auth_profile to name a configured profile. Reading a service back preserves the declaration exactly: an omitted policy reads back with this field absent, never resolved to a value. On a replace of an existing service, omitting this field leaves the declared policy unchanged \u2014 it never silently turns enforcement off; to clear a declared policy, send \"disabled\" explicitly. Independent of sse_mode and pd_disagg_mode, and independent of the management-plane authentication mode.",
+          "description": "Data-plane credential enforcement declaration for this service. Omission is a state of its own. OMITTED declares nothing: the service is not marked AI-facing, proxying stays byte-identical, and a backend-owned X-Api-Key header passes through untouched. An explicit \"disabled\" declares the service AI-facing without enforcement: no key is validated, but X-Api-Key is the gateway's credential namespace and the header is stripped before dispatch. \"required\" makes the data plane validate the X-Api-Key header against the API-key store before the request reaches a backend, fails closed when the policy cannot be evaluated, and likewise strips the header. \"jwt\" validates an Authorization Bearer JWT against the service's jwt_auth_profile instead; X-Api-Key is not consulted. \"apikey-or-jwt\" accepts either credential with a fixed precedence: a present X-Api-Key decides alone (its rejection is final, with no JWT fallback), otherwise a Bearer token decides, and a request carrying neither is refused. Both JWT modes require jwt_auth_profile to name a configured profile. Reading a service back preserves the declaration exactly: an omitted policy reads back with this field absent, never resolved to a value. On a replace of an existing service, omitting this field leaves the declared policy unchanged — it never silently turns enforcement off; to clear a declared policy, send \"disabled\" explicitly. Independent of sse_mode and pd_disagg_mode, and independent of the management-plane authentication mode. Rules that share a listener (address, port and protocol) share its credential policy, because the admission gate runs before a request is matched to a rule by host, path or model: a create or replace whose api_key_auth or jwt_auth_profile differs from the rules already on the listener is refused with 400 (an unset policy and an explicit \"disabled\" are different values), and a restored configuration is kept whole with the disagreement logged, as for the listener's TLS settings.",
           "type": "string",
           "enum": [
             "disabled",
@@ -41358,6 +43263,35 @@ func init() {
           ],
           "x-nullable": false
         },
+        "fc_band_min_share_pct": {
+          "description": "Each band's floor, critical:standard:sheddable, in percent of the service ceiling in force (rounded up to whole units, and following the adaptive ceiling). A floor is a guarantee under contention, not a reservation: it binds only while that band has a waiter, so with no demand in the band the other bands take every unit. When a unit frees, the highest-ranked band that is below its floor and has a runnable waiter takes it; when no band is below its floor, the wake policy chooses. HTTP/2 streams and role legs never wait, so on a service that carries only HTTP/2 a floor never binds. Each 0 to 100, at most 100 together (400 naming fc_band_min_share_pct). 0:0:0 (the default) is no floor. A floor is independent of the wake policy and of the weights. Replace and null semantics as fc_band_weights.",
+          "type": "string",
+          "x-nullable": false
+        },
+        "fc_band_queue_pct": {
+          "description": "The most of the queue depth each band may hold, critical:standard:sheddable, in percent, rounded up to whole waiters and at least one; 0 is the shared depth. It bounds that band's own occupancy of fc_max_queue_depth and is a ceiling, not a reservation: what a band does not use stays open to every other band, and the queue as a whole never holds more than fc_max_queue_depth. A band at its share is refused with 429 admission_capacity (reason queue_full); nobody is evicted to make room for it. At most 100 together when all three are non-zero. 0:0:0 (the default) is no share. Replace and null semantics as fc_band_weights.",
+          "type": "string",
+          "x-nullable": false
+        },
+        "fc_band_wait_ms": {
+          "description": "Each band's wait window, critical:standard:sheddable, in milliseconds, each 0 to 3600000. A band's window is a cap inside the rule's window (fc_max_queue_wait_ms), never above it: a larger value runs at the rule's window, and 0 is the rule's window. A waiter whose window ends is answered 504 admission_queue_timeout. 0:0:0 (the default) resets every band to the queue's window. Replace and null semantics as fc_band_weights.",
+          "type": "string",
+          "x-nullable": false
+        },
+        "fc_band_weights": {
+          "description": "The weighted wake's weights, written critical:standard:sheddable (for example 8:3:1): three whole numbers, each 1 to 62, at most 64 together, or 0:0:0 for none (a zero weight beside non-zero ones is refused, 400). Each is the band's credits per round. Declared under strict they are stored and reported as not in use in fc_effective, so a later switch to weighted finds them. A change of weights starts a new round. Not three whole numbers separated by ':' is refused (400). 0:0:0 resets to none; omitted on a replace keeps the stored value; explicit JSON null is rejected.",
+          "type": "string",
+          "x-nullable": false
+        },
+        "fc_critical_reserve_pct": {
+          "description": "The only true reservation: the percent of the ceiling in force (rounded up to whole units) that no other band may take, even when critical is idle. It holds on HTTP/2 and role legs as well, which never wait. Together with the standard and sheddable entries of fc_band_min_share_pct at most 100 (400 naming fc_critical_reserve_pct); the critical entry of fc_band_min_share_pct is a separate floor, and critical holds the larger of the two. 0 or omitted on create is none. Replace and null semantics as fc_max_outstanding.",
+          "type": "integer",
+          "format": "int32",
+          "default": 0,
+          "maximum": 100,
+          "minimum": 0,
+          "x-nullable": false
+        },
         "fc_decode_max_inflight": {
           "description": "The per-endpoint ceiling on decode legs of disaggregated requests. 0 or omitted leaves the process default (LLB_FC_DECODE_MAX_INFLIGHT) in force; at most 100000. Changeable at runtime by a replace POST (the stored value is kept when omitted, an explicit 0 resets to the process default). Explicit JSON null is rejected. The value in force and its source are read back in fc_effective.",
           "type": "integer",
@@ -41399,11 +43333,76 @@ func init() {
                 "off"
               ]
             },
+            "band_fallback_reason": {
+              "description": "Why the gate runs band settings other than the configured ones: a combination the API refuses a rule to declare, reached by inheriting the environment (LLB_FC_*) or by a restore replay, runs on the defaults and is logged once at apply time. sockmap_request - sockMapMode request or both on a rule that is not an AI-gateway service: every band knob at its default (the request direction never reaches the gate). zero_weight - weighted with a zero weight: strict. no_queue - shed queue on with no queue depth: off. none - the configuration runs as configured.",
+              "type": "string",
+              "enum": [
+                "none",
+                "sockmap_request",
+                "zero_weight",
+                "no_queue"
+              ]
+            },
+            "bands": {
+              "description": "Each priority band's live counts and the knobs in force (after any fallback). min_share_pct and floor_units are the floor alone; the critical reserve is reported beside the bands.",
+              "type": "object",
+              "properties": {
+                "critical": {
+                  "$ref": "#/definitions/FcBandEffective"
+                },
+                "critical_reserve_pct": {
+                  "description": "The critical reserve in percent of the ceiling in force - units no other band may take, even when critical is idle.",
+                  "type": "integer",
+                  "format": "int32",
+                  "x-omitempty": false
+                },
+                "critical_reserve_units": {
+                  "description": "The reserve in service units against effective_max_outstanding, as the gate enforces it; 0 without a ceiling.",
+                  "type": "integer",
+                  "format": "int32",
+                  "x-omitempty": false
+                },
+                "sheddable": {
+                  "$ref": "#/definitions/FcBandEffective"
+                },
+                "standard": {
+                  "$ref": "#/definitions/FcBandEffective"
+                }
+              }
+            },
+            "bands_configured": {
+              "description": "true when any band knob in force differs from its default.",
+              "type": "boolean",
+              "x-omitempty": false
+            },
+            "config_source": {
+              "description": "Where the objectives and the tenant and key classes this gateway is applying came from. store - the AI key store answered the last read. lkg - the store has not answered since the gateway started and the last-known-good file (aigw-lkg.json under the configuration path) is being served; writes are refused with 503 meanwhile and loxilb_ai_class_config_lkg_intervals_total counts. none - nothing was read (no store configured, or a store that has not answered and no file); every request is standard. The same value on every rule - it is the gateway's, not the rule's.",
+              "type": "string",
+              "enum": [
+                "store",
+                "lkg",
+                "none"
+              ]
+            },
             "decode_max_inflight": {
               "description": "Per-endpoint ceiling for decode legs; 0 is unlimited.",
               "type": "integer",
               "x-omitempty": false,
               "format": "int32"
+            },
+            "default_max_tokens": {
+              "description": "The default reservation in tokens in force for requests that route to this rule; 0 while default_reservation is off.",
+              "type": "integer",
+              "format": "int32",
+              "x-omitempty": false
+            },
+            "default_reservation": {
+              "description": "Whether a request without a declared max_tokens that routes to this rule reserves a default for its completion. Each rule of a VIP and port has its own value - the gate takes it from the rule the request's host, path and model select.",
+              "type": "string",
+              "enum": [
+                "on",
+                "off"
+              ]
             },
             "effective_max_outstanding": {
               "description": "The service ceiling in force now; below max_outstanding while an adaptive pool is tightened.",
@@ -41428,8 +43427,15 @@ func init() {
             "inflight": {
               "description": "Inference requests executing on the pool right now.",
               "type": "integer",
-              "x-omitempty": false,
               "format": "int32"
+            },
+            "llmd_headers": {
+              "description": "Whether refusals carry x-llm-d-request-dropped-reason and x-llm-d-inference-ttl may shorten a wait.",
+              "type": "string",
+              "enum": [
+                "on",
+                "off"
+              ]
             },
             "max_outstanding": {
               "description": "Pool-wide ceiling on executing inference requests; 0 is unlimited.",
@@ -41468,8 +43474,60 @@ func init() {
             "queued": {
               "description": "Inference requests waiting for a unit right now.",
               "type": "integer",
-              "x-omitempty": false,
-              "format": "int32"
+              "format": "int32",
+              "x-omitempty": false
+            },
+            "reservation_clamped_budget": {
+              "description": "Requests admitted with less than default_max_tokens reserved, since the process started, because the bucket's budget was already taken by other claims or by spend. Transient - it passes as the window refills. Counted per service, as reservation_clamped_burst. Never a refusal.",
+              "type": "integer",
+              "format": "int64",
+              "x-omitempty": false
+            },
+            "reservation_clamped_burst": {
+              "description": "Requests admitted with less than default_max_tokens reserved, since the process started, because default_max_tokens beside the prompt is more than a quota bucket can ever hold, so the request is clamped on an idle bucket too. A configuration to fix - lower the default or raise the quota or its burst. A request this applies to is counted here whatever the budgets held. Counted per service - every model pool of the same VIP and port reads the same number. Never a refusal.",
+              "type": "integer",
+              "format": "int64",
+              "x-omitempty": false
+            },
+            "reservation_epoch": {
+              "description": "The minute (Unix time divided by 60) the reservation_held_* fields below are a reading of. A token reservation belongs to the minute it was made in and does not outlive it - a request that ended without settling leaves its claim until the minute turns, and no longer. Compare two readings only when this value is the same in both.",
+              "type": "integer",
+              "format": "int64",
+              "x-omitempty": false
+            },
+            "reservation_held": {
+              "description": "The quota buckets holding reserved tokens right now, largest first, at most 64. Empty when nothing is held. A bucket not listed holds nothing unless reservation_held_truncated is true.",
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/LoadbalanceEntryServiceArgumentsFcEffectiveReservationHeldItems0"
+              }
+            },
+            "reservation_held_claims": {
+              "description": "How many token reservations are held right now on the quota buckets this service's requests reserve on, counted one per request and bucket - a request holds one claim on every quota bucket that applies to it (tenant, tenant and model, user, user and model, key, service), so one in-flight request on three buckets is three claims. Zero exactly when nothing is held. It is a count of claims and says nothing about tokens - the tokens each bucket holds are in reservation_held. A tenant's bucket is shared by every service the tenant uses, and its claims are counted on each of them. Read from the quota store's own counters. Management read-back only - not exported as a metric.",
+              "type": "integer",
+              "format": "int64",
+              "x-omitempty": false
+            },
+            "reservation_held_truncated": {
+              "description": "true when reservation_held does not list every bucket holding a reservation - more than 64 hold one, or the service has reserved on more buckets than the gateway tracks for it (4096). reservation_held_claims covers the tracked buckets in either case.",
+              "type": "boolean",
+              "x-omitempty": false
+            },
+            "shed_queue": {
+              "description": "As configured: whether a sheddable request at the ceiling waits in its band instead of 429 admission_shed.",
+              "type": "string",
+              "enum": [
+                "on",
+                "off"
+              ]
+            },
+            "shed_queue_effective": {
+              "description": "The shed queue the gate runs.",
+              "type": "string",
+              "enum": [
+                "on",
+                "off"
+              ]
             },
             "source": {
               "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default).",
@@ -41483,7 +43541,63 @@ func init() {
                     "default"
                   ]
                 },
+                "band_min_share_pct": {
+                  "type": "string",
+                  "enum": [
+                    "rule",
+                    "env",
+                    "default"
+                  ]
+                },
+                "band_queue_pct": {
+                  "type": "string",
+                  "enum": [
+                    "rule",
+                    "env",
+                    "default"
+                  ]
+                },
+                "band_wait_ms": {
+                  "type": "string",
+                  "enum": [
+                    "rule",
+                    "env",
+                    "default"
+                  ]
+                },
+                "band_weights": {
+                  "type": "string",
+                  "enum": [
+                    "rule",
+                    "env",
+                    "default"
+                  ]
+                },
+                "critical_reserve_pct": {
+                  "type": "string",
+                  "enum": [
+                    "rule",
+                    "env",
+                    "default"
+                  ]
+                },
                 "decode_max_inflight": {
+                  "type": "string",
+                  "enum": [
+                    "rule",
+                    "env",
+                    "default"
+                  ]
+                },
+                "default_max_tokens": {
+                  "type": "string",
+                  "enum": [
+                    "rule",
+                    "env",
+                    "default"
+                  ]
+                },
+                "default_reservation": {
                   "type": "string",
                   "enum": [
                     "rule",
@@ -41500,6 +43614,14 @@ func init() {
                   ]
                 },
                 "expose_headers": {
+                  "type": "string",
+                  "enum": [
+                    "rule",
+                    "env",
+                    "default"
+                  ]
+                },
+                "llmd_headers": {
                   "type": "string",
                   "enum": [
                     "rule",
@@ -41547,6 +43669,14 @@ func init() {
                     "default"
                   ]
                 },
+                "shed_queue": {
+                  "type": "string",
+                  "enum": [
+                    "rule",
+                    "env",
+                    "default"
+                  ]
+                },
                 "telemetry_stale_ms": {
                   "type": "string",
                   "enum": [
@@ -41563,7 +43693,23 @@ func init() {
                     "default"
                   ]
                 },
+                "tenant_wake": {
+                  "type": "string",
+                  "enum": [
+                    "rule",
+                    "env",
+                    "default"
+                  ]
+                },
                 "ttft_target_ms": {
+                  "type": "string",
+                  "enum": [
+                    "rule",
+                    "env",
+                    "default"
+                  ]
+                },
+                "wake_policy": {
                   "type": "string",
                   "enum": [
                     "rule",
@@ -41581,6 +43727,17 @@ func init() {
                 }
               }
             },
+            "store_last_read": {
+              "description": "When a read of the AI key store last answered in this process. A gateway started from the last-known-good file shows, until the store answers, the read that last CHANGED that file: the store may have answered later with nothing changed (the file is written only on a change). Absent when neither happened or no key store is configured.",
+              "type": "string",
+              "format": "date-time",
+              "x-nullable": true
+            },
+            "store_reachable": {
+              "description": "Whether the AI key store answered the gateway's latest read of it, whatever config_source says (a configuration read earlier stays in force through an outage). Absent when no key store is configured. The gateway's, the same on every rule.",
+              "type": "boolean",
+              "x-nullable": true
+            },
             "telemetry_stale_ms": {
               "description": "The P/D scorers' trust window for scraped queue depth, in milliseconds.",
               "type": "integer",
@@ -41593,6 +43750,27 @@ func init() {
               "x-omitempty": false,
               "format": "int32"
             },
+            "tenant_slots": {
+              "description": "Tenants the pool tracks by name at once for the tenant share; tenants past it share one budget. Fixed when the pool is created (LLB_FC_TENANT_SLOTS).",
+              "type": "integer",
+              "format": "int32"
+            },
+            "tenant_wake": {
+              "description": "The order inside one band, as configured (fifo, or rr across tenants).",
+              "type": "string",
+              "enum": [
+                "fifo",
+                "rr"
+              ]
+            },
+            "tenant_wake_effective": {
+              "description": "The order inside one band the gate runs (fifo, or rr across tenants).",
+              "type": "string",
+              "enum": [
+                "fifo",
+                "rr"
+              ]
+            },
             "tenants_active": {
               "description": "Tenants holding a unit or waiting on the pool now, while it holds tenants to a share.",
               "type": "integer",
@@ -41601,8 +43779,23 @@ func init() {
             },
             "ttft_target_ms": {
               "type": "integer",
-              "x-omitempty": false,
               "format": "int32"
+            },
+            "wake_policy": {
+              "description": "The wake policy as configured, by the rule or inherited (source.wake_policy); wake_policy_effective is the one the gate runs. strict - while higher-band demand keeps the ceiling full, a lower band is admitted zero requests; each waiter is refused when its band's wait window ends. weighted - a deficit round robin: while several bands have waiters, each receives its weight's share of wake-ups, exactly over whole rounds (8:3:1 is 8, 3, 1 in every 12); the share is of admissions, not of tokens, GPU time or latency. No band is promoted because it has waited long.",
+              "type": "string",
+              "enum": [
+                "strict",
+                "weighted"
+              ]
+            },
+            "wake_policy_effective": {
+              "description": "The wake policy the gate runs. Differs from wake_policy only when band_fallback_reason is not none.",
+              "type": "string",
+              "enum": [
+                "strict",
+                "weighted"
+              ]
             },
             "warming_endpoints": {
               "description": "Endpoints inside their warm-up window.",
@@ -41612,8 +43805,11 @@ func init() {
             },
             "warmup_ms": {
               "type": "integer",
-              "x-omitempty": false,
               "format": "int32"
+            },
+            "weights_in_use": {
+              "description": "true when wake_policy_effective is weighted and the weights decide the wake; declared weights are stored but not in use otherwise.",
+              "type": "boolean"
             }
           },
           "readOnly": true
@@ -41629,6 +43825,16 @@ func init() {
         },
         "fc_expose_headers": {
           "description": "on puts X-Loxilb-Admission-Inflight, X-Loxilb-Admission-Queued and X-Loxilb-Admission-Limit on the head of every admitted inference response (HTTP/1 and HTTP/2, streamed ones included), the same three a capacity refusal carries: the pool's executing units and waiting requests as the response head goes out, and the service ceiling in force (0 is none). Fields of those names from the backend are replaced. off leaves responses as the backend sent them; inherit, or omitted on create, runs on the process default (LLB_FC_EXPOSE_HEADERS). Refused (400) with sockMapMode both or response, where the gateway never sees the response. Replace and null semantics as fc_mode.",
+          "type": "string",
+          "enum": [
+            "on",
+            "off",
+            "inherit"
+          ],
+          "x-nullable": false
+        },
+        "fc_llmd_headers": {
+          "description": "on: adds x-llm-d-request-dropped-reason to the admission refusals (HTTP/1.1 answers and HTTP/2 stream refusals); lets a valid x-llm-d-inference-ttl on an HTTP/1.1 request (Go duration syntax, positive, held at one day) shorter than the window that applies shorten that request's wait, never extend it, where a wait the client's TTL ended is answered 429 admission_ttl_expired and a wait a window of the rule ended stays 504 admission_queue_timeout; and forwards the gateway's resolved values in x-llm-d-inference-objective (the class the request was admitted as) and x-llm-d-inference-fairness-id (the authenticated tenant, none for a request without one), removing the client's copy of either name and of the deprecated x-gateway-inference-* names, on HTTP/1.1 and HTTP/2 alike (on a chunked HTTP/1.1 request the copies are removed and nothing is written; HTTP/2 streams never wait, so the TTL does not apply to them). off leaves all of it out: the TTL header is ignored and every header is forwarded as sent. inherit, or omitted on create, runs on the process default (LLB_FC_LLMD_HEADERS, else off). Replace and null semantics as fc_mode.",
           "type": "string",
           "enum": [
             "on",
@@ -41684,6 +43890,16 @@ func init() {
           "minimum": 0,
           "x-nullable": false
         },
+        "fc_shed_queue": {
+          "description": "off refuses a sheddable request at the ceiling at once with 429 admission_shed; on lets it wait in its band, and when the queue is full an arriving request of any higher band (standard or critical) evicts the youngest sheddable waiter, which is answered 429 admission_shed. on is refused (400) while the queue depth in force (fc_max_queue_depth, else LLB_FC_MAX_QUEUE_DEPTH) is 0. inherit, or omitted on create, runs on the process default (LLB_FC_SHED_QUEUE, else off). Replace and null semantics as fc_mode.",
+          "type": "string",
+          "enum": [
+            "on",
+            "off",
+            "inherit"
+          ],
+          "x-nullable": false
+        },
         "fc_telemetry_stale_ms": {
           "description": "How long an endpoint's scraped queue depth is trusted by the P/D scorers without a refresh, in milliseconds; an older value is replaced by the candidates' average. 0 or omitted leaves the process default (LLB_FC_TELEMETRY_STALE_MS, else 30000) in force. The scraper stamps whole seconds, so the window is effectively rounded to them. Replace and null semantics as fc_max_outstanding.",
           "type": "integer",
@@ -41702,6 +43918,16 @@ func init() {
           "minimum": 0,
           "x-nullable": false
         },
+        "fc_tenant_wake": {
+          "description": "The order inside one band. fifo wakes the oldest runnable waiter and does not tell tenants apart; rr rotates across the tenants with a runnable waiter in the band, oldest first inside one tenant, each band keeping its own place in the rotation. rr needs no fc_tenant_max_share_pct. inherit, or omitted on create, runs on the process default (LLB_FC_TENANT_WAKE, else fifo). Replace and null semantics as fc_mode.",
+          "type": "string",
+          "enum": [
+            "fifo",
+            "rr",
+            "inherit"
+          ],
+          "x-nullable": false
+        },
         "fc_ttft_target_ms": {
           "description": "With fc_adaptive on: an endpoint whose streamed responses take longer than this from admission to their first data event (an eighth-weighted average, trusted for fc_telemetry_stale_ms) is backpressure. Only streamed responses are measured: a buffered response's first byte comes with the whole completion. 0 or omitted leaves the process default (LLB_FC_TTFT_TARGET_MS, else TTFT unused) in force. Replace and null semantics as fc_max_outstanding.",
           "type": "integer",
@@ -41709,6 +43935,16 @@ func init() {
           "default": 0,
           "maximum": 3600000,
           "minimum": 0,
+          "x-nullable": false
+        },
+        "fc_wake_policy": {
+          "description": "Which priority band a freed service unit wakes when requests of several bands wait (critical, standard, sheddable: the class the request's objective resolved to). Bands act only with fc_mode enforce, below the ceiling every band is admitted at once, and HTTP/2 streams and P/D role legs never queue (for them the band decides the refusal only). strict wakes the highest band with a runnable waiter: while higher-band demand keeps the ceiling full, a lower band is admitted zero requests, and each waiter is refused when its band's wait window ends. weighted is a deficit round robin by fc_band_weights: each band with a runnable waiter gets its weight in credits per round, the highest band with credit left is served first, one wake costs one credit, and a band with no runnable waiter forfeits its turn; over whole rounds the wake-ups split exactly as the weights do (8:3:1 is 8 critical, 3 standard, 1 sheddable in every 12). The share is of admissions, not of tokens or latency, and a floor is served before the round. weighted needs every weight at least 1 (400 otherwise). inherit, or omitted on create, runs on the process default (LLB_FC_WAKE_POLICY, else strict). Refused (400) beside sockMapMode both or request on a rule that is not an AI-gateway service, as is every band knob other than its default. Such a rule that INHERITS weighted (or another band setting it would be refused for declaring) runs every band knob at its default instead, logs one warning at apply time and reads back fc_effective.wake_policy_effective with band_fallback_reason; so does weighted without a weight for every band. A change of policy starts a new round and loses no waiter. Replace and null semantics as fc_mode.",
+          "type": "string",
+          "enum": [
+            "strict",
+            "weighted",
+            "inherit"
+          ],
           "x-nullable": false
         },
         "fc_warmup_ms": {
@@ -41775,7 +44011,7 @@ func init() {
           "type": "boolean"
         },
         "id": {
-          "description": "Opaque LB identifier, supplied by the client or minted as UUIDv4 when absent. Collisions with another rule are rejected. The update path can replace an ID when another change is applied; do not assume immutable identity or automatic L7 reference migration.",
+          "description": "Opaque LB identifier, supplied by the client or minted as UUIDv4 when absent. An id already bound to another rule is refused with 400 (lbrule-id conflict). A replace that differs from the stored rule in this field alone rebinds the id to the existing rule in place, without touching the data plane, and answers success; a replace that changes other fields carries the new id along. Do not assume immutable identity or automatic L7 reference migration.",
           "type": "string"
         },
         "inactiveTimeOut": {
@@ -41784,7 +44020,7 @@ func init() {
           "format": "int32"
         },
         "jwt_auth_profile": {
-          "description": "Name of the JWT auth profile (config/ai/jwtauthprofile) that decides this service's Bearer arm. Required by, and only valid with, api_key_auth \"jwt\" and \"apikey-or-jwt\"; a create or replace naming a profile that is not configured is rejected. On a replace, omitting this field preserves the existing reference, in lockstep with api_key_auth's replace semantics. While a service references a profile, deleting that profile is refused.",
+          "description": "Name of the JWT auth profile (config/ai/jwtauthprofile) that decides this service's Bearer arm. Required by, and only valid with, api_key_auth \"jwt\" and \"apikey-or-jwt\"; a create or replace naming a profile that is not configured is rejected. On a replace, omitting this field preserves the existing reference, in lockstep with api_key_auth's replace semantics. While a service references a profile, deleting that profile is refused. Rules that share a listener must name the same profile; a disagreement is refused like a differing api_key_auth.",
           "type": "string",
           "maxLength": 63
         },
@@ -41829,7 +44065,7 @@ func init() {
           "x-nullable": false
         },
         "kvExactMode": {
-          "description": "KV-cache exact (Tier 1.5) routing mode. Selects the ENDPOINT TOPOLOGY only \u2014 the serving framework is chosen independently by kvEngineType, and engine support for each mode is bounded by the per-engine capability matrix in the kvEngineType description (NOT every mode works with every engine). 0 = off. 1 = exact routing over a P/D role-partitioned pool: requires pd_disagg_mode=true (rejected otherwise) and endpoints tagged ep_role 1/2; only ep_role=1 (prefill) endpoints are subscribed and scored, and Tier 1.5 sits between Tier 1 (trie) and Tier 2 (min-load) in the P/D ladder. 2 = reserved and rejected; no NATS implementation is available. 3 = single-pool exact routing: requires mode=4 (fullproxy) and pd_disagg_mode=false (both rejected otherwise); ALL endpoints are subscribed and scored. Mode 3 does NOT reproduce the P/D ladder \u2014 there is no Tier-0 P/D session-affinity stage, no Tier-1 P/D trie and no P/D backpressure admission stage on this path; management admission and strict binding enforcement still apply. A Tier-1.5 miss falls back to the rule's own sel selector. vllm/sglang consume ZMQ events; trtllm consumes HTTP-polled events. All enabled exact modes require model_name and a loadable tokenizer. vLLM Exact additionally requires the Gateway process to have been launched with a non-empty LLB_KV_NONE_HASH_SEED of at most 23 bytes, matching the engine's PYTHONHASHSEED: it is a property of the Gateway's deployment, not of this request, so on a Gateway launched without it EVERY vLLM Exact rule is refused and no request body can succeed. Query the Gateway's readiness rather than discovering this by submitting. See kvHashAlgo for what the seed governs. Profile/API-surface constraints apply independently; see kvModelProfile and kvExactApiMode.",
+          "description": "KV-cache exact (Tier 1.5) routing mode. Selects the ENDPOINT TOPOLOGY only — the serving framework is chosen independently by kvEngineType, and engine support for each mode is bounded by the per-engine capability matrix in the kvEngineType description (NOT every mode works with every engine). 0 = off. 1 = exact routing over a P/D role-partitioned pool: requires pd_disagg_mode=true (rejected otherwise) and endpoints tagged ep_role 1/2; only ep_role=1 (prefill) endpoints are subscribed and scored, and Tier 1.5 sits between Tier 1 (trie) and Tier 2 (min-load) in the P/D ladder. 2 = reserved and rejected; no NATS implementation is available. 3 = single-pool exact routing: requires mode=4 (fullproxy) and pd_disagg_mode=false (both rejected otherwise); ALL endpoints are subscribed and scored. Mode 3 does NOT reproduce the P/D ladder — there is no Tier-0 P/D session-affinity stage, no Tier-1 P/D trie and no P/D backpressure admission stage on this path; management admission and strict binding enforcement still apply. A Tier-1.5 miss falls back to the rule's own sel selector. vllm/sglang consume ZMQ events; trtllm consumes HTTP-polled events. All enabled exact modes require model_name and a loadable tokenizer. vLLM Exact additionally requires the Gateway process to have been launched with a non-empty LLB_KV_NONE_HASH_SEED of at most 23 bytes, matching the engine's PYTHONHASHSEED: it is a property of the Gateway's deployment, not of this request, so on a Gateway launched without it EVERY vLLM Exact rule is refused and no request body can succeed. Query the Gateway's readiness rather than discovering this by submitting. See kvHashAlgo for what the seed governs. Profile/API-surface constraints apply independently; see kvModelProfile and kvExactApiMode.",
           "type": "integer",
           "format": "int64",
           "default": 0,
@@ -41849,7 +44085,7 @@ func init() {
           "x-nullable": false
         },
         "kvModelProfile": {
-          "description": "ID of the ModelPromptProfile this rule binds to. Naming a profile makes the rule STRICT: the profile must be published in the gateway's profile registry, its alias policy must admit the rule's model_name, its pinned tokenizer artifacts must load and digest-match, and a composed KV-exact binding (model-profile@generation + engine-contract@generation) is allocated at create time \u2014 admission fails closed while no engine-contract registry is available. Absent = legacy profile-less rule (no binding; documented migration behavior). Immutable after create (delete+recreate to change), with ONE sanctioned exception: the migration attach. A replace-POST that names a profile on a live profile-less rule is admitted and re-runs the full strict bring-up (admission checks run BEFORE any mutation, so a refused attach leaves the rule, binding, and data plane untouched; enforcement reports pending until the data-plane contract installs and is acknowledged). The reverse transitions \u2014 dropping the profile or changing it to another \u2014 stay refused, as does any kvExactApiMode change during the attach (raw-string equality; an undeclared apiMode must stay undeclared in the attach POST). CAVEAT operators must be shown: attaching changes the rule's EFFECTIVE surface from the legacy both-surfaces default to the profile's declared supportedApis \u2014 attaching a completions-only profile to a rule that was serving chat traffic narrows the served surface. Scalar by schema \u2014 exactly one profile per rule; arrays are rejected representations. Requires kvExactMode=1 or 3; a profile declaration with Exact disabled is rejected. Snapshot restore has a separate recovery contract: it may preserve an unresolved profile declaration while fencing Exact routing; consult kvexactstatus rather than treating restored storage as a successful fresh admission.",
+          "description": "ID of the ModelPromptProfile this rule binds to. Naming a profile makes the rule STRICT: the profile must be published in the gateway's profile registry, its alias policy must admit the rule's model_name, its pinned tokenizer artifacts must load and digest-match, and a composed KV-exact binding (model-profile@generation + engine-contract@generation) is allocated at create time — admission fails closed while no engine-contract registry is available. Absent = legacy profile-less rule (no binding; documented migration behavior). Immutable after create (delete+recreate to change), with ONE sanctioned exception: the migration attach. A replace-POST that names a profile on a live profile-less rule is admitted and re-runs the full strict bring-up (admission checks run BEFORE any mutation, so a refused attach leaves the rule, binding, and data plane untouched; enforcement reports pending until the data-plane contract installs and is acknowledged). The reverse transitions — dropping the profile or changing it to another — stay refused, as does any kvExactApiMode change during the attach (raw-string equality; an undeclared apiMode must stay undeclared in the attach POST). CAVEAT operators must be shown: attaching changes the rule's EFFECTIVE surface from the legacy both-surfaces default to the profile's declared supportedApis — attaching a completions-only profile to a rule that was serving chat traffic narrows the served surface. Scalar by schema — exactly one profile per rule; arrays are rejected representations. Requires kvExactMode=1 or 3; a profile declaration with Exact disabled is rejected. Snapshot restore has a separate recovery contract: it may preserve an unresolved profile declaration while fencing Exact routing; consult kvexactstatus rather than treating restored storage as a successful fresh admission.",
           "type": "string",
           "x-nullable": false
         },
@@ -41881,6 +44117,15 @@ func init() {
           "format": "int32",
           "default": 0,
           "minimum": 0,
+          "x-nullable": false
+        },
+        "mcp_protocol_version": {
+          "description": "Explicit stateless MCP transport mode. Omitted or empty on create preserves legacy behavior. Omitted replace preserves the existing value; changing it requires delete and recreate. Requires TCP FullProxy (mode=4), round-robin (sel=0) or weighted round-robin (sel=2), and sockMapMode=off. Session affinity, model routing, P/D disaggregation and KV routing are rejected. Configuration readback does not prove request validation or backend delivery.",
+          "type": "string",
+          "enum": [
+            "",
+            "2026-07-28"
+          ],
           "x-nullable": false
         },
         "mode": {
@@ -42152,7 +44397,6 @@ func init() {
             10
           ]
         },
-        "mcp_protocol_version": {"type": "string", "x-nullable": false, "enum": ["", "2026-07-28"], "description": "Explicit stateless MCP transport mode. Omitted create is legacy; omitted replace preserves. Immutable after create: delete and recreate to change. Requires TCP FullProxy mode=4, sel=0 or 2, sockMapMode=off. No session affinity, model, P/D or KV routing."},
         "session_header_name": {
           "description": "Session-key extraction setting for proxy affinity. Use a header name such as X-Session-ID, cookie:NAME for one cookie, query:NAME for one query parameter, or basic-auth for the Basic Authorization username. RR (sel=0) and persistence (sel=3) paths contain handling; a missing usable key follows their RR or IP-based fallback respectively. This setting is not authentication. GET includes it only for those selectors. The server accepts at most 127 UTF-8 bytes and rejects embedded NUL or invalid UTF-8 before changing rule state. This byte limit reserves the terminator in the 128-byte data-plane field; UI validation must count encoded bytes rather than characters. Cross-mode interaction with L7 HTTP_COOKIE remains unresolved.",
           "type": "string",
@@ -42174,7 +44418,7 @@ func init() {
           ]
         },
         "sse_mode": {
-          "description": "Enable detection of text/event-stream responses and the associated streaming idle-timeout protection. This flag controls Gateway SSE handling, not whether the backend implements an OpenAI API. Active detected streams remain subject to max_stream_duration_sec and the system stream cap; enabling SSE does not make them unbounded.",
+          "description": "Enable detection of text/event-stream responses and the associated streaming idle-timeout protection. A rule with pd_disagg_mode always has it, whether or not sse_mode is set. This flag controls Gateway SSE handling, not whether the backend implements an OpenAI API. Active detected streams remain subject to max_stream_duration_sec and the system stream cap; enabling SSE does not make them unbounded.",
           "type": "boolean",
           "default": false,
           "x-nullable": false
@@ -42291,10 +44535,74 @@ func init() {
             "off"
           ]
         },
+        "band_fallback_reason": {
+          "description": "Why the gate runs band settings other than the configured ones: a combination the API refuses a rule to declare, reached by inheriting the environment (LLB_FC_*) or by a restore replay, runs on the defaults and is logged once at apply time. sockmap_request - sockMapMode request or both on a rule that is not an AI-gateway service: every band knob at its default (the request direction never reaches the gate). zero_weight - weighted with a zero weight: strict. no_queue - shed queue on with no queue depth: off. none - the configuration runs as configured.",
+          "type": "string",
+          "enum": [
+            "none",
+            "sockmap_request",
+            "zero_weight",
+            "no_queue"
+          ]
+        },
+        "bands": {
+          "description": "Each priority band's live counts and the knobs in force (after any fallback). min_share_pct and floor_units are the floor alone; the critical reserve is reported beside the bands.",
+          "type": "object",
+          "properties": {
+            "critical": {
+              "$ref": "#/definitions/FcBandEffective"
+            },
+            "critical_reserve_pct": {
+              "description": "The critical reserve in percent of the ceiling in force - units no other band may take, even when critical is idle.",
+              "type": "integer",
+              "format": "int32",
+              "x-omitempty": false
+            },
+            "critical_reserve_units": {
+              "description": "The reserve in service units against effective_max_outstanding, as the gate enforces it; 0 without a ceiling.",
+              "type": "integer",
+              "format": "int32",
+              "x-omitempty": false
+            },
+            "sheddable": {
+              "$ref": "#/definitions/FcBandEffective"
+            },
+            "standard": {
+              "$ref": "#/definitions/FcBandEffective"
+            }
+          }
+        },
+        "bands_configured": {
+          "description": "true when any band knob in force differs from its default.",
+          "type": "boolean",
+          "x-omitempty": false
+        },
+        "config_source": {
+          "description": "Where the objectives and the tenant and key classes this gateway is applying came from. store - the AI key store answered the last read. lkg - the store has not answered since the gateway started and the last-known-good file (aigw-lkg.json under the configuration path) is being served; writes are refused with 503 meanwhile and loxilb_ai_class_config_lkg_intervals_total counts. none - nothing was read (no store configured, or a store that has not answered and no file); every request is standard. The same value on every rule - it is the gateway's, not the rule's.",
+          "type": "string",
+          "enum": [
+            "store",
+            "lkg",
+            "none"
+          ]
+        },
         "decode_max_inflight": {
           "description": "Per-endpoint ceiling for decode legs; 0 is unlimited.",
           "type": "integer",
           "format": "int32"
+        },
+        "default_max_tokens": {
+          "description": "The default reservation in tokens in force for requests that route to this rule; 0 while default_reservation is off.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "default_reservation": {
+          "description": "Whether a request without a declared max_tokens that routes to this rule reserves a default for its completion. Each rule of a VIP and port has its own value - the gate takes it from the rule the request's host, path and model select.",
+          "type": "string",
+          "enum": [
+            "on",
+            "off"
+          ]
         },
         "effective_max_outstanding": {
           "description": "The service ceiling in force now; below max_outstanding while an adaptive pool is tightened.",
@@ -42318,6 +44626,14 @@ func init() {
           "description": "Inference requests executing on the pool right now.",
           "type": "integer",
           "format": "int32"
+        },
+        "llmd_headers": {
+          "description": "Whether refusals carry x-llm-d-request-dropped-reason and x-llm-d-inference-ttl may shorten a wait.",
+          "type": "string",
+          "enum": [
+            "on",
+            "off"
+          ]
         },
         "max_outstanding": {
           "description": "Pool-wide ceiling on executing inference requests; 0 is unlimited.",
@@ -42353,6 +44669,53 @@ func init() {
           "type": "integer",
           "format": "int32"
         },
+        "reservation_clamped_budget": {
+          "description": "Requests admitted with less than default_max_tokens reserved, since the process started, because the bucket's budget was already taken by other claims or by spend. Transient - it passes as the window refills. Counted per service, as reservation_clamped_burst. Never a refusal.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "reservation_clamped_burst": {
+          "description": "Requests admitted with less than default_max_tokens reserved, since the process started, because default_max_tokens beside the prompt is more than a quota bucket can ever hold, so the request is clamped on an idle bucket too. A configuration to fix - lower the default or raise the quota or its burst. A request this applies to is counted here whatever the budgets held. Counted per service - every model pool of the same VIP and port reads the same number. Never a refusal.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "reservation_epoch": {
+          "description": "The minute (Unix time divided by 60) the reservation_held_* fields below are a reading of. A token reservation belongs to the minute it was made in and does not outlive it - a request that ended without settling leaves its claim until the minute turns, and no longer. Compare two readings only when this value is the same in both.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "reservation_held": {
+          "description": "The quota buckets holding reserved tokens right now, largest first, at most 64. Empty when nothing is held. A bucket not listed holds nothing unless reservation_held_truncated is true.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/LoadbalanceEntryServiceArgumentsFcEffectiveReservationHeldItems0"
+          }
+        },
+        "reservation_held_claims": {
+          "description": "How many token reservations are held right now on the quota buckets this service's requests reserve on, counted one per request and bucket - a request holds one claim on every quota bucket that applies to it (tenant, tenant and model, user, user and model, key, service), so one in-flight request on three buckets is three claims. Zero exactly when nothing is held. It is a count of claims and says nothing about tokens - the tokens each bucket holds are in reservation_held. A tenant's bucket is shared by every service the tenant uses, and its claims are counted on each of them. Read from the quota store's own counters. Management read-back only - not exported as a metric.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "reservation_held_truncated": {
+          "description": "true when reservation_held does not list every bucket holding a reservation - more than 64 hold one, or the service has reserved on more buckets than the gateway tracks for it (4096). reservation_held_claims covers the tracked buckets in either case.",
+          "type": "boolean"
+        },
+        "shed_queue": {
+          "description": "As configured: whether a sheddable request at the ceiling waits in its band instead of 429 admission_shed.",
+          "type": "string",
+          "enum": [
+            "on",
+            "off"
+          ]
+        },
+        "shed_queue_effective": {
+          "description": "The shed queue the gate runs.",
+          "type": "string",
+          "enum": [
+            "on",
+            "off"
+          ]
+        },
         "source": {
           "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default).",
           "type": "object",
@@ -42365,7 +44728,63 @@ func init() {
                 "default"
               ]
             },
+            "band_min_share_pct": {
+              "type": "string",
+              "enum": [
+                "rule",
+                "env",
+                "default"
+              ]
+            },
+            "band_queue_pct": {
+              "type": "string",
+              "enum": [
+                "rule",
+                "env",
+                "default"
+              ]
+            },
+            "band_wait_ms": {
+              "type": "string",
+              "enum": [
+                "rule",
+                "env",
+                "default"
+              ]
+            },
+            "band_weights": {
+              "type": "string",
+              "enum": [
+                "rule",
+                "env",
+                "default"
+              ]
+            },
+            "critical_reserve_pct": {
+              "type": "string",
+              "enum": [
+                "rule",
+                "env",
+                "default"
+              ]
+            },
             "decode_max_inflight": {
+              "type": "string",
+              "enum": [
+                "rule",
+                "env",
+                "default"
+              ]
+            },
+            "default_max_tokens": {
+              "type": "string",
+              "enum": [
+                "rule",
+                "env",
+                "default"
+              ]
+            },
+            "default_reservation": {
               "type": "string",
               "enum": [
                 "rule",
@@ -42382,6 +44801,14 @@ func init() {
               ]
             },
             "expose_headers": {
+              "type": "string",
+              "enum": [
+                "rule",
+                "env",
+                "default"
+              ]
+            },
+            "llmd_headers": {
               "type": "string",
               "enum": [
                 "rule",
@@ -42429,6 +44856,14 @@ func init() {
                 "default"
               ]
             },
+            "shed_queue": {
+              "type": "string",
+              "enum": [
+                "rule",
+                "env",
+                "default"
+              ]
+            },
             "telemetry_stale_ms": {
               "type": "string",
               "enum": [
@@ -42445,7 +44880,23 @@ func init() {
                 "default"
               ]
             },
+            "tenant_wake": {
+              "type": "string",
+              "enum": [
+                "rule",
+                "env",
+                "default"
+              ]
+            },
             "ttft_target_ms": {
+              "type": "string",
+              "enum": [
+                "rule",
+                "env",
+                "default"
+              ]
+            },
+            "wake_policy": {
               "type": "string",
               "enum": [
                 "rule",
@@ -42463,6 +44914,17 @@ func init() {
             }
           }
         },
+        "store_last_read": {
+          "description": "When a read of the AI key store last answered in this process. A gateway started from the last-known-good file shows, until the store answers, the read that last CHANGED that file: the store may have answered later with nothing changed (the file is written only on a change). Absent when neither happened or no key store is configured.",
+          "type": "string",
+          "format": "date-time",
+          "x-nullable": true
+        },
+        "store_reachable": {
+          "description": "Whether the AI key store answered the gateway's latest read of it, whatever config_source says (a configuration read earlier stays in force through an outage). Absent when no key store is configured. The gateway's, the same on every rule.",
+          "type": "boolean",
+          "x-nullable": true
+        },
         "telemetry_stale_ms": {
           "description": "The P/D scorers' trust window for scraped queue depth, in milliseconds.",
           "type": "integer",
@@ -42473,6 +44935,27 @@ func init() {
           "type": "integer",
           "format": "int32"
         },
+        "tenant_slots": {
+          "description": "Tenants the pool tracks by name at once for the tenant share; tenants past it share one budget. Fixed when the pool is created (LLB_FC_TENANT_SLOTS).",
+          "type": "integer",
+          "format": "int32"
+        },
+        "tenant_wake": {
+          "description": "The order inside one band, as configured (fifo, or rr across tenants).",
+          "type": "string",
+          "enum": [
+            "fifo",
+            "rr"
+          ]
+        },
+        "tenant_wake_effective": {
+          "description": "The order inside one band the gate runs (fifo, or rr across tenants).",
+          "type": "string",
+          "enum": [
+            "fifo",
+            "rr"
+          ]
+        },
         "tenants_active": {
           "description": "Tenants holding a unit or waiting on the pool now, while it holds tenants to a share.",
           "type": "integer",
@@ -42482,6 +44965,22 @@ func init() {
           "type": "integer",
           "format": "int32"
         },
+        "wake_policy": {
+          "description": "The wake policy as configured, by the rule or inherited (source.wake_policy); wake_policy_effective is the one the gate runs. strict - while higher-band demand keeps the ceiling full, a lower band is admitted zero requests; each waiter is refused when its band's wait window ends. weighted - a deficit round robin: while several bands have waiters, each receives its weight's share of wake-ups, exactly over whole rounds (8:3:1 is 8, 3, 1 in every 12); the share is of admissions, not of tokens, GPU time or latency. No band is promoted because it has waited long.",
+          "type": "string",
+          "enum": [
+            "strict",
+            "weighted"
+          ]
+        },
+        "wake_policy_effective": {
+          "description": "The wake policy the gate runs. Differs from wake_policy only when band_fallback_reason is not none.",
+          "type": "string",
+          "enum": [
+            "strict",
+            "weighted"
+          ]
+        },
         "warming_endpoints": {
           "description": "Endpoints inside their warm-up window.",
           "type": "integer",
@@ -42490,9 +44989,67 @@ func init() {
         "warmup_ms": {
           "type": "integer",
           "format": "int32"
+        },
+        "weights_in_use": {
+          "description": "true when wake_policy_effective is weighted and the weights decide the wake; declared weights are stored but not in use otherwise.",
+          "type": "boolean"
         }
       },
       "readOnly": true
+    },
+    "LoadbalanceEntryServiceArgumentsFcEffectiveBands": {
+      "description": "Each priority band's live counts and the knobs in force (after any fallback). min_share_pct and floor_units are the floor alone; the critical reserve is reported beside the bands.",
+      "type": "object",
+      "properties": {
+        "critical": {
+          "$ref": "#/definitions/FcBandEffective"
+        },
+        "critical_reserve_pct": {
+          "description": "The critical reserve in percent of the ceiling in force - units no other band may take, even when critical is idle.",
+          "type": "integer",
+          "format": "int32",
+          "x-omitempty": false
+        },
+        "critical_reserve_units": {
+          "description": "The reserve in service units against effective_max_outstanding, as the gate enforces it; 0 without a ceiling.",
+          "type": "integer",
+          "format": "int32",
+          "x-omitempty": false
+        },
+        "sheddable": {
+          "$ref": "#/definitions/FcBandEffective"
+        },
+        "standard": {
+          "$ref": "#/definitions/FcBandEffective"
+        }
+      }
+    },
+    "LoadbalanceEntryServiceArgumentsFcEffectiveReservationHeldItems0": {
+      "type": "object",
+      "properties": {
+        "bucket": {
+          "description": "The bucket's key in the quota store. It is built from identifiers only (tenant, user, model, key id, service) and never holds a credential.",
+          "type": "string"
+        },
+        "kind": {
+          "description": "Which quota the bucket belongs to - the tenant's, the tenant's for one model, a user's, a user's for one model, an API key's own, or the service's shared keyless quota.",
+          "type": "string",
+          "enum": [
+            "tenant",
+            "tenant_model",
+            "user",
+            "user_model",
+            "key",
+            "service"
+          ]
+        },
+        "tokens": {
+          "description": "Tokens reserved on the bucket and not yet settled.",
+          "type": "integer",
+          "format": "int64",
+          "x-omitempty": false
+        }
+      }
     },
     "LoadbalanceEntryServiceArgumentsFcEffectiveSource": {
       "description": "Where each value in force came from: rule (the rule's own declaration), env (the process environment, LLB_FC_*) or default (the product default).",
@@ -42506,7 +45063,63 @@ func init() {
             "default"
           ]
         },
+        "band_min_share_pct": {
+          "type": "string",
+          "enum": [
+            "rule",
+            "env",
+            "default"
+          ]
+        },
+        "band_queue_pct": {
+          "type": "string",
+          "enum": [
+            "rule",
+            "env",
+            "default"
+          ]
+        },
+        "band_wait_ms": {
+          "type": "string",
+          "enum": [
+            "rule",
+            "env",
+            "default"
+          ]
+        },
+        "band_weights": {
+          "type": "string",
+          "enum": [
+            "rule",
+            "env",
+            "default"
+          ]
+        },
+        "critical_reserve_pct": {
+          "type": "string",
+          "enum": [
+            "rule",
+            "env",
+            "default"
+          ]
+        },
         "decode_max_inflight": {
+          "type": "string",
+          "enum": [
+            "rule",
+            "env",
+            "default"
+          ]
+        },
+        "default_max_tokens": {
+          "type": "string",
+          "enum": [
+            "rule",
+            "env",
+            "default"
+          ]
+        },
+        "default_reservation": {
           "type": "string",
           "enum": [
             "rule",
@@ -42523,6 +45136,14 @@ func init() {
           ]
         },
         "expose_headers": {
+          "type": "string",
+          "enum": [
+            "rule",
+            "env",
+            "default"
+          ]
+        },
+        "llmd_headers": {
           "type": "string",
           "enum": [
             "rule",
@@ -42570,6 +45191,14 @@ func init() {
             "default"
           ]
         },
+        "shed_queue": {
+          "type": "string",
+          "enum": [
+            "rule",
+            "env",
+            "default"
+          ]
+        },
         "telemetry_stale_ms": {
           "type": "string",
           "enum": [
@@ -42586,7 +45215,23 @@ func init() {
             "default"
           ]
         },
+        "tenant_wake": {
+          "type": "string",
+          "enum": [
+            "rule",
+            "env",
+            "default"
+          ]
+        },
         "ttft_target_ms": {
+          "type": "string",
+          "enum": [
+            "rule",
+            "env",
+            "default"
+          ]
+        },
+        "wake_policy": {
           "type": "string",
           "enum": [
             "rule",
@@ -43240,6 +45885,150 @@ func init() {
         }
       }
     },
+    "NetIdentityEntry": {
+      "description": "A network-identity binding: the tenant of the requests that reach an AI service from a network. A cidr match says where a request came from; it does not prove who sent it, and any host that can send from the range is attributed to the tenant. Use it for limits, fairness and records, never in place of a credential. An ingress_if match is as strong as the network boundary behind the interface. Where several bindings match a request, an ingress_if match wins over a cidr match, the longest prefix wins among cidr matches, and a binding that names the service wins over one that names none.",
+      "type": "object",
+      "required": [
+        "name",
+        "match",
+        "tenant"
+      ],
+      "properties": {
+        "allowed_models": {
+          "description": "The models a request admitted or held by this binding may name, compared exactly. Empty or omitted allows any. At most 256.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-omitempty": true
+        },
+        "credential": {
+          "description": "none (default): the binding never stands in for a credential. network: on a service that requires a credential, a request that presents none is admitted as the binding's tenant. Accepted with an interface match only (ingress_if, vlan, vni or ipsec_tunnel); refused with a cidr match. Also refused when a named service has a rule that is not an AI-gateway service and runs sockMapMode request or both: the gateway does not see every request on it.",
+          "type": "string",
+          "enum": [
+            "none",
+            "network"
+          ]
+        },
+        "enforce": {
+          "description": "advisory (default): a request that presents a credential is decided by it and the binding is only noted. strict: a credential whose tenant is not the binding's is refused with 403 network_tenant_mismatch, and the model must also pass allowed_models. In both, a request with no credential on a service that does not require one is admitted as the binding's tenant.",
+          "type": "string",
+          "enum": [
+            "advisory",
+            "strict"
+          ]
+        },
+        "fail_mode": {
+          "description": "What the binding's services do with a request while the binding lookup itself cannot answer (an internal fault, counted in loxilb_ai_netid_resolver_faults_total). neutral (default): the request is decided as if the service had no binding - it is never admitted by its network, and a valid credential is not refused, so a strict binding is not enforced during the fault. closed: every request the lookup would have decided is refused with 503 netid_unavailable until it answers again. The setting is per service in effect, not per binding: a service fails closed when any binding that applies to it says closed, whether that binding names the service or names none, and then it does so for every source. When the bindings that apply to a service disagree, the reply to the POST is \"Success; warning: fail_mode: ...\" and names them.",
+          "type": "string",
+          "enum": [
+            "neutral",
+            "closed"
+          ]
+        },
+        "forward_identity": {
+          "description": "Forward the request's tenant upstream as X-Auth-Tenant, and its user as X-Auth-User when it has one, on a request whose source matched this binding. Needs a non-empty services list, and is refused without one. The services the binding names then also drop every header whose name starts with X-Auth- that a client sends, on every request and whatever the rule's api_key_auth, whether or not the request's source matched a binding. A service no such binding applies to is unchanged. The identity is injected only on an AI-gateway service, where the admission gate decides it, and not into a chunked HTTP/1.1 request. Refused when a service the binding names has a rule that is not an AI-gateway service and runs sockMapMode request or both: the gateway does not see every request on it. Such a rule is refused in turn while the binding exists. Default false.",
+          "type": "boolean"
+        },
+        "match": {
+          "description": "The source the binding applies to. Exactly one of cidr, ingress_if, vlan, vni and ipsec_tunnel. All but cidr match on the interface the connection arrived on.",
+          "type": "object",
+          "properties": {
+            "cidr": {
+              "description": "IPv4 networks in a.b.c.d/len form, without host bits, that the socket peer of the request is in. At most 256.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "x-omitempty": true
+            },
+            "ingress_if": {
+              "description": "Name of the interface the connection arrived on, at most 15 characters: the logical device, which for a tagged VLAN is its bridge (vlan\u003cid\u003e), for a VXLAN its device (vxlan\u003cvni\u003e) and for an IPsec tunnel its VTI. The name is stored, never an index, so an interface that is removed and created again keeps its binding. A name that does not exist on the node is accepted with a warning in the reply and matches nothing until it exists; an interface that is removed later is logged and matches nothing until it is back. The interface is that of the connection's first packet and holds for the life of the connection.",
+              "type": "string"
+            },
+            "ipsec_tunnel": {
+              "description": "Name of an IPsec tunnel configured on this node (/config/ipsec/tunnel). Another spelling of ingress_if: the tunnel's VTI interface, vti\u003cmark\u003e. A tunnel that is not configured, or has no mark, is accepted with a warning and matches nothing until it has one.",
+              "type": "string"
+            },
+            "vlan": {
+              "description": "A VLAN ID. Another spelling of ingress_if: the VLAN's bridge interface on this node, vlan\u003cid\u003e.",
+              "type": "integer",
+              "maximum": 4094,
+              "minimum": 1,
+              "x-omitempty": true
+            },
+            "vni": {
+              "description": "A VXLAN network identifier. Another spelling of ingress_if: the interface vxlan\u003cvni\u003e on this node.",
+              "type": "integer",
+              "maximum": 16777215,
+              "minimum": 1,
+              "x-omitempty": true
+            }
+          }
+        },
+        "name": {
+          "description": "Binding name, 1 to 63 characters of letters, digits, '-', '_' and '.', starting with a letter or digit. It is what request records carry.",
+          "type": "string"
+        },
+        "priority_class": {
+          "description": "The highest priority class a request the binding names the tenant of may have. It can only lower what the tenant allows (a tenant that sets no class allows standard). Default standard - a binding that should not cap its requests says critical.",
+          "type": "string",
+          "enum": [
+            "standard",
+            "critical",
+            "sheddable"
+          ]
+        },
+        "services": {
+          "description": "The AI services the binding applies to, each as VIP:port (IPv4). Empty or omitted applies it to every AI service. A service does not have to exist yet. At most 256.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-omitempty": true
+        },
+        "tenant": {
+          "description": "The tenant a matching request is attributed to, 1 to 127 bytes. The same namespace as API-key and JWT tenants: its limits are the ones configured for that tenant.",
+          "type": "string"
+        }
+      }
+    },
+    "NetIdentityEntryMatch": {
+      "description": "The source the binding applies to. Exactly one of cidr, ingress_if, vlan, vni and ipsec_tunnel. All but cidr match on the interface the connection arrived on.",
+      "type": "object",
+      "properties": {
+        "cidr": {
+          "description": "IPv4 networks in a.b.c.d/len form, without host bits, that the socket peer of the request is in. At most 256.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-omitempty": true
+        },
+        "ingress_if": {
+          "description": "Name of the interface the connection arrived on, at most 15 characters: the logical device, which for a tagged VLAN is its bridge (vlan\u003cid\u003e), for a VXLAN its device (vxlan\u003cvni\u003e) and for an IPsec tunnel its VTI. The name is stored, never an index, so an interface that is removed and created again keeps its binding. A name that does not exist on the node is accepted with a warning in the reply and matches nothing until it exists; an interface that is removed later is logged and matches nothing until it is back. The interface is that of the connection's first packet and holds for the life of the connection.",
+          "type": "string"
+        },
+        "ipsec_tunnel": {
+          "description": "Name of an IPsec tunnel configured on this node (/config/ipsec/tunnel). Another spelling of ingress_if: the tunnel's VTI interface, vti\u003cmark\u003e. A tunnel that is not configured, or has no mark, is accepted with a warning and matches nothing until it has one.",
+          "type": "string"
+        },
+        "vlan": {
+          "description": "A VLAN ID. Another spelling of ingress_if: the VLAN's bridge interface on this node, vlan\u003cid\u003e.",
+          "type": "integer",
+          "maximum": 4094,
+          "minimum": 1,
+          "x-omitempty": true
+        },
+        "vni": {
+          "description": "A VXLAN network identifier. Another spelling of ingress_if: the interface vxlan\u003cvni\u003e on this node.",
+          "type": "integer",
+          "maximum": 16777215,
+          "minimum": 1,
+          "x-omitempty": true
+        }
+      }
+    },
     "NewFlowCountMetrics": {
       "type": "object",
       "properties": {
@@ -43498,7 +46287,7 @@ func init() {
       }
     },
     "PIIConfigEntry": {
-      "description": "Stored settings, not scanner-readiness evidence. Requires piidetection and an initialized manager. Omission generally preserves values; empty strings do not clear them. Known gaps are documented on the affected fields below. Numeric int64 settings are narrowed to uint32 without upper bounds, and min_body_size <= max_body_size is not validated. Configuration success does not establish encryption, complete-body inspection, or protection.",
+      "description": "Stored settings, not scanner-readiness evidence. Requires piidetection and an initialized manager. Omission generally preserves values; empty strings do not clear them. Known gaps are documented on the affected fields below. Numeric int64 settings are narrowed to uint32 without upper bounds, and min_body_size \u003c= max_body_size is not validated. Configuration success does not establish encryption, complete-body inspection, or protection.",
       "type": "object",
       "properties": {
         "analyzer_url": {
@@ -45151,10 +47940,22 @@ func init() {
         "tenant_id"
       ],
       "properties": {
+        "allowed_objectives": {
+          "description": "The objectives a request of this tenant may raise itself to by header, and the body tiers (tier:priority, tier:fast, tier:flex); a hint at or below what the request gets without one needs no entry",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-omitempty": true
+        },
         "burst_pct": {
           "description": "Token bucket capacity as a percent of tokens_per_min; 0 uses the server default",
           "type": "integer",
           "format": "int64"
+        },
+        "default_objective": {
+          "description": "The objective a request of this tenant gets when it names none, or one it may not use",
+          "type": "string"
         },
         "model_limits": {
           "description": "Per-model token quotas for the tenant",
@@ -45162,6 +47963,10 @@ func init() {
           "items": {
             "$ref": "#/definitions/TenantModelRateLimit"
           }
+        },
+        "priority_class": {
+          "description": "The highest priority class a request of this tenant may have; absent when none is set, which holds the tenant at standard",
+          "type": "string"
         },
         "rps": {
           "description": "Maximum requests per second for the tenant",
@@ -45185,16 +47990,29 @@ func init() {
       }
     },
     "TenantRateLimitMod": {
-      "description": "POST replaces aggregate rps, tokens_per_min, and burst_pct; omission becomes zero, not preservation. Supplied model_limits are individual upserts or removals; omitted/empty model_limits preserves existing model rows. Aggregate and model writes are sequential, not one transaction, so failure can leave partial changes. Blank identifiers and malformed model entries are not consistently rejected as 400. Configuration alone does not enable enforcement on a service.",
+      "description": "POST replaces aggregate rps, tokens_per_min, and burst_pct; omission becomes zero, not preservation. Supplied model_limits are individual upserts or removals; omitted/empty model_limits preserves existing model rows. Aggregate and model writes are sequential, not one transaction, so failure can leave partial changes. Blank identifiers and malformed model entries are not consistently rejected as 400. Configuration alone does not enable enforcement on a service. The class fields (priority_class, default_objective, allowed_objectives) are written by their own statement and only when the body names one of them, so a POST of limits leaves the tenant's class as it is. A body that names a class field and carries no limit (rps, tokens_per_min and burst_pct absent or zero, no model_limits) writes the class only and leaves the limits as they are.",
       "type": "object",
       "required": [
         "tenant_id"
       ],
       "properties": {
+        "allowed_objectives": {
+          "description": "The objectives a request of this tenant may raise itself to with the x-llm-d-inference-objective header, and the body tiers it may raise itself to by service_tier, named tier:priority, tier:fast and tier:flex; at most 64. Omitted leaves the stored list; an empty array clears it, and then only a hint at or below what the request gets without one is honoured (the list governs raises only).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-omitempty": true
+        },
         "burst_pct": {
           "description": "Token bucket capacity as a percent of tokens_per_min; 0 uses the server default",
           "type": "integer",
           "format": "int64"
+        },
+        "default_objective": {
+          "description": "The objective a request of this tenant gets when it names none, or one it may not use. Omitted leaves the stored value; an empty string clears it.",
+          "type": "string",
+          "x-nullable": true
         },
         "model_limits": {
           "description": "Per-model token quotas for the tenant",
@@ -45202,6 +48020,11 @@ func init() {
           "items": {
             "$ref": "#/definitions/TenantModelRateLimit"
           }
+        },
+        "priority_class": {
+          "description": "The highest priority class a request of this tenant may have: standard, critical or sheddable. Omitted leaves the stored value; an empty string clears it, and a tenant that sets no class is held at standard.",
+          "type": "string",
+          "x-nullable": true
         },
         "rps": {
           "description": "Maximum requests per second for the tenant",
@@ -45524,7 +48347,7 @@ func init() {
           "type": "string"
         },
         "features": {
-          "description": "Optional capabilities this build serves, for clients that gate a feature on the gateway rather than on its version string. \"epp\" means loadbalancer rules accept the Endpoint Picker fields (eppEndpoint, eppFailureMode, eppTimeoutMs, eppPlaintext) and the data plane consults the picker. Builds predating the field omit it; clients treat an absent or empty list as \"no optional feature\".",
+          "description": "Gateway-only capabilities this build implements, as stable tokens a controller checks before it sends the matching rule fields; absent on builds that predate the field. \"epp\": loadbalancer rules accept the Endpoint Picker fields (eppEndpoint, eppFailureMode, eppTimeoutMs, eppPlaintext) and the data plane consults the picker. \"api_key_auth\": the serviceArguments api_key_auth credential-policy declaration is accepted and enforced. \"jwt_auth_profile\": the Bearer arm (api_key_auth \"jwt\" and \"apikey-or-jwt\") and the jwt_auth_profile reference are accepted and enforced. The REST layer ignores fields it does not know, so a build without a token would install a rule WITHOUT that policy and report success: a controller that does not find the token for a field it needs must not send the rule.",
           "items": {
             "type": "string"
           },
@@ -45541,7 +48364,7 @@ func init() {
       }
     },
     "VlanBridgeEntry": {
-      "description": "Linux bridge identifier used to form vlan<ID>. The REST creation helper does not enforce all documented VLAN bounds; successful bridge creation does not establish completion of link setup.",
+      "description": "Linux bridge identifier used to form vlan\u003cID\u003e. The REST creation helper does not enforce all documented VLAN bounds; successful bridge creation does not establish completion of link setup.",
       "type": "object",
       "required": [
         "vid"

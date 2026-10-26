@@ -28,6 +28,7 @@ import (
 	"testing"
 	"time"
 
+	prom "github.com/loxilb-io/loxilb/api/prometheus"
 	"github.com/loxilb-io/loxilb/pkg/audit"
 )
 
@@ -234,6 +235,57 @@ func TestEmitAICompleteRecordsTheRequest(t *testing.T) {
 	}
 	if isStream, _ := d["stream"].(bool); !isStream {
 		t.Error("detail.stream = false, want true")
+	}
+}
+
+// An answer the client did not get whole is not ok, whatever status the
+// client got, and its reason is the one its end code names.
+func TestEmitAICompleteAbortedIsNotOK(t *testing.T) {
+	_, drain := startTrail(t)
+
+	if !emitAIComplete(aiCompleteRecord{
+		RequestID:  "req-ab",
+		TenantID:   "acme",
+		ModelName:  "llama-3",
+		StatusCode: 200,
+		ErrorCode:  "backend_died",
+		WorkerID:   3,
+	}) {
+		t.Fatal("emit refused")
+	}
+	o := only(t, drain(), eventAIComplete).outcome()
+	if o.num("status") != 200 || o.str("reason") != string(audit.ReasonBackendConn) {
+		t.Errorf("outcome = %v, want 200/backend_conn", o)
+	}
+	if ok, _ := o["ok"].(bool); ok {
+		t.Error("ok = true for an answer the engine cut, want false")
+	}
+}
+
+// Every end code the metrics count as aborted has its own reason: none
+// falls back to the status, which would read a 200 cut as ok.
+func TestAICompleteReasonCoversEveryEndCode(t *testing.T) {
+	want := map[string]audit.Reason{
+		prom.AICauseClient:  audit.ReasonClientAbort,
+		prom.AICauseEngine:  audit.ReasonBackendConn,
+		prom.AICauseGateway: "",
+	}
+	for _, code := range prom.AIEndCodes() {
+		r := aiCompleteReason(200, code)
+		if r == audit.ReasonOK || !audit.ValidReason(r) {
+			t.Errorf("aiCompleteReason(200, %q) = %q: an end code needs its own reason", code, r)
+		}
+		if w := want[prom.AIEndCause(code)]; w != "" && r != w {
+			t.Errorf("aiCompleteReason(200, %q) = %q, want %q", code, r, w)
+		}
+	}
+	// The gateway's own cut, its listener going away, is its own reason: no
+	// backend failed, and a SIEM rule on backend_conn must not count it.
+	if r := aiCompleteReason(200, "listener_closed"); r != audit.ReasonGatewayShutdown {
+		t.Errorf("aiCompleteReason(200, listener_closed) = %q, want %q", r, audit.ReasonGatewayShutdown)
+	}
+	if !audit.ValidReason(audit.ReasonGatewayShutdown) {
+		t.Error("gateway_shutdown is not in the vocabulary")
 	}
 }
 
@@ -486,7 +538,7 @@ func TestAIReasonsAreInTheVocabulary(t *testing.T) {
 			}
 		}
 	}
-	for _, code := range []string{"", "client_abort", "timeout", "backend_conn", "backend_tls", "upstream_error", "nonsense"} {
+	for _, code := range append([]string{"", "client_abort", "timeout", "backend_conn", "backend_tls", "upstream_error", "nonsense"}, prom.AIEndCodes()...) {
 		for _, status := range []int{0, 200, 404, 500} {
 			if r := aiCompleteReason(status, code); !audit.ValidReason(r) {
 				t.Errorf("aiCompleteReason(%d, %q) = %q, not in the vocabulary", status, code, r)

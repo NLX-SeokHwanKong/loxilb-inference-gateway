@@ -615,8 +615,8 @@ func (ch *CIStateH) ClusterNodeDelete(node cmn.ClusterNodeMod) (int, error) {
 // CIBFDSessionAdd - routine to add BFD session
 func (ch *CIStateH) CIBFDSessionAdd(bm cmn.BFDMod) (int, error) {
 
-	if ch.Bs == nil {
-		return -1, errors.New("bfd not initialized")
+	if ch == nil || ch.Bs == nil {
+		return -1, cmn.ErrBFDUnavailable
 	}
 
 	if bm.Interval != 0 && bm.Interval < bfd.BFDMinSysTXIntervalUs {
@@ -650,7 +650,22 @@ func (ch *CIStateH) CIBFDSessionAdd(bm cmn.BFDMod) (int, error) {
 		bfdSessConfigArgs := bfd.ConfigArgs{RemoteIP: bm.RemoteIP.String(), SourceIP: bm.SourceIP.String(),
 			Port: cmn.BFDPort, Interval: uint32(bm.Interval),
 			Multi: bm.RetryCount, Instance: bm.Instance}
-		go ch.startBFDProto(bfdSessConfigArgs)
+		// Register before acknowledging configuration, but retain the initial
+		// HA synchronization/cool-off gate before sending or processing BFD.
+		ready := make(chan struct{})
+		bfdSessConfigArgs.StartGate = ready
+		if err := ch.Bs.BFDAddRemote(bfdSessConfigArgs, ch); err != nil {
+			ch.SpawnKa = false
+			return -1, err
+		}
+		go func() {
+			if mh.dp != nil {
+				mh.dp.WaitXsyncReady("ka")
+				time.Sleep(KAInitTiVal * time.Second)
+			}
+			close(ready)
+		}()
+
 	} else {
 		bfdSessConfigArgs := bfd.ConfigArgs{RemoteIP: bm.RemoteIP.String(), SourceIP: bm.SourceIP.String(),
 			Port: cmn.BFDPort, Interval: uint32(bm.Interval),
@@ -668,9 +683,8 @@ func (ch *CIStateH) CIBFDSessionAdd(bm cmn.BFDMod) (int, error) {
 // CIBFDSessionDel - routine to delete BFD session
 func (ch *CIStateH) CIBFDSessionDel(bm cmn.BFDMod) (int, error) {
 
-	if !ch.SpawnKa {
-		tk.LogIt(tk.LogError, "[CLUSTER] Cluster Instance %s not running BFD\n", bm.Instance)
-		return -1, errors.New("bfd session not running")
+	if ch == nil || ch.Bs == nil {
+		return -1, cmn.ErrBFDUnavailable
 	}
 
 	_, found := ch.ClusterMap[bm.Instance]
@@ -685,17 +699,22 @@ func (ch *CIStateH) CIBFDSessionDel(bm cmn.BFDMod) (int, error) {
 		tk.LogIt(tk.LogCritical, "KA - Cant delete BFD remote\n")
 		return -1, err
 	}
-	ch.SpawnKa = false
+	remaining, err := ch.Bs.BFDGet()
+	if err != nil {
+		return -1, err
+	}
+	ch.SpawnKa = len(remaining) > 0
 	tk.LogIt(tk.LogInfo, "KA - BFD remote %s:%s deleted\n", bm.Instance, bm.RemoteIP.String())
 	return 0, nil
 }
 
 // CIBFDSessionGet - routine to get BFD session info
 func (ch *CIStateH) CIBFDSessionGet() ([]cmn.BFDMod, error) {
-	if !ch.SpawnKa || ch.Bs == nil {
-		tk.LogIt(tk.LogError, "[CLUSTER] BFD sessions not running\n")
-		return nil, errors.New("bfd session not running")
+	if ch == nil || ch.Bs == nil {
+		return nil, cmn.ErrBFDUnavailable
 	}
+	// The session table is authoritative. SpawnKa is a lifecycle hint, not
+	// an availability gate: idle and last-session deletion are normal reads.
 
 	return ch.Bs.BFDGet()
 }

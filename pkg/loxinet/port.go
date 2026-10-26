@@ -194,6 +194,9 @@ func (P *PortsH) PortHasTunSlaves(master string, ptype int) (bool, []*Port) {
 // PortAdd - add a port to loxinet realm
 func (P *PortsH) PortAdd(name string, osid int, ptype int, zone string,
 	hwi PortHwInfo, l2i PortLayer2Info) (int, error) {
+	// A network-identity binding may name this interface: have the
+	// resolver look at its interfaces again. Wakes a goroutine, no more.
+	defer NetIdentityPortEvent()
 
 	if _, err := mh.zn.ZonePortIsValid(name, zone); err != nil {
 		tk.LogIt(tk.LogError, "port add - %s no such zone\n", name)
@@ -412,6 +415,7 @@ func (P *PortsH) PortAdd(name string, osid int, ptype int, zone string,
 
 // PortDel - delete a port from loxinet realm
 func (P *PortsH) PortDel(name string, ptype int) (int, error) {
+	defer NetIdentityPortEvent()
 	if P.portSmap[name] == nil {
 		tk.LogIt(tk.LogError, "port delete - %s no such port\n", name)
 		return PortNotExistErr, errors.New("no-port error")

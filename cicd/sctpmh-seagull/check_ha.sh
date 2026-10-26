@@ -4,10 +4,12 @@ master="llb1"
 backup="llb2"
 
 function check_ha() {
+    # The retry budget is counted across iterations, so it is set once,
+    # before the loop: reset inside it, the limit below could never be met.
+    count=0
     while : ; do
         status1=$($hexec llb1 curl -sX 'GET' 'http://0.0.0.0:11111/netlox/v1/config/cistate/all' -H 'accept: application/json' | jq -r '.Attr[0].state')
         status2=$($hexec llb2 curl -sX 'GET' 'http://0.0.0.0:11111/netlox/v1/config/cistate/all' -H 'accept: application/json' | jq -r '.Attr[0].state')
-        count=0
         if [[ $status1 == "MASTER" && $status2 == "BACKUP" ]];
         then
             master="llb1"
