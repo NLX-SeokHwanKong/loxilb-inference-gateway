@@ -20,6 +20,24 @@ binary behaves exactly like upstream loxilb.
 
 ### Added
 
+- **Idempotent API-key creation and one transaction per management write.**
+  A generated key's secret is delivered once, so a create whose answer was
+  lost to a store stall (504) could leave an enabled key nobody holds the
+  secret of, and a retry made a second one. `POST /config/ai/apikey` takes an
+  optional `client_op_id` (also the `Idempotency-Key` header): a retry with
+  the same id converges on one row per tenant. While that key has never
+  authenticated the secret is minted again and delivered with the same
+  `key_id` and `reused: true`, and the earlier secret stops authenticating
+  everywhere; once it has, the retry answers 409 `api_key_already_delivered`
+  naming the `key_id`. The id shows on the key's summary. A key create with
+  class fields, a PATCH of several fields, a tenant limit with its model
+  quotas and a user limit with its model quotas each run as one store
+  transaction, applied whole or not at all. Every write answered 504 now
+  leaves an audit result with reason `store_outcome_unknown` (a create's
+  detail carries the tenant and `client_op_id`) and steps
+  `loxilb_ai_store_write_outcome_unknown_total{plane}` (`aikey`, `mgmt`), so
+  the writes an operator must reconcile are countable and findable.
+  (docs/AI-KEY-STORE.md, "Time budgets and the write-outcome contract")
 - **Data-path isolation for the API-key store.** A cache miss during a store
   stall no longer costs every proxy worker one full lookup budget for as long
   as the stall lasts. Two guards sit in front of the data-path reads (the key

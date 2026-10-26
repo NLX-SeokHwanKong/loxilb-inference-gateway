@@ -417,7 +417,11 @@ use (unknown, not for this service, or a raise it was not granted) with 403
 lowering hint is never refused.
 
 **When the key store is away.** Every write above answers 503 (`ai_key_store_unavailable`,
-or `ai_key_store_unconfigured` with no store) and changes nothing. A running gateway keeps
+or `ai_key_store_unconfigured` with no store) and changes nothing. A write the store was
+handed and did not answer within its budget is 504 (`ai_key_store_outcome_unknown`): it may
+still land, so read the resource back before retrying; an API-key create sent with a
+`client_op_id` can be retried blindly and converges on one key (see
+[AI-KEY-STORE.md](../AI-KEY-STORE.md), "Retrying a create safely"). A running gateway keeps
 applying what it last read. A gateway that starts while the store does not answer serves
 the last-known-good file `aigw-lkg.json` under `--config-path` (written, mode 0600, after
 every read whose content changed) until the store answers. `fc_effective.config_source` on
