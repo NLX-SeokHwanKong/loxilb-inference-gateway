@@ -94,39 +94,55 @@ func within(t *testing.T, what string, took, budget time.Duration) {
 func TestManagementOperationsAnswerInsideOneOperationBudget(t *testing.T) {
 	const budget = 200 * time.Millisecond
 	t.Setenv(pgstore.OpTimeoutEnv, "200")
+	// AddUser hashes the password before its first statement, and bcrypt at
+	// the production cost is CPU work the budget does not govern: under the
+	// race detector on a small runner it alone takes longer than the budget.
+	// Measure it here, in the same process, and credit that one operation
+	// with it, so the wall-clock check still holds the store wait to one
+	// budget without timing the hash.
+	hashStart := time.Now()
+	if _, err := hashUserPassword("Correct-Horse-9!"); err != nil {
+		t.Fatalf("hash the probe password: %v", err)
+	}
+	hashCost := time.Since(hashStart)
 	ops := []struct {
-		name string
-		call func(context.Context, *UserService) error
+		name        string
+		hashesFirst bool
+		call        func(context.Context, *UserService) error
 	}{
-		{"AddUser", func(ctx context.Context, s *UserService) error {
+		{"AddUser", true, func(ctx context.Context, s *UserService) error {
 			_, err := s.AddUser(ctx, cmn.User{Username: "alice", Password: "Correct-Horse-9!", Role: "admin", CreatedAt: time.Now()})
 			return err
 		}},
-		{"BootstrapUser", func(ctx context.Context, s *UserService) error {
+		{"BootstrapUser", false, func(ctx context.Context, s *UserService) error {
 			_, err := s.BootstrapUser(ctx, cmn.User{Username: "alice", Password: "Correct-Horse-9!", Role: "admin", CreatedAt: time.Now()})
 			return err
 		}},
-		{"GetUsers", func(ctx context.Context, s *UserService) error { _, err := s.GetUsers(ctx); return err }},
-		{"DelegationAllowed", func(ctx context.Context, s *UserService) error {
+		{"GetUsers", false, func(ctx context.Context, s *UserService) error { _, err := s.GetUsers(ctx); return err }},
+		{"DelegationAllowed", false, func(ctx context.Context, s *UserService) error {
 			_, err := s.DelegationAllowed(ctx, "alice")
 			return err
 		}},
-		{"DeleteUser", func(ctx context.Context, s *UserService) error { return s.DeleteUser(ctx, 7) }},
-		{"UpdateUser", func(ctx context.Context, s *UserService) error {
+		{"DeleteUser", false, func(ctx context.Context, s *UserService) error { return s.DeleteUser(ctx, 7) }},
+		{"UpdateUser", false, func(ctx context.Context, s *UserService) error {
 			return s.UpdateUser(ctx, cmn.User{ID: 7, Username: "alice", Password: "Correct-Horse-9!"})
 		}},
-		{"Login", func(ctx context.Context, s *UserService) error { _, _, err := s.Login(ctx, "alice", "pw"); return err }},
-		{"Logout", func(ctx context.Context, s *UserService) error { return s.Logout(ctx, "tok") }},
-		{"ValidateToken", func(ctx context.Context, s *UserService) error { _, err := s.ValidateToken(ctx, "tok"); return err }},
+		{"Login", false, func(ctx context.Context, s *UserService) error { _, _, err := s.Login(ctx, "alice", "pw"); return err }},
+		{"Logout", false, func(ctx context.Context, s *UserService) error { return s.Logout(ctx, "tok") }},
+		{"ValidateToken", false, func(ctx context.Context, s *UserService) error { _, err := s.ValidateToken(ctx, "tok"); return err }},
 	}
 	for _, tc := range ops {
 		t.Run(tc.name, func(t *testing.T) {
 			svc, h := stalledUserService(t)
 			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 			defer cancel()
+			allowed := budget
+			if tc.hashesFirst {
+				allowed += hashCost
+			}
 			start := time.Now()
 			err := tc.call(ctx, svc)
-			within(t, tc.name, time.Since(start), budget)
+			within(t, tc.name, time.Since(start), allowed)
 			if err == nil {
 				t.Fatal("a stalled store answered success")
 			}
