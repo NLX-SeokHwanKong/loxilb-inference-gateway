@@ -11,7 +11,7 @@ on:
       - 'go.sum'
       - '.github/workflows/status-api.yml'
   pull_request:
-    branches: [main, codex/ucx-status-native-reads]
+    branches: [main]
     paths:
       - 'api/apiutils/status/**'
       - 'api/restapi/handler/status.go'
