@@ -71,7 +71,7 @@ func bfdErrorResponse(err error) middleware.Responder {
 	case errors.Is(err, cmn.ErrBFDUnavailable):
 		return errorResponseWithCode(http.StatusServiceUnavailable, "BFD subsystem unavailable")
 	case errors.Is(err, cmn.ErrBFDUnsupported):
-		return errorResponseWithCode(http.StatusForbidden, "BFD is unavailable in BGP-only mode")
+		return errorResponseWithCode(http.StatusBadRequest, "BFD is unavailable in BGP-only mode")
 	default:
 		return &ErrorResponse{Payload: ResultErrorResponseError(err)}
 	}

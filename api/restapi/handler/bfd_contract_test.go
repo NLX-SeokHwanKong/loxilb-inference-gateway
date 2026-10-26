@@ -52,7 +52,7 @@ func TestBFDGetWireContract(t *testing.T) {
 		{name: "idle empty list", code: 200},
 		{name: "configured down session", rows: []cmn.BFDMod{{Instance: "default", RemoteIP: net.ParseIP("127.0.0.2"), SourceIP: net.ParseIP("127.0.0.1"), State: "BFDDown"}}, code: 200},
 		{name: "uninitialized", err: fmt.Errorf("wrapped: %w", cmn.ErrBFDUnavailable), code: 503},
-		{name: "unsupported", err: cmn.ErrBFDUnsupported, code: 403},
+		{name: "unsupported", err: cmn.ErrBFDUnsupported, code: 400},
 		{name: "actual failure stays failure", err: errors.New("unexpected hook fault"), code: 500},
 		{name: "lookalike is not a sentinel", err: errors.New(cmn.ErrBFDUnavailable.Error()), code: 500},
 	} {
@@ -83,7 +83,7 @@ func TestBFDMutationUnavailableStatus(t *testing.T) {
 	for _, tc := range []struct {
 		err  error
 		code int
-	}{{cmn.ErrBFDUnavailable, 503}, {cmn.ErrBFDUnsupported, 403}, {errors.New("unknown failure"), 500}} {
+	}{{cmn.ErrBFDUnavailable, 503}, {cmn.ErrBFDUnsupported, 400}, {fmt.Errorf("wrapped mode: %w", cmn.ErrBFDUnsupported), 400}, {fmt.Errorf("wrapped init: %w", cmn.ErrBFDUnavailable), 503}, {errors.New("unknown failure"), 500}} {
 		ApiHooks = &bfdContractHook{err: tc.err}
 		req := httptest.NewRequest(http.MethodPost, "/netlox/v1/config/bfd", nil)
 		calls := []middleware.Responder{

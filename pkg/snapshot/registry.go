@@ -411,7 +411,7 @@ func isStartupMessage(m string) bool {
 
 // isSubsystemUnavailable reports whether err is an optional subsystem
 // (BFD, BGP, IPsec) telling us it is not running/enabled on this gateway
-// (loxinet nil-guard convention: "bfd session not running", "loxilb BGP
+// (typed BFD sentinels, or legacy loxinet nil-guard convention: "bfd session not running", "loxilb BGP
 // mode is disabled", "IPsec not initialized", "running in bgp only mode").
 // Capture and wipe treat such a domain as EMPTY -- a subsystem that is not
 // running has no configuration to snapshot or delete, and failing the whole
@@ -422,6 +422,9 @@ func isStartupMessage(m string) bool {
 func isSubsystemUnavailable(err error) bool {
 	if err == nil {
 		return false
+	}
+	if errors.Is(err, cmn.ErrBFDUnavailable) || errors.Is(err, cmn.ErrBFDUnsupported) {
+		return true
 	}
 	m := strings.ToLower(err.Error())
 	return strings.Contains(m, "not running") ||
