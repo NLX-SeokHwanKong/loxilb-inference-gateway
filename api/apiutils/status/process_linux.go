@@ -9,6 +9,7 @@ package status
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -16,16 +17,26 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/loxilb-io/loxilb/api/models"
 )
+
+// ProcessReadError identifies a server-side collection failure. Its cause is
+// retained for diagnostics; HTTP handlers must not classify it as client input.
+type ProcessReadError struct{ Err error }
+
+func (e *ProcessReadError) Error() string {
+	return fmt.Sprintf("process status collection failed: %v", e.Err)
+}
+func (e *ProcessReadError) Unwrap() error { return e.Err }
 
 // ProcessInfoGet reads procfs without creating children that compete with the
 // process-wide SIGCHLD reaper. CPU is lifetime CPU / elapsed lifetime, as in ps.
 func ProcessInfoGet() ([]*models.ProcessInfoEntry, error) {
 	ticks, err := clockTicks()
 	if err != nil {
-		return nil, err
+		return nil, &ProcessReadError{Err: err}
 	}
 	return processInfoFromProc("/proc", "/etc/passwd", ticks)
 }
@@ -107,10 +118,20 @@ func parseProcessStat(data string) (processStat, error) {
 }
 
 func processInfoFromProc(root, passwd string, ticks float64) ([]*models.ProcessInfoEntry, error) {
+	return processInfoFromProcWithReader(root, passwd, ticks, os.ReadFile)
+}
+
+func processInfoFromProcWithReader(root, passwd string, ticks float64, readFile func(string) ([]byte, error)) (rows []*models.ProcessInfoEntry, err error) {
+	defer func() {
+		if err != nil {
+			err = &ProcessReadError{Err: err}
+		}
+	}()
+
 	if ticks <= 0 || math.IsNaN(ticks) || math.IsInf(ticks, 0) {
 		return nil, fmt.Errorf("invalid clock tick rate")
 	}
-	uptimeData, err := os.ReadFile(filepath.Join(root, "uptime"))
+	uptimeData, err := readFile(filepath.Join(root, "uptime"))
 	if err != nil {
 		return nil, err
 	}
@@ -122,7 +143,7 @@ func processInfoFromProc(root, passwd string, ticks float64) ([]*models.ProcessI
 	if err != nil || uptime <= 0 || math.IsNaN(uptime) || math.IsInf(uptime, 0) {
 		return nil, fmt.Errorf("invalid proc uptime")
 	}
-	memData, err := os.ReadFile(filepath.Join(root, "meminfo"))
+	memData, err := readFile(filepath.Join(root, "meminfo"))
 	if err != nil {
 		return nil, err
 	}
@@ -142,11 +163,13 @@ func processInfoFromProc(root, passwd string, ticks float64) ([]*models.ProcessI
 	}
 	users := map[string]string{}
 	// User names are optional. Numeric UIDs remain useful when passwd is unavailable.
-	if data, e := os.ReadFile(passwd); e == nil {
+	if data, e := readFile(passwd); e == nil {
 		for _, line := range strings.Split(string(data), "\n") {
 			f := strings.Split(line, ":")
 			if len(f) >= 4 {
-				users[f[2]] = f[0]
+				if _, exists := users[f[2]]; !exists {
+					users[f[2]] = f[0]
+				}
 			}
 		}
 	}
@@ -161,7 +184,7 @@ func processInfoFromProc(root, passwd string, ticks float64) ([]*models.ProcessI
 			continue
 		}
 		path := filepath.Join(root, dir.Name())
-		data, err := os.ReadFile(filepath.Join(path, "stat"))
+		data, err := readFile(filepath.Join(path, "stat"))
 		if err != nil {
 			if transientProcessError(err) {
 				continue
@@ -170,12 +193,12 @@ func processInfoFromProc(root, passwd string, ticks float64) ([]*models.ProcessI
 		}
 		p, err := parseProcessStat(string(data))
 		if err != nil {
-			return nil, fmt.Errorf("parse process %s: %w", dir.Name(), err)
+			continue
 		}
 		if p.pid != dir.Name() {
-			return nil, fmt.Errorf("process PID does not match directory")
+			continue
 		}
-		data, err = os.ReadFile(filepath.Join(path, "status"))
+		data, err = readFile(filepath.Join(path, "status"))
 		if err != nil {
 			if transientProcessError(err) {
 				continue
@@ -191,9 +214,9 @@ func processInfoFromProc(root, passwd string, ticks float64) ([]*models.ProcessI
 			}
 		} // effective UID, as in top
 		if uid == "" {
-			return nil, fmt.Errorf("process %s has no effective UID", p.pid)
+			continue
 		}
-		statm, err := os.ReadFile(filepath.Join(path, "statm"))
+		statm, err := readFile(filepath.Join(path, "statm"))
 		if err != nil {
 			if transientProcessError(err) {
 				continue
@@ -202,14 +225,14 @@ func processInfoFromProc(root, passwd string, ticks float64) ([]*models.ProcessI
 		}
 		f := strings.Fields(string(statm))
 		if len(f) < 3 {
-			return nil, fmt.Errorf("short process statm")
+			continue
 		}
 		shared, err := strconv.ParseUint(f[2], 10, 64)
 		if err != nil {
-			return nil, err
+			continue
 		}
 		// A PID may disappear or be reused between the independent procfs reads.
-		again, err := os.ReadFile(filepath.Join(path, "stat"))
+		again, err := readFile(filepath.Join(path, "stat"))
 		if err != nil {
 			if transientProcessError(err) {
 				continue
@@ -218,7 +241,7 @@ func processInfoFromProc(root, passwd string, ticks float64) ([]*models.ProcessI
 		}
 		current, err := parseProcessStat(string(again))
 		if err != nil {
-			return nil, err
+			continue
 		}
 		if current.start != p.start {
 			continue
@@ -232,7 +255,7 @@ func processInfoFromProc(root, passwd string, ticks float64) ([]*models.ProcessI
 			user = uid
 		}
 		priority := strconv.FormatInt(p.priority, 10)
-		if p.priority < 0 {
+		if p.priority == -100 {
 			priority = "rt"
 		}
 		centis := uint64(float64(p.cpu) * 100 / ticks)
@@ -254,4 +277,6 @@ func processInfoFromProc(root, passwd string, ticks float64) ([]*models.ProcessI
 	return result, nil
 }
 
-func transientProcessError(err error) bool { return os.IsNotExist(err) || os.IsPermission(err) }
+func transientProcessError(err error) bool {
+	return os.IsNotExist(err) || os.IsPermission(err) || errors.Is(err, syscall.ESRCH)
+}

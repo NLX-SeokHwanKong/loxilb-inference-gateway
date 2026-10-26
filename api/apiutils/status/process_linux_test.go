@@ -8,13 +8,19 @@
 package status
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func processFixtureStat(pid, command string, cpu, start, rss uint64) string {
@@ -95,8 +101,9 @@ func TestProcessProcfsContract(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "21", "stat"), []byte("bad stat"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := processInfoFromProc(root, passwd, 100); err == nil {
-		t.Fatal("malformed procfs reported success")
+	rows, err = processInfoFromProc(root, passwd, 100)
+	if err != nil || len(rows) != 1 || rows[0].Pid != "20" {
+		t.Fatalf("one malformed PID must not fail healthy rows: %+v %v", rows, err)
 	}
 }
 
@@ -149,4 +156,155 @@ func TestProcessNativeConcurrentWithoutExecutables(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+func processReviewFixture(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	for name, data := range map[string]string{"uptime": "100 0", "meminfo": "MemTotal: 1000 kB", "passwd": "first:x:1001:1001::/:/bin/false\nsecond:x:1001:1001::/:/bin/false\n"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeProcessFixture(t, root, "20", "stable", 1, 1)
+	writeProcessFixture(t, root, "21", "exiting", 1, 1)
+	return root
+}
+
+func TestProcessExitDuringEachRead(t *testing.T) {
+	for _, target := range []string{"stat", "status", "statm", "stat-again"} {
+		t.Run(target, func(t *testing.T) {
+			root := processReviewFixture(t)
+			statReads := 0
+			injected := false
+			reader := func(path string) ([]byte, error) {
+				if filepath.Dir(path) == filepath.Join(root, "21") {
+					name := filepath.Base(path)
+					if name == "stat" {
+						statReads++
+					}
+					if name == target || target == "stat-again" && name == "stat" && statReads == 2 {
+						injected = true
+						return nil, &os.PathError{Op: "read", Path: path, Err: syscall.ESRCH}
+					}
+				}
+				return os.ReadFile(path)
+			}
+			rows, err := processInfoFromProcWithReader(root, filepath.Join(root, "passwd"), 100, reader)
+			if !injected || err != nil || len(rows) != 1 || rows[0].Pid != "20" {
+				t.Fatalf("exit %s: injected=%v rows=%+v err=%v", target, injected, rows, err)
+			}
+		})
+	}
+	for _, err := range []error{syscall.ESRCH, &os.PathError{Op: "read", Path: "/proc/example/stat", Err: syscall.ESRCH}, fmt.Errorf("wrapped: %w", syscall.ESRCH), syscall.ENOENT, syscall.EPERM, syscall.EACCES} {
+		if !transientProcessError(err) {
+			t.Errorf("must skip %v", err)
+		}
+	}
+	if transientProcessError(syscall.EIO) || transientProcessError(nil) {
+		t.Fatal("unexpected I/O must not be silently skipped")
+	}
+}
+
+func TestProcessMalformedRowsAndPriority(t *testing.T) {
+	for _, file := range []string{"stat", "status", "statm"} {
+		t.Run(file, func(t *testing.T) {
+			root := processReviewFixture(t)
+			if err := os.WriteFile(filepath.Join(root, "21", file), []byte("malformed"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			rows, err := processInfoFromProc(root, filepath.Join(root, "passwd"), 100)
+			if err != nil || len(rows) != 1 || rows[0].Pid != "20" {
+				t.Fatalf("malformed %s: rows=%+v err=%v", file, rows, err)
+			}
+		})
+	}
+	for _, priority := range []string{"-100", "-51", "20"} {
+		t.Run(priority, func(t *testing.T) {
+			root := processReviewFixture(t)
+			data := strings.Replace(processFixtureStat("20", "stable", 1, 1, 1), " 20 0 ", " "+priority+" 0 ", 1)
+			if err := os.WriteFile(filepath.Join(root, "20", "stat"), []byte(data), 0600); err != nil {
+				t.Fatal(err)
+			}
+			rows, err := processInfoFromProc(root, filepath.Join(root, "passwd"), 100)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := priority
+			if priority == "-100" {
+				want = "rt"
+			}
+			for _, p := range rows {
+				if p.Pid == "20" && (p.Priority != want || p.User != "first") {
+					t.Fatalf("priority/first UID: %+v", p)
+				}
+			}
+		})
+	}
+}
+
+func TestProcessServerErrorsAreTyped(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		reader func(string) ([]byte, error)
+		ticks  float64
+	}{
+		{"missing procfs", os.ReadFile, 100},
+		{"invalid uptime", func(string) ([]byte, error) { return []byte("invalid"), nil }, 100},
+		{"invalid ticks", os.ReadFile, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := processInfoFromProcWithReader(t.TempDir(), "", tc.ticks, tc.reader)
+			var typed *ProcessReadError
+			if !errors.As(err, &typed) {
+				t.Fatalf("missing typed server error: %v", err)
+			}
+		})
+	}
+}
+
+func TestProcessCollectionDuringChildChurn(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var wg sync.WaitGroup
+	var children atomic.Int64
+	for i := 0; i < 6; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for ctx.Err() == nil {
+				err := exec.CommandContext(ctx, "/bin/true").Run()
+				if err != nil && ctx.Err() == nil {
+					t.Errorf("spawn churn child: %v", err)
+					return
+				}
+				children.Add(1)
+			}
+		}()
+	}
+	defer wg.Wait()
+	reads := 0
+	pid := strconv.Itoa(os.Getpid())
+	for ctx.Err() == nil {
+		rows, err := ProcessInfoGet()
+		if err != nil {
+			cancel()
+			t.Fatalf("collection during process exits: %v", err)
+		}
+		found := false
+		for _, p := range rows {
+			if p.Pid == pid {
+				found = true
+			}
+		}
+		if !found {
+			cancel()
+			t.Fatal("stable current process missing during churn")
+		}
+		reads++
+	}
+	if reads == 0 || children.Load() == 0 {
+		t.Fatal("churn regression did not exercise both spawning and collection")
+	}
+	t.Logf("process churn: %d collections, %d short-lived children, zero collection failures", reads, children.Load())
 }
