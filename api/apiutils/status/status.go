@@ -1,3 +1,5 @@
+//go:build linux
+
 /*
  * Copyright (c) 2022 NetLOX Inc
  *
@@ -18,12 +20,12 @@ package status
 
 import (
 	"fmt"
-	"golang.org/x/sys/unix"
 	"os"
 	"os/exec"
 	"strings"
 
 	"github.com/loxilb-io/loxilb/api/models"
+	"golang.org/x/sys/unix"
 )
 
 // ProcessInfoGet- Get Process Status using "top -bn 1" command
@@ -137,13 +139,23 @@ func DeviceInfoGet() (*models.DeviceInfoEntry, error) {
 	}
 	result.Uptime = string(uptime)
 
-	var uts unix.Utsname
-	if err := unix.Uname(&uts); err != nil {
+	architecture, err := deviceArchitecture()
+	if err != nil {
 		return nil, err
 	}
-	result.Architecture = unix.ByteSliceToString(uts.Machine[:])
+	result.Architecture = architecture
 
 	return result, nil
+}
+
+// deviceArchitecture reports the kernel machine architecture, without the
+// trailing newline formerly produced by the uname -p command.
+func deviceArchitecture() (string, error) {
+	var uts unix.Utsname
+	if err := unix.Uname(&uts); err != nil {
+		return "", err
+	}
+	return unix.ByteSliceToString(uts.Machine[:]), nil
 }
 
 // Get FileSystem Status

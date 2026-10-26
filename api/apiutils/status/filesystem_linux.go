@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022 NetLOX Inc
+ * Copyright (c) 2026 NetLOX Inc
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,11 +26,25 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// Read kernel mount and usage data without spawning children: the PID-1
-// SIGCHLD reaper can otherwise steal df's status from os/exec.Wait.
+type filesystemMount struct{ device, root, target, source, kind string }
+
+// These kernel interfaces have no storage usage to report. In particular,
+// statfs on autofs can trigger an automount, so filter before any syscall.
+func dummyFilesystem(kind string) bool {
+	switch kind {
+	case "autofs", "proc", "sysfs", "devpts", "cgroup", "cgroup2", "securityfs",
+		"debugfs", "tracefs", "configfs", "fusectl", "mqueue", "pstore", "bpf",
+		"rpc_pipefs", "binfmt_misc", "nsfs", "efivarfs", "selinuxfs", "smackfs":
+		return true
+	}
+	return false
+}
+
+// Read kernel mount and usage data without spawning children: the process-wide
+// SIGCHLD reaper can steal df's status from os/exec.Wait even outside PID 1.
 func filesystemInfoFromMounts(data string, stat func(string, *unix.Statfs_t) error) ([]*models.FileSystemInfoEntry, error) {
-	result := make([]*models.FileSystemInfoEntry, 0)
-	seen := make(map[string]bool)
+	mounts := []filesystemMount{}
+	lastPath := make(map[string]int)
 	unescape := strings.NewReplacer(`\040`, " ", `\011`, "\t", `\012`, "\n", `\134`, `\`)
 	for _, line := range strings.Split(data, "\n") {
 		halves := strings.SplitN(line, " - ", 2)
@@ -41,25 +55,62 @@ func filesystemInfoFromMounts(data string, stat func(string, *unix.Statfs_t) err
 		if len(mount) < 6 || len(fs) < 2 {
 			continue
 		}
-		target, source := unescape.Replace(mount[4]), unescape.Replace(fs[1])
-		var st unix.Statfs_t
-		// A mount may disappear during collection; like df, omit unavailable
-		// entries and pseudo filesystems without storage blocks.
-		if stat(target, &st) != nil || st.Blocks == 0 || st.Bsize <= 0 {
+		m := filesystemMount{device: mount[2], root: unescape.Replace(mount[3]), target: unescape.Replace(mount[4]), source: unescape.Replace(fs[1]), kind: fs[0]}
+		lastPath[m.target] = len(mounts)
+		mounts = append(mounts, m)
+	}
+	// Resolve stacked paths before grouping devices. statfs(path) sees only
+	// the visible mount; retaining a covered entry would mislabel that result.
+	groups := [][]filesystemMount{}
+	groupIndex := make(map[string]int)
+	for i, m := range mounts {
+		if lastPath[m.target] != i || dummyFilesystem(m.kind) {
 			continue
 		}
-		key := mount[2] + ":" + fs[0]
-		if seen[key] {
+		key := m.device + ":" + m.kind
+		n, seen := groupIndex[key]
+		if !seen {
+			groupIndex[key] = len(groups)
+			groups = append(groups, []filesystemMount{m})
 			continue
 		}
-		seen[key] = true
-		free := min(st.Bfree, st.Blocks)
-		used := st.Blocks - free
-		pct := uint64(0)
-		if used+st.Bavail > 0 {
-			pct = uint64(math.Ceil(float64(used) * 100 / float64(used+st.Bavail)))
+		// Prefer the filesystem root over a bind alias. An inaccessible preferred
+		// path may fall back to another alias, but successful groups are read once.
+		if m.root == "/" && groups[n][0].root != "/" {
+			groups[n] = append([]filesystemMount{m}, groups[n]...)
+		} else {
+			groups[n] = append(groups[n], m)
 		}
-		result = append(result, &models.FileSystemInfoEntry{FileSystem: source, Type: fs[0], MountedOn: target, Size: humanBytes(float64(st.Blocks) * float64(st.Bsize)), Used: humanBytes(float64(used) * float64(st.Bsize)), Avail: humanBytes(float64(st.Bavail) * float64(st.Bsize)), UsePercent: strconv.FormatUint(pct, 10) + "%"})
+	}
+	result := make([]*models.FileSystemInfoEntry, 0)
+	for _, group := range groups {
+		for _, m := range group {
+			var st unix.Statfs_t
+			if stat(m.target, &st) != nil {
+				continue
+			}
+			blockSize := st.Frsize
+			if blockSize <= 0 {
+				blockSize = st.Bsize
+			}
+			if st.Blocks == 0 || blockSize <= 0 {
+				break
+			}
+			free := min(st.Bfree, st.Blocks)
+			used := st.Blocks - free
+			percent := "-"
+			denominator := float64(used) + float64(st.Bavail)
+			if denominator > 0 {
+				percent = strconv.FormatUint(uint64(math.Ceil(float64(used)*100/denominator)), 10) + "%"
+			}
+			result = append(result, &models.FileSystemInfoEntry{
+				FileSystem: m.source, Type: m.kind, MountedOn: m.target,
+				Size:  humanBytes(float64(st.Blocks) * float64(blockSize)),
+				Used:  humanBytes(float64(used) * float64(blockSize)),
+				Avail: humanBytes(float64(st.Bavail) * float64(blockSize)), UsePercent: percent,
+			})
+			break
+		}
 	}
 	if len(result) == 0 {
 		return nil, fmt.Errorf("no file system information found")
@@ -74,7 +125,12 @@ func humanBytes(value float64) string {
 		value /= 1024
 		i++
 	}
-	if i > 0 && value < 10 {
+	// Rounding can cross either the one-decimal boundary or a unit boundary.
+	if math.Ceil(value) >= 1024 && i < len(units)-1 {
+		value /= 1024
+		i++
+	}
+	if i > 0 && math.Ceil(value*10)/10 < 10 {
 		return fmt.Sprintf("%.1f%s", math.Ceil(value*10)/10, units[i])
 	}
 	return fmt.Sprintf("%.0f%s", math.Ceil(value), units[i])
