@@ -852,8 +852,15 @@ func (na *NetAPIStruct) NetBFDGet() ([]cmn.BFDMod, error) {
 		return nil, cmn.ErrBFDUnsupported
 	}
 	mh.mtx.Lock()
-	defer mh.mtx.Unlock()
-	return mh.has.CIBFDSessionGet()
+	if mh.has == nil || mh.has.Bs == nil {
+		mh.mtx.Unlock()
+		return nil, cmn.ErrBFDUnavailable
+	}
+	bp := mh.has.Bs
+	mh.mtx.Unlock()
+	// Protocol notifications take the global mutex while holding the BFD
+	// table lock. Preserve the read path's release-before-table-lock order.
+	return bp.BFDGet()
 }
 
 // NetBFDAdd - Add BFD Session
