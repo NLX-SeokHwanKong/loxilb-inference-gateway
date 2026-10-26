@@ -6,15 +6,20 @@ border="************************************************************************
 
 for((j=0,i=1; i<=6; i++, j++)); do
     echo "SCTP Multihoming - Test case #$i"
+    # A case that exits early (check_ha gives up on a split brain, or a step
+    # aborts) writes no status file; remove any earlier one so it cannot be
+    # read in its place.
+    rm -f "status$i.txt"
     echo -e "\n\n\n$border\n"
     ./validation$i.sh
     echo -e "\n\n"
     file=status$i.txt
-    status=`cat $file`
+    status=$(cat "$file" 2>/dev/null)
     title=${tc[j]}
     echo -e "\n\n"
 
-    if [[ $status == "NOK" ]]; then
+    # Only an explicit OK passes: a missing status means the case never finished.
+    if [[ $status != "OK" ]]; then
         code=1
         printf "Test case #%2s - %s%s %s\n" "$i" "$title" "${padding:${#title}}" "[FAILED]";
     else
@@ -29,11 +34,11 @@ echo -e "\n\n\n$border\n"
 printf "================================================== SCTP MULTIHOMING CONSOLIDATED RESULT ==========================================================\n"
 for((j=0,i=1; i<=6; i++, j++)); do
     file=status$i.txt
-    status=`cat $file`
+    status=$(cat "$file" 2>/dev/null)
     title=${tc[j]}
     echo -e "\n\n"
 
-    if [[ $status == "NOK" ]]; then
+    if [[ $status != "OK" ]]; then
         code=1
         printf "Test case #%2s - %s%s %s\n" "$i" "$title" "${padding:${#title}}" "[FAILED]";
     else
