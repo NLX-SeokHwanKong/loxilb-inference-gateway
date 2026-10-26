@@ -1,0 +1,44 @@
+name: Status API contracts
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'api/apiutils/status/**'
+      - 'api/restapi/handler/status.go'
+      - 'api/models/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/status-api.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'api/apiutils/status/**'
+      - 'api/restapi/handler/status.go'
+      - 'api/models/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/status-api.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  status-api:
+    name: status-api-linux-race
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Kernel status contracts with race detector
+        run: go test -race -count=1 -v ./api/apiutils/status
+      - name: Stacked tmpfs mounts in a private mount namespace
+        # Enter the namespace before Go starts any threads. Only the test's
+        # new temporary directory is mounted; propagation to the runner is off.
+        run: |
+          sudo -E unshare --mount --propagation private env "PATH=$PATH" \
+            LOXILB_STATUS_TEST_MOUNTS=1 go test -race -count=1 -v \
+            -run '^TestFilesystemOvermountLive$' ./api/apiutils/status

@@ -1,3 +1,5 @@
+//go:build linux
+
 /*
  * Copyright (c) 2022 NetLOX Inc
  *
@@ -23,6 +25,7 @@ import (
 	"strings"
 
 	"github.com/loxilb-io/loxilb/api/models"
+	"golang.org/x/sys/unix"
 )
 
 // ProcessInfoGet- Get Process Status using "top -bn 1" command
@@ -136,51 +139,30 @@ func DeviceInfoGet() (*models.DeviceInfoEntry, error) {
 	}
 	result.Uptime = string(uptime)
 
-	app := "uname"
-	arg0 := "-p"
-	cmd := exec.Command(app, arg0)
-	stdout, err := cmd.Output()
+	architecture, err := deviceArchitecture()
 	if err != nil {
 		return nil, err
 	}
-	result.Architecture = string(stdout)
+	result.Architecture = architecture
+
 	return result, nil
+}
+
+// deviceArchitecture reports the kernel machine architecture, without the
+// trailing newline formerly produced by the uname -p command.
+func deviceArchitecture() (string, error) {
+	var uts unix.Utsname
+	if err := unix.Uname(&uts); err != nil {
+		return "", err
+	}
+	return unix.ByteSliceToString(uts.Machine[:]), nil
 }
 
 // Get FileSystem Status
 func FileSystemInfoGet() ([]*models.FileSystemInfoEntry, error) {
-	var result []*models.FileSystemInfoEntry
-	result = make([]*models.FileSystemInfoEntry, 0)
-	app := "df"
-	arg0 := "-hT"
-	cmd := exec.Command(app, arg0)
-	stdout, err := cmd.Output()
+	data, err := os.ReadFile("/proc/self/mountinfo")
 	if err != nil {
 		return nil, err
 	}
-	dfResult := string(stdout)
-
-	if len(strings.Split(dfResult, "\n")) < 2 {
-		return nil, fmt.Errorf("no file system information found")
-	}
-	// Print the output
-	for _, dfInfos := range strings.Split(dfResult, "\n")[1:] {
-		tmpdf := strings.Fields(dfInfos)
-		if len(tmpdf) == 7 {
-			tmpResult := &models.FileSystemInfoEntry{
-				FileSystem: tmpdf[0],
-				Type:       tmpdf[1],
-				Size:       tmpdf[2],
-				Used:       tmpdf[3],
-				Avail:      tmpdf[4],
-				UsePercent: tmpdf[5],
-				MountedOn:  tmpdf[6],
-			}
-
-			result = append(result, tmpResult)
-		}
-
-	}
-
-	return result, nil
+	return filesystemInfoFromMounts(string(data), unix.Statfs)
 }
