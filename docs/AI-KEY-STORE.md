@@ -203,8 +203,72 @@ refresh has failed. `/version` answering says nothing about the store.
 
 **Data path.** A request whose key is cached is validated without touching
 the store. A cache miss during a stall is refused with 503
-`policy_store_unavailable` and `Retry-After` inside the lookup budget, the same
-answer a cold outage gives.
+`policy_store_unavailable` and `Retry-After`: inside the lookup budget for the
+first few misses, and immediately once the store-health circuit below has
+opened. The answer is the same one a cold outage gives.
+
+### Data-path isolation
+
+The lookup budget bounds one round trip. On its own it still costs every cache
+miss one full wait while the store stalls, on every proxy worker that asks.
+Two guards sit in front of the data-path reads (the key lookup on a cache miss,
+the quota-row reads behind a request); the management plane, the readiness
+ping and the snapshot refresher do not consult them.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `LLB_AI_KEY_LOOKUP_MAX_INFLIGHT` | 2 | Data-path round trips allowed on the store at once. A worker that finds no slot waits for one only until its lookup budget expires, so wait plus statement never exceed one budget. Deployments that raise `LLB_PROXY_WORKERS` well above the default and see high key churn may want this raised with it. |
+| `LLB_AI_KEY_LOOKUP_CIRCUIT_FAILURES` | 3 | Consecutive store failures that open the circuit. 0 disables it. |
+| `LLB_AI_KEY_LOOKUP_CIRCUIT_COOLDOWN_MS` | 5000 | How long the circuit stays open before one probe read is let through. |
+| `LLB_AI_KEY_NEGATIVE_CACHE_MS` | 2000 | How long a key hash the store answered "no such key" for is refused without asking again. 0 disables it. |
+| `LLB_AI_KEY_NEGATIVE_CACHE_CAP` | 4096 | Entries the negative cache holds; the oldest goes first. |
+
+**The circuit.** It is closed while the store answers. A failure is a round
+trip the store did not answer: the budget expired, the connection failed, or
+the store is not connected. A row, and the store's "no such row", are answers
+and reset the count. After `LLB_AI_KEY_LOOKUP_CIRCUIT_FAILURES` failures in a
+row the circuit opens: every data-path miss is refused at once without
+contacting the store, and every quota read answers from the last value the
+store confirmed to this process (or from the last-known-good file), refusing
+only a tenant, user or key the store never described. After the cool-down the
+circuit is half-open: exactly one miss is let through as a probe, every other
+miss is still refused; the probe's success closes the circuit, its failure
+opens it again for a fresh cool-down. A refused in-flight slot is contention,
+not a failure, and never opens the circuit. A statement that completes after
+the circuit changed state is counted in the metrics and moves nothing.
+
+**Two independent signals.** `store_reachable` (on `GET /config/ai/objective`
+and `/diagnostics`) is the snapshot refresher's view: a 3 s-budget read every
+refresh interval. `loxilb_ai_key_store_circuit_open` is the data path's view:
+300 ms-budget reads driven by cache misses. They can disagree, and both are
+right about what they measure. In particular the circuit **stays open after
+the store recovers until a cache miss arrives to run the half-open probe**: a
+gauge that reads 1 on a gateway with no miss traffic is not an outage. It
+drops within one cool-down of recovery only while misses keep arriving.
+
+**Key limits during an outage.** A key's rate limit and token quota come from
+its row. Both the by-hash validation and the by-ID read keep the last view the
+store confirmed, so a key this process has validated keeps its limits enforced
+through an outage even after the cached entry aged out. A key the process has
+never seen described (validated on a peer, or evicted by the cache cap) is
+refused with 503 `policy_store_unavailable` rather than admitted on zero
+limits.
+
+**Negative cache.** A hash the store said does not exist is refused for
+`LLB_AI_KEY_NEGATIVE_CACHE_MS` without another round trip. Creating that key
+here, or a peer's invalidation for its hash, clears the entry at once; a key
+created on a peer whose hash was probed here just before can therefore be
+refused 401 for up to the TTL. That is the accepted trade for not spending a
+slot and a budget per unknown key under a flood.
+
+**Metrics.** `loxilb_ai_key_store_lookup_seconds{result}` is the time a worker
+spent on one data-path round trip, by how it ended (`miss_found`,
+`miss_invalid`, `timeout`, `refused_circuit`, `refused_inflight`,
+`unavailable`; cache hits are not round trips and are not counted);
+`loxilb_ai_key_store_circuit_open` and `loxilb_ai_key_store_lookup_inflight`
+are the two gauges. Samples piling up at the 0.3 s bucket edge are the stall
+signature; `refused_circuit` rising with `circuit_open` at 1 is the guard
+doing its job.
 
 ## Troubleshooting
 

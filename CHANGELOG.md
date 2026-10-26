@@ -20,6 +20,30 @@ binary behaves exactly like upstream loxilb.
 
 ### Added
 
+- **Data-path isolation for the API-key store.** A cache miss during a store
+  stall no longer costs every proxy worker one full lookup budget for as long
+  as the stall lasts. Two guards sit in front of the data-path reads (the key
+  lookup on a miss and the quota-row reads behind a request): an in-flight
+  bound (`LLB_AI_KEY_LOOKUP_MAX_INFLIGHT`, 2; the wait for a slot shares the
+  lookup budget, so a worker is parked at most one budget in total) and a
+  store-health circuit (`LLB_AI_KEY_LOOKUP_CIRCUIT_FAILURES`, 3, consecutive
+  failures; `LLB_AI_KEY_LOOKUP_CIRCUIT_COOLDOWN_MS`, 5000) that, once open,
+  refuses misses without contacting the store and serves every quota read from
+  the last store-confirmed value, admitting one probe per cool-down. The
+  management plane, readiness and the snapshot refresher bypass it;
+  `store_reachable` and the new `loxilb_ai_key_store_circuit_open` gauge are
+  independent signals, and the gauge stays 1 after recovery until a miss runs
+  the probe. A bounded negative cache (`LLB_AI_KEY_NEGATIVE_CACHE_MS`, 2000;
+  `LLB_AI_KEY_NEGATIVE_CACHE_CAP`, 4096) refuses a hash the store said does not
+  exist without another round trip. New families:
+  `loxilb_ai_key_store_lookup_seconds{result}`,
+  `loxilb_ai_key_store_circuit_open`, `loxilb_ai_key_store_lookup_inflight`.
+  Fixed on the way: a key's per-key RPS and token quota read as unlimited when
+  the by-ID row could not be read during an outage. The by-hash validation and
+  the by-ID read now keep the last store-confirmed view of the key, and a key
+  the process has never seen described fails closed with 503
+  `policy_store_unavailable` instead of being admitted on zero limits.
+  (docs/AI-KEY-STORE.md, "Data-path isolation")
 - **P/D decode selection counters: `loxilb_ai_pd_decode_selected_total{path=hint|score|score_kv,model}`
   and `loxilb_ai_pd_decode_kv_fill_total{model}`** (OWNER REVIEW PENDING). Both
   are seeded per model so a first event shows in `increase()`. `kv_fill` rising
