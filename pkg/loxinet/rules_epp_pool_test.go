@@ -12,7 +12,7 @@ import (
 	cmn "github.com/loxilb-io/loxilb/common"
 )
 
-// Phase 1 M2 completion check, end to end through the real data plane:
+// completion check, end to end through the real data plane:
 // a fullproxy rule that names an EPP lands its mode word, deadline and
 // rule identity in the sockproxy pool (dp_proxy_tacts -> llb_conv_nat2proxy
 // -> proxy_add_entry), and a rule without an EPP leaves them zero. Needs

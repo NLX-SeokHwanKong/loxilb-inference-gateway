@@ -5,7 +5,7 @@
  */
 package epp
 
-// Package epp is the Endpoint Picker (EPP) client — Phase 1 M3. Pure Go, no
+// Package epp is the Endpoint Picker (EPP) client. Pure Go, no
 // cgo: the data plane (pkg/loxinet) and the cmd/epp-probe diagnostic share it.
 //
 // An EPP is a Gateway API Inference Extension endpoint picker (llm-d-router,

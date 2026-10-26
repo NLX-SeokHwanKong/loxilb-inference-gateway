@@ -5,7 +5,7 @@
  */
 package loxinet
 
-// The Go half of the Endpoint Picker (EPP) boundary — Phase 1 M4.
+// The Go half of the Endpoint Picker (EPP) boundary.
 //
 // The data plane hands a buffered request over (llb_epp_submit, on a worker
 // thread, returns at once with a stream id) and parks the client. A

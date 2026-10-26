@@ -1,5 +1,5 @@
 #!/bin/bash
-# What the EPP integration must do end to end (Phase 1 M9): a request on an
+# What the EPP integration must do end to end: a request on an
 # EPP rule goes to the pod the EPP named (X-Served-By), the request phase
 # shows in the metrics, and with the EPP gone FailOpen falls back to the
 # rule's own selector while FailClose answers 503 epp_unavailable; when the

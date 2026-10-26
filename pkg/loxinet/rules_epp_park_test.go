@@ -61,7 +61,7 @@ func eppHistogramCount(t *testing.T, name string) uint64 {
 	return 0
 }
 
-// Phase 1 M4 completion checks, end to end through the in-process data
+// completion checks, end to end through the in-process data
 // plane (the loxinet harness runs the sockproxy workers): an EPP rule's
 // request is handed to Go, the client parks without blocking its worker,
 // the decision resumes it, and a deadline, a client that leaves or a
@@ -319,7 +319,7 @@ func TestEppParkResumeThroughDataPlane(t *testing.T) {
 	})
 }
 
-// Phase 1 M5: the EPP's decision is applied — its first usable candidate
+// the EPP's decision is applied — its first usable candidate
 // gets the request, with the header and body mutations; unusable
 // candidates (unknown to the rule, down) are skipped in order; with none
 // usable the failure mode decides.
@@ -405,7 +405,7 @@ func TestEppDecisionPinsEndpoint(t *testing.T) {
 	})
 }
 
-// Phase 1 M7: failure handling the data plane decides after the decision —
+// failure handling the data plane decides after the decision —
 // an EPP that is down (connection refused, the shape of NOT_SERVING and of
 // a restart gap) takes the failure mode, and a request the EPP evicts
 // during its response is cut. M8: the counters explain each run.

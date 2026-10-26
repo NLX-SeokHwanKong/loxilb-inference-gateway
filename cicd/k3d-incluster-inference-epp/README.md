@@ -1,8 +1,7 @@
 # k3d-incluster-inference-epp
 
 loxilb (in-cluster DaemonSet) asks an **Endpoint Picker (EPP)** where every
-request of a fullproxy rule goes, over Envoy's ext_proc protocol (Phase 1 of
-the EPP integration).
+request of a fullproxy rule goes, over Envoy's ext_proc protocol.
 
 The EPP is `cmd/epp-fake`, a pure-Go ext_proc server built by `config.sh` and
 run on the CI host (the k3d node's gateway on the cluster network). It names
