@@ -870,9 +870,10 @@ func (na *NetAPIStruct) NetBFDAdd(bm *cmn.BFDMod) (int, error) {
 		return CIErrBase, cmn.ErrBFDUnsupported
 	}
 	mh.mtx.Lock()
-	defer mh.mtx.Unlock()
-
-	_, err := mh.has.CIBFDSessionAdd(*bm)
+	ch := mh.has
+	mh.mtx.Unlock()
+	// Called without mh.mtx: lock order in CIStateH.bfdCfgMtx.
+	_, err := ch.CIBFDSessionAdd(*bm)
 	if err != nil {
 		return -1, err
 	}
@@ -886,9 +887,10 @@ func (na *NetAPIStruct) NetBFDDel(bm *cmn.BFDMod) (int, error) {
 		return CIErrBase, cmn.ErrBFDUnsupported
 	}
 	mh.mtx.Lock()
-	defer mh.mtx.Unlock()
-
-	_, err := mh.has.CIBFDSessionDel(*bm)
+	ch := mh.has
+	mh.mtx.Unlock()
+	// Called without mh.mtx: lock order in CIStateH.bfdCfgMtx.
+	_, err := ch.CIBFDSessionDel(*bm)
 	if err != nil {
 		return -1, err
 	}
