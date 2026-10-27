@@ -2966,13 +2966,12 @@ type NetHookInterface interface {
 	// the client's connection, so a client that hangs up cancels its own
 	// statement instead of leaving a handler to finish a write nobody will
 	// read the result of. (The same holds for the NetUser* hooks above.)
-	NetAPIKeyCreate(ctx context.Context, entry ApiKeyEntry) (string, string, error)
+	NetAPIKeyCreate(ctx context.Context, entry ApiKeyEntry) (ApiKeyCreated, error)
 	NetAPIKeyList(ctx context.Context, tenantID string) ([]ApiKeySummary, error)
 	NetAPIKeyGet(ctx context.Context, keyID string) (*ApiKeySummary, error)
 	NetAPIKeyRevoke(ctx context.Context, keyID string) error
 	NetAPIKeyDelete(ctx context.Context, keyID string) error
-	NetAPIKeyPatch(ctx context.Context, keyID string, allowedModels []string, enabled *bool) error
-	NetAPIKeyRateLimitPatch(ctx context.Context, keyID string, rps, burstSize, tokensPerMin *int) error
+	NetAPIKeyPatch(ctx context.Context, keyID string, patch ApiKeyPatch) error
 	NetTenantRateLimitSet(ctx context.Context, tenantID string, rps, tokensPerMin, burstPct int, modelLimits []TenantModelRateLimit) error
 	NetTenantRateLimitGet(ctx context.Context, tenantID string) (*TenantRateLimitEntry, error)
 
@@ -2982,7 +2981,6 @@ type NetHookInterface interface {
 	NetAIObjectiveAdd(ctx context.Context, e *AIObjectiveEntry) (int, error)
 	NetAIObjectiveDel(ctx context.Context, name string) (int, error)
 	NetTenantClassPatch(ctx context.Context, tenantID string, patch AIClassPatch) error
-	NetAPIKeyClassPatch(ctx context.Context, keyID string, patch AIClassPatch) error
 
 	// AI Gateway - QoS ladder: per-user limits and configurable defaults.
 	NetUserRateLimitSet(ctx context.Context, entry UserRateLimitEntry) error
@@ -3219,8 +3217,40 @@ type ApiKeyEntry struct {
 	CreatedAt     time.Time  `json:"created_at"`
 	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
 	Enabled       bool       `json:"enabled"`
+	// ClientOpID is the caller's operation id for an idempotent create: a
+	// retry carrying the same id converges on the same row. Empty when the
+	// caller sent none.
+	ClientOpID string `json:"client_op_id,omitempty"`
 	// The key's class fields; they can only narrow its tenant's.
 	AIClassPolicy
+}
+
+// ApiKeyCreated is what a create answers: the one delivery of the secret
+// (empty for an imported key), the key's id, and whether the row was made
+// by an earlier request with the same client_op_id, in which case the
+// secret was minted again and the earlier one no longer authenticates.
+type ApiKeyCreated struct {
+	RawKey string
+	KeyID  string
+	Reused bool
+}
+
+// ApiKeyPatch names the fields of a key a PATCH changes. A nil field is
+// left as it is; the fields named are applied in one transaction.
+type ApiKeyPatch struct {
+	AllowedModels []string
+	Enabled       *bool
+	RateLimitRPS  *int
+	BurstSize     *int
+	TokensPerMin  *int
+	Class         AIClassPatch
+}
+
+// IsZero reports whether the patch names no field.
+func (p ApiKeyPatch) IsZero() bool {
+	return p.AllowedModels == nil && p.Enabled == nil &&
+		p.RateLimitRPS == nil && p.BurstSize == nil && p.TokensPerMin == nil &&
+		p.Class.IsZero()
 }
 
 // ApiKeySummary - API key summary without the secret hash
@@ -3235,6 +3265,9 @@ type ApiKeySummary struct {
 	CreatedAt     time.Time  `json:"created_at"`
 	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
 	Enabled       bool       `json:"enabled"`
+	// ClientOpID as on ApiKeyEntry: lets an operator find the row a create
+	// whose answer was lost left behind.
+	ClientOpID string `json:"client_op_id,omitempty"`
 	// The key's class fields; they can only narrow its tenant's.
 	AIClassPolicy
 }

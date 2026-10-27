@@ -107,31 +107,12 @@ func (s *Service) PatchTenantClass(ctx context.Context, tenantID string, patch c
 }
 
 // PatchAPIKeyClass changes the class fields of a key that the patch names
-// and leaves the others as they are, in one statement.
+// and leaves the others as they are. One arm of PatchAPIKeyAll.
 func (s *Service) PatchAPIKeyClass(ctx context.Context, keyID string, patch cmn.AIClassPatch) error {
 	if patch.IsZero() {
 		return nil
 	}
-	pc, def, allowed, err := classPatchArgs(patch)
-	if err != nil {
-		return err
-	}
-	db, err := s.store()
-	if err != nil {
-		return err
-	}
-	ctx, cancel := s.opContext(ctx)
-	defer cancel()
-	res, err := db.ExecContext(ctx, sqlPatchKeyClass, keyID, pc, def, allowed)
-	if err != nil {
-		tk.LogIt(tk.LogError, "[AIKey] Failed to patch class of key %s: %v\n", keyID, err)
-		return writeErr(err)
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return ErrKeyNotFound
-	}
-	s.refreshClassesAfterWrite()
-	return nil
+	return s.PatchAPIKeyAll(ctx, keyID, cmn.ApiKeyPatch{Class: patch})
 }
 
 // ListAPIKeyClasses reads from the store the class fields of every key that

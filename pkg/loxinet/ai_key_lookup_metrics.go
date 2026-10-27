@@ -19,6 +19,7 @@ package loxinet
 import (
 	"github.com/loxilb-io/loxilb/api/prometheus"
 	"github.com/loxilb-io/loxilb/pkg/aikey"
+	"github.com/loxilb-io/loxilb/pkg/pgstore"
 )
 
 // aiKeyLookupSnapshot is what the loxilb_ai_key_store_* families report: the
@@ -42,6 +43,18 @@ func aiKeyLookupSnapshotOf(st aikey.LookupStats) prometheus.AIKeyLookupSnapshot 
 	return snap
 }
 
+// aiStoreWriteOutcomeSnapshot is what loxilb_ai_store_write_outcome_unknown_total
+// reports: the store packages' per-plane count of writes answered 504,
+// every plane present from the start.
+func aiStoreWriteOutcomeSnapshot() prometheus.AIStoreWriteOutcomeSnapshot {
+	snap := prometheus.AIStoreWriteOutcomeSnapshot{UnknownByPlane: make(map[string]uint64, len(pgstore.Planes))}
+	for _, p := range pgstore.Planes {
+		snap.UnknownByPlane[string(p)] = pgstore.OutcomeUnknownTotal(p)
+	}
+	return snap
+}
+
 func init() {
 	prometheus.SetAIKeyLookupSource(aiKeyLookupSnapshot)
+	prometheus.SetAIStoreWriteOutcomeSource(aiStoreWriteOutcomeSnapshot)
 }

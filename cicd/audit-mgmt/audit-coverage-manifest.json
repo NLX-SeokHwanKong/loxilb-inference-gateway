@@ -3,7 +3,7 @@
   "generated_by": "cicd/audit-mgmt/gen-coverage-manifest.py",
   "stage_claimed": "1b",
   "event_types": 66,
-  "matrix_digest": "010744915593afc59e529204099599cfea820f1410e7be489d70a7ec1ca32b2d",
+  "matrix_digest": "e3f1dcfa189f26bc8a3a2eb2be8b721df17ab89ecfb1051267ea8306bda21313",
   "requirements_by_stage": {
     "1b": {
       "covered and tested": 4
@@ -18,7 +18,7 @@
     },
     "1a": {
       "covered and tested": 5,
-      "covered but untested": 26
+      "covered but untested": 27
     }
   },
   "entries": [
@@ -661,6 +661,28 @@
           ],
           "red_twin_run_id": "llbigw-2-twin-T3-r1",
           "state": "covered and tested"
+        },
+        {
+          "stage": "1a",
+          "fields": [
+            "username",
+            "role"
+          ],
+          "behaviour": "a write the store was handed and never answered gets a result with reason store_outcome_unknown and status 504, never a synthesised ok and never 'not written'",
+          "scenario": "audit-mgmt",
+          "assertion_ids": [
+            "T21-1a",
+            "T21-1b",
+            "T21-2a",
+            "T21-2b",
+            "T21-2c",
+            "T21-2d",
+            "T21-2e"
+          ],
+          "unit_tests": [],
+          "red_twin_run_id": null,
+          "note": "the gateway lives through the stall (T20 is the crash arm); the write lands when the store resumes and the identical retry is refused, which is what the reason is for",
+          "state": "covered but untested"
         }
       ],
       "state": "uncovered"
