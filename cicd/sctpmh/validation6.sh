@@ -21,7 +21,9 @@ sudo pkill sctp_test
 $hexec user sctp_test -H 0.0.0.0  -P 9999 -l > user.out &
 sleep 2
 
-$hexec ep1 stdbuf -oL sctp_test -H 31.31.31.1 -B 32.32.32.1 -P 20000 -h $extIP -p $port -s -c 6 -x 30000 > ep1.out &
+# The client sends far longer than the case runs: the checks after the MASTER
+# restart need its association live, and the case stops it once they are done.
+$hexec ep1 stdbuf -oL sctp_test -H 31.31.31.1 -B 32.32.32.1 -P 20000 -h $extIP -p $port -s -c 6 -x 3000000 > ep1.out &
 
 #Path counters
 p1c_old=0
@@ -35,21 +37,25 @@ hadone=0
 code=0
 # Sync state measured after the MASTER restart; empty until measured.
 postSync=
+postTries=0
 
 for((i=0;i<500;i++)) do
-    fin=`tail -n 100 ep1.out | grep "Client: Sending packets.(30000/30000)"`
+    fin=`tail -n 100 ep1.out | grep "Client: Sending packets.(3000000/3000000)"`
     if [[ ! -z $fin ]]; then
-        fin=1
-        echo "sctp_test done."
+        echo "Measurement failed: the client finished before the case was done"
+        code=1
         break;
     fi
 
     if [[ $checkha == 1 ]]; then
         check_ha
         echo -e "\nHA state Master:$master BACKUP-$backup\n"
-        checkSync
+        checkLiveSync sctpmh2 20000
         postSync=$?
-        if [[ $postSync == 2 ]]; then #No active connections in Master, no need to continue.
+        postTries=$(( $postTries + 1 ))
+        # Done on the first sync of the live association, at once when the
+        # MASTER holds none of it, and when the retry budget is spent.
+        if [[ $postSync == 0 || $postSync == 2 || $postTries -ge 6 ]]; then
             break;
         fi
     fi
@@ -89,7 +95,7 @@ for((i=0;i<500;i++)) do
     p2c_old=$p1c_new
 
     if [[ $hadone == 0 ]]; then
-        checkSync
+        checkLiveSync sctpmh2 20000
         rc=$?
         if [[ $rc == 0 ]]; then
             restart_mloxilb
@@ -104,7 +110,7 @@ done
 sudo rm -rf *.out
 sudo pkill sctp_test
 
-if [[ $fin == 1 && $p1 == 1 && $p2 == 1 && $p3 == 1 && $code == 0 && $postSync == 0 ]]; then
+if [[ $p1 == 1 && $p2 == 1 && $p3 == 1 && $code == 0 && $postSync == 0 ]]; then
     echo "sctpmh SCTP Multihoming E2E HA Failover [OK]"
     echo "OK" > status6.txt
     restart_loxilbs
