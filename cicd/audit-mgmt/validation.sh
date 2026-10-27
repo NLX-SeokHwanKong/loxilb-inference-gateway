@@ -531,6 +531,55 @@ if [[ "$UNATTRIBUTED" != 0 ]]; then
   echo "  offending records:"; records ".boot_id==\"$B1\" and .stream==\"mgmt\" and .phase==\"result\" and .outcome.ok==true and (.actor.bootstrap!=true) and (.actor.provisional!=true) and ((.actor.user // \"\")==\"\" or .actor.auth==\"none\")" | cut -c1-300 | sed 's/^/    /'
 fi
 
+# ── T21: the write-outcome contract, without a crash ────────────────────────
+echo ""
+echo "T21: a write the paused store never answers is reported as outcome unknown, lands when the store resumes, and its identical retry is refused as a duplicate"
+# The same pause as T20, but the gateway lives: the operation budget
+# (LLB_AI_STORE_OP_TIMEOUT_MS, 3 s) answers the call with 504 and the result
+# record says store_outcome_unknown -- its own reason, so a reconciliation
+# can find exactly these records. A fresh login puts a live connection in the
+# pool; the listing read reuses it once (the driver pings a connection on its
+# FIRST reuse, and a ping against a stall absorbs the budget: the statement
+# would never be sent and the answer would be 503, the other contract). The
+# write then follows the pause within a second of that reuse.
+T21_PW='St4ll-pass!7q'
+SENT_CANARIES+=("$T21_PW")
+TOKEN=$(login "$ADMIN_USER" "$ADMIN_PW"); AUTH=(-H "Authorization: Bearer $TOKEN")
+api GET /auth/users "${AUTH[@]}"
+T21_M0=$(metric_val loxilb_ai_store_write_outcome_unknown_total 'plane="mgmt"')
+docker pause "$PG_NAME"
+T21_T0=$(date +%s%N)
+api POST /auth/users "${AUTH[@]}" "${CT[@]}" -d "{\"username\":\"stalled\",\"password\":\"$T21_PW\",\"role\":\"viewer\"}"
+T21_MS=$(( ($(date +%s%N) - T21_T0) / 1000000 ))
+chk     T21-1a "the write under the stall is answered 504" 504 "$RESP_CODE"
+chk     T21-1b "with the outcome-unknown result" store_outcome_unknown "$(json '.result')"
+chk     T21-1c "inside the operation budget (3 s) plus margin" 1 "$([[ "$T21_MS" -le 4500 ]] && echo 1 || echo 0)"
+echo "  (answered in ${T21_MS}ms)"
+R=$(records '.event_type=="mgmt.user.create" and .phase=="result" and .detail.username=="stalled"' | tail -n1)
+chk_nonempty T21-2a "a result record for the write exists while the store is still paused" "$R"
+chk     T21-2b "its reason is store_outcome_unknown" store_outcome_unknown "$(printf '%s' "$R" | jq -r '.outcome.reason')"
+chk     T21-2c "its status is 504" 504 "$(printf '%s' "$R" | jq -r '.outcome.status')"
+chk     T21-2d "and it is not ok" false "$(printf '%s' "$R" | jq -r '.outcome.ok')"
+chk     T21-2e "the intent has exactly one result" 1 "$(count ".event_id==\"$(printf '%s' "$R" | jq -r '.event_id')\" and .phase==\"result\"")"
+chk     T21-2f "the counter names the write: loxilb_ai_store_write_outcome_unknown_total{plane=\"mgmt\"} moved by one" 1 "$(( $(metric_val loxilb_ai_store_write_outcome_unknown_total 'plane="mgmt"') - T21_M0 ))"
+docker unpause "$PG_NAME"
+# The statement the server was handed is drained when it resumes: the write
+# lands AFTER the caller was told 504. That is what "outcome unknown" means
+# and why the contract says to read back. The listing is polled, because the
+# server finishes the statement on its own clock.
+T21_LANDED=0
+for i in $(seq 1 25); do
+  api GET /auth/users "${AUTH[@]}"
+  if [[ "$(json '[.[]? | select(.username=="stalled")] | length')" == 1 ]]; then T21_LANDED=1; break; fi
+  sleep 0.4
+done
+chk     T21-3a "after the store resumes the account exists: the write answered 504 landed" 1 "$T21_LANDED"
+api POST /auth/users "${AUTH[@]}" "${CT[@]}" -d "{\"username\":\"stalled\",\"password\":\"$T21_PW\",\"role\":\"viewer\"}"
+chk     T21-3b "the identical retry is refused as a duplicate, not applied twice" 409 "$RESP_CODE"
+chk     T21-3c "one account" 1 "$(json '[.[]? | select(.username=="stalled")] | length' 2>/dev/null || { api GET /auth/users "${AUTH[@]}"; json '[.[]? | select(.username=="stalled")] | length'; })"
+T21_ID=$(user_id stalled)
+[[ -n "$T21_ID" ]] && api DELETE "/auth/users/$T21_ID" "${AUTH[@]}"
+
 # ── T20: crash between intent and result ────────────────────────────────────
 echo ""
 echo "T20: a crash after the durable intent leaves exactly one orphan report"

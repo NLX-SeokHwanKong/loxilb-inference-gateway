@@ -34,7 +34,7 @@ func NewPostConfigAiApikey(ctx *middleware.Context, handler PostConfigAiApikeyHa
 
 # Create a new API key
 
-Creates a new API key for a tenant. The raw key is returned ONLY in this response.
+Creates a new API key for a tenant. The raw key is returned ONLY in this response. A create is not idempotent by itself: an answer lost to a store stall (504) may have left an enabled key whose secret nobody holds, and a blind retry creates a second one. Send client_op_id (or the Idempotency-Key header) and a retry converges on one row per (tenant_id, client_op_id): while the key has never authenticated the secret is minted again and delivered with the same key_id and reused=true; once it has, the retry answers 409 api_key_already_delivered naming the key_id. The row's other fields are the first request's.
 */
 type PostConfigAiApikey struct {
 	Context *middleware.Context

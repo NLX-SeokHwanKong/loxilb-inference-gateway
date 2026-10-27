@@ -236,6 +236,7 @@ type mgmtJSON struct {
 	Filename              string   `json:"filename,omitempty"`
 	Count                 int      `json:"count,omitempty"`
 	Tenant                string   `json:"tenant,omitempty"`
+	ClientOpID            string   `json:"client_op_id,omitempty"`
 	ConfigGeneration      uint64   `json:"config_generation,omitempty"`
 	AuthMode              string   `json:"auth_mode,omitempty"`
 	Mechanism             string   `json:"mechanism,omitempty"`

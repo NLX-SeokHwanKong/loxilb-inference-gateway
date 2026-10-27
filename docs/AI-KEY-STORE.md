@@ -196,6 +196,51 @@ distinguishes two failures, and clients must treat them differently:
 
 Reads never answer 504: a read whose budget expires is a 503.
 
+**Reconciling after a 504.** Every write answered 504 leaves two traces: the
+audit result record of the request, with `outcome.reason` set to
+`store_outcome_unknown` and, for an API-key create, the tenant and the
+`client_op_id` in its detail; and one step of
+`loxilb_ai_store_write_outcome_unknown_total{plane}` (`aikey` for this store,
+`mgmt` for the management credential store). Read the resource back once the
+store answers: a limit or objective is present or absent; a key created
+without a `client_op_id` shows in `GET /config/ai/apikey?tenant_id=…` by its
+`name`, and if its secret was lost it is deleted and created again.
+
+**Retrying a create safely.** A generated key's secret is minted by the
+gateway and delivered once, so a create is not idempotent by itself: an
+answer lost to a stall may have left an enabled key whose secret nobody
+holds, and a blind retry makes a second one. Send `client_op_id` in the body
+(or the `Idempotency-Key` header; at most 128 printable non-space ASCII
+characters, unique per tenant, a UUID the client minted for this create) and
+a retry converges on one row per `(tenant_id, client_op_id)`:
+
+- no such row: the key is created and the id recorded (it shows as
+  `client_op_id` on the key's summary);
+- the row exists and the key has never authenticated: this is the retry of a
+  lost answer. The secret is minted again and the row's hash rotated to it,
+  so the earlier secret, held by nobody, stops authenticating on every
+  gateway (the rotation is an invalidation like a revoke). The answer carries
+  the **same `key_id`**, the new `raw_key`, and `reused: true`. The row's
+  other fields are the first request's and are not rewritten;
+- the row exists and the key has authenticated: **409
+  `api_key_already_delivered`**, naming the `key_id`. The secret in use is
+  not rotated out from under its holder and no second secret is minted for
+  the same operation. Delete and recreate the key to issue a new one.
+
+The first authentication of such a key is recorded by the data path, off the
+proxy worker, with one statement per key lifetime; a key created without an
+id costs nothing extra. Two retries carrying the same id serialise on the
+row. An imported key (`api_key` in the body) takes the same path: a retry
+with the same id and the same material is a no-op that answers `reused:
+true`.
+
+**Multi-statement writes are one transaction.** A key create with class
+fields, a PATCH naming several fields, a tenant limit with model quotas, and
+a user limit with model quotas each run as one transaction: applied whole or
+not at all, and a 504 means the whole body may land. Before this a stall
+between two statements left the row half-written with the caller told only
+about the statement that failed.
+
 **Readiness.** `/status/ready` probes each store under the ping budget and
 answers 503 within it when a store stalls; `GET /config/ai/objective` keeps
 answering from the applied snapshot with `store_reachable=false` once a
@@ -276,7 +321,10 @@ counted);
 `loxilb_ai_key_store_circuit_open` and `loxilb_ai_key_store_lookup_inflight`
 are the two gauges. Samples piling up at the 0.3 s bucket edge are the stall
 signature; `refused_circuit` rising with `circuit_open` at 1 is the guard
-doing its job.
+doing its job. On the management side,
+`loxilb_ai_store_write_outcome_unknown_total{plane}` counts the writes
+answered 504 (see "Reconciling after a 504" above); it is the one counter of
+this family that names work an operator owes.
 
 ## Troubleshooting
 

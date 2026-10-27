@@ -2,7 +2,6 @@ package aikey
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -12,36 +11,20 @@ import (
 	cmn "github.com/loxilb-io/loxilb/common"
 )
 
-type importConflictDB struct {
-	err   error
-	calls int
-}
-
-func (d *importConflictDB) ExecContext(_ context.Context, _ string, _ ...any) (sql.Result, error) {
-	d.calls++
-	return nil, d.err
-}
-func (*importConflictDB) QueryContext(context.Context, string, ...any) (*sql.Rows, error) {
-	panic("unexpected Query")
-}
-func (*importConflictDB) QueryRowContext(context.Context, string, ...any) *sql.Row {
-	panic("unexpected QueryRow")
-}
-func (*importConflictDB) PingContext(context.Context) error { return nil }
-
 // Drive CreateAPIKey's actual insert failure, including wrapped PostgreSQL errors.
 func TestImportedCredentialUniqueViolationIsSecretFreeConflict(t *testing.T) {
 	const secret = "fixture-imported-key-only"
 	driver := &pgconn.PgError{Code: "23505", ConstraintName: "uq_api_keys_key_hash", Message: "duplicate key", Detail: "private-hash-detail"}
 	for _, err := range []error{driver, fmt.Errorf("wrapped: %w", driver)} {
-		db := &importConflictDB{err: err}
+		db := newScriptDB(t)
+		db.push(scriptAnswer{err: err})
 		svc := &Service{db: db}
 		raw, id, got := svc.CreateAPIKey(context.Background(), cmn.ApiKeyEntry{TenantID: "fixture-tenant", ApiKey: secret})
 		var conflict *cmn.ConflictError
 		if !errors.As(got, &conflict) {
 			t.Fatalf("got %T, want typed conflict", got)
 		}
-		if raw != "" || id != "" || db.calls != 1 {
+		if raw != "" || id != "" || db.callCount() != 1 {
 			t.Fatal("failure returned key material or did not execute insert")
 		}
 		if got.Error() != "imported API key is already registered" || strings.Contains(got.Error(), secret) || strings.Contains(got.Error(), driver.Detail) {
@@ -69,14 +52,15 @@ func TestImportConflictDoesNotReclassifyOtherFailures(t *testing.T) {
 			if tc.plain {
 				original = errors.New("23505 uq_api_keys_key_hash duplicate key")
 			}
-			db := &importConflictDB{err: original}
+			db := newScriptDB(t)
+			db.push(scriptAnswer{err: original})
 			svc := &Service{db: db}
 			raw, id, got := svc.CreateAPIKey(context.Background(), cmn.ApiKeyEntry{TenantID: "fixture-tenant", ApiKey: tc.key})
 			// The write-outcome classifier may wrap the cause (a plain error
 			// is "outcome unknown" to it), but it must stay in the chain,
 			// and nothing here may turn it into the public conflict.
 			var conflict *cmn.ConflictError
-			if !errors.Is(got, original) || errors.As(got, &conflict) || raw != "" || id != "" || db.calls != 1 {
+			if !errors.Is(got, original) || errors.As(got, &conflict) || raw != "" || id != "" || db.callCount() != 1 {
 				t.Fatal("unrelated failure reclassified")
 			}
 			if tc.plain && !errors.Is(got, cmn.ErrStoreOutcomeUnknown) {

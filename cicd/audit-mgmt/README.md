@@ -17,6 +17,7 @@ an event type is covered.
 | T15 | canary secrets reach no segment (active, sealed, compressed) and no error body | nine canaries the harness sends (proved from its own request log) plus the raw API keys and the OAuth state the gateway minted |
 | T11 | actor conformance | with `--userservice` every successful result names a principal with `auth=session`; without it every record says `auth=none` and names nobody |
 | T20 | a crash between a durable intent and its result is reported at the next boot, never guessed | the store is paused, a user create blocks after its intent, the process is SIGKILLed; boot 2 writes exactly one `sys.intent.orphaned` naming that `event_id`, the counter reads 1, no result exists |
+| T21 | a write the store was handed and never answered is reported as outcome unknown, not as not written; it lands when the store resumes and its identical retry is refused | the store is paused, a user create is answered 504 `store_outcome_unknown` inside the 3 s operation budget, its result record carries that reason and its status, `loxilb_ai_store_write_outcome_unknown_total{plane="mgmt"}` moves by one; after the unpause the account exists and the identical POST answers 409 |
 | T3 | the gate fails closed with the authoritative state unchanged | the audit directory sits on a 1 MiB tmpfs that is filled to the last byte, then written into with an audited probe that changes nothing until the gate refuses one (fatal if it never does); the probe's intent is the shortest line anything written while wedged can be, which a row checks; a generated route, a raw route and a named route answer 503 `audit_unavailable` and the rule table, the key and the account list are unchanged; freed, the same calls leave a pair sharing one `event_id`, intent before result by `seq` |
 | T-GW-2 | the audit policy, the remote sink and sealing on demand are management changes like any other | a policy replace and an unsatisfiable one; a sink refused for a missing, out-of-range or unreadable argument and one accepted; `POST /audit/rotate` seals the segment the status named and the next record lands in the new one |
 | T-GW-5 | `loxicmd` drives the three audit paths against a live gateway, and its refusals stay local | `get audit-status` on a running writer and on a boot whose audit directory is unusable; `get audit-sink` unconfigured and configured; a set, a replace that proves the endpoint replaces rather than patches, and `--disable`; five locally refused invocations that leave the audited `mgmt.audit.sink` count untouched, against one the gateway refuses that does not; `-o json` compared key for key with the gateway's own body |
@@ -73,6 +74,16 @@ boot's segment is sealed at recovery and compressed, never removed.
   permission-loss arm of T19 is not driven here: a `chmod` of the directory
   cannot reach an open descriptor either; the writer's reaction to EACCES
   is covered by the unit suite through the fault hook.
+- **T21 is T20 without the crash.** The same pause, and the gateway lives
+  through it: the operation budget answers the blocked create with 504 and
+  the result record says `store_outcome_unknown` -- its own reason, so the
+  records a reconciliation must look at can be selected. The account exists
+  once the store resumes (the server drains the statement it was handed), so
+  the case also shows why the contract says "read back before retrying":
+  the identical retry answers 409. The listing read before the pause is the
+  pooled connection's first reuse; the driver pings a connection on that
+  reuse, and a ping against a stall absorbs the budget and answers 503 (the
+  other contract), which is not what this case is about.
 - **T20 needs no fault point.** `docker pause` freezes the store's
   processes but the kernel keeps acknowledging TCP, so a handler that
   already holds a pooled connection waits for an answer that never comes.

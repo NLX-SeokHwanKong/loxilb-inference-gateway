@@ -187,37 +187,53 @@ func (s *Service) SetUserRateLimit(ctx context.Context, entry cmn.UserRateLimitE
 	ctx, cancel := s.opContext(ctx)
 	defer cancel()
 	now := time.Now().UTC()
-	if _, err := db.ExecContext(ctx, sqlUpsertUserRateLimit,
-		entry.TenantID, entry.UserID, entry.RPS, entry.BurstSize, entry.TokensPerMin, now); err != nil {
-		tk.LogIt(tk.LogError, "[AIKey] Failed to set user rate limit for %s/%s: %v\n", entry.TenantID, entry.UserID, err)
-		return writeErr(err)
+	// One transaction: the entry the caller sends is the entry that exists
+	// afterwards, or nothing changed. Before this the aggregate row, the
+	// delete of the model rows and their re-insertion were separate
+	// statements, and a store that stalled between them left the pair with
+	// its aggregate written and its models gone.
+	err = inTx(ctx, db, func(tx stmtRunner) error {
+		if _, err := tx.ExecContext(ctx, sqlUpsertUserRateLimit,
+			entry.TenantID, entry.UserID, entry.RPS, entry.BurstSize, entry.TokensPerMin, now); err != nil {
+			tk.LogIt(tk.LogError, "[AIKey] Failed to set user rate limit for %s/%s: %v\n", entry.TenantID, entry.UserID, err)
+			return writeErr(err)
+		}
+		// Model limits are REPLACED as a set, mirroring the tenant surface's
+		// posture (SetTenantLimits). The models about to be dropped are
+		// forgotten first — after the delete their names are unrecoverable
+		// and their cached quotas would go on being enforced. A forgotten
+		// entry whose transaction then rolls back is only re-read from the
+		// store, so forgetting inside the transaction is the safe side.
+		s.forgetUserModelRateLimits(ctx, tx, entry.TenantID, entry.UserID)
+		if _, err := tx.ExecContext(ctx, sqlDeleteUserModelRateLimits, entry.TenantID, entry.UserID); err != nil {
+			tk.LogIt(tk.LogError, "[AIKey] Failed to clear user model rate limits for %s/%s: %v\n", entry.TenantID, entry.UserID, err)
+			return writeErr(err)
+		}
+		for _, ml := range entry.ModelLimits {
+			if ml.TokensPerMin <= 0 {
+				continue
+			}
+			if _, err := tx.ExecContext(ctx, sqlUpsertUserModelRateLimit,
+				entry.TenantID, entry.UserID, ml.Model, ml.TokensPerMin, now); err != nil {
+				tk.LogIt(tk.LogError, "[AIKey] Failed to set user model rate limit for %s/%s/%s: %v\n",
+					entry.TenantID, entry.UserID, ml.Model, err)
+				return writeErr(err)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 	s.rememberUserRateLimit(cacheKeyForUser(entry.TenantID, entry.UserID),
 		&userRateLimitCacheEntry{rps: entry.RPS, burstSize: entry.BurstSize, tokensPerMin: entry.TokensPerMin})
-
-	// Model limits are REPLACED as a set, mirroring the tenant surface's
-	// posture (NetTenantRateLimitSet): the entry the caller sends is the
-	// entry that exists afterwards. The models about to be dropped are
-	// forgotten first — after the delete their names are unrecoverable and
-	// their cached quotas would go on being enforced. The loop below then
-	// re-remembers the models this entry does carry, so a model present in
-	// both the old and the new set is never left without a cached value.
-	s.forgetUserModelRateLimits(ctx, db, entry.TenantID, entry.UserID)
-	if _, err := db.ExecContext(ctx, sqlDeleteUserModelRateLimits, entry.TenantID, entry.UserID); err != nil {
-		tk.LogIt(tk.LogError, "[AIKey] Failed to clear user model rate limits for %s/%s: %v\n", entry.TenantID, entry.UserID, err)
-		return writeErr(err)
-	}
+	// Re-remember the models this entry carries, so a model present in both
+	// the old and the new set is never left without a cached value.
 	for _, ml := range entry.ModelLimits {
 		if ml.TokensPerMin <= 0 {
 			s.rememberUserRateLimit(cacheKeyForUserModel(entry.TenantID, entry.UserID, ml.Model),
 				&userRateLimitCacheEntry{})
 			continue
-		}
-		if _, err := db.ExecContext(ctx, sqlUpsertUserModelRateLimit,
-			entry.TenantID, entry.UserID, ml.Model, ml.TokensPerMin, now); err != nil {
-			tk.LogIt(tk.LogError, "[AIKey] Failed to set user model rate limit for %s/%s/%s: %v\n",
-				entry.TenantID, entry.UserID, ml.Model, err)
-			return writeErr(err)
 		}
 		s.rememberUserRateLimit(cacheKeyForUserModel(entry.TenantID, entry.UserID, ml.Model),
 			&userRateLimitCacheEntry{tokensPerMin: ml.TokensPerMin})
@@ -247,7 +263,7 @@ func (s *Service) SetUserRateLimit(ctx context.Context, entry cmn.UserRateLimitE
 // A store that cannot answer is not an error here: the rows could not be
 // deleted either, so there is nothing stale to forget. It runs on the
 // writer's handle and under the writer's deadline.
-func (s *Service) forgetUserModelRateLimits(ctx context.Context, db DBTX, tenantID, userID string) {
+func (s *Service) forgetUserModelRateLimits(ctx context.Context, db stmtRunner, tenantID, userID string) {
 	rows, err := db.QueryContext(ctx, sqlSelectUserModelRateLimits, tenantID, userID)
 	if err != nil {
 		tk.LogIt(tk.LogError, "[AIKey] Failed to list user model rate limits for cache eviction %s/%s: %v\n",
@@ -431,20 +447,27 @@ func (s *Service) DeleteUserRateLimit(ctx context.Context, tenantID, userID stri
 	}
 	ctx, cancel := s.opContext(ctx)
 	defer cancel()
-	res, err := db.ExecContext(ctx, sqlDeleteUserRateLimit, tenantID, userID)
+	// The row and its model rows go together, or not at all.
+	err = inTx(ctx, db, func(tx stmtRunner) error {
+		res, err := tx.ExecContext(ctx, sqlDeleteUserRateLimit, tenantID, userID)
+		if err != nil {
+			tk.LogIt(tk.LogError, "[AIKey] Failed to delete user rate limit for %s/%s: %v\n", tenantID, userID, err)
+			return writeErr(err)
+		}
+		if n, aerr := res.RowsAffected(); aerr == nil && n == 0 {
+			return ErrUserRateLimitNotFound
+		}
+		// Same order as the replace path: name the models while they still
+		// exist, or their quotas outlive the row that configured them.
+		s.forgetUserModelRateLimits(ctx, tx, tenantID, userID)
+		if _, err := tx.ExecContext(ctx, sqlDeleteUserModelRateLimits, tenantID, userID); err != nil {
+			tk.LogIt(tk.LogError, "[AIKey] Failed to delete user model rate limits for %s/%s: %v\n", tenantID, userID, err)
+			return writeErr(err)
+		}
+		return nil
+	})
 	if err != nil {
-		tk.LogIt(tk.LogError, "[AIKey] Failed to delete user rate limit for %s/%s: %v\n", tenantID, userID, err)
-		return writeErr(err)
-	}
-	if n, aerr := res.RowsAffected(); aerr == nil && n == 0 {
-		return ErrUserRateLimitNotFound
-	}
-	// Same order as the replace path: name the models while they still
-	// exist, or their quotas outlive the row that configured them.
-	s.forgetUserModelRateLimits(ctx, db, tenantID, userID)
-	if _, err := db.ExecContext(ctx, sqlDeleteUserModelRateLimits, tenantID, userID); err != nil {
-		tk.LogIt(tk.LogError, "[AIKey] Failed to delete user model rate limits for %s/%s: %v\n", tenantID, userID, err)
-		return writeErr(err)
+		return err
 	}
 	s.rememberUserRateLimit(cacheKeyForUser(tenantID, userID), &userRateLimitCacheEntry{})
 	s.Cache.Delete(cacheKeyForUser(tenantID, userID))
@@ -634,42 +657,7 @@ func (s *Service) PatchAPIKeyRateLimits(ctx context.Context, keyID string, rps, 
 	if rps == nil && burstSize == nil && tokensPerMin == nil {
 		return nil
 	}
-	for _, v := range []*int{rps, burstSize, tokensPerMin} {
-		if v != nil && *v < 0 {
-			return cmn.NewValidationError("", "rate limit values must not be negative")
-		}
-	}
-	db, err := s.store()
-	if err != nil {
-		return err
-	}
-	ctx, cancel := s.opContext(ctx)
-	defer cancel()
-	keyHash, err := s.keyHashByID(ctx, db, keyID)
-	if err != nil {
-		return err
-	}
-	if rps != nil {
-		if _, err = db.ExecContext(ctx, sqlUpdateAPIKeyRPS, *rps, keyID); err != nil {
-			tk.LogIt(tk.LogError, "[AIKey] Failed to patch rate_limit_rps for key %s: %v\n", keyID, err)
-			return writeErr(err)
-		}
-	}
-	if burstSize != nil {
-		if _, err = db.ExecContext(ctx, sqlUpdateAPIKeyBurst, *burstSize, keyID); err != nil {
-			tk.LogIt(tk.LogError, "[AIKey] Failed to patch burst_size for key %s: %v\n", keyID, err)
-			return writeErr(err)
-		}
-	}
-	if tokensPerMin != nil {
-		if _, err = db.ExecContext(ctx, sqlUpdateAPIKeyTPM, *tokensPerMin, keyID); err != nil {
-			tk.LogIt(tk.LogError, "[AIKey] Failed to patch tokens_per_min for key %s: %v\n", keyID, err)
-			return writeErr(err)
-		}
-	}
-	s.evictAndFanOut(KeyInvalidation{KeyHash: keyHash, KeyID: keyID})
-	tk.LogIt(tk.LogInfo, "[AIKey] Patched rate limits for API key %s\n", keyID)
-	return nil
+	return s.PatchAPIKeyAll(ctx, keyID, cmn.ApiKeyPatch{RateLimitRPS: rps, BurstSize: burstSize, TokensPerMin: tokensPerMin})
 }
 
 var (

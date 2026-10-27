@@ -29,6 +29,9 @@ type APIKeySummary struct {
 	// Total request-bucket capacity, not additional capacity above RPS. Nonpositive burst uses per-key RPS; nonpositive RPS skips that limiter.
 	BurstSize int64 `json:"burst_size,omitempty"`
 
+	// The idempotency handle the create carried, when it carried one. It is how a key left by a create whose answer was lost (504) is found in the listing and reconciled.
+	ClientOpID string `json:"client_op_id,omitempty"`
+
 	// Timestamp when the key was created
 	// Format: date-time
 	CreatedAt strfmt.DateTime `json:"created_at,omitempty"`

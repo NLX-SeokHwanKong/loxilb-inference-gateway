@@ -102,6 +102,12 @@ const (
 // data plane's listener_closed). Until this value existed such a response
 // read backend_conn, the closest available reason. See aiCompleteReason in
 // pkg/loxinet.
+//
+// store_outcome_unknown is a management write the store was handed and did
+// not answer within its budget (the 504 of the write-outcome contract): the
+// server may still apply it. It is its own value, not timeout, because a
+// reader reconciling the store after a stall looks for exactly these
+// records, and because "timed out" would read as "did not happen".
 type Reason string
 
 const (
@@ -120,6 +126,7 @@ const (
 	ReasonUpstreamError    Reason = "upstream_error"
 	ReasonAuditUnavailable Reason = "audit_unavailable"
 	ReasonGatewayShutdown  Reason = "gateway_shutdown"
+	ReasonStoreOutcomeUnknown Reason = "store_outcome_unknown"
 )
 
 var reasons = map[Reason]struct{}{
@@ -127,7 +134,7 @@ var reasons = map[Reason]struct{}{
 	ReasonAdmission: {}, ReasonRateLimit: {}, ReasonQuota: {},
 	ReasonCircuitBreaker: {}, ReasonBackendTLS: {}, ReasonBackendConn: {},
 	ReasonTimeout: {}, ReasonClientAbort: {}, ReasonUpstreamError: {},
-	ReasonAuditUnavailable: {}, ReasonGatewayShutdown: {},
+	ReasonAuditUnavailable: {}, ReasonGatewayShutdown: {}, ReasonStoreOutcomeUnknown: {},
 }
 
 // ValidReason reports whether r is in the closed vocabulary. The empty
@@ -237,6 +244,10 @@ type MgmtDetail struct {
 	Filename         string
 	Count            int
 	Tenant           string
+	// ClientOpID is the caller's idempotency handle on an API-key create,
+	// so a create whose result says store_outcome_unknown can be matched to
+	// the row it may have left. An identifier, never a credential.
+	ClientOpID       string
 	ConfigGeneration uint64
 	AuthMode         string
 	Mechanism        string

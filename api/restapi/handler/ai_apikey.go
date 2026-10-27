@@ -31,6 +31,7 @@ import (
 	"github.com/loxilb-io/loxilb/api/models"
 	aiops "github.com/loxilb-io/loxilb/api/restapi/operations/ai"
 	cmn "github.com/loxilb-io/loxilb/common"
+	"github.com/loxilb-io/loxilb/pkg/aikey"
 	"github.com/loxilb-io/loxilb/pkg/audit"
 )
 
@@ -61,6 +62,11 @@ func keyStoreFailure(err error) *ErrorResponse {
 	}
 	return nil
 }
+
+// keyAlreadyDeliveredCode is the 409 a retried create answers once the key
+// it converged on has authenticated: the secret in use is not rotated and a
+// second one is not minted. The body names the key_id to read back.
+const keyAlreadyDeliveredCode = "api_key_already_delivered"
 
 // keyStoreOutcomeUnknownCode is the error code of a write the key store may
 // still apply. The status and the code are the documented contract of every
@@ -113,6 +119,19 @@ func ConfigPostAIApikey(params aiops.PostConfigAiApikeyParams, principal interfa
 	if req.Enabled != nil {
 		entry.Enabled = *req.Enabled
 	}
+	// The idempotency handle: the body field, else the Idempotency-Key
+	// header. A retry with the same handle converges on one row (see the
+	// swagger description and the store's CreateKey).
+	entry.ClientOpID = strings.TrimSpace(req.ClientOpID)
+	if entry.ClientOpID == "" && params.IdempotencyKey != nil {
+		entry.ClientOpID = strings.TrimSpace(*params.IdempotencyKey)
+	}
+	if entry.ClientOpID != "" {
+		opID := entry.ClientOpID
+		AuditDetail(params.HTTPRequest, func(d *audit.MgmtDetail) { d.Tenant, d.ClientOpID = *req.TenantID, opID })
+	} else {
+		AuditDetail(params.HTTPRequest, func(d *audit.MgmtDetail) { d.Tenant = *req.TenantID })
+	}
 	// Guard against both Go zero time (0001-01-01) and strfmt's Unix-epoch sentinel
 	// (1970-01-01T00:00:00Z) returned by ParseDateTime(""). Only treat a future
 	// timestamp as a real expiry.
@@ -121,10 +140,16 @@ func ConfigPostAIApikey(params aiops.PostConfigAiApikeyParams, principal interfa
 		entry.ExpiresAt = &expiresAt
 	}
 
-	rawKey, keyID, err := ApiHooks.NetAPIKeyCreate(params.HTTPRequest.Context(), entry)
+	created, err := ApiHooks.NetAPIKeyCreate(params.HTTPRequest.Context(), entry)
 	if err != nil {
 		tk.LogIt(tk.LogError, "[AIApikey] Failed to create API key for tenant %s: %v\n", *req.TenantID, err)
 		if resp := keyStoreFailure(err); resp != nil {
+			return resp
+		}
+		var delivered *aikey.KeyAlreadyDeliveredError
+		if errors.As(err, &delivered) {
+			resp := errorResponseWithCode(http.StatusConflict, keyAlreadyDeliveredCode)
+			resp.Payload.Result = "key " + delivered.KeyID + " has already authenticated; its secret cannot be delivered again. Read the key back; delete and recreate it to issue a new secret"
 			return resp
 		}
 		return &ErrorResponse{Payload: ResultErrorResponseError(err)}
@@ -133,9 +158,11 @@ func ConfigPostAIApikey(params aiops.PostConfigAiApikeyParams, principal interfa
 	// raw key must never be logged. It is also empty when the caller supplied
 	// the key material: echoing a value the caller already holds would put it
 	// into response logs and API traces for no benefit.
+	rawKey, keyID := created.RawKey, created.KeyID
 	return aiops.NewPostConfigAiApikeyCreated().WithPayload(&models.APIKeyCreateResponse{
 		RawKey: &rawKey,
 		KeyID:  &keyID,
+		Reused: created.Reused,
 	})
 }
 
@@ -291,23 +318,16 @@ func ConfigPatchAIApikey(w http.ResponseWriter, r *http.Request, keyID string) {
 		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 	}
 
-	if body.AllowedModels != nil || body.Enabled != nil {
-		if err := ApiHooks.NetAPIKeyPatch(r.Context(), keyID, body.AllowedModels, body.Enabled); err != nil {
-			writePatchErr(err)
-			return
-		}
-	}
-	if body.RateLimitRPS != nil || body.BurstSize != nil || body.TokensPerMin != nil {
-		if err := ApiHooks.NetAPIKeyRateLimitPatch(r.Context(), keyID, body.RateLimitRPS, body.BurstSize, body.TokensPerMin); err != nil {
-			writePatchErr(err)
-			return
-		}
-	}
-	if !classPatch.IsZero() {
-		if err := ApiHooks.NetAPIKeyClassPatch(r.Context(), keyID, classPatch); err != nil {
-			writePatchErr(err)
-			return
-		}
+	// Every field the body names goes to the store as one write with one
+	// outcome; a PATCH is never left half-applied by a stall between its
+	// statements.
+	if err := ApiHooks.NetAPIKeyPatch(r.Context(), keyID, cmn.ApiKeyPatch{
+		AllowedModels: body.AllowedModels, Enabled: body.Enabled,
+		RateLimitRPS: body.RateLimitRPS, BurstSize: body.BurstSize, TokensPerMin: body.TokensPerMin,
+		Class: classPatch,
+	}); err != nil {
+		writePatchErr(err)
+		return
 	}
 
 	w.WriteHeader(http.StatusNoContent)
@@ -423,6 +443,7 @@ func apiKeySummaryToModel(k cmn.ApiKeySummary) *models.APIKeySummary {
 		PriorityClass:     k.PriorityClass,
 		DefaultObjective:  k.DefaultObjective,
 		AllowedObjectives: k.AllowedObjectives,
+		ClientOpID:        k.ClientOpID,
 	}
 	if k.ExpiresAt != nil {
 		summary.ExpiresAt = strfmt.DateTime(*k.ExpiresAt)
