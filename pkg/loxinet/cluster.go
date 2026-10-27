@@ -102,6 +102,14 @@ type CIStateH struct {
 	//    before the BFD table is entered;
 	//  - callers of CIBFDSessionAdd/Del must not hold mh.mtx.
 	bfdCfgMtx sync.Mutex
+	// initSync is closed once the initial HA sync of this process is done:
+	// XSync has reached the cluster peers (or given up waiting), followed by
+	// the KAInitTiVal cool-off. A BFD session added before then -- by the
+	// --ka start, the BFDconfig.txt replay or the boot snapshot restore --
+	// stays silent until it closes, so a restarted node cannot take MASTER
+	// back before it holds the peer's conntrack. Sessions added after it
+	// start at once. A nil channel means there is no initial sync to wait for.
+	initSync chan struct{}
 }
 
 func (ch *CIStateH) BFDSessionNotify(instance string, _ string, ciState string) {
@@ -122,9 +130,9 @@ func (ch *CIStateH) startBFDProto(bfdSessConfigArgs bfd.ConfigArgs) {
 		return
 	}
 
-	mh.dp.WaitXsyncReady("ka")
-	// We need some cool-off period for loxilb to self sync-up in the cluster
-	time.Sleep(KAInitTiVal * time.Second)
+	if ch.initSync != nil {
+		<-ch.initSync
+	}
 
 	txInterval := uint32(bfd.BFDDflSysTXIntervalUs)
 	if ch.Interval != 0 && ch.Interval >= bfd.BFDMinSysTXIntervalUs {
@@ -140,6 +148,31 @@ func (ch *CIStateH) startBFDProto(bfdSessConfigArgs bfd.ConfigArgs) {
 	tk.LogIt(tk.LogInfo, "KA - Added BFD remote %s:%s:%vus\n", ch.RemoteIP.String(), ch.SourceIP.String(), txInterval)
 }
 
+// waitInitialSync - closes initSync once the initial HA sync is done
+func (ch *CIStateH) waitInitialSync() {
+	if mh.dp != nil {
+		mh.dp.WaitXsyncReady("ka")
+	}
+	// We need some cool-off period for loxilb to self sync-up in the cluster
+	time.Sleep(KAInitTiVal * time.Second)
+	tk.LogIt(tk.LogInfo, "KA - initial HA sync done, BFD sessions may start\n")
+	close(ch.initSync)
+}
+
+// bfdStartGate - the start gate for a session added now: initSync while the
+// initial HA sync is pending, nil once it is done
+func (ch *CIStateH) bfdStartGate() <-chan struct{} {
+	if ch.initSync == nil {
+		return nil
+	}
+	select {
+	case <-ch.initSync:
+		return nil
+	default:
+		return ch.initSync
+	}
+}
+
 // CITicker - Periodic ticker for Cluster module
 func (ch *CIStateH) CITicker() {
 	// Nothing to do currently
@@ -149,6 +182,9 @@ func (ch *CIStateH) CITicker() {
 func (ch *CIStateH) CISpawn() {
 	bs := bfd.StructNew(3784)
 	ch.Bs = bs
+	if ch.initSync != nil {
+		go ch.waitInitialSync()
+	}
 	// The existence gate and ApplyBFDConfig's reader must agree on the
 	// directory: a hardcoded /etc/loxilb here silently skipped the replay
 	// (or replayed the wrong file) under a non-default --config-path.
@@ -188,6 +224,7 @@ func CIInit(args CIKAArgs) *CIStateH {
 	nCIh.SourceIP = args.SourceIP
 	nCIh.Interval = args.Interval
 	nCIh.ClusterMap = make(map[string]*ClusterInstance)
+	nCIh.initSync = make(chan struct{})
 
 	if _, ok := nCIh.ClusterMap[cmn.CIDefault]; !ok {
 		ci := &ClusterInstance{State: cmn.CIStateNotDefined,
@@ -640,33 +677,21 @@ func (ch *CIStateH) CIBFDSessionAdd(bm cmn.BFDMod) (int, error) {
 		return -1, err
 	}
 
-	if first {
-		// Register before acknowledging configuration, but retain the initial
-		// HA synchronization/cool-off gate before sending or processing BFD.
-		ready := make(chan struct{})
-		bfdSessConfigArgs.StartGate = ready
-		if err := ch.Bs.BFDAddRemote(bfdSessConfigArgs, ch); err != nil {
+	// Register before acknowledging configuration. Whether the session may
+	// send or process BFD yet depends on the initial HA sync only, not on
+	// whether this is the first session: a boot replay finds SpawnKa already
+	// set by --ka and would otherwise start ungated.
+	bfdSessConfigArgs.StartGate = ch.bfdStartGate()
+	if err := ch.Bs.BFDAddRemote(bfdSessConfigArgs, ch); err != nil {
+		tk.LogIt(tk.LogCritical, "KA - Cant add BFD remote: %s\n", err.Error())
+		if first {
 			mh.mtx.Lock()
 			ch.SpawnKa = false
 			mh.mtx.Unlock()
-			return -1, err
 		}
-		go func() {
-			if mh.dp != nil {
-				mh.dp.WaitXsyncReady("ka")
-				time.Sleep(KAInitTiVal * time.Second)
-			}
-			close(ready)
-		}()
-
-	} else {
-		err := ch.Bs.BFDAddRemote(bfdSessConfigArgs, ch)
-		if err != nil {
-			tk.LogIt(tk.LogCritical, "KA - Cant add BFD remote: %s\n", err.Error())
-			return -1, err
-		}
-		tk.LogIt(tk.LogInfo, "KA - BFD remote %s:%s:%vus Added\n", bm.RemoteIP.String(), bm.SourceIP.String(), bm.Interval)
+		return -1, err
 	}
+	tk.LogIt(tk.LogInfo, "KA - BFD remote %s:%s:%vus Added (gated %v)\n", bm.RemoteIP.String(), bm.SourceIP.String(), bm.Interval, bfdSessConfigArgs.StartGate != nil)
 	return 0, nil
 }
 
