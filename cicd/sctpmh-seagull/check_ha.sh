@@ -32,6 +32,10 @@ function check_ha() {
     done
 }
 
+# Returns 0 when the MASTER and BACKUP hold the same number of established
+# connections, 1 when they still differ after the retries, and 2 when the
+# MASTER holds none. The result is the return code only: callers read it
+# with `checkSync; rc=$?`, never from its output.
 function checkSync() {
     count=1
     sync=0
@@ -64,9 +68,9 @@ function checkSync() {
 
     if [[ $sync == 0 ]]; then
         echo -e "\nConnection Sync failed\n" >&2
-        return 0
+        return 1
     fi
-    echo "$sync"
+    return 0
 }
 
 # Restarts the gateway in one node with the command line it runs now, so
@@ -75,7 +79,7 @@ function checkSync() {
 # stderr in /tmp/loxilb.err of that node.
 function restart_llb() {
     local node=$1
-    local pids cmd i
+    local pids cmd i ev ts
 
     pids=$(docker exec $node pgrep -x loxilb)
     if [[ -z $pids ]]; then
@@ -83,6 +87,13 @@ function restart_llb() {
         return 1
     fi
     cmd=$(docker exec $node cat /proc/$(echo $pids | cut -d' ' -f1)/cmdline | tr '\0' ' ')
+    # The restart truncates the redirect below, so keep the outgoing
+    # gateway's output first, under the case that restarts it.
+    ev=${SCTPMH_EVIDENCE:-/tmp/sctpmh-evidence}/$(basename $0 .sh)
+    ts=$(date +%Y%m%dT%H%M%S)
+    mkdir -p $ev
+    docker cp $node:/tmp/loxilb.err $ev/$node-loxilb.err.$ts 2> /dev/null
+    docker cp $node:/tmp/loxilb.out $ev/$node-loxilb.out.$ts 2> /dev/null
     echo "Killing $node loxilb pid(s): $(echo $pids)" >&2
     docker exec $node kill -9 $pids
     for i in $(seq 1 50); do

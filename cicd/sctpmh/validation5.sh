@@ -31,7 +31,8 @@ p3c_new=0
 checkha=0
 hadone=0
 code=0
-nsyncOk=0
+# Sync state measured after the MASTER restart; empty until measured.
+postSync=
 
 for((i=0;i<400;i++)) do
     fin=`tail -n 100 user.out | grep "Client: Sending packets.(30000/30000)"`
@@ -40,12 +41,12 @@ for((i=0;i<400;i++)) do
         echo "sctp_test done."
         break;
     fi
-    syncOk=$nsyncOk
     if [[ $checkha == 1 ]]; then
         check_ha
         echo -e "\nHA state Master:$master BACKUP-$backup\n"
-        nsyncOk=$(checkSync)
-        if [[ $nsyncOk == 2 ]]; then #No active connections in Master, no need to continue.
+        checkSync
+        postSync=$?
+        if [[ $postSync == 2 ]]; then #No active connections in Master, no need to continue.
             break;
         fi
     fi
@@ -81,8 +82,9 @@ for((i=0;i<400;i++)) do
     p2c_old=$p1c_new
     echo -e "\n"
     if [[ $hadone == 0 ]]; then
-        nsyncOk=$(checkSync)
-        if [[ $nsyncOk == 1 ]]; then
+        checkSync
+        rc=$?
+        if [[ $rc == 0 ]]; then
             restart_mloxilb
             checkha=1
             hadone=1
@@ -94,7 +96,7 @@ done
 sudo rm -rf *.out
 sudo pkill sctp_test
 
-if [[ $fin == 1 && $p1 == 1 && $p2 == 1 && $p3 == 1 && $code == 0 && $syncOk == 1 ]]; then
+if [[ $fin == 1 && $p1 == 1 && $p2 == 1 && $p3 == 1 && $code == 0 && $postSync == 0 ]]; then
     echo "sctpmh SCTP Multihoming C2LB HA Failover [OK]"
     echo "OK" > status5.txt
     restart_loxilbs
