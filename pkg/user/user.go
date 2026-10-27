@@ -259,7 +259,7 @@ func (s *UserService) AddUser(ctx context.Context, user cmn.User) (int, error) {
 				return ErrUsernameExists
 			}
 			tk.LogIt(tk.LogError, "Failed to insert user: %v\n", err.Error())
-			return err
+			return pgstore.ClassifyWriteErr(err)
 		}
 
 		tk.LogIt(tk.LogInfo, "User created: %v\n", user.Username)
@@ -374,7 +374,7 @@ func (s *UserService) GetUsers(ctx context.Context) ([]cmn.User, error) {
 		rows, err := handle.QueryContext(ctx, SelectAllUsersQuery)
 		if err != nil {
 			tk.LogIt(tk.LogError, "Failed to fetch users: %v\n", err.Error())
-			return err
+			return pgstore.ClassifyReadErr(err)
 		}
 		defer rows.Close()
 		users = users[:0]
@@ -388,7 +388,7 @@ func (s *UserService) GetUsers(ctx context.Context) ([]cmn.User, error) {
 			var delegation bool
 			if err := rows.Scan(&user.ID, &user.Username, &user.CreatedAt, &user.Role, &delegation); err != nil {
 				tk.LogIt(tk.LogError, "Failed to scan user: %v\n", err.Error())
-				return err
+				return pgstore.ClassifyReadErr(err)
 			}
 			user.DelegationAllowed = &delegation
 			users = append(users, user)
@@ -396,7 +396,7 @@ func (s *UserService) GetUsers(ctx context.Context) ([]cmn.User, error) {
 
 		if err = rows.Err(); err != nil {
 			tk.LogIt(tk.LogError, "Rows error: %v\n", err.Error())
-			return err
+			return pgstore.ClassifyReadErr(err)
 		}
 
 		return nil
@@ -448,12 +448,12 @@ func (s *UserService) DeleteUser(ctx context.Context, id int) error {
 				return ErrUserNotFound
 			}
 			tk.LogIt(tk.LogError, "Failed to read the user being deleted: %v\n", err.Error())
-			return err
+			return pgstore.ClassifyReadErr(err)
 		}
 		return s.revokeSessions(ctx, handle, username, func(tx *sql.Tx) error {
 			if _, err := tx.ExecContext(ctx, DeleteUserQuery, id); err != nil {
 				tk.LogIt(tk.LogError, "Failed to delete user: %v\n", err.Error())
-				return err
+				return pgstore.ClassifyWriteErr(err)
 			}
 			return nil
 		})
@@ -474,12 +474,12 @@ func (s *UserService) UpdateUser(ctx context.Context, user cmn.User) error {
 		query := SelectUserQuery
 		err := handle.QueryRowContext(ctx, query, user.ID).Scan(&existingUser.ID, &existingUser.Username, &existingUser.Password, &existingUser.Role)
 		if err != nil {
-			if err == sql.ErrNoRows {
+			if errors.Is(err, sql.ErrNoRows) {
 				tk.LogIt(tk.LogError, "User not found: %s\n", err.Error())
-				return errors.New("user not found")
+				return ErrUserNotFound
 			}
 			tk.LogIt(tk.LogError, "Failed to query user: %s\n", err.Error())
-			return err
+			return pgstore.ClassifyReadErr(err)
 		}
 
 		// Validate the new password
@@ -512,7 +512,7 @@ func (s *UserService) UpdateUser(ctx context.Context, user cmn.User) error {
 		if err := s.revokeSessions(ctx, handle, existingUser.Username, func(tx *sql.Tx) error {
 			if _, err := tx.ExecContext(ctx, UpdateUserQuery, user.Username, hashedPassword, user.Role, user.ID, user.DelegationAllowed); err != nil {
 				tk.LogIt(tk.LogError, "Failed to update user: %v\n", err.Error())
-				return err
+				return pgstore.ClassifyWriteErr(err)
 			}
 			return nil
 		}); err != nil {
@@ -595,7 +595,7 @@ func (s *UserService) Logout(ctx context.Context, tokenString string) error {
 		_, err := handle.ExecContext(ctx, DeleteTokenQuery, hashed)
 		if err != nil {
 			tk.LogIt(tk.LogError, "Failed to delete token: %v\n", err.Error())
-			return err
+			return pgstore.ClassifyWriteErr(err)
 		}
 
 		tk.LogIt(tk.LogInfo, "User logged out: %v\n", username)

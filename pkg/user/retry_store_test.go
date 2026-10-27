@@ -18,6 +18,7 @@ package user
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -595,4 +596,68 @@ func readSource(t *testing.T, name string) string {
 		t.Fatalf("read %s: %v", name, err)
 	}
 	return string(b)
+}
+
+// --- U-21: a verdict is never a store outcome ------------------------------
+//
+// The write-outcome classifier says what the STORE did with a statement. An
+// answer the operation reached itself -- the name is taken, the role or the
+// password was refused, the row does not exist -- is not the store's doing,
+// is never retried, and reaches the caller as it was made. Before this, a
+// duplicate username was retried three times and then answered 504.
+func TestU21_VerdictsAreNeverClassifiedAsStoreOutcomes(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"ErrUsernameExists", ErrUsernameExists},
+		{"ErrInvalidRole", cmn.ErrInvalidRole},
+		{"password policy", policyErr("password must be at least 9 characters long")},
+		{"ErrUserNotFound", ErrUserNotFound},
+		{"validation", cmn.NewValidationError("role", "bad")},
+		{"wrapped duplicate", errWrap{ErrUsernameExists}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			attempts := 0
+			err := retryWrite(context.Background(), func() error {
+				attempts++
+				return tc.err
+			})
+			if attempts != 1 {
+				t.Errorf("a verdict was retried: attempts=%d", attempts)
+			}
+			if !errors.Is(err, tc.err) {
+				t.Errorf("verdict not returned as made: %v", err)
+			}
+			if errors.Is(err, cmn.ErrStoreOutcomeUnknown) || errors.Is(err, cmn.ErrDBUnavailable) {
+				t.Errorf("a verdict was reported as a store outcome: %v", err)
+			}
+			if err.Error() != tc.err.Error() {
+				t.Errorf("the message changed: %q -> %q", tc.err.Error(), err.Error())
+			}
+		})
+	}
+}
+
+// A store failure keeps its classification: one already classified as
+// outcome unknown is not retried (the server may be applying it) and reaches
+// the caller as such; a raw transport error a closure returned unclassified
+// is retried and classified by the wrapper's net.
+func TestU22_StoreFailuresAreClassifiedAndAnUnknownOutcomeIsNotRetried(t *testing.T) {
+	attempts := 0
+	err := retryWrite(context.Background(), func() error {
+		attempts++
+		return pgstore.ClassifyWriteErr(errors.New("write: broken pipe after the statement went out"))
+	})
+	if attempts != 1 || !errors.Is(err, cmn.ErrStoreOutcomeUnknown) {
+		t.Fatalf("outcome unknown: attempts=%d err=%v", attempts, err)
+	}
+	attempts = 0
+	err = retryWrite(context.Background(), func() error {
+		attempts++
+		return driver.ErrBadConn
+	})
+	if attempts != AuthMaxRetries || !errors.Is(err, cmn.ErrDBUnavailable) {
+		t.Fatalf("not sent: attempts=%d err=%v", attempts, err)
+	}
 }

@@ -562,6 +562,16 @@ binary behaves exactly like upstream loxilb.
 
 ### Fixed
 
+- **A management-store verdict is never reported as a store outcome.** Since
+  the write-outcome contract, `POST /auth/users` with a username that exists
+  retried the insert three times and answered 504 `store_outcome_unknown`
+  instead of 409, because the verdict reached the classifier meant for the
+  store's own failures; a refused password or role took the same path to 504
+  instead of 400. A verdict (the name is taken, the role or the password was
+  refused, the row does not exist, the credential is wrong) is now answered
+  at the first attempt, as it was made, and the store operations classify
+  their own transport errors at the statement. Found by the new audit-mgmt
+  T21 on the bed.
 - **Every key-store and management-store statement carries a deadline, and a
   write says whether the server may still apply it.** A PostgreSQL that stalled
   while keeping its TCP connections open (hung or overloaded server, stalled
