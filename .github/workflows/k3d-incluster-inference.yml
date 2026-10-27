@@ -22,6 +22,7 @@ on:
       - 'cicd/common/k8s-inference/**'
       - 'cicd/k3d-incluster-inference-svc/**'
       - 'cicd/k3d-incluster-inference-gwapi/**'
+      - 'cicd/k3d-incluster-inference-epp/**'
       - 'cicd/k3d-helm-inference-gwapi/**'
       - 'deploy/helm/**'
       - '.github/workflows/k3d-incluster-inference.yml'
@@ -31,6 +32,7 @@ on:
       - 'cicd/common/k8s-inference/**'
       - 'cicd/k3d-incluster-inference-svc/**'
       - 'cicd/k3d-incluster-inference-gwapi/**'
+      - 'cicd/k3d-incluster-inference-epp/**'
       - 'cicd/k3d-helm-inference-gwapi/**'
       - 'deploy/helm/**'
       - '.github/workflows/k3d-incluster-inference.yml'
@@ -39,13 +41,17 @@ jobs:
   k3d-incluster-inference:
     name: ${{ matrix.scenario }}
     runs-on: ubuntu-22.04
-    timeout-minutes: 45
+    timeout-minutes: 90   # the EPP scenario builds the image from the checkout
     strategy:
       fail-fast: false
       matrix:
-        scenario: [k3d-incluster-inference-svc, k3d-incluster-inference-gwapi, k3d-helm-inference-gwapi]
+        scenario: [k3d-incluster-inference-svc, k3d-incluster-inference-gwapi, k3d-incluster-inference-epp, k3d-helm-inference-gwapi]
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The EPP scenario builds the image from this checkout, and the
+          # Dockerfile needs loxilb-ebpf (and its nested libbpf) present.
+          submodules: recursive
       - name: Install PyYAML (manifest renderer)
         run: python3 -m pip install --quiet pyyaml
       # Authenticate to avoid anonymous ghcr pull limits (the image is public).
@@ -55,6 +61,15 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GHCR_TOKEN || github.token }}
+      - uses: actions/setup-go@v5
+        if: matrix.scenario == 'k3d-incluster-inference-epp'
+        with:
+          go-version-file: go.mod
+      - name: Build loxilb from this checkout (the EPP scenario tests the branch)
+        if: matrix.scenario == 'k3d-incluster-inference-epp'
+        run: |
+          docker build -t ghcr.io/loxilb-io/loxilb-inference-gateway:k3d-epp-local .
+          echo "IGW_IMAGE=ghcr.io/loxilb-io/loxilb-inference-gateway:k3d-epp-local" >> "$GITHUB_ENV"
       - name: Run the scenario
         env:
           KLB_REF: ${{ github.event.inputs.klbRef || 'feat/auth-annotation' }}

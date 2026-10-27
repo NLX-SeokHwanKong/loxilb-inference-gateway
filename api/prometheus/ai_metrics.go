@@ -22,13 +22,13 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
-// ============================================================================
-// AI GATEWAY METRICS - Per-model and per-tenant Prometheus metrics
+// =====================================================================// AI GATEWAY METRICS - Per-model and per-tenant Prometheus metrics
 // ============================================================================
 // These metrics are populated by the CGO export llb_ai_record_request defined
 // in pkg/loxinet/ai_gateway_dp.go. C sockproxy calls that export once per
@@ -598,6 +598,62 @@ var (
 		[]string{"tier", "model"},
 	)
 
+	// aiEppRequestsTotal counts requests a rule handed to its Endpoint
+	// Picker (EPP) by how the request phase ended: ok (a decision with
+	// candidates was applied), immediate (the EPP answered the client),
+	// error (deadline, gRPC error, NOT_SERVING), refused (the submit was
+	// refused before a stream opened), no_endpoint (no candidate usable),
+	// body_too_large (decision D5), evicted (shed during the response).
+	aiEppRequestsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "loxilb_ai_epp_requests_total",
+			Help: "Total requests handed to an Endpoint Picker (EPP), by outcome of the request phase (ok, immediate, error, refused, no_endpoint, body_too_large, evicted).",
+		},
+		[]string{"outcome"},
+	)
+
+	// aiEppDurationSeconds is the EPP's request-phase latency: from the
+	// submit to the decision (or its failure), the time the client waits
+	// parked before the backend is chosen.
+	aiEppDurationSeconds = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "loxilb_ai_epp_duration_seconds",
+			Help:    "Endpoint Picker request-phase duration in seconds, submit to decision.",
+			Buckets: []float64{0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0},
+		},
+	)
+
+	// aiEppCandidatesRejectedTotal counts the endpoints an EPP named that
+	// the data plane could not use, by reason: unknown (not an endpoint of
+	// the rule), down, disabled (controller), unhealthy (prober or breaker),
+	// capacity (endpoint ceiling), connect (refused the connection).
+	aiEppCandidatesRejectedTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "loxilb_ai_epp_candidates_rejected_total",
+			Help: "Total Endpoint Picker candidates the data plane skipped, by reason (unknown, down, disabled, unhealthy, capacity, connect).",
+		},
+		[]string{"reason"},
+	)
+
+	// aiEppInflight and aiEppPending expose the EPP state the data plane
+	// holds right now, so a failover can be checked to have drained: requests
+	// between submit and their last report (the EPP's view of in-flight
+	// load), and decisions the C side table still holds. Both read the
+	// provider loxinet installs (SetEppStateProvider) at scrape time.
+	aiEppInflight = promauto.NewGaugeFunc(
+		prometheus.GaugeOpts{
+			Name: "loxilb_ai_epp_inflight",
+			Help: "Requests currently handed to an Endpoint Picker and not yet reported finished (the EPP's in-flight view).",
+		},
+		func() float64 { a, _ := eppState(); return float64(a) },
+	)
+	aiEppPending = promauto.NewGaugeFunc(
+		prometheus.GaugeOpts{
+			Name: "loxilb_ai_epp_pending",
+			Help: "Endpoint Picker decisions the data plane side table still holds (parked or being applied).",
+		},
+		func() float64 { _, p := eppState(); return float64(p) },
+	)
 	// aiPDDecodeSelectedTotal counts terminal P/D decode selections per model
 	// by the path that produced the endpoint: hint (the session-pinned decode
 	// EP was kept), score (the min-load scorer picked; with
@@ -724,6 +780,22 @@ func AdjustActiveStreams(model string, delta float64) {
 // a request is denied (decision != 0), and llb_ai_token_quota_reserve when
 // the pre-admission reservation refuses one.
 // If reason is empty it falls back to "rate_limit_exceeded".
+// eppStateProvider is installed by loxinet; nil reads as zero.
+var eppStateProvider atomic.Pointer[func() (inflight, pending int)]
+
+// SetEppStateProvider installs the function the EPP in-flight/pending
+// gauges read at scrape time.
+func SetEppStateProvider(fn func() (inflight, pending int)) {
+	eppStateProvider.Store(&fn)
+}
+
+func eppState() (int, int) {
+	if f := eppStateProvider.Load(); f != nil {
+		return (*f)()
+	}
+	return 0, 0
+}
+
 func RecordRateLimitHit(tenantID, reason string) {
 	if reason == "" {
 		reason = "rate_limit_exceeded"
@@ -1560,4 +1632,20 @@ func RecordAIRequestDeniedUnserved(tenantID, modelName, noModelLabel string, sta
 	seedAIRequestPair(model, tenant)
 
 	aiRequestsTotal.WithLabelValues(model, tenant, status, AIOutcomeDenied, "").Inc()
+}
+
+// RecordEppOutcome counts one request handed to an Endpoint Picker by how
+// its request phase ended, and its duration when known (seconds > 0).
+func RecordEppOutcome(outcome string, seconds float64) {
+	if outcome != "" {
+		aiEppRequestsTotal.WithLabelValues(sanitizeLabel(outcome)).Inc()
+	}
+	if seconds > 0 {
+		aiEppDurationSeconds.Observe(seconds)
+	}
+}
+
+// RecordEppCandidateRejected counts one EPP candidate the data plane skipped.
+func RecordEppCandidateRejected(reason string) {
+	aiEppCandidatesRejectedTotal.WithLabelValues(sanitizeLabel(reason)).Inc()
 }

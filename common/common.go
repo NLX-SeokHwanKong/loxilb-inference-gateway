@@ -59,24 +59,23 @@ var BuildTags string = ""
 // upstream loxilb, so this must ship in any release the UI flavor-gates on.
 const Product = "loxilb-inference-gateway"
 
-// Feature tokens GET /netlox/v1/version lists under "features": the
-// gateway-only capabilities a controller checks for before it sends the
-// matching rule fields. The REST layer ignores fields it does not know, so a
-// build that lacks a token would install a rule WITHOUT the policy the caller
-// asked for and report success; the controller's check on this list is what
-// turns that into a refusal. Tokens are the rule field names they stand for.
+// FeatureEpp - the Endpoint Picker integration: loadbalancer rules accept the
+// epp* fields and the data plane consults the picker. kube-loxilb gates on it.
+const FeatureEpp = "epp"
+
+// Feature tokens GET /netlox/v1/version lists under "features": gateway-only
+// capabilities a controller checks for before it sends the matching rule fields.
 const (
 	// FeatureAPIKeyAuth - serviceArguments.api_key_auth is accepted and enforced.
 	FeatureAPIKeyAuth = "api_key_auth"
-	// FeatureJWTAuthProfile - the Bearer arm (api_key_auth "jwt" / "apikey-or-jwt")
-	// and the serviceArguments.jwt_auth_profile reference are accepted and enforced.
+	// FeatureJWTAuthProfile - the Bearer arm and serviceArguments.jwt_auth_profile.
 	FeatureJWTAuthProfile = "jwt_auth_profile"
 )
 
 // VersionFeatures - the features this build advertises, in a fixed order. A
 // fresh slice each call: callers may append to it.
 func VersionFeatures() []string {
-	return []string{FeatureAPIKeyAuth, FeatureJWTAuthProfile}
+	return []string{FeatureEpp, FeatureAPIKeyAuth, FeatureJWTAuthProfile}
 }
 
 // This file defines the go interface implementation needed to interact with loxinet go module
@@ -1032,6 +1031,38 @@ const KVBlockSizeMax uint32 = 4096
 // for hours.
 const PDPrefillTimeoutSecMax uint16 = 3600
 
+// Endpoint Picker (EPP) rule arguments. An EPP is a Gateway API Inference
+// Extension endpoint picker that loxilb asks, over Envoy's ext_proc gRPC
+// protocol, which backend should serve each request of a fullproxy rule.
+const (
+	// EppFailureModeFailOpen falls back to the rule's own selection ladder
+	// when the EPP cannot answer.
+	EppFailureModeFailOpen = "FailOpen"
+	// EppFailureModeFailClose answers 503 when the EPP cannot answer. It is
+	// the resolved default of an empty eppFailureMode on an EPP rule.
+	EppFailureModeFailClose = "FailClose"
+	// EppDefaultTimeoutMs is what an omitted or zero eppTimeoutMs resolves
+	// to on an EPP rule: the request-phase decision deadline in ms.
+	EppDefaultTimeoutMs uint32 = 3000
+	// EppTimeoutMsMax bounds eppTimeoutMs (ten minutes); the data plane
+	// carries the value in 32 bits, the bound guards against a typo that
+	// would park client connections for hours.
+	EppTimeoutMsMax uint32 = 600000
+	// EppEndpointMaxBytes bounds the UTF-8 length of eppEndpoint.
+	EppEndpointMaxBytes = 255
+)
+
+// IsValidEppFailureMode reports whether mode is one of the closed set of
+// eppFailureMode values; the empty string is accepted (resolved at
+// admission).
+func IsValidEppFailureMode(mode string) bool {
+	switch mode {
+	case "", EppFailureModeFailOpen, EppFailureModeFailClose:
+		return true
+	}
+	return false
+}
+
 // LbServiceArg - Information related to load-balancer service
 type LbServiceArg struct {
 	// ServIP - the service ip or vip  of the load-balancer rule
@@ -1458,6 +1489,21 @@ type LbServiceArg struct {
 	// create time. Empty = legacy profile-less rule (no binding, documented
 	// migration behavior). Immutable on a live rule (delete+recreate).
 	KvModelProfile string `json:"kvModelProfile,omitempty"`
+
+	// Endpoint Picker (EPP) client configuration — Gateway API Inference
+	// Extension ext_proc. Zero values on every field keep the rule, the
+	// stored JSON and the data-plane push byte-identical to a rule that
+	// never heard of the EPP (default-OFF additive chain).
+	// EppEndpoint - gRPC host:port of the EPP; "" = EPP off.
+	EppEndpoint string `json:"eppEndpoint,omitempty"`
+	// EppFailureMode - "FailOpen" or "FailClose" ("" resolves to FailClose at
+	// admission when EppEndpoint is set).
+	EppFailureMode string `json:"eppFailureMode,omitempty"`
+	// EppTimeoutMs - request-phase decision deadline in ms (0 resolves to
+	// EppDefaultTimeoutMs at admission when EppEndpoint is set).
+	EppTimeoutMs uint32 `json:"eppTimeoutMs,omitempty"`
+	// EppPlaintext - true connects to the EPP without TLS.
+	EppPlaintext bool `json:"eppPlaintext,omitempty"`
 	// RestoreReplay - set by the snapshot engine when this rule add is a
 	// restore replay rather than a fresh POST. A replayed strict rule must
 	// NOT allocate a new KV-exact binding generation: the snapshot's
