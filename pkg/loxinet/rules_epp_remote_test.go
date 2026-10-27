@@ -44,7 +44,10 @@ const (
 func eppRemoteRun(t *testing.T, args ...string) {
 	t.Helper()
 	out, err := exec.Command(args[0], args[1:]...).CombinedOutput()
-	if err != nil {
+	// loxilb's global SIGCHLD reaper (loxinet.go) can reap this child before
+	// CombinedOutput's own Wait, which then returns ECHILD even though the
+	// command ran fine -- the same hazard isWaitECHILD guards everywhere else.
+	if err != nil && !isWaitECHILD(err) {
 		t.Fatalf("%s: %v: %s", strings.Join(args, " "), err, out)
 	}
 }
@@ -77,7 +80,7 @@ func eppTestRemoteBackend(t *testing.T, name string) (cmn.LbEndPointArg, *eppTes
 	eppRemoteRun(t, "ip", "-n", eppRemoteNs, "addr", "add", eppRemoteIP+"/30", "dev", eppRemoteVethNs)
 	eppRemoteRun(t, "ip", "-n", eppRemoteNs, "link", "set", eppRemoteVethNs, "up")
 	eppRemoteRun(t, "ip", "-n", eppRemoteNs, "link", "set", "lo", "up")
-	if out, err := exec.Command("tc", "qdisc", "add", "dev", eppRemoteVethH, "root", "netem", "delay", "30ms").CombinedOutput(); err != nil {
+	if out, err := exec.Command("tc", "qdisc", "add", "dev", eppRemoteVethH, "root", "netem", "delay", "30ms").CombinedOutput(); err != nil && !isWaitECHILD(err) {
 		t.Skipf("tc netem not available: %v: %s", err, out)
 	}
 
