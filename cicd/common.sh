@@ -1,6 +1,6 @@
 #!/bin/bash
 
-if [[ "$1" == "init" ]]; then
+if [[ "${1:-}" == "init" ]]; then
   pull_dockers
 fi
 
@@ -98,7 +98,7 @@ fi
 # (e.g. "latest") to pin the loxilb-inference-gateway repo to that tag.
 # Use case: the latest-u24 image trips the eBPF verifier E2BIG limit on
 # hosted ubuntu-24.04 (6.x-azure) runners, so those workflows force :latest.
-if [[ -n "$LOXILB_DOCKER_IMAGE" ]]; then
+if [[ -n "${LOXILB_DOCKER_IMAGE:-}" ]]; then
   if [[ "$LOXILB_DOCKER_IMAGE" == *"/"* || "$LOXILB_DOCKER_IMAGE" == *":"* ]]; then
     lxdocker="$LOXILB_DOCKER_IMAGE"
   else
