@@ -36,16 +36,17 @@ p3c_new=0
 checkha=0
 hadone=0
 code=0
-nsyncOk=0
+# Sync state measured after the MASTER restart; empty until measured.
+postSync=
 frecover=1
 
 for((i=0;i<15;i++)) do
-    syncOk=$nsyncOk
     if [[ $checkha == 1 ]]; then
         check_ha
         echo -e "\nHA state Master:$master BACKUP-$backup\n"
-        nsyncOk=$(checkSync)
-        if [[ $nsyncOk == 2 ]]; then #No active connections in Master, no need to continue.
+        checkSync
+        postSync=$?
+        if [[ $postSync == 2 ]]; then #No active connections in Master, no need to continue.
             break;
         fi
     fi
@@ -123,8 +124,9 @@ for((i=0;i<15;i++)) do
     fail_old=$fail_new
 
     if [[ $hadone == 0 ]]; then
-        nsyncOk=$(checkSync)
-        if [[ $nsyncOk == 1 ]]; then
+        checkSync
+        rc=$?
+        if [[ $rc == 0 ]]; then
             restart_mloxilb
             checkha=1
             hadone=1
@@ -137,7 +139,7 @@ done
 sudo docker exec -dt user ksh -c 'sed -i 's/source=0.0.0.0/source=31.31.31.1/g' /opt/seagull/diameter-env/config/conf.server.xml'
 sudo docker exec -dt ep1 ksh -c 'sed -i 's/dest=133.133.133.1/dest=20.20.20.1/g' /opt/seagull/diameter-env/config/conf.client.xml'
 
-if [[ $p1 == 1 && $p2 == 1 && $p3 == 1 && $code == 0 && $nsyncOk == 1 && $recover == 1 ]]; then
+if [[ $p1 == 1 && $p2 == 1 && $p3 == 1 && $code == 0 && $postSync == 0 && $recover == 1 ]]; then
     echo "sctpmh SCTP Multihoming E2E HA Failover [OK]"
     echo "OK" > /vagrant/status6.txt
     restart_loxilbs
