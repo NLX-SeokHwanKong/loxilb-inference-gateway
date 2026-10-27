@@ -872,9 +872,7 @@ func (na *NetAPIStruct) NetBFDAdd(bm *cmn.BFDMod) (int, error) {
 	mh.mtx.Lock()
 	ch := mh.has
 	mh.mtx.Unlock()
-	// Protocol notifications take the global mutex while holding the BFD
-	// table lock, so the session add takes mh.mtx only around its
-	// own cluster state, never across the table.
+	// Called without mh.mtx: lock order in CIStateH.bfdCfgMtx.
 	_, err := ch.CIBFDSessionAdd(*bm)
 	if err != nil {
 		return -1, err
@@ -891,9 +889,7 @@ func (na *NetAPIStruct) NetBFDDel(bm *cmn.BFDMod) (int, error) {
 	mh.mtx.Lock()
 	ch := mh.has
 	mh.mtx.Unlock()
-	// Protocol notifications take the global mutex while holding the BFD
-	// table lock, so the session delete takes mh.mtx only around its
-	// own cluster state, never across the table.
+	// Called without mh.mtx: lock order in CIStateH.bfdCfgMtx.
 	_, err := ch.CIBFDSessionDel(*bm)
 	if err != nil {
 		return -1, err

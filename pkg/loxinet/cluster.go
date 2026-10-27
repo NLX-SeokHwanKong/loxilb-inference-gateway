@@ -93,8 +93,14 @@ type CIStateH struct {
 	OSrc6       string
 	initRules   bool
 	initRules6  bool
-	// bfdCfgMtx serialises BFD session adds and deletes. They enter the
-	// BFD table without mh.mtx, so mh.mtx no longer keeps them atomic.
+	// bfdCfgMtx serialises BFD session adds and deletes, which mh.mtx no
+	// longer keeps atomic. Lock order for BFD configuration:
+	//  - a BFD notification takes mh.mtx while it holds the BFD table lock
+	//    (BFDMtx), so BFDMtx is never taken while holding mh.mtx;
+	//  - bfdCfgMtx is taken first, never while holding mh.mtx or BFDMtx;
+	//    under it, mh.mtx is held only around CIStateH state and released
+	//    before the BFD table is entered;
+	//  - callers of CIBFDSessionAdd/Del must not hold mh.mtx.
 	bfdCfgMtx sync.Mutex
 }
 
@@ -617,9 +623,7 @@ func (ch *CIStateH) ClusterNodeDelete(node cmn.ClusterNodeMod) (int, error) {
 }
 
 // CIBFDSessionAdd - routine to add BFD session
-// A BFD notification takes mh.mtx while it holds the BFD table lock, so the
-// table is never entered with mh.mtx held: mh.mtx covers only the CIStateH
-// reads and writes around the BFD call. The caller must not hold mh.mtx.
+// Locking: see bfdCfgMtx. The caller must not hold mh.mtx.
 func (ch *CIStateH) CIBFDSessionAdd(bm cmn.BFDMod) (int, error) {
 
 	if ch == nil {
@@ -714,7 +718,7 @@ func (ch *CIStateH) bfdSessionAddArgs(bm cmn.BFDMod) (bfd.ConfigArgs, bool, erro
 }
 
 // CIBFDSessionDel - routine to delete BFD session
-// Same locking as CIBFDSessionAdd: the caller must not hold mh.mtx.
+// Locking: see bfdCfgMtx. The caller must not hold mh.mtx.
 func (ch *CIStateH) CIBFDSessionDel(bm cmn.BFDMod) (int, error) {
 
 	if ch == nil {

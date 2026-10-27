@@ -41,6 +41,7 @@ func waitForBlockedIn(t *testing.T, fn string, limit time.Duration) {
 // The BFD receive path holds the BFD table lock while it notifies the
 // cluster, and the notification takes mh.mtx. A session add that holds
 // mh.mtx while it waits for the table therefore deadlocks with it.
+// It swaps the global mh.has, so it must not run with t.Parallel.
 func TestBFDAddDoesNotHoldGlobalMutexAcrossTable(t *testing.T) {
 	ch := &CIStateH{
 		Bs:         bfd.StructNew(0),
