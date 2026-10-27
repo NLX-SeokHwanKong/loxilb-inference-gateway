@@ -17344,8 +17344,10 @@ definitions:
       # unconditionally; without 'required' go-swagger emits omitempty and a
       # client has to null-check a field the server never omits.
       - key_id
-      # reused is a claim made on every answer; false must serialize too.
-      - reused
+      # reused is NOT in 'required': a required response property added after
+      # a client vendored this spec is a breaking change to that client
+      # (UI-Spec-Contract-CI), and the UI's copy predates it. x-omitempty
+      # keeps the claim on every answer: false must serialize too.
     properties:
       raw_key:
         type: string
@@ -17355,6 +17357,7 @@ definitions:
         description: Unique identifier of the created API key
       reused:
         type: boolean
+        x-omitempty: false
         description: True when this answer is a retry's, converged on the row an earlier request with the same client_op_id created; the secret in raw_key is new and the one that answer carried no longer authenticates.
 
   ApiKeySummary:

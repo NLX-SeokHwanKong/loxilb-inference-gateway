@@ -271,13 +271,13 @@ func init() {
         },
         "reused": {
           "description": "True when this answer is a retry's, converged on the row an earlier request with the same client_op_id created; the secret in raw_key is new and the one that answer carried no longer authenticates.",
-          "type": "boolean"
+          "type": "boolean",
+          "x-omitempty": false
         }
       },
       "required": [
         "raw_key",
-        "key_id",
-        "reused"
+        "key_id"
       ],
       "type": "object"
     },
@@ -36502,8 +36502,7 @@ func init() {
       "type": "object",
       "required": [
         "raw_key",
-        "key_id",
-        "reused"
+        "key_id"
       ],
       "properties": {
         "key_id": {
@@ -36516,7 +36515,8 @@ func init() {
         },
         "reused": {
           "description": "True when this answer is a retry's, converged on the row an earlier request with the same client_op_id created; the secret in raw_key is new and the one that answer carried no longer authenticates.",
-          "type": "boolean"
+          "type": "boolean",
+          "x-omitempty": false
         }
       }
     },

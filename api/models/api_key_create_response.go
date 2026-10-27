@@ -28,8 +28,7 @@ type APIKeyCreateResponse struct {
 	RawKey *string `json:"raw_key"`
 
 	// True when this answer is a retry's, converged on the row an earlier request with the same client_op_id created; the secret in raw_key is new and the one that answer carried no longer authenticates.
-	// Required: true
-	Reused *bool `json:"reused"`
+	Reused bool `json:"reused"`
 }
 
 // Validate validates this Api key create response
@@ -41,10 +40,6 @@ func (m *APIKeyCreateResponse) Validate(formats strfmt.Registry) error {
 	}
 
 	if err := m.validateRawKey(formats); err != nil {
-		res = append(res, err)
-	}
-
-	if err := m.validateReused(formats); err != nil {
 		res = append(res, err)
 	}
 
@@ -66,15 +61,6 @@ func (m *APIKeyCreateResponse) validateKeyID(formats strfmt.Registry) error {
 func (m *APIKeyCreateResponse) validateRawKey(formats strfmt.Registry) error {
 
 	if err := validate.Required("raw_key", "body", m.RawKey); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (m *APIKeyCreateResponse) validateReused(formats strfmt.Registry) error {
-
-	if err := validate.Required("reused", "body", m.Reused); err != nil {
 		return err
 	}
 

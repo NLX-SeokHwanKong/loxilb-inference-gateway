@@ -158,11 +158,11 @@ func ConfigPostAIApikey(params aiops.PostConfigAiApikeyParams, principal interfa
 	// raw key must never be logged. It is also empty when the caller supplied
 	// the key material: echoing a value the caller already holds would put it
 	// into response logs and API traces for no benefit.
-	rawKey, keyID, reused := created.RawKey, created.KeyID, created.Reused
+	rawKey, keyID := created.RawKey, created.KeyID
 	return aiops.NewPostConfigAiApikeyCreated().WithPayload(&models.APIKeyCreateResponse{
 		RawKey: &rawKey,
 		KeyID:  &keyID,
-		Reused: &reused,
+		Reused: created.Reused,
 	})
 }
 
