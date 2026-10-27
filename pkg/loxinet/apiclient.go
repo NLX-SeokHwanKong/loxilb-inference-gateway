@@ -2033,11 +2033,11 @@ func keyStoreAbsentErr() error {
 }
 
 // NetAPIKeyCreate - Create a new API key for a tenant.
-func (na *NetAPIStruct) NetAPIKeyCreate(ctx context.Context, entry cmn.ApiKeyEntry) (string, string, error) {
+func (na *NetAPIStruct) NetAPIKeyCreate(ctx context.Context, entry cmn.ApiKeyEntry) (cmn.ApiKeyCreated, error) {
 	if mh.AIKeyService == nil {
-		return "", "", keyStoreAbsentErr()
+		return cmn.ApiKeyCreated{}, keyStoreAbsentErr()
 	}
-	return mh.AIKeyService.CreateAPIKey(ctx, entry)
+	return mh.AIKeyService.CreateKey(ctx, entry)
 }
 
 // NetAPIKeyList - List API keys. If tenantID is empty, returns all keys.
@@ -2094,26 +2094,18 @@ func (na *NetAPIStruct) NetAPIKeyDelete(ctx context.Context, keyID string) error
 	return mh.AIKeyService.DeleteAPIKey(ctx, keyID)
 }
 
-// NetAPIKeyPatch - Update allowed_models and/or enabled for an API key.
-func (na *NetAPIStruct) NetAPIKeyPatch(ctx context.Context, keyID string, allowedModels []string, enabled *bool) error {
+// NetAPIKeyPatch - apply every field a PATCH names to a key, in one store
+// transaction. The live RPS bucket is reset in the same call -- the push
+// path -- when a rate-limit field changed, so the new limit binds on the
+// next request instead of after the config cache's TTL.
+func (na *NetAPIStruct) NetAPIKeyPatch(ctx context.Context, keyID string, patch cmn.ApiKeyPatch) error {
 	if mh.AIKeyService == nil {
 		return keyStoreAbsentErr()
 	}
-	return mh.AIKeyService.PatchAPIKey(ctx, keyID, allowedModels, enabled)
-}
-
-// NetAPIKeyRateLimitPatch - Update an existing key's rate-limit fields (the
-// PATCH gap fix: they were settable at creation and then frozen). The live
-// RPS bucket is reset in the same call — the push path — so the new limit
-// binds on the next request instead of after the config cache's TTL.
-func (na *NetAPIStruct) NetAPIKeyRateLimitPatch(ctx context.Context, keyID string, rps, burstSize, tokensPerMin *int) error {
-	if mh.AIKeyService == nil {
-		return keyStoreAbsentErr()
-	}
-	if err := mh.AIKeyService.PatchAPIKeyRateLimits(ctx, keyID, rps, burstSize, tokensPerMin); err != nil {
+	if err := mh.AIKeyService.PatchAPIKeyAll(ctx, keyID, patch); err != nil {
 		return err
 	}
-	if rps != nil || burstSize != nil {
+	if patch.RateLimitRPS != nil || patch.BurstSize != nil {
 		// Re-read the row rather than trusting the patch arguments: a
 		// nil field kept its stored value, which the bucket needs too.
 		if key, err := mh.AIKeyService.GetAPIKeyByID(keyID); err == nil {
@@ -2129,13 +2121,9 @@ func (na *NetAPIStruct) NetTenantRateLimitSet(ctx context.Context, tenantID stri
 	if mh.AIKeyService == nil {
 		return keyStoreAbsentErr()
 	}
-	if err := mh.AIKeyService.SetTenantRateLimit(ctx, tenantID, rps, tokensPerMin, burstPct); err != nil {
+	// The aggregate row and the model rows are one write with one outcome.
+	if err := mh.AIKeyService.SetTenantLimits(ctx, tenantID, rps, tokensPerMin, burstPct, modelLimits); err != nil {
 		return err
-	}
-	for _, ml := range modelLimits {
-		if err := mh.AIKeyService.SetTenantModelRateLimit(ctx, tenantID, ml.Model, ml.TokensPerMin); err != nil {
-			return err
-		}
 	}
 	// A quota is attributed through a validated key, and keys are only checked
 	// on services whose api_key_auth is "required". With no such service this
@@ -2178,15 +2166,6 @@ func (na *NetAPIStruct) NetTenantClassPatch(ctx context.Context, tenantID string
 		return keyStoreAbsentErr()
 	}
 	return mh.AIKeyService.PatchTenantClass(ctx, tenantID, patch)
-}
-
-// NetAPIKeyClassPatch - change the class fields of a key that the patch
-// names.
-func (na *NetAPIStruct) NetAPIKeyClassPatch(ctx context.Context, keyID string, patch cmn.AIClassPatch) error {
-	if mh.AIKeyService == nil {
-		return keyStoreAbsentErr()
-	}
-	return mh.AIKeyService.PatchAPIKeyClass(ctx, keyID, patch)
 }
 
 // NetAIObjectiveGet - list the objectives as the store holds them, or, while

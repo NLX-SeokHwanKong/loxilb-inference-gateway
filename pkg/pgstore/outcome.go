@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sync/atomic"
 
 	pgxconn "github.com/jackc/pgx/v5/pgconn"
 
@@ -68,9 +69,45 @@ import (
 // sentinel and the original), so a caller's own classification of the
 // cause, and the log line, keep working.
 
+// Plane names the store a write classification is about, for the
+// outcome-unknown counter: the API-key store (aikey) or the management
+// credential store (mgmt).
+type Plane string
+
+const (
+	PlaneAIKey Plane = "aikey"
+	PlaneMgmt  Plane = "mgmt"
+)
+
+// Planes lists every plane, so the counter's series exist from the start.
+var Planes = []Plane{PlaneAIKey, PlaneMgmt}
+
+var outcomeUnknownTotal [2]atomic.Uint64
+
+func planeIndex(p Plane) int {
+	if p == PlaneMgmt {
+		return 1
+	}
+	return 0
+}
+
+// OutcomeUnknownTotal is how many writes on plane have been classified as
+// outcome unknown since the process started: each is a statement the store
+// may have applied after the caller was told 504, and each has an audit
+// result record with reason store_outcome_unknown to reconcile it by.
+func OutcomeUnknownTotal(p Plane) uint64 { return outcomeUnknownTotal[planeIndex(p)].Load() }
+
 // ClassifyWriteErr maps the error of a store write to the write-outcome
 // contract. nil, *pgconn.PgError and sql.ErrNoRows pass through unchanged.
-func ClassifyWriteErr(err error) error {
+// It counts on the management plane; the API-key store's writes classify
+// through ClassifyWriteErrFor with their own plane.
+func ClassifyWriteErr(err error) error { return ClassifyWriteErrFor(PlaneMgmt, err) }
+
+// ClassifyWriteErrFor is ClassifyWriteErr counting the outcome-unknown
+// verdict on plane. An error that already carries a verdict is returned
+// unchanged and not counted again, so a transaction whose statement was
+// classified once is one event however many frames wrap it.
+func ClassifyWriteErrFor(plane Plane, err error) error {
 	if err == nil {
 		return nil
 	}
@@ -84,6 +121,7 @@ func ClassifyWriteErr(err error) error {
 	if notSent(err) {
 		return fmt.Errorf("%w: %w", cmn.ErrDBUnavailable, err)
 	}
+	outcomeUnknownTotal[planeIndex(plane)].Add(1)
 	return fmt.Errorf("%w: %w", cmn.ErrStoreOutcomeUnknown, err)
 }
 

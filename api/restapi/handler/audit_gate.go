@@ -759,7 +759,11 @@ func auditDetailFor(r *http.Request, route auditRoute, fields []string) *audit.M
 // auditOutcomeOf maps the status the handler answered with to the closed
 // reason vocabulary. A 503 is the gateway declining to perform the request
 // (the boot and restore freezes, operator maintenance, a store that is not
-// up) and so is an admission decision, not an upstream failure.
+// up) and so is an admission decision, not an upstream failure. A 504 on
+// this plane is the write-outcome contract: the only management handlers
+// that answer it are the store writes whose statement was sent and not
+// answered within the budget, so the record says store_outcome_unknown and
+// a reconciliation can find it.
 func auditOutcomeOf(status int, route auditRoute) audit.Outcome {
 	o := audit.Outcome{Status: status}
 	switch {
@@ -772,7 +776,7 @@ func auditOutcomeOf(status int, route auditRoute) audit.Outcome {
 	case status == http.StatusForbidden:
 		o.Reason = audit.ReasonAuthz
 	case status == http.StatusGatewayTimeout:
-		o.Reason = audit.ReasonTimeout
+		o.Reason = audit.ReasonStoreOutcomeUnknown
 	case status == http.StatusServiceUnavailable:
 		o.Reason = audit.ReasonAdmission
 	case status >= http.StatusInternalServerError:

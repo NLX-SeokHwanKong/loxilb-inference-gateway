@@ -104,30 +104,48 @@ var ErrInvalidKey = errors.New("invalid or disabled API key")
 var (
 	sqlInsertAPIKey = fmt.Sprintf(`INSERT INTO %s.api_keys`+
 		` (key_id, key_hash, tenant_id, name, allowed_models,`+
-		` rate_limit_rps, burst_size, tokens_per_min, created_at, expires_at, enabled)`+
-		` VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`, Schema)
+		` rate_limit_rps, burst_size, tokens_per_min, created_at, expires_at, enabled, client_op_id)`+
+		` VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`, Schema)
+
+	// The idempotent create's row lookup, locked for the rest of the
+	// transaction so two retries carrying the same operation id serialise
+	// on the row instead of both rotating it.
+	sqlSelectAPIKeyByClientOp = fmt.Sprintf(`SELECT key_id, key_hash, first_used_at`+
+		` FROM %s.api_keys WHERE tenant_id = $1 AND client_op_id = $2 FOR UPDATE`, Schema)
+
+	// A retried create rotates the secret of a row no request has ever
+	// authenticated with; the earlier secret was delivered to nobody.
+	sqlRotateAPIKeyHash = fmt.Sprintf(`UPDATE %s.api_keys SET key_hash = $1, created_at = $2`+
+		` WHERE key_id = $3`, Schema)
+
+	// Written once, by the data path, the first time a key created with an
+	// operation id authenticates: from then on a retry of its create is
+	// refused rather than rotating a secret somebody holds.
+	sqlMarkAPIKeyFirstUse = fmt.Sprintf(`UPDATE %s.api_keys SET first_used_at = $1`+
+		` WHERE key_id = $2 AND first_used_at IS NULL`, Schema)
 
 	// Auth path: only enabled keys may authenticate. This filter is a security
 	// invariant and must stay.
 	sqlSelectAPIKeyByHash = fmt.Sprintf(`SELECT key_id, key_hash, tenant_id, name, allowed_models,`+
-		` rate_limit_rps, burst_size, tokens_per_min, created_at, expires_at, enabled`+
+		` rate_limit_rps, burst_size, tokens_per_min, created_at, expires_at, enabled,`+
+		` client_op_id, first_used_at`+
 		` FROM %s.api_keys WHERE key_hash = $1 AND enabled = TRUE`, Schema)
 
 	// Management list/get paths: return keys regardless of enabled state so an
 	// operator can see, audit and re-enable a disabled key. The response
 	// carries the `enabled` field to distinguish them.
 	sqlSelectAPIKeysByTenant = fmt.Sprintf(`SELECT key_id, tenant_id, name, allowed_models,`+
-		` rate_limit_rps, burst_size, tokens_per_min, created_at, expires_at, enabled`+
+		` rate_limit_rps, burst_size, tokens_per_min, created_at, expires_at, enabled, client_op_id`+
 		` FROM %s.api_keys WHERE tenant_id = $1`, Schema)
 
 	sqlSelectKeyHashByID = fmt.Sprintf(`SELECT key_hash FROM %s.api_keys WHERE key_id = $1`, Schema)
 
 	sqlSelectAPIKeyByID = fmt.Sprintf(`SELECT key_id, tenant_id, name, allowed_models,`+
-		` rate_limit_rps, burst_size, tokens_per_min, created_at, expires_at, enabled`+
+		` rate_limit_rps, burst_size, tokens_per_min, created_at, expires_at, enabled, client_op_id`+
 		` FROM %s.api_keys WHERE key_id = $1`, Schema)
 
 	sqlSelectAllAPIKeys = fmt.Sprintf(`SELECT key_id, tenant_id, name, allowed_models,`+
-		` rate_limit_rps, burst_size, tokens_per_min, created_at, expires_at, enabled`+
+		` rate_limit_rps, burst_size, tokens_per_min, created_at, expires_at, enabled, client_op_id`+
 		` FROM %s.api_keys`, Schema)
 
 	sqlCountKnownTenants = fmt.Sprintf(`SELECT COUNT(*) FROM (`+
@@ -213,7 +231,7 @@ func lookupContext() (context.Context, context.CancelFunc) {
 // method returns from a statement goes through one of them, so the REST
 // layer's errors.Is checks see the shared sentinels rather than the
 // driver's types.
-func writeErr(err error) error { return pgstore.ClassifyWriteErr(err) }
+func writeErr(err error) error { return pgstore.ClassifyWriteErrFor(pgstore.PlaneAIKey, err) }
 func readErr(err error) error  { return pgstore.ClassifyReadErr(err) }
 
 // rateLimitCacheEntry holds tenant rate limit values cached in memory.
@@ -562,20 +580,90 @@ func validateSuppliedKey(raw string) error {
 // from the first half of the secret, as the MySQL implementation did, made a
 // public identifier a function of the credential it identifies.
 func (s *Service) CreateAPIKey(ctx context.Context, entry cmn.ApiKeyEntry) (string, string, error) {
+	created, err := s.CreateKey(ctx, entry)
+	return created.RawKey, created.KeyID, err
+}
+
+// ErrKeyAlreadyDelivered is the verdict of a retried create whose key has
+// already authenticated: the secret the first answer carried is in use, and
+// a second secret cannot be delivered for the same operation. The caller
+// holds the key_id in the error and reads the key back.
+var ErrKeyAlreadyDelivered = errors.New("API key has already authenticated: its secret cannot be delivered again")
+
+// KeyAlreadyDeliveredError carries the key the retry converged on.
+type KeyAlreadyDeliveredError struct{ KeyID string }
+
+func (e *KeyAlreadyDeliveredError) Error() string {
+	return fmt.Sprintf("%v (key_id %s)", ErrKeyAlreadyDelivered, e.KeyID)
+}
+func (e *KeyAlreadyDeliveredError) Unwrap() error { return ErrKeyAlreadyDelivered }
+
+// Bounds of a client operation id: long enough for a UUID with a prefix,
+// short enough to index, and the same character set a supplied key is held
+// to, for the same reason (it rides in a header too).
+const maxClientOpIDLen = 128
+
+func validateClientOpID(id string) error {
+	if len(id) > maxClientOpIDLen {
+		return cmn.NewValidationError("client_op_id", "client_op_id must be at most %d characters", maxClientOpIDLen)
+	}
+	for i := 0; i < len(id); i++ {
+		if id[i] < 0x21 || id[i] > 0x7e {
+			return cmn.NewValidationError("client_op_id", "client_op_id must contain only printable non-space ASCII characters")
+		}
+	}
+	return nil
+}
+
+// CreateKey creates an API key for a tenant and answers with the one
+// delivery of its secret.
+//
+// A create is not idempotent by nature: the server mints the secret, and a
+// create whose answer was lost (a 504: the statement was sent and the store
+// did not answer within the budget) may have left an enabled key whose
+// secret nobody holds. A caller that wants a safe retry sends a
+// client_op_id. The create then converges on one row per (tenant_id,
+// client_op_id):
+//
+//   - no such row: the key is created with the id recorded;
+//   - a row no request has ever authenticated with: this is the retry of a
+//     create whose answer was lost. The secret is minted again and the row's
+//     hash rotated to it, so the earlier secret, delivered to nobody, stops
+//     authenticating; the answer carries the SAME key_id, Reused=true. The
+//     row's other fields are the first request's and are not rewritten;
+//   - a row that has authenticated: KeyAlreadyDeliveredError (409). The
+//     secret in use is not rotated out from under its holder, and a second
+//     secret is not minted for the same operation.
+//
+// The lookup and the write run in one transaction with the row locked, so
+// two retries carrying the same id serialise on it. A create without an id
+// behaves as before.
+func (s *Service) CreateKey(ctx context.Context, entry cmn.ApiKeyEntry) (cmn.ApiKeyCreated, error) {
+	var none cmn.ApiKeyCreated
 	// A key's tenant_id reaches the QoS ladder as a bucket key exactly as an
 	// operator-set tenant row does, so it is held to the same rule. Without
 	// this, the key surface was a way to introduce an aliasing tenant that
 	// the rate-limit surfaces refuse.
 	if err := ValidateQoSIdentity("tenant_id", entry.TenantID); err != nil {
-		return "", "", err
+		return none, err
 	}
 	class, err := ValidateClassPolicy(entry.AIClassPolicy)
 	if err != nil {
-		return "", "", err
+		return none, err
+	}
+	if entry.ClientOpID != "" {
+		if err := validateClientOpID(entry.ClientOpID); err != nil {
+			return none, err
+		}
+	}
+	if entry.ApiKey != "" {
+		if err := validateSuppliedKey(entry.ApiKey); err != nil {
+			return none, err
+		}
 	}
 	db, err := s.store()
 	if err != nil {
-		return "", "", err
+		return none, err
 	}
 	ctx, cancel := s.opContext(ctx)
 	defer cancel()
@@ -585,21 +673,18 @@ func (s *Service) CreateAPIKey(ctx context.Context, entry cmn.ApiKeyEntry) (stri
 	idBytes := make([]byte, 16)
 	if _, err := rand.Read(idBytes); err != nil {
 		tk.LogIt(tk.LogError, "[AIKey] Failed to generate key id: %v\n", err)
-		return "", "", err
+		return none, err
 	}
 	keyID := hex.EncodeToString(idBytes)
 
 	var rawKey, returnedKey string
 	if entry.ApiKey != "" {
-		if err := validateSuppliedKey(entry.ApiKey); err != nil {
-			return "", "", err
-		}
 		rawKey = entry.ApiKey
 	} else {
 		secret := make([]byte, 32)
 		if _, err := rand.Read(secret); err != nil {
 			tk.LogIt(tk.LogError, "[AIKey] Failed to generate key material: %v\n", err)
-			return "", "", err
+			return none, err
 		}
 		rawKey = apiKeyPrefix + hex.EncodeToString(secret)
 		returnedKey = rawKey
@@ -611,44 +696,110 @@ func (s *Service) CreateAPIKey(ctx context.Context, entry cmn.ApiKeyEntry) (stri
 	s.forgetNegative(keyHash)
 	allowedModels := strings.Join(entry.AllowedModels, ",")
 	now := time.Now().UTC()
+	clientOpID := sql.NullString{String: entry.ClientOpID, Valid: entry.ClientOpID != ""}
 
-	if _, err := db.ExecContext(ctx, sqlInsertAPIKey,
-		keyID, keyHash, entry.TenantID, entry.Name,
-		allowedModels, entry.RateLimitRPS, entry.BurstSize, entry.TokensPerMin,
-		now, entry.ExpiresAt, entry.Enabled); err != nil {
-		// Only an imported credential colliding with the credential-hash index
-		// is a caller conflict. ID/generated-key collisions remain server errors.
-		// Do not expose the driver Detail: it may contain the credential hash.
-		var unique *pgconn.PgError
-		if entry.ApiKey != "" && errors.As(err, &unique) && unique.Code == "23505" && unique.ConstraintName == "uq_api_keys_key_hash" {
-			return "", "", cmn.NewConflictError("imported API key is already registered")
+	var out cmn.ApiKeyCreated
+	var rotatedFrom string // the hash a retry replaced, to evict
+	inserted := false
+	err = inTx(ctx, db, func(tx stmtRunner) error {
+		if clientOpID.Valid {
+			var existingID, existingHash string
+			var firstUsed sql.NullTime
+			err := tx.QueryRowContext(ctx, sqlSelectAPIKeyByClientOp, entry.TenantID, entry.ClientOpID).
+				Scan(&existingID, &existingHash, &firstUsed)
+			switch {
+			case err == nil:
+				if firstUsed.Valid {
+					return &KeyAlreadyDeliveredError{KeyID: existingID}
+				}
+				if _, err := tx.ExecContext(ctx, sqlRotateAPIKeyHash, keyHash, now, existingID); err != nil {
+					tk.LogIt(tk.LogError, "[AIKey] Failed to rotate the secret of key %s on a retried create: %v\n", existingID, err)
+					return writeErr(err)
+				}
+				out = cmn.ApiKeyCreated{RawKey: returnedKey, KeyID: existingID, Reused: true}
+				rotatedFrom = existingHash
+				return nil
+			case errors.Is(err, sql.ErrNoRows):
+				// First time this operation is seen: create.
+			default:
+				// Nothing has been written at this point, so a failure here
+				// is a read's: the store could not be asked.
+				tk.LogIt(tk.LogError, "[AIKey] Failed to look up client_op_id for tenant %s: %v\n", entry.TenantID, err)
+				return readErr(err)
+			}
 		}
-		tk.LogIt(tk.LogError, "[AIKey] Failed to create API key for tenant %s: %v\n", entry.TenantID, err)
-		return "", "", writeErr(err)
+
+		if _, err := tx.ExecContext(ctx, sqlInsertAPIKey,
+			keyID, keyHash, entry.TenantID, entry.Name,
+			allowedModels, entry.RateLimitRPS, entry.BurstSize, entry.TokensPerMin,
+			now, entry.ExpiresAt, entry.Enabled, clientOpID); err != nil {
+			// Only an imported credential colliding with the credential-hash
+			// index is a caller conflict, as is a second create racing this
+			// one on the same operation id (the lock above serialises the
+			// retries that find a row; two that find none both insert, and
+			// the index refuses the second). ID/generated-key collisions
+			// remain server errors. Do not expose the driver Detail: it may
+			// contain the credential hash.
+			var unique *pgconn.PgError
+			if errors.As(err, &unique) && unique.Code == "23505" {
+				switch {
+				case entry.ApiKey != "" && unique.ConstraintName == "uq_api_keys_key_hash":
+					return cmn.NewConflictError("imported API key is already registered")
+				case unique.ConstraintName == "uq_api_keys_client_op":
+					return cmn.NewConflictError("a create with this client_op_id is being applied: read the key back")
+				}
+			}
+			tk.LogIt(tk.LogError, "[AIKey] Failed to create API key for tenant %s: %v\n", entry.TenantID, err)
+			return writeErr(err)
+		}
+
+		// The class fields have their own statement, in the same
+		// transaction: a key asked for with a class never exists without it.
+		if !class.IsZero() {
+			if _, err := tx.ExecContext(ctx, sqlUpdateKeyClass, keyID, class.PriorityClass, class.DefaultObjective,
+				joinList(class.AllowedObjectives)); err != nil {
+				tk.LogIt(tk.LogError, "[AIKey] Failed to set class of new key %s: %v\n", keyID, err)
+				return writeErr(err)
+			}
+		}
+		inserted = true
+		out = cmn.ApiKeyCreated{RawKey: returnedKey, KeyID: keyID}
+		return nil
+	})
+	if err != nil {
+		return none, err
 	}
 
-	// The class fields have their own statement. A key that was asked for
-	// with a class and would exist without it is not left behind: its
-	// requests would run above the class its operator set.
-	if !class.IsZero() {
-		if _, err := db.ExecContext(ctx, sqlUpdateKeyClass, keyID, class.PriorityClass, class.DefaultObjective,
-			joinList(class.AllowedObjectives)); err != nil {
-			tk.LogIt(tk.LogError, "[AIKey] Failed to set class of new key %s, removing it: %v\n", keyID, err)
-			if _, dErr := db.ExecContext(ctx, sqlDeleteAPIKeyByID, keyID); dErr != nil {
-				tk.LogIt(tk.LogError, "[AIKey] New key %s could not be removed either: it exists without its class\n", keyID)
-			}
-			// The class statement's own outcome is what the caller is told:
-			// a deadline after it was sent means the key may exist, with or
-			// without its class, and the removal above may or may not have
-			// reached the server either. "Not written" would be a guess.
-			return "", "", writeErr(err)
-		}
+	if rotatedFrom != "" && rotatedFrom != keyHash {
+		// The earlier secret may have been cached by a validation on this
+		// node or a peer; it has stopped being valid.
+		s.evictAndFanOut(KeyInvalidation{KeyHash: rotatedFrom, KeyID: out.KeyID})
+	}
+	if inserted && !class.IsZero() {
 		s.refreshClassesAfterWrite()
 	}
 
-	tk.LogIt(tk.LogInfo, "[AIKey] Created API key %s for tenant %s (supplied=%t)\n",
-		keyID, entry.TenantID, entry.ApiKey != "")
-	return returnedKey, keyID, nil
+	tk.LogIt(tk.LogInfo, "[AIKey] Created API key %s for tenant %s (supplied=%t, reused=%t)\n",
+		out.KeyID, entry.TenantID, entry.ApiKey != "", out.Reused)
+	return out, nil
+}
+
+// markFirstUse records, off the proxy worker, that a key created with an
+// operation id has authenticated once. The statement is a no-op after the
+// first time, and its failure costs nothing but the next retry of that
+// create being allowed to rotate a secret that is in use; it is logged.
+func (s *Service) markFirstUse(keyID string) {
+	go func() {
+		db, err := s.store()
+		if err != nil {
+			return
+		}
+		ctx, cancel := s.opContext(context.Background())
+		defer cancel()
+		if _, err := db.ExecContext(ctx, sqlMarkAPIKeyFirstUse, time.Now().UTC(), keyID); err != nil {
+			tk.LogIt(tk.LogWarning, "[AIKey] First use of key %s not recorded: %v\n", keyID, err)
+		}
+	}()
 }
 
 // ValidateAPIKey checks whether rawKey is a valid, enabled API key.
@@ -682,12 +833,13 @@ func (s *Service) ValidateAPIKey(rawKey string) (*cmn.ApiKeyEntry, error) {
 	// above never gets here, so cached keys keep validating through a stall.
 	var entry cmn.ApiKeyEntry
 	var allowedModels string
-	var expiresAt sql.NullTime
+	var expiresAt, firstUsed sql.NullTime
+	var clientOpID sql.NullString
 	err := s.dataPathRead(func(ctx context.Context, db DBTX) error {
 		return db.QueryRowContext(ctx, sqlSelectAPIKeyByHash, keyHash).Scan(
 			&entry.KeyID, &entry.KeyHash, &entry.TenantID, &entry.Name,
 			&allowedModels, &entry.RateLimitRPS, &entry.BurstSize, &entry.TokensPerMin,
-			&entry.CreatedAt, &expiresAt, &entry.Enabled)
+			&entry.CreatedAt, &expiresAt, &entry.Enabled, &clientOpID, &firstUsed)
 	})
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -710,11 +862,18 @@ func (s *Service) ValidateAPIKey(rawKey string) (*cmn.ApiKeyEntry, error) {
 		entry.ExpiresAt = &t
 	}
 
+	entry.ClientOpID = clientOpID.String
+
 	s.Cache.Set(cacheKeyForHash(keyHash), &entry, CacheExpirationTime*time.Minute)
 	// The row carries the key's limits, so the by-ID view the quota stages
 	// read is written now: a key validated here always has one to fall back
 	// on while the store is away.
 	s.rememberKeySummary(entry.KeyID, summaryOfEntry(&entry))
+	// A key created with an operation id has now authenticated: its create
+	// may no longer be retried into a new secret.
+	if clientOpID.Valid && !firstUsed.Valid {
+		s.markFirstUse(entry.KeyID)
+	}
 
 	return &entry, nil
 }
@@ -776,36 +935,7 @@ func (s *Service) DeleteAPIKey(ctx context.Context, keyID string) error {
 // and on peers, because a patch that disables a key is a revocation by
 // another name.
 func (s *Service) PatchAPIKey(ctx context.Context, keyID string, allowedModels []string, enabled *bool) error {
-	db, err := s.store()
-	if err != nil {
-		return err
-	}
-	ctx, cancel := s.opContext(ctx)
-	defer cancel()
-	keyHash, err := s.keyHashByID(ctx, db, keyID)
-	if err != nil {
-		return err
-	}
-
-	if allowedModels != nil {
-		models := strings.Join(allowedModels, ",")
-		if _, err = db.ExecContext(ctx, sqlUpdateAPIKeyAllowedModels, models, keyID); err != nil {
-			tk.LogIt(tk.LogError, "[AIKey] Failed to patch allowed_models for key %s: %v\n", keyID, err)
-			return writeErr(err)
-		}
-	}
-
-	if enabled != nil {
-		if _, err = db.ExecContext(ctx, sqlUpdateAPIKeyEnabled, *enabled, keyID); err != nil {
-			tk.LogIt(tk.LogError, "[AIKey] Failed to patch enabled for key %s: %v\n", keyID, err)
-			return writeErr(err)
-		}
-	}
-
-	s.evictAndFanOut(KeyInvalidation{KeyHash: keyHash, KeyID: keyID})
-
-	tk.LogIt(tk.LogInfo, "[AIKey] Patched API key %s\n", keyID)
-	return nil
+	return s.PatchAPIKeyAll(ctx, keyID, cmn.ApiKeyPatch{AllowedModels: allowedModels, Enabled: enabled})
 }
 
 // keyHashByID resolves a key id to its stored hash, which is what the cache
@@ -814,7 +944,7 @@ func (s *Service) PatchAPIKey(ctx context.Context, keyID string, allowedModels [
 // It takes the pool rather than fetching one, so that the lookup and the
 // mutation that follows it run against the same store even if the reconnect
 // tick replaces the pool in between.
-func (s *Service) keyHashByID(ctx context.Context, db DBTX, keyID string) (string, error) {
+func (s *Service) keyHashByID(ctx context.Context, db stmtRunner, keyID string) (string, error) {
 	var keyHash string
 	err := db.QueryRowContext(ctx, sqlSelectKeyHashByID, keyID).Scan(&keyHash)
 	if err != nil {
@@ -1054,11 +1184,12 @@ func (s *Service) GetAPIKeyByID(keyID string) (*cmn.ApiKeySummary, error) {
 	var key cmn.ApiKeySummary
 	var allowedModels string
 	var expiresAt sql.NullTime
+	var clientOpID sql.NullString
 	err := s.dataPathRead(func(ctx context.Context, db DBTX) error {
 		return db.QueryRowContext(ctx, sqlSelectAPIKeyByID, keyID).Scan(
 			&key.KeyID, &key.TenantID, &key.Name,
 			&allowedModels, &key.RateLimitRPS, &key.BurstSize, &key.TokensPerMin,
-			&key.CreatedAt, &expiresAt, &key.Enabled)
+			&key.CreatedAt, &expiresAt, &key.Enabled, &clientOpID)
 	})
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -1084,6 +1215,7 @@ func (s *Service) GetAPIKeyByID(keyID string) (*cmn.ApiKeySummary, error) {
 		t := expiresAt.Time
 		key.ExpiresAt = &t
 	}
+	key.ClientOpID = clientOpID.String
 
 	s.rememberKeySummary(keyID, &key)
 
@@ -1132,11 +1264,12 @@ func (s *Service) ListAPIKeys(ctx context.Context, tenantID string) ([]cmn.ApiKe
 		var key cmn.ApiKeySummary
 		var allowedModels string
 		var expiresAt sql.NullTime
+		var clientOpID sql.NullString
 
 		if err := rows.Scan(
 			&key.KeyID, &key.TenantID, &key.Name,
 			&allowedModels, &key.RateLimitRPS, &key.BurstSize, &key.TokensPerMin,
-			&key.CreatedAt, &expiresAt, &key.Enabled); err != nil {
+			&key.CreatedAt, &expiresAt, &key.Enabled, &clientOpID); err != nil {
 			tk.LogIt(tk.LogError, "[AIKey] Failed to scan API key row: %v\n", err)
 			return nil, readErr(err)
 		}
@@ -1148,6 +1281,7 @@ func (s *Service) ListAPIKeys(ctx context.Context, tenantID string) ([]cmn.ApiKe
 			t := expiresAt.Time
 			key.ExpiresAt = &t
 		}
+		key.ClientOpID = clientOpID.String
 
 		keys = append(keys, key)
 	}

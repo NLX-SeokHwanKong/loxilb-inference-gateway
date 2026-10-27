@@ -17,7 +17,7 @@ import (
 const PostConfigAiApikeyCreatedCode int = 201
 
 /*
-PostConfigAiApikeyCreated Created
+PostConfigAiApikeyCreated Created (reused=true when a retry converged on the row an earlier request with the same client_op_id created)
 
 swagger:response postConfigAiApikeyCreated
 */
@@ -197,7 +197,7 @@ func (o *PostConfigAiApikeyForbidden) WriteResponse(rw http.ResponseWriter, prod
 const PostConfigAiApikeyConflictCode int = 409
 
 /*
-PostConfigAiApikeyConflict Imported API key is already registered
+PostConfigAiApikeyConflict Imported API key is already registered; or, with a client_op_id, the key this operation created has already authenticated (code api_key_already_delivered, the key_id in the result): its secret is not delivered again. Delete and recreate the key to issue a new one. A concurrent create carrying the same client_op_id is also 409: read the key back.
 
 swagger:response postConfigAiApikeyConflict
 */
@@ -332,7 +332,7 @@ func (o *PostConfigAiApikeyServiceUnavailable) WriteResponse(rw http.ResponseWri
 const PostConfigAiApikeyGatewayTimeoutCode int = 504
 
 /*
-PostConfigAiApikeyGatewayTimeout Write outcome unknown (code ai_key_store_outcome_unknown). The statement was handed to the API-key store and the store did not answer within the operation budget; the store may still apply it when it resumes. Not a 503: nothing says the write did not happen. Read the resource back (GET) before deciding whether to retry; a blind retry of a non-idempotent write can create a second row.
+PostConfigAiApikeyGatewayTimeout Write outcome unknown (code ai_key_store_outcome_unknown). The statement was handed to the API-key store and the store did not answer within the operation budget; the store may still apply it when it resumes. Not a 503: nothing says the write did not happen. Read the resource back (GET, filtering the listing by tenant_id and matching client_op_id) before deciding whether to retry; a blind retry without a client_op_id can create a second row, a retry with the same client_op_id converges on one.
 
 swagger:response postConfigAiApikeyGatewayTimeout
 */

@@ -50,19 +50,19 @@ func TestAbsentKeyStoreDistinguishesUnconfiguredFromUnreachable(t *testing.T) {
 	// that returns the bare sentinel would pass a single-hook test.
 	calls := map[string]func() error{
 		"NetAPIKeyCreate": func() error {
-			_, _, err := na.NetAPIKeyCreate(context.Background(), cmn.ApiKeyEntry{TenantID: "t"})
+			_, err := na.NetAPIKeyCreate(context.Background(), cmn.ApiKeyEntry{TenantID: "t"})
 			return err
 		},
 		"NetAPIKeyList":         func() error { _, err := na.NetAPIKeyList(context.Background(), ""); return err },
 		"NetAPIKeyGet":          func() error { _, err := na.NetAPIKeyGet(context.Background(), "k"); return err },
 		"NetAPIKeyRevoke":       func() error { return na.NetAPIKeyRevoke(context.Background(), "k") },
 		"NetAPIKeyDelete":       func() error { return na.NetAPIKeyDelete(context.Background(), "k") },
-		"NetAPIKeyPatch":        func() error { return na.NetAPIKeyPatch(context.Background(), "k", nil, &enabled) },
+		"NetAPIKeyPatch":        func() error { return na.NetAPIKeyPatch(context.Background(), "k", cmn.ApiKeyPatch{Enabled: &enabled}) },
 		"NetTenantRateLimitSet": func() error { return na.NetTenantRateLimitSet(context.Background(), "t", 1, 1, 1, nil) },
 		"NetTenantRateLimitGet": func() error { _, err := na.NetTenantRateLimitGet(context.Background(), "t"); return err },
 		"NetAPIKeyRateLimitPatch": func() error {
 			one := 1
-			return na.NetAPIKeyRateLimitPatch(context.Background(), "k", &one, nil, nil)
+			return na.NetAPIKeyPatch(context.Background(), "k", cmn.ApiKeyPatch{RateLimitRPS: &one})
 		},
 		"NetUserRateLimitSet": func() error {
 			return na.NetUserRateLimitSet(context.Background(), cmn.UserRateLimitEntry{TenantID: "t", UserID: "u", RPS: 1})
@@ -88,7 +88,7 @@ func TestAbsentKeyStoreDistinguishesUnconfiguredFromUnreachable(t *testing.T) {
 			return na.NetTenantClassPatch(context.Background(), "t", cmn.AIClassPatch{PriorityClass: &classStd})
 		},
 		"NetAPIKeyClassPatch": func() error {
-			return na.NetAPIKeyClassPatch(context.Background(), "k", cmn.AIClassPatch{PriorityClass: &classStd})
+			return na.NetAPIKeyPatch(context.Background(), "k", cmn.ApiKeyPatch{Class: cmn.AIClassPatch{PriorityClass: &classStd}})
 		},
 	}
 

@@ -182,6 +182,11 @@ MATRIX = [
             "pair; the account is the subject and the password never leaves the request; the loopback bootstrap is marked on actor and detail; fail-closed",
             assertions=["TM-10", "T3-3a", "T3-3b", "T11-1c", "T20-0a", "T20-1a", "T20-1b"],
             unit=["TestAuditEmitUserCreateBootstrap", "TestAuditEmitUserCreateWithCredential"], twin="T3"),
+        req("1a", ["username", "role"],
+            "a write the store was handed and never answered gets a result with reason store_outcome_unknown and status 504, never a synthesised ok and never 'not written'",
+            assertions=["T21-1a", "T21-1b", "T21-2a", "T21-2b", "T21-2c", "T21-2d", "T21-2e"],
+            note="the gateway lives through the stall (T20 is the crash arm); the write lands when the store "
+                 "resumes and the identical retry is refused, which is what the reason is for"),
     ]),
     entry("mgmt.user.update", "M", [
         req("1a", ["username", "changed_fields", "role_from", "role_to"],

@@ -95,6 +95,50 @@ func hashToken(raw string) string {
 // change.
 var ErrUserNotFound = errors.New("User not found")
 
+// ErrPasswordPolicy is what every password-policy refusal unwraps to. The
+// refusals keep their own wording (the REST layer maps "password must …" to
+// 400); the sentinel is how the retry wrapper recognises them as verdicts.
+var ErrPasswordPolicy = errors.New("password policy refused")
+
+// policyError is one password-policy refusal: its message is the rule that
+// refused, and it unwraps to ErrPasswordPolicy.
+type policyError struct{ msg string }
+
+func (e *policyError) Error() string        { return e.msg }
+func (e *policyError) Is(target error) bool { return target == ErrPasswordPolicy }
+func policyErr(msg string) error            { return &policyError{msg: msg} }
+
+// isVerdict reports whether err is an answer rather than a failure to get
+// one: the row does not exist, the name is taken, the credential is wrong,
+// the role or the password was refused. A verdict is as true on the fifth
+// attempt as on the first, so it is never retried; and it is the caller's
+// own decision, not the store's, so it is never classified as a store
+// outcome. Before this, a duplicate username was retried three times and
+// then reported as "outcome unknown" (504) because the write-outcome
+// classifier was handed an error that no store had produced.
+func isVerdict(err error) bool {
+	var invalid *cmn.ValidationError
+	var conflict *cmn.ConflictError
+	switch {
+	case err == nil:
+		return false
+	case errors.Is(err, sql.ErrNoRows),
+		errors.Is(err, ErrUserNotFound),
+		errors.Is(err, ErrUsernameExists),
+		errors.Is(err, ErrInvalidToken),
+		errors.Is(err, ErrTokenExpired),
+		errors.Is(err, cmn.ErrTokenNotFound),
+		errors.Is(err, ErrBootstrapClosed),
+		errors.Is(err, cmn.ErrInvalidRole),
+		errors.Is(err, ErrPasswordPolicy),
+		errors.Is(err, bcrypt.ErrMismatchedHashAndPassword),
+		errors.As(err, &invalid),
+		errors.As(err, &conflict):
+		return true
+	}
+	return false
+}
+
 // retryable reports whether an operation is worth repeating.
 //
 // The default policy for the store: repeat transport and availability
@@ -103,18 +147,7 @@ var ErrUserNotFound = errors.New("User not found")
 // and retrying them turns a cheap negative into an expensive one. A login with
 // an unknown username used to cost five attempts and five sleeps.
 func retryableDBError(err error) bool {
-	switch {
-	case err == nil:
-		return false
-	case errors.Is(err, sql.ErrNoRows),
-		errors.Is(err, ErrUserNotFound),
-		errors.Is(err, ErrInvalidToken),
-		errors.Is(err, ErrTokenExpired),
-		errors.Is(err, cmn.ErrTokenNotFound),
-		errors.Is(err, ErrBootstrapClosed):
-		return false
-	}
-	return true
+	return err != nil && !isVerdict(err)
 }
 
 // RetryOperation retries operation until it succeeds, until retryable says the
@@ -176,16 +209,16 @@ func retryOperation(ctx context.Context, operation func() error, maxRetries int,
 		}
 		delay *= AuthRetryBackoff
 	}
-	// The budget is spent. Say what is known in the taxonomy the callers
-	// branch on, so that a request whose credential was never examined is
-	// answered 503 rather than 401, a store read that never happened is not
-	// rendered as 500, and a write the server may still apply is reported
-	// as outcome unknown rather than as not written.
-	//
-	// The classifier leaves application outcomes alone: `retryable` returns
-	// true for anything that is not on a short terminal list, so it also
-	// covers outcomes such as a duplicate username, and reporting one of
-	// those as a database outage would be worse than the bug this fixes.
+	// The budget is spent on a failure to get an answer (a verdict returned
+	// above, at the first attempt, as it was made). Say what is known in the
+	// taxonomy the callers branch on, so that a request whose credential was
+	// never examined is answered 503 rather than 401, a store read that never
+	// happened is not rendered as 500, and a write the server may still apply
+	// is reported as outcome unknown rather than as not written. The
+	// operations classify their own store errors at the statement; this is
+	// the net under them, and it must only ever see a store's failure: an
+	// answer that reaches it is reported as "outcome unknown", which is how a
+	// duplicate username came to be answered 504.
 	return classify(err)
 }
 
@@ -208,7 +241,7 @@ func (s *UserService) ValidateUser(ctx context.Context, username, password strin
 				return ErrUserNotFound
 			}
 			tk.LogIt(tk.LogError, "Failed to query user: %v\n", err.Error())
-			return err
+			return pgstore.ClassifyReadErr(err)
 		}
 		return nil
 	}, AuthMaxRetries, AuthRetryDelay, retryableDBError)
@@ -287,13 +320,13 @@ func (s *UserService) ValidateUser(ctx context.Context, username, password strin
 // another account's current password was correct.
 func (s *UserService) validatePasswordPolicy(username, password string) error {
 	if len(password) < MinPasswordLength {
-		err := errors.New("password must be at least 9 characters long")
+		err := policyErr("password must be at least 9 characters long")
 		tk.LogIt(tk.LogError, "%v\n", err.Error())
 		return err
 	}
 
 	if password == username {
-		err := errors.New("password must not be the same as the username")
+		err := policyErr("password must not be the same as the username")
 		tk.LogIt(tk.LogError, "%v\n", err.Error())
 		return err
 	}
@@ -318,7 +351,7 @@ func (s *UserService) validatePasswordPolicy(username, password string) error {
 			if char == prevChar {
 				repeatCount++
 				if repeatCount >= 2 {
-					err := errors.New("password must not contain the same character more than twice in a row")
+					err := policyErr("password must not contain the same character more than twice in a row")
 					tk.LogIt(tk.LogError, "%v\n", err.Error())
 					return err
 				}
@@ -331,22 +364,22 @@ func (s *UserService) validatePasswordPolicy(username, password string) error {
 	}
 
 	if !hasUpper {
-		err := errors.New("password must contain at least one uppercase letter")
+		err := policyErr("password must contain at least one uppercase letter")
 		tk.LogIt(tk.LogError, "%v\n", err.Error())
 		return err
 	}
 	if !hasLower {
-		err := errors.New("password must contain at least one lowercase letter")
+		err := policyErr("password must contain at least one lowercase letter")
 		tk.LogIt(tk.LogError, "%v\n", err.Error())
 		return err
 	}
 	if !hasNumber {
-		err := errors.New("password must contain at least one number")
+		err := policyErr("password must contain at least one number")
 		tk.LogIt(tk.LogError, "%v\n", err.Error())
 		return err
 	}
 	if !hasSpecial {
-		err := errors.New("password must contain at least one special character")
+		err := policyErr("password must contain at least one special character")
 		tk.LogIt(tk.LogError, "%v\n", err.Error())
 		return err
 	}
@@ -386,7 +419,7 @@ func (s *UserService) validatePassword(ctx context.Context, username, password s
 	} else {
 		err = bcrypt.CompareHashAndPassword([]byte(previousPassword), []byte(password))
 		if err == nil {
-			err := errors.New("password must not be the same as the previous password")
+			err := policyErr("password must not be the same as the previous password")
 			tk.LogIt(tk.LogError, "%v\n", err.Error())
 			return err
 		}
@@ -435,7 +468,7 @@ func (s *UserService) ValidateToken(ctx context.Context, token string) (interfac
 				return cmn.ErrTokenNotFound
 			}
 			tk.LogIt(tk.LogError, "Failed to query token: %v\n", err.Error())
-			return err // Other errors
+			return pgstore.ClassifyReadErr(err)
 		}
 		return nil
 	}, AuthMaxRetries, AuthRetryDelay, retryableDBError)

@@ -373,7 +373,7 @@ func TestLastKnownValuesServeUnderAnOpenCircuit(t *testing.T) {
 
 	// A validated key: the store answers the by-hash row once.
 	created := time.Unix(1_700_000_000, 0).UTC()
-	db.push(scriptAnswer{values: []driver.Value{"kid-1", hashKey("live-key"), "t-1", "name", "m1,m2", int64(7), int64(3), int64(600), created, nil, true}})
+	db.push(scriptAnswer{values: []driver.Value{"kid-1", hashKey("live-key"), "t-1", "name", "m1,m2", int64(7), int64(3), int64(600), created, nil, true, nil, nil}})
 	entry, err := svc.ValidateAPIKey("live-key")
 	if err != nil || entry.KeyID != "kid-1" {
 		t.Fatalf("validate: %v %v", entry, err)

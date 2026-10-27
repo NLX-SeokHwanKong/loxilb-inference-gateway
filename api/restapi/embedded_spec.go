@@ -207,6 +207,10 @@ func init() {
           "format": "int64",
           "type": "integer"
         },
+        "client_op_id": {
+          "description": "Optional idempotency handle, at most 128 printable non-space ASCII characters, unique per tenant (a UUID the client minted for this create). A retry carrying the same value converges on the row the first request created instead of making a second key: while that key has never authenticated, its secret is minted again and delivered with the same key_id (reused=true); once it has, 409 api_key_already_delivered. Also accepted as the Idempotency-Key header. Absent, the create behaves as before and a retry after a 504 must first read the listing back.",
+          "type": "string"
+        },
         "default_objective": {
           "description": "The objective a request with this key gets when it names none, or one it may not use. Counts only when the tenant's allowed_objectives hold it.",
           "type": "string"
@@ -255,7 +259,7 @@ func init() {
       "type": "object"
     },
     "ApiKeyCreateResponse": {
-      "description": "HTTP 201 creation result. key_id is the management handle. raw_key contains a secret only for generated credentials and is currently empty for imports. Protect generated secrets from logs; subsequent reads expose metadata only.",
+      "description": "HTTP 201 creation result. key_id is the management handle. raw_key contains a secret only for generated credentials and is currently empty for imports. Protect generated secrets from logs; subsequent reads expose metadata only. reused=true says a retry with the same client_op_id converged on the row an earlier request created: same key_id, a new secret, the earlier secret no longer authenticates.",
       "properties": {
         "key_id": {
           "description": "Unique identifier of the created API key",
@@ -264,6 +268,11 @@ func init() {
         "raw_key": {
           "description": "Generated plaintext credential returned only at creation; currently an empty string, not omission, when the caller imported api_key.",
           "type": "string"
+        },
+        "reused": {
+          "description": "True when this answer is a retry's, converged on the row an earlier request with the same client_op_id created; the secret in raw_key is new and the one that answer carried no longer authenticates.",
+          "type": "boolean",
+          "x-omitempty": false
         }
       },
       "required": [
@@ -294,6 +303,11 @@ func init() {
           "description": "Total request-bucket capacity, not additional capacity above RPS. Nonpositive burst uses per-key RPS; nonpositive RPS skips that limiter.",
           "format": "int64",
           "type": "integer"
+        },
+        "client_op_id": {
+          "description": "The idempotency handle the create carried, when it carried one. It is how a key left by a create whose answer was lost (504) is found in the listing and reconciled.",
+          "type": "string",
+          "x-omitempty": true
         },
         "created_at": {
           "description": "Timestamp when the key was created",
@@ -8577,7 +8591,7 @@ func init() {
       "type": "object"
     },
     "TenantRateLimitMod": {
-      "description": "POST replaces aggregate rps, tokens_per_min, and burst_pct; omission becomes zero, not preservation. Supplied model_limits are individual upserts or removals; omitted/empty model_limits preserves existing model rows. Aggregate and model writes are sequential, not one transaction, so failure can leave partial changes. Blank identifiers and malformed model entries are not consistently rejected as 400. Configuration alone does not enable enforcement on a service. The class fields (priority_class, default_objective, allowed_objectives) are written by their own statement and only when the body names one of them, so a POST of limits leaves the tenant's class as it is. A body that names a class field and carries no limit (rps, tokens_per_min and burst_pct absent or zero, no model_limits) writes the class only and leaves the limits as they are.",
+      "description": "POST replaces aggregate rps, tokens_per_min, and burst_pct; omission becomes zero, not preservation. Supplied model_limits are individual upserts or removals; omitted/empty model_limits preserves existing model rows. The aggregate row and the model rows are written in one transaction: the body is applied whole or not at all, and a 504 (outcome unknown) means the whole body may land. Blank identifiers and malformed model entries are not consistently rejected as 400. Configuration alone does not enable enforcement on a service. The class fields (priority_class, default_objective, allowed_objectives) are written by their own statement and only when the body names one of them, so a POST of limits leaves the tenant's class as it is. A body that names a class field and carries no limit (rps, tokens_per_min and burst_pct absent or zero, no model_limits) writes the class only and leaves the limits as they are.",
       "properties": {
         "allowed_objectives": {
           "description": "The objectives a request of this tenant may raise itself to with the x-llm-d-inference-objective header, and the body tiers it may raise itself to by service_tier, named tier:priority, tier:fast and tier:flex; at most 64. Omitted leaves the stored list; an empty array clears it, and then only a hint at or below what the request gets without one is honoured (the list governs raises only).",
@@ -9946,9 +9960,16 @@ func init() {
         ]
       },
       "post": {
-        "description": "Creates a new API key for a tenant. The raw key is returned ONLY in this response.",
+        "description": "Creates a new API key for a tenant. The raw key is returned ONLY in this response. A create is not idempotent by itself: an answer lost to a store stall (504) may have left an enabled key whose secret nobody holds, and a blind retry creates a second one. Send client_op_id (or the Idempotency-Key header) and a retry converges on one row per (tenant_id, client_op_id): while the key has never authenticated the secret is minted again and delivered with the same key_id and reused=true; once it has, the retry answers 409 api_key_already_delivered naming the key_id. The row's other fields are the first request's.",
         "operationId": "postConfigAiApikey",
         "parameters": [
+          {
+            "description": "Same meaning as client_op_id in the body; the body field wins when both are sent. At most 128 printable non-space ASCII characters.",
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "type": "string"
+          },
           {
             "in": "body",
             "name": "body",
@@ -9960,7 +9981,7 @@ func init() {
         ],
         "responses": {
           "201": {
-            "description": "Created",
+            "description": "Created (reused=true when a retry converged on the row an earlier request with the same client_op_id created)",
             "schema": {
               "$ref": "#/definitions/ApiKeyCreateResponse"
             }
@@ -9984,7 +10005,7 @@ func init() {
             }
           },
           "409": {
-            "description": "Imported API key is already registered",
+            "description": "Imported API key is already registered; or, with a client_op_id, the key this operation created has already authenticated (code api_key_already_delivered, the key_id in the result): its secret is not delivered again. Delete and recreate the key to issue a new one. A concurrent create carrying the same client_op_id is also 409: read the key back.",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -10002,7 +10023,7 @@ func init() {
             }
           },
           "504": {
-            "description": "Write outcome unknown (code ai_key_store_outcome_unknown). The statement was handed to the API-key store and the store did not answer within the operation budget; the store may still apply it when it resumes. Not a 503: nothing says the write did not happen. Read the resource back (GET) before deciding whether to retry; a blind retry of a non-idempotent write can create a second row.",
+            "description": "Write outcome unknown (code ai_key_store_outcome_unknown). The statement was handed to the API-key store and the store did not answer within the operation budget; the store may still apply it when it resumes. Not a 503: nothing says the write did not happen. Read the resource back (GET, filtering the listing by tenant_id and matching client_op_id) before deciding whether to retry; a blind retry without a client_op_id can create a second row, a retry with the same client_op_id converges on one.",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -23385,13 +23406,19 @@ func init() {
         }
       },
       "post": {
-        "description": "Creates a new API key for a tenant. The raw key is returned ONLY in this response.",
+        "description": "Creates a new API key for a tenant. The raw key is returned ONLY in this response. A create is not idempotent by itself: an answer lost to a store stall (504) may have left an enabled key whose secret nobody holds, and a blind retry creates a second one. Send client_op_id (or the Idempotency-Key header) and a retry converges on one row per (tenant_id, client_op_id): while the key has never authenticated the secret is minted again and delivered with the same key_id and reused=true; once it has, the retry answers 409 api_key_already_delivered naming the key_id. The row's other fields are the first request's.",
         "tags": [
           "ai"
         ],
         "summary": "Create a new API key",
         "operationId": "postConfigAiApikey",
         "parameters": [
+          {
+            "type": "string",
+            "description": "Same meaning as client_op_id in the body; the body field wins when both are sent. At most 128 printable non-space ASCII characters.",
+            "name": "Idempotency-Key",
+            "in": "header"
+          },
           {
             "name": "body",
             "in": "body",
@@ -23403,7 +23430,7 @@ func init() {
         ],
         "responses": {
           "201": {
-            "description": "Created",
+            "description": "Created (reused=true when a retry converged on the row an earlier request with the same client_op_id created)",
             "schema": {
               "$ref": "#/definitions/ApiKeyCreateResponse"
             }
@@ -23427,7 +23454,7 @@ func init() {
             }
           },
           "409": {
-            "description": "Imported API key is already registered",
+            "description": "Imported API key is already registered; or, with a client_op_id, the key this operation created has already authenticated (code api_key_already_delivered, the key_id in the result): its secret is not delivered again. Delete and recreate the key to issue a new one. A concurrent create carrying the same client_op_id is also 409: read the key back.",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -23445,7 +23472,7 @@ func init() {
             }
           },
           "504": {
-            "description": "Write outcome unknown (code ai_key_store_outcome_unknown). The statement was handed to the API-key store and the store did not answer within the operation budget; the store may still apply it when it resumes. Not a 503: nothing says the write did not happen. Read the resource back (GET) before deciding whether to retry; a blind retry of a non-idempotent write can create a second row.",
+            "description": "Write outcome unknown (code ai_key_store_outcome_unknown). The statement was handed to the API-key store and the store did not answer within the operation budget; the store may still apply it when it resumes. Not a 503: nothing says the write did not happen. Read the resource back (GET, filtering the listing by tenant_id and matching client_op_id) before deciding whether to retry; a blind retry without a client_op_id can create a second row, a retry with the same client_op_id converges on one.",
             "schema": {
               "$ref": "#/definitions/Error"
             }
@@ -36423,6 +36450,10 @@ func init() {
           "type": "integer",
           "format": "int64"
         },
+        "client_op_id": {
+          "description": "Optional idempotency handle, at most 128 printable non-space ASCII characters, unique per tenant (a UUID the client minted for this create). A retry carrying the same value converges on the row the first request created instead of making a second key: while that key has never authenticated, its secret is minted again and delivered with the same key_id (reused=true); once it has, 409 api_key_already_delivered. Also accepted as the Idempotency-Key header. Absent, the create behaves as before and a retry after a 504 must first read the listing back.",
+          "type": "string"
+        },
         "default_objective": {
           "description": "The objective a request with this key gets when it names none, or one it may not use. Counts only when the tenant's allowed_objectives hold it.",
           "type": "string"
@@ -36467,7 +36498,7 @@ func init() {
       }
     },
     "ApiKeyCreateResponse": {
-      "description": "HTTP 201 creation result. key_id is the management handle. raw_key contains a secret only for generated credentials and is currently empty for imports. Protect generated secrets from logs; subsequent reads expose metadata only.",
+      "description": "HTTP 201 creation result. key_id is the management handle. raw_key contains a secret only for generated credentials and is currently empty for imports. Protect generated secrets from logs; subsequent reads expose metadata only. reused=true says a retry with the same client_op_id converged on the row an earlier request created: same key_id, a new secret, the earlier secret no longer authenticates.",
       "type": "object",
       "required": [
         "raw_key",
@@ -36481,6 +36512,11 @@ func init() {
         "raw_key": {
           "description": "Generated plaintext credential returned only at creation; currently an empty string, not omission, when the caller imported api_key.",
           "type": "string"
+        },
+        "reused": {
+          "description": "True when this answer is a retry's, converged on the row an earlier request with the same client_op_id created; the secret in raw_key is new and the one that answer carried no longer authenticates.",
+          "type": "boolean",
+          "x-omitempty": false
         }
       }
     },
@@ -36510,6 +36546,11 @@ func init() {
           "description": "Total request-bucket capacity, not additional capacity above RPS. Nonpositive burst uses per-key RPS; nonpositive RPS skips that limiter.",
           "type": "integer",
           "format": "int64"
+        },
+        "client_op_id": {
+          "description": "The idempotency handle the create carried, when it carried one. It is how a key left by a create whose answer was lost (504) is found in the listing and reconciled.",
+          "type": "string",
+          "x-omitempty": true
         },
         "created_at": {
           "description": "Timestamp when the key was created",
@@ -48070,7 +48111,7 @@ func init() {
       }
     },
     "TenantRateLimitMod": {
-      "description": "POST replaces aggregate rps, tokens_per_min, and burst_pct; omission becomes zero, not preservation. Supplied model_limits are individual upserts or removals; omitted/empty model_limits preserves existing model rows. Aggregate and model writes are sequential, not one transaction, so failure can leave partial changes. Blank identifiers and malformed model entries are not consistently rejected as 400. Configuration alone does not enable enforcement on a service. The class fields (priority_class, default_objective, allowed_objectives) are written by their own statement and only when the body names one of them, so a POST of limits leaves the tenant's class as it is. A body that names a class field and carries no limit (rps, tokens_per_min and burst_pct absent or zero, no model_limits) writes the class only and leaves the limits as they are.",
+      "description": "POST replaces aggregate rps, tokens_per_min, and burst_pct; omission becomes zero, not preservation. Supplied model_limits are individual upserts or removals; omitted/empty model_limits preserves existing model rows. The aggregate row and the model rows are written in one transaction: the body is applied whole or not at all, and a 504 (outcome unknown) means the whole body may land. Blank identifiers and malformed model entries are not consistently rejected as 400. Configuration alone does not enable enforcement on a service. The class fields (priority_class, default_objective, allowed_objectives) are written by their own statement and only when the body names one of them, so a POST of limits leaves the tenant's class as it is. A body that names a class field and carries no limit (rps, tokens_per_min and burst_pct absent or zero, no model_limits) writes the class only and leaves the limits as they are.",
       "type": "object",
       "required": [
         "tenant_id"

@@ -33,6 +33,11 @@ type scriptDB struct {
 	answers []scriptAnswer
 	repeat  *scriptAnswer // when the script runs out, answer this
 	calls   int
+	// stmts is every statement the driver saw, in order, with BEGIN, COMMIT
+	// and ROLLBACK recorded as such: the oracle for "one transaction".
+	stmts []string
+	// failCommit, when set, is what the next COMMIT answers with (once).
+	failCommit error
 }
 
 var (
@@ -104,6 +109,19 @@ func (d *scriptDB) next() (scriptAnswer, error) {
 	return scriptAnswer{}, errors.New("script exhausted: the store was asked more often than the test allowed")
 }
 
+// statements returns the SQL (or BEGIN/COMMIT/ROLLBACK) in the order seen.
+func (d *scriptDB) statements() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]string(nil), d.stmts...)
+}
+
+func (d *scriptDB) record(stmt string) {
+	d.mu.Lock()
+	d.stmts = append(d.stmts, stmt)
+	d.mu.Unlock()
+}
+
 func (d *scriptDB) callCount() int {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -120,6 +138,9 @@ func (d *scriptDB) QueryRowContext(ctx context.Context, q string, args ...any) *
 	return d.db.QueryRowContext(ctx, q, args...)
 }
 func (d *scriptDB) PingContext(ctx context.Context) error { return d.db.PingContext(ctx) }
+func (d *scriptDB) BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
+	return d.db.BeginTx(ctx, opts)
+}
 
 type scriptConn struct{ d *scriptDB }
 
@@ -128,8 +149,30 @@ func (c *scriptConn) Prepare(string) (driver.Stmt, error) {
 }
 func (c *scriptConn) Close() error { return nil }
 func (c *scriptConn) Begin() (driver.Tx, error) {
-	return nil, errors.New("script driver: no transactions")
+	return nil, errors.New("script driver: Begin without a context is not scripted")
 }
+
+// BeginTx costs no scripted answer: the script is about statements. The
+// transaction's end is recorded, and COMMIT fails when the script says so.
+func (c *scriptConn) BeginTx(ctx context.Context, _ driver.TxOptions) (driver.Tx, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	c.d.record("BEGIN")
+	return &scriptTx{d: c.d}, nil
+}
+
+type scriptTx struct{ d *scriptDB }
+
+func (t *scriptTx) Commit() error {
+	t.d.record("COMMIT")
+	t.d.mu.Lock()
+	err := t.d.failCommit
+	t.d.failCommit = nil
+	t.d.mu.Unlock()
+	return err
+}
+func (t *scriptTx) Rollback() error { t.d.record("ROLLBACK"); return nil }
 
 func (c *scriptConn) answer(ctx context.Context) (scriptAnswer, error) {
 	a, err := c.d.next()
@@ -146,7 +189,8 @@ func (c *scriptConn) answer(ctx context.Context) (scriptAnswer, error) {
 	return a, nil
 }
 
-func (c *scriptConn) QueryContext(ctx context.Context, _ string, _ []driver.NamedValue) (driver.Rows, error) {
+func (c *scriptConn) QueryContext(ctx context.Context, q string, _ []driver.NamedValue) (driver.Rows, error) {
+	c.d.record(q)
 	a, err := c.answer(ctx)
 	if err != nil {
 		return nil, err
@@ -161,7 +205,8 @@ func (c *scriptConn) QueryContext(ctx context.Context, _ string, _ []driver.Name
 	return &scriptRows{cols: cols, row: a.values}, nil
 }
 
-func (c *scriptConn) ExecContext(ctx context.Context, _ string, _ []driver.NamedValue) (driver.Result, error) {
+func (c *scriptConn) ExecContext(ctx context.Context, q string, _ []driver.NamedValue) (driver.Result, error) {
+	c.d.record(q)
 	if _, err := c.answer(ctx); err != nil {
 		return nil, err
 	}

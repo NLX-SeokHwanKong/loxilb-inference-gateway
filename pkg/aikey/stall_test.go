@@ -101,6 +101,12 @@ func (d *stallDB) QueryRowContext(ctx context.Context, _ string, _ ...any) *sql.
 }
 func (d *stallDB) PingContext(ctx context.Context) error { return d.wait(ctx) }
 
+// BeginTx stalls like every other statement: a BEGIN the pool never got out
+// is a write that was not sent.
+func (d *stallDB) BeginTx(ctx context.Context, _ *sql.TxOptions) (*sql.Tx, error) {
+	return nil, d.wait(ctx)
+}
+
 func (d *stallDB) snapshot() (calls int, deadlines []time.Duration) {
 	d.mu.Lock()
 	defer d.mu.Unlock()

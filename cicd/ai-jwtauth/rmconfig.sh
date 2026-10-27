@@ -4,8 +4,14 @@ echo SCENARIO-ai-jwtauth-cleanup
 
 # Matched on the script path, not on "python3": a network namespace shares
 # the host PID namespace, so a name-wide kill here would reach every
-# unrelated python process on the machine.
+# unrelated python process on the machine. stop_helpers reaches the helpers
+# recorded in the PID file; the mock backends config.sh starts with a bare
+# `nohup … &` inside a namespace are not in it and outlived every teardown
+# on the local runner (its leftover-state stage flagged ten of them), so
+# they are matched here by the path they were started from.
 stop_helpers
+SDIR=$(cd "$(dirname "$0")" && pwd)
+sudo pkill -9 -f "$SDIR/(hdr_echo|h2c_echo|rawsink|body_witness)\.py" 2>/dev/null || true
 sleep 1
 
 disconnect_docker_hosts llb1 l3h1
