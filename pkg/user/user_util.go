@@ -16,12 +16,14 @@
 package user
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	pgxconn "github.com/jackc/pgx/v5/pgconn"
 	"time"
 	"unicode"
 
@@ -123,9 +125,30 @@ func retryableDBError(err error) bool {
 // every failure — with the old 5 x 2 s profile it was five sleeps for five
 // attempts, which is exactly the ten seconds a failing password change spent
 // before answering.
-func RetryOperation(operation func() error, maxRetries int, retryDelay time.Duration, retryable func(error) bool) error {
+//
+// The whole of it runs under ctx: once the deadline has passed no further
+// attempt is made and no sleep is started, so the budget bounds the
+// operation, not one attempt of it. An attempt that timed out after its
+// statement was sent is never repeated either -- the server may still be
+// applying the first one.
+func RetryOperation(ctx context.Context, operation func() error, maxRetries int, retryDelay time.Duration, retryable func(error) bool) error {
+	return retryOperation(ctx, operation, maxRetries, retryDelay, retryable, pgstore.ClassifyReadErr)
+}
+
+// retryWrite is RetryOperation for a statement that changes the store: the
+// error it reports says whether the server may still apply the write
+// (pkg/pgstore outcome.go) rather than only whether the store answered.
+func retryWrite(ctx context.Context, operation func() error) error {
+	return retryOperation(ctx, operation, AuthMaxRetries, AuthRetryDelay, retryableDBError, pgstore.ClassifyWriteErr)
+}
+
+func retryOperation(ctx context.Context, operation func() error, maxRetries int, retryDelay time.Duration,
+	retryable func(error) bool, classify func(error) error) error {
 	if retryable == nil {
 		retryable = retryableDBError
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	var err error
 	delay := retryDelay
@@ -137,39 +160,48 @@ func RetryOperation(operation func() error, maxRetries int, retryDelay time.Dura
 		if !retryable(err) {
 			return err
 		}
+		// A statement the server may still be applying must not be sent
+		// again; nor is there anything to gain from an attempt whose
+		// deadline has already passed.
+		if pgxconn.Timeout(err) || errors.Is(err, cmn.ErrStoreOutcomeUnknown) || ctx.Err() != nil {
+			break
+		}
 		if i == maxRetries-1 {
 			break
 		}
-		time.Sleep(delay)
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			return classify(ctx.Err())
+		}
 		delay *= AuthRetryBackoff
 	}
-	// The budget is spent. If what defeated it was the store being
-	// unreachable, say so in the taxonomy the callers branch on, so that a
-	// request whose credential was never examined is answered 503 rather than
-	// 401 and a store read that never happened is not rendered as 500.
+	// The budget is spent. Say what is known in the taxonomy the callers
+	// branch on, so that a request whose credential was never examined is
+	// answered 503 rather than 401, a store read that never happened is not
+	// rendered as 500, and a write the server may still apply is reported
+	// as outcome unknown rather than as not written.
 	//
-	// The test is pgstore.IsUnavailable, not `retryable`: `retryable` returns
+	// The classifier leaves application outcomes alone: `retryable` returns
 	// true for anything that is not on a short terminal list, so it also
-	// covers application outcomes such as a duplicate username, and reporting
-	// one of those as a database outage would be worse than the bug this
-	// fixes. The cause is wrapped rather than replaced so the log keeps it.
-	if pgstore.IsUnavailable(err) {
-		return fmt.Errorf("%w: %v", cmn.ErrDBUnavailable, err)
-	}
-	return err
+	// covers outcomes such as a duplicate username, and reporting one of
+	// those as a database outage would be worse than the bug this fixes.
+	return classify(err)
 }
 
 // UserService provides user-related operations such as user validation and token generation.
-func (s *UserService) ValidateUser(username, password string) (string, bool, error) {
+func (s *UserService) ValidateUser(ctx context.Context, username, password string) (string, bool, error) {
 	handle, err := s.store()
 	if err != nil {
 		return "", false, err
 	}
+	ctx, cancel := opContext(ctx)
+	defer cancel()
 	var storedHash string
 	var role string
 	// Query the database for the stored password hash.
-	err = RetryOperation(func() error {
-		err := handle.QueryRow(SelectUserPasswordQuery, username).Scan(&storedHash, &role)
+	err = RetryOperation(ctx, func() error {
+		err := handle.QueryRowContext(ctx, SelectUserPasswordQuery, username).Scan(&storedHash, &role)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				tk.LogIt(tk.LogWarning, "User not found: %v\n", username)
@@ -328,7 +360,7 @@ func (s *UserService) validatePasswordPolicy(username, password string) error {
 // check for a password CHANGE. Creates use validatePasswordPolicy: see the
 // note there for why the comparison cannot run on a path where the row it
 // compares against is the conflict the caller should have been told about.
-func (s *UserService) validatePassword(username, password string) error {
+func (s *UserService) validatePassword(ctx context.Context, username, password string) error {
 	if err := s.validatePasswordPolicy(username, password); err != nil {
 		return err
 	}
@@ -338,16 +370,18 @@ func (s *UserService) validatePassword(username, password string) error {
 	if err != nil {
 		return err
 	}
+	ctx, cancel := opContext(ctx)
+	defer cancel()
 	var previousPassword string
 	query := SelectUserPasswordOnlyQuery
-	err = handle.QueryRow(query, username).Scan(&previousPassword)
+	err = handle.QueryRowContext(ctx, query, username).Scan(&previousPassword)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			// No previous password found, continue with validation
 			tk.LogIt(tk.LogInfo, "No previous password found for username: %v\n", username)
 		} else {
 			tk.LogIt(tk.LogError, "Failed to query previous password: %v\n", err.Error())
-			return err
+			return pgstore.ClassifyReadErr(err)
 		}
 	} else {
 		err = bcrypt.CompareHashAndPassword([]byte(previousPassword), []byte(password))
@@ -364,12 +398,12 @@ func (s *UserService) validatePassword(username, password string) error {
 }
 
 // Public wrapper function
-func (s *UserService) ValidatePassword(username, password string) error {
-	return s.validatePassword(username, password)
+func (s *UserService) ValidatePassword(ctx context.Context, username, password string) error {
+	return s.validatePassword(ctx, username, password)
 }
 
 // ValidateToken validates a token using the in-memory cache and the database as a fallback.
-func (s *UserService) ValidateToken(token string) (interface{}, error) {
+func (s *UserService) ValidateToken(ctx context.Context, token string) (interface{}, error) {
 	// The API server starts before the user service finishes initialising, so
 	// this can be called on a nil receiver during startup.
 	if s == nil {
@@ -388,11 +422,13 @@ func (s *UserService) ValidateToken(token string) (interface{}, error) {
 	if err != nil {
 		return nil, err
 	}
+	ctx, cancel := opContext(ctx)
+	defer cancel()
 	var username string
 	var role string
 	var expiresAt time.Time
-	err = RetryOperation(func() error {
-		err := handle.QueryRow(ValidateTokenQuery, hashed).Scan(&username, &role, &expiresAt)
+	err = RetryOperation(ctx, func() error {
+		err := handle.QueryRowContext(ctx, ValidateTokenQuery, hashed).Scan(&username, &role, &expiresAt)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				tk.LogIt(tk.LogError, "Token not found\n")
@@ -437,12 +473,12 @@ func GenerateToken(username, role string, expirationMinutes int) (string, error)
 	return generateToken()
 }
 
-func (s *UserService) saveToken(username, token, role string) error {
+func (s *UserService) saveToken(ctx context.Context, username, token, role string) error {
 	handle, err := s.store()
 	if err != nil {
 		return err
 	}
 	expirationTime := time.Now().Add(time.Duration(TokenExpirationMinutes) * time.Minute)
-	_, err = handle.Exec(InsertTokenQuery, hashToken(token), username, expirationTime, role)
-	return err
+	_, err = handle.ExecContext(ctx, InsertTokenQuery, hashToken(token), username, expirationTime, role)
+	return pgstore.ClassifyWriteErr(err)
 }

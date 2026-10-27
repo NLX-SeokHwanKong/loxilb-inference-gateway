@@ -262,3 +262,48 @@ func (o *DeleteConfigAiRatelimitDefaultsScopeServiceUnavailable) WriteResponse(r
 		}
 	}
 }
+
+// DeleteConfigAiRatelimitDefaultsScopeGatewayTimeoutCode is the HTTP code returned for type DeleteConfigAiRatelimitDefaultsScopeGatewayTimeout
+const DeleteConfigAiRatelimitDefaultsScopeGatewayTimeoutCode int = 504
+
+/*
+DeleteConfigAiRatelimitDefaultsScopeGatewayTimeout Write outcome unknown (code ai_key_store_outcome_unknown). The statement was handed to the API-key store and the store did not answer within the operation budget; the store may still apply it when it resumes. Not a 503: nothing says the write did not happen. Read the resource back (GET) before deciding whether to retry; a blind retry of a non-idempotent write can create a second row.
+
+swagger:response deleteConfigAiRatelimitDefaultsScopeGatewayTimeout
+*/
+type DeleteConfigAiRatelimitDefaultsScopeGatewayTimeout struct {
+
+	/*
+	  In: Body
+	*/
+	Payload *models.Error `json:"body,omitempty"`
+}
+
+// NewDeleteConfigAiRatelimitDefaultsScopeGatewayTimeout creates DeleteConfigAiRatelimitDefaultsScopeGatewayTimeout with default headers values
+func NewDeleteConfigAiRatelimitDefaultsScopeGatewayTimeout() *DeleteConfigAiRatelimitDefaultsScopeGatewayTimeout {
+
+	return &DeleteConfigAiRatelimitDefaultsScopeGatewayTimeout{}
+}
+
+// WithPayload adds the payload to the delete config ai ratelimit defaults scope gateway timeout response
+func (o *DeleteConfigAiRatelimitDefaultsScopeGatewayTimeout) WithPayload(payload *models.Error) *DeleteConfigAiRatelimitDefaultsScopeGatewayTimeout {
+	o.Payload = payload
+	return o
+}
+
+// SetPayload sets the payload to the delete config ai ratelimit defaults scope gateway timeout response
+func (o *DeleteConfigAiRatelimitDefaultsScopeGatewayTimeout) SetPayload(payload *models.Error) {
+	o.Payload = payload
+}
+
+// WriteResponse to the client
+func (o *DeleteConfigAiRatelimitDefaultsScopeGatewayTimeout) WriteResponse(rw http.ResponseWriter, producer runtime.Producer) {
+
+	rw.WriteHeader(504)
+	if o.Payload != nil {
+		payload := o.Payload
+		if err := producer.Produce(rw, payload); err != nil {
+			panic(err) // let the recovery middleware deal with this
+		}
+	}
+}

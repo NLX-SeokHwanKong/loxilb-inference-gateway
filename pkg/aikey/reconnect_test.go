@@ -16,6 +16,7 @@
 package aikey
 
 import (
+	"context"
 	"errors"
 	"net"
 	"net/url"
@@ -95,13 +96,13 @@ func TestDegradedServiceRefusesEveryStoreCall(t *testing.T) {
 	if _, err := svc.ValidateAPIKey("lxb_" + strings.Repeat("b", 64)); !errors.Is(err, ErrDBUnavailable) {
 		t.Errorf("ValidateAPIKey on a degraded service = %v, want ErrDBUnavailable", err)
 	}
-	if _, _, err := svc.CreateAPIKey(cmn.ApiKeyEntry{TenantID: "t"}); !errors.Is(err, ErrDBUnavailable) {
+	if _, _, err := svc.CreateAPIKey(context.Background(), cmn.ApiKeyEntry{TenantID: "t"}); !errors.Is(err, ErrDBUnavailable) {
 		t.Errorf("CreateAPIKey on a degraded service = %v, want ErrDBUnavailable", err)
 	}
-	if err := svc.RevokeAPIKey("nosuch"); !errors.Is(err, ErrDBUnavailable) {
+	if err := svc.RevokeAPIKey(context.Background(), "nosuch"); !errors.Is(err, ErrDBUnavailable) {
 		t.Errorf("RevokeAPIKey on a degraded service = %v, want ErrDBUnavailable", err)
 	}
-	if _, err := svc.ListAPIKeys(""); !errors.Is(err, ErrDBUnavailable) {
+	if _, err := svc.ListAPIKeys(context.Background(), ""); !errors.Is(err, ErrDBUnavailable) {
 		t.Errorf("ListAPIKeys on a degraded service = %v, want ErrDBUnavailable", err)
 	}
 	// The quota reads used to report bare "no limit" here, indistinguishable
@@ -181,7 +182,7 @@ func TestTickerHealsADegradedStart(t *testing.T) {
 	}
 	// Provisioned, not merely connected: a statement against the tables has to
 	// work.
-	if _, err := svc.ListAPIKeys(""); err != nil {
+	if _, err := svc.ListAPIKeys(context.Background(), ""); err != nil {
 		t.Fatalf("ListAPIKeys after Ticker healed the service: %v", err)
 	}
 }
@@ -230,14 +231,14 @@ func TestNewIsUsableBeforeConnect(t *testing.T) {
 	if _, err := svc.ValidateAPIKey("lxb_" + strings.Repeat("c", 64)); !errors.Is(err, ErrDBUnavailable) {
 		t.Errorf("ValidateAPIKey before Connect = %v, want ErrDBUnavailable", err)
 	}
-	if _, err := svc.ListAPIKeys(""); !errors.Is(err, ErrDBUnavailable) {
+	if _, err := svc.ListAPIKeys(context.Background(), ""); !errors.Is(err, ErrDBUnavailable) {
 		t.Errorf("ListAPIKeys before Connect = %v, want ErrDBUnavailable", err)
 	}
 	// ErrDBUnavailable and ErrKeyStoreUnconfigured are different conditions and
 	// the API renders them differently. A service that has not connected yet is
 	// the first, never the second — the second is reserved for a nil service,
 	// which means no store was configured at all.
-	if _, err := svc.ListAPIKeys(""); errors.Is(err, cmn.ErrKeyStoreUnconfigured) {
+	if _, err := svc.ListAPIKeys(context.Background(), ""); errors.Is(err, cmn.ErrKeyStoreUnconfigured) {
 		t.Error("a service that has not connected yet reports itself as unconfigured")
 	}
 }

@@ -16,6 +16,7 @@
 package user
 
 import (
+	"context"
 	"database/sql"
 	"os"
 	"regexp"
@@ -111,17 +112,17 @@ func TestNoCredentialLeakInLogs(t *testing.T) {
 		svc.Cache.Set(hashToken(tok), "testuser|admin", 5*time.Minute)
 
 		// Insert a token row so DeleteTokenQuery succeeds (exercises the log line)
-		if _, err := db.Exec(InsertTokenQuery,
+		if _, err := db.ExecContext(context.Background(), InsertTokenQuery,
 			hashToken(tok), "testuser", time.Now().Add(1*time.Hour), "admin"); err != nil {
 			t.Fatalf("insert token: %v", err)
 		}
 
-		if err := svc.Logout(tok); err != nil {
+		if err := svc.Logout(context.Background(), tok); err != nil {
 			t.Logf("Logout returned error (may be expected): %v", err)
 		}
 
 		// --- Exercise ValidateToken path (token not in cache or DB) ---
-		if _, err := svc.ValidateToken(tok); err != nil {
+		if _, err := svc.ValidateToken(context.Background(), tok); err != nil {
 			t.Logf("ValidateToken returned error (expected — token deleted): %v", err)
 		}
 	}

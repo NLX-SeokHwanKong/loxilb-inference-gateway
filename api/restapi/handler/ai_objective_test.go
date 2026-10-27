@@ -17,6 +17,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -57,7 +58,7 @@ type stubClassHook struct {
 	summary      *cmn.ApiKeySummary
 }
 
-func (s *stubClassHook) NetAIObjectiveGet() (cmn.AIObjectiveList, error) {
+func (s *stubClassHook) NetAIObjectiveGet(context.Context) (cmn.AIObjectiveList, error) {
 	src := s.source
 	if src == "" {
 		src = cmn.AIClassSourceStore
@@ -65,39 +66,41 @@ func (s *stubClassHook) NetAIObjectiveGet() (cmn.AIObjectiveList, error) {
 	return cmn.AIObjectiveList{Objectives: s.objectives, Source: src, SourceTimestamp: s.sourceAt,
 		StoreReachable: s.reachable, StoreLastRead: s.lastRead}, s.err
 }
-func (s *stubClassHook) NetAIObjectiveAdd(e *cmn.AIObjectiveEntry) (int, error) {
+func (s *stubClassHook) NetAIObjectiveAdd(_ context.Context, e *cmn.AIObjectiveEntry) (int, error) {
 	s.added = e
 	return 0, s.err
 }
-func (s *stubClassHook) NetAIObjectiveDel(name string) (int, error) {
+func (s *stubClassHook) NetAIObjectiveDel(_ context.Context, name string) (int, error) {
 	s.deleted = name
 	return 0, s.err
 }
-func (s *stubClassHook) NetTenantRateLimitSet(string, int, int, int, []cmn.TenantModelRateLimit) error {
+func (s *stubClassHook) NetTenantRateLimitSet(context.Context, string, int, int, int, []cmn.TenantModelRateLimit) error {
 	s.limitsSet++
 	return s.err
 }
-func (s *stubClassHook) NetTenantClassPatch(_ string, p cmn.AIClassPatch) error {
+func (s *stubClassHook) NetTenantClassPatch(_ context.Context, _ string, p cmn.AIClassPatch) error {
 	s.tenantPatch = &p
 	return s.err
 }
-func (s *stubClassHook) NetTenantRateLimitGet(string) (*cmn.TenantRateLimitEntry, error) {
+func (s *stubClassHook) NetTenantRateLimitGet(context.Context, string) (*cmn.TenantRateLimitEntry, error) {
 	return s.tenantEntry, s.err
 }
-func (s *stubClassHook) NetAPIKeyCreate(e cmn.ApiKeyEntry) (string, string, error) {
+func (s *stubClassHook) NetAPIKeyCreate(_ context.Context, e cmn.ApiKeyEntry) (string, string, error) {
 	s.created = &e
 	return "sk-raw", "kid-1", s.err
 }
-func (s *stubClassHook) NetAPIKeyGet(string) (*cmn.ApiKeySummary, error) { return s.summary, s.err }
-func (s *stubClassHook) NetAPIKeyPatch(string, []string, *bool) error {
+func (s *stubClassHook) NetAPIKeyGet(context.Context, string) (*cmn.ApiKeySummary, error) {
+	return s.summary, s.err
+}
+func (s *stubClassHook) NetAPIKeyPatch(context.Context, string, []string, *bool) error {
 	s.keyPatched++
 	return s.err
 }
-func (s *stubClassHook) NetAPIKeyRateLimitPatch(string, *int, *int, *int) error {
+func (s *stubClassHook) NetAPIKeyRateLimitPatch(context.Context, string, *int, *int, *int) error {
 	s.limitPatched++
 	return s.err
 }
-func (s *stubClassHook) NetAPIKeyClassPatch(_ string, p cmn.AIClassPatch) error {
+func (s *stubClassHook) NetAPIKeyClassPatch(_ context.Context, _ string, p cmn.AIClassPatch) error {
 	s.keyPatch = &p
 	return s.err
 }

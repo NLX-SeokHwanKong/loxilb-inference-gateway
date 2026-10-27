@@ -159,6 +159,20 @@ func ResultErrorResponseErrorMessage(msg string) *models.Error {
 		return &models.Error{Code: 404, Message: "Resource not found", Result: msg}
 	}
 
+	// 504 Gateway Timeout — the write was sent to the store and not
+	// answered within the budget. The store may still apply it when it
+	// resumes, so this is NOT the 503 below: a 503 says nothing was written
+	// and a retry is safe, and a retry of this one may duplicate the write.
+	// The caller reads the resource back before deciding. Tested first,
+	// because the message also carries the store's name.
+	if containsAny(m, "outcome unknown") {
+		return &models.Error{
+			Code:    504,
+			Message: "Credential store did not answer within the budget: outcome unknown, read back before retrying",
+			Result:  "store_outcome_unknown",
+		}
+	}
+
 	// 503 Service Unavailable — the store was never reached
 	//
 	// Placed ahead of the classes below because it is about whether the

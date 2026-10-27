@@ -16,6 +16,7 @@
 package aikey
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -75,7 +76,7 @@ func truncate(t *testing.T, db *sql.DB) {
 	t.Helper()
 	for _, table := range []string{"api_keys", "tenant_rate_limits", "tenant_model_rate_limits",
 		"user_rate_limits", "user_model_rate_limits", "rate_limit_defaults", "objectives"} {
-		if _, err := db.Exec(fmt.Sprintf("DELETE FROM %s.%s", Schema, table)); err != nil {
+		if _, err := db.ExecContext(context.Background(), fmt.Sprintf("DELETE FROM %s.%s", Schema, table)); err != nil {
 			t.Fatalf("clear %s: %v", table, err)
 		}
 	}
@@ -112,7 +113,7 @@ func TestEnsureSchemaIsIdempotent(t *testing.T) {
 	svc := storeFixture(t)
 	db := poolOf(t, svc)
 	for i := 0; i < 3; i++ {
-		if err := ensureSchema(db); err != nil {
+		if err := ensureSchema(context.Background(), db); err != nil {
 			t.Fatalf("ensureSchema pass %d: %v", i+1, err)
 		}
 	}
@@ -131,31 +132,31 @@ func TestUpsertLeavesUnnamedColumnsIntact(t *testing.T) {
 	svc := storeFixture(t)
 	db := poolOf(t, svc)
 
-	if _, err := db.Exec(fmt.Sprintf(
+	if _, err := db.ExecContext(context.Background(), fmt.Sprintf(
 		"ALTER TABLE %s.tenant_rate_limits ADD COLUMN IF NOT EXISTS probe_col TEXT", Schema)); err != nil {
 		t.Fatalf("add probe column: %v", err)
 	}
 	t.Cleanup(func() {
-		_, _ = db.Exec(fmt.Sprintf("ALTER TABLE %s.tenant_rate_limits DROP COLUMN IF EXISTS probe_col", Schema))
+		_, _ = db.ExecContext(context.Background(), fmt.Sprintf("ALTER TABLE %s.tenant_rate_limits DROP COLUMN IF EXISTS probe_col", Schema))
 	})
 
 	const tenant = "team-a"
-	if err := svc.SetTenantRateLimit(tenant, 10, 1000, 50); err != nil {
+	if err := svc.SetTenantRateLimit(context.Background(), tenant, 10, 1000, 50); err != nil {
 		t.Fatalf("initial set: %v", err)
 	}
-	if _, err := db.Exec(fmt.Sprintf(
+	if _, err := db.ExecContext(context.Background(), fmt.Sprintf(
 		"UPDATE %s.tenant_rate_limits SET probe_col = 'keepme' WHERE tenant_id = $1", Schema), tenant); err != nil {
 		t.Fatalf("seed probe column: %v", err)
 	}
 
 	// The upsert path: same tenant, new values.
-	if err := svc.SetTenantRateLimit(tenant, 20, 1000, 50); err != nil {
+	if err := svc.SetTenantRateLimit(context.Background(), tenant, 20, 1000, 50); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
 	var rps, tpm, burst int
 	var probe sql.NullString
-	if err := db.QueryRow(fmt.Sprintf(
+	if err := db.QueryRowContext(context.Background(), fmt.Sprintf(
 		"SELECT rps, tokens_per_min, burst_pct, probe_col FROM %s.tenant_rate_limits WHERE tenant_id = $1", Schema),
 		tenant).Scan(&rps, &tpm, &burst, &probe); err != nil {
 		t.Fatalf("read back: %v", err)
@@ -175,7 +176,7 @@ func TestUpsertLeavesUnnamedColumnsIntact(t *testing.T) {
 	// Exactly one row: an upsert that inserted a second row would also pass
 	// the checks above if the read happened to find the new one.
 	var rows int
-	if err := db.QueryRow(fmt.Sprintf(
+	if err := db.QueryRowContext(context.Background(), fmt.Sprintf(
 		"SELECT COUNT(*) FROM %s.tenant_rate_limits WHERE tenant_id = $1", Schema), tenant).Scan(&rows); err != nil {
 		t.Fatalf("count: %v", err)
 	}
@@ -189,30 +190,30 @@ func TestModelUpsertLeavesUnnamedColumnsIntact(t *testing.T) {
 	svc := storeFixture(t)
 	db := poolOf(t, svc)
 
-	if _, err := db.Exec(fmt.Sprintf(
+	if _, err := db.ExecContext(context.Background(), fmt.Sprintf(
 		"ALTER TABLE %s.tenant_model_rate_limits ADD COLUMN IF NOT EXISTS probe_col TEXT", Schema)); err != nil {
 		t.Fatalf("add probe column: %v", err)
 	}
 	t.Cleanup(func() {
-		_, _ = db.Exec(fmt.Sprintf("ALTER TABLE %s.tenant_model_rate_limits DROP COLUMN IF EXISTS probe_col", Schema))
+		_, _ = db.ExecContext(context.Background(), fmt.Sprintf("ALTER TABLE %s.tenant_model_rate_limits DROP COLUMN IF EXISTS probe_col", Schema))
 	})
 
 	const tenant, model = "team-a", "llama-3-70b"
-	if err := svc.SetTenantModelRateLimit(tenant, model, 5000); err != nil {
+	if err := svc.SetTenantModelRateLimit(context.Background(), tenant, model, 5000); err != nil {
 		t.Fatalf("initial set: %v", err)
 	}
-	if _, err := db.Exec(fmt.Sprintf(
+	if _, err := db.ExecContext(context.Background(), fmt.Sprintf(
 		"UPDATE %s.tenant_model_rate_limits SET probe_col = 'keepme' WHERE tenant_id = $1 AND model = $2", Schema),
 		tenant, model); err != nil {
 		t.Fatalf("seed probe column: %v", err)
 	}
-	if err := svc.SetTenantModelRateLimit(tenant, model, 9000); err != nil {
+	if err := svc.SetTenantModelRateLimit(context.Background(), tenant, model, 9000); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
 
 	var tpm int
 	var probe sql.NullString
-	if err := db.QueryRow(fmt.Sprintf(
+	if err := db.QueryRowContext(context.Background(), fmt.Sprintf(
 		"SELECT tokens_per_min, probe_col FROM %s.tenant_model_rate_limits WHERE tenant_id = $1 AND model = $2", Schema),
 		tenant, model).Scan(&tpm, &probe); err != nil {
 		t.Fatalf("read back: %v", err)
@@ -232,7 +233,7 @@ func TestCreateAPIKeyWithSuppliedKey(t *testing.T) {
 	db := poolOf(t, svc)
 
 	const supplied = "sk-imported-from-another-gateway-0001"
-	returned, keyID, err := svc.CreateAPIKey(cmn.ApiKeyEntry{
+	returned, keyID, err := svc.CreateAPIKey(context.Background(), cmn.ApiKeyEntry{
 		ApiKey: supplied, TenantID: "team-a", Name: "imported", Enabled: true,
 		AllowedModels: []string{"llama-3-70b"}, RateLimitRPS: 20, TokensPerMin: 100000,
 	})
@@ -255,7 +256,7 @@ func TestCreateAPIKeyWithSuppliedKey(t *testing.T) {
 
 	// Only the hash is at rest.
 	var storedHash string
-	if err := db.QueryRow(fmt.Sprintf(
+	if err := db.QueryRowContext(context.Background(), fmt.Sprintf(
 		"SELECT key_hash FROM %s.api_keys WHERE key_id = $1", Schema), keyID).Scan(&storedHash); err != nil {
 		t.Fatalf("read back: %v", err)
 	}
@@ -281,7 +282,7 @@ func TestCreateAPIKeyWithSuppliedKey(t *testing.T) {
 		t.Fatalf("get by id: %v", err)
 	}
 	assertNoKeyMaterial(t, "GetAPIKeyByID", summary, supplied)
-	list, err := svc.ListAPIKeys("team-a")
+	list, err := svc.ListAPIKeys(context.Background(), "team-a")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -295,7 +296,7 @@ func TestCreateAPIKeyGeneratesWhenNoneSupplied(t *testing.T) {
 	svc := storeFixture(t)
 	db := poolOf(t, svc)
 
-	raw, keyID, err := svc.CreateAPIKey(cmn.ApiKeyEntry{TenantID: "team-b", Name: "minted", Enabled: true})
+	raw, keyID, err := svc.CreateAPIKey(context.Background(), cmn.ApiKeyEntry{TenantID: "team-b", Name: "minted", Enabled: true})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -309,7 +310,7 @@ func TestCreateAPIKeyGeneratesWhenNoneSupplied(t *testing.T) {
 	}
 
 	var storedHash string
-	if err := db.QueryRow(fmt.Sprintf(
+	if err := db.QueryRowContext(context.Background(), fmt.Sprintf(
 		"SELECT key_hash FROM %s.api_keys WHERE key_id = $1", Schema), keyID).Scan(&storedHash); err != nil {
 		t.Fatalf("read back: %v", err)
 	}
@@ -328,10 +329,10 @@ func TestSuppliedKeyCannotDuplicateAnExistingHash(t *testing.T) {
 	svc := storeFixture(t)
 
 	const supplied = "sk-imported-from-another-gateway-0001"
-	if _, _, err := svc.CreateAPIKey(cmn.ApiKeyEntry{ApiKey: supplied, TenantID: "team-a", Enabled: true}); err != nil {
+	if _, _, err := svc.CreateAPIKey(context.Background(), cmn.ApiKeyEntry{ApiKey: supplied, TenantID: "team-a", Enabled: true}); err != nil {
 		t.Fatalf("first create: %v", err)
 	}
-	if _, _, err := svc.CreateAPIKey(cmn.ApiKeyEntry{ApiKey: supplied, TenantID: "team-b", Enabled: true}); err == nil {
+	if _, _, err := svc.CreateAPIKey(context.Background(), cmn.ApiKeyEntry{ApiKey: supplied, TenantID: "team-b", Enabled: true}); err == nil {
 		t.Error("a second tenant registered the same key material — the authentication lookup now has two rows to choose from")
 	}
 }
@@ -367,7 +368,7 @@ func TestRevocationReachesPeerCache(t *testing.T) {
 	svc := storeFixture(t)
 	peer := peerOf(t, svc)
 
-	raw, keyID, err := svc.CreateAPIKey(cmn.ApiKeyEntry{TenantID: "team-a", Enabled: true})
+	raw, keyID, err := svc.CreateAPIKey(context.Background(), cmn.ApiKeyEntry{TenantID: "team-a", Enabled: true})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -380,7 +381,7 @@ func TestRevocationReachesPeerCache(t *testing.T) {
 	if _, err = peer.ValidateAPIKey(raw); err != nil {
 		t.Fatalf("peer validate: %v", err)
 	}
-	if err = svc.RevokeAPIKey(keyID); err != nil {
+	if err = svc.RevokeAPIKey(context.Background(), keyID); err != nil {
 		t.Fatalf("revoke: %v", err)
 	}
 	if _, err = svc.ValidateAPIKey(raw); err == nil {
@@ -392,7 +393,7 @@ func TestRevocationReachesPeerCache(t *testing.T) {
 	}
 
 	// Positive leg: same scene, fan-out wired.
-	raw2, keyID2, err := svc.CreateAPIKey(cmn.ApiKeyEntry{TenantID: "team-a", Enabled: true})
+	raw2, keyID2, err := svc.CreateAPIKey(context.Background(), cmn.ApiKeyEntry{TenantID: "team-a", Enabled: true})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -408,7 +409,7 @@ func TestRevocationReachesPeerCache(t *testing.T) {
 	if _, err = peer.ValidateAPIKey(raw2); err != nil {
 		t.Fatalf("peer validate: %v", err)
 	}
-	if err = svc.RevokeAPIKey(keyID2); err != nil {
+	if err = svc.RevokeAPIKey(context.Background(), keyID2); err != nil {
 		t.Fatalf("revoke: %v", err)
 	}
 	if delivered != 1 {
@@ -434,14 +435,14 @@ func TestDeleteReachesPeerCache(t *testing.T) {
 	peer := peerOf(t, svc)
 	svc.SetInvalidationSink(peer.ApplyInvalidation)
 
-	raw, keyID, err := svc.CreateAPIKey(cmn.ApiKeyEntry{TenantID: "team-a", Enabled: true})
+	raw, keyID, err := svc.CreateAPIKey(context.Background(), cmn.ApiKeyEntry{TenantID: "team-a", Enabled: true})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	if _, err = peer.ValidateAPIKey(raw); err != nil {
 		t.Fatalf("peer validate: %v", err)
 	}
-	if err = svc.DeleteAPIKey(keyID); err != nil {
+	if err = svc.DeleteAPIKey(context.Background(), keyID); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 	if _, err = peer.ValidateAPIKey(raw); err == nil {
@@ -455,7 +456,7 @@ func TestPatchDisableReachesPeerCache(t *testing.T) {
 	peer := peerOf(t, svc)
 	svc.SetInvalidationSink(peer.ApplyInvalidation)
 
-	raw, keyID, err := svc.CreateAPIKey(cmn.ApiKeyEntry{TenantID: "team-a", Enabled: true})
+	raw, keyID, err := svc.CreateAPIKey(context.Background(), cmn.ApiKeyEntry{TenantID: "team-a", Enabled: true})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -463,7 +464,7 @@ func TestPatchDisableReachesPeerCache(t *testing.T) {
 		t.Fatalf("peer validate: %v", err)
 	}
 	disabled := false
-	if err = svc.PatchAPIKey(keyID, nil, &disabled); err != nil {
+	if err = svc.PatchAPIKey(context.Background(), keyID, nil, &disabled); err != nil {
 		t.Fatalf("patch: %v", err)
 	}
 	if _, err = peer.ValidateAPIKey(raw); err == nil {
@@ -478,10 +479,10 @@ func TestRateLimitRoundTrip(t *testing.T) {
 	svc := storeFixture(t)
 
 	const tenant = "team-a"
-	if err := svc.SetTenantRateLimit(tenant, 25, 120000, 40); err != nil {
+	if err := svc.SetTenantRateLimit(context.Background(), tenant, 25, 120000, 40); err != nil {
 		t.Fatalf("set: %v", err)
 	}
-	if err := svc.SetTenantModelRateLimit(tenant, "llama-3-70b", 9000); err != nil {
+	if err := svc.SetTenantModelRateLimit(context.Background(), tenant, "llama-3-70b", 9000); err != nil {
 		t.Fatalf("set model: %v", err)
 	}
 
@@ -499,7 +500,7 @@ func TestRateLimitRoundTrip(t *testing.T) {
 		t.Errorf("model quota = %d, want 9000", got)
 	}
 
-	entry, err := peerOf(t, svc).GetTenantRateLimitEntry(tenant)
+	entry, err := peerOf(t, svc).GetTenantRateLimitEntry(context.Background(), tenant)
 	if err != nil {
 		t.Fatalf("get entry: %v", err)
 	}
@@ -515,7 +516,7 @@ func TestRateLimitRoundTrip(t *testing.T) {
 
 	// A non-positive quota removes the row rather than storing a zero that
 	// would read as an explicit "no tokens".
-	if err := svc.SetTenantModelRateLimit(tenant, "llama-3-70b", 0); err != nil {
+	if err := svc.SetTenantModelRateLimit(context.Background(), tenant, "llama-3-70b", 0); err != nil {
 		t.Fatalf("clear model quota: %v", err)
 	}
 	if got, mErr := peerOf(t, svc).GetTenantModelRateLimit(tenant, "llama-3-70b"); mErr != nil || got != 0 {
@@ -531,7 +532,7 @@ func TestTimestampsRoundTrip(t *testing.T) {
 
 	expiry := time.Now().UTC().Add(48 * time.Hour).Truncate(time.Millisecond)
 	before := time.Now().UTC().Add(-time.Second)
-	raw, keyID, err := svc.CreateAPIKey(cmn.ApiKeyEntry{
+	raw, keyID, err := svc.CreateAPIKey(context.Background(), cmn.ApiKeyEntry{
 		TenantID: "team-a", Enabled: true, ExpiresAt: &expiry,
 	})
 	if err != nil {
@@ -555,7 +556,7 @@ func TestTimestampsRoundTrip(t *testing.T) {
 
 	// A key with no expiry stays nil rather than becoming the zero time,
 	// which the datapath would read as "expired in year 1".
-	raw2, _, err := svc.CreateAPIKey(cmn.ApiKeyEntry{TenantID: "team-a", Enabled: true})
+	raw2, _, err := svc.CreateAPIKey(context.Background(), cmn.ApiKeyEntry{TenantID: "team-a", Enabled: true})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -574,11 +575,11 @@ func TestTimestampsRoundTrip(t *testing.T) {
 func TestDisabledKeyIsUnusableButVisible(t *testing.T) {
 	svc := storeFixture(t)
 
-	raw, keyID, err := svc.CreateAPIKey(cmn.ApiKeyEntry{TenantID: "team-a", Enabled: true})
+	raw, keyID, err := svc.CreateAPIKey(context.Background(), cmn.ApiKeyEntry{TenantID: "team-a", Enabled: true})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if err = svc.RevokeAPIKey(keyID); err != nil {
+	if err = svc.RevokeAPIKey(context.Background(), keyID); err != nil {
 		t.Fatalf("revoke: %v", err)
 	}
 
@@ -593,7 +594,7 @@ func TestDisabledKeyIsUnusableButVisible(t *testing.T) {
 	if summary.Enabled {
 		t.Error("the revoked key still reads as enabled")
 	}
-	keys, err := fresh.ListAPIKeys("team-a")
+	keys, err := fresh.ListAPIKeys(context.Background(), "team-a")
 	if err != nil || len(keys) != 1 {
 		t.Errorf("list returned %d keys, err=%v; want the revoked key still listed", len(keys), err)
 	}
@@ -606,7 +607,7 @@ func TestPreflightRejectsMissingSchema(t *testing.T) {
 	db := poolOf(t, svc)
 
 	var exists bool
-	if err := db.QueryRow(`SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'aigw_absent')`).Scan(&exists); err != nil {
+	if err := db.QueryRowContext(context.Background(), `SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'aigw_absent')`).Scan(&exists); err != nil {
 		t.Fatalf("catalogue query: %v", err)
 	}
 	if exists {
@@ -615,7 +616,7 @@ func TestPreflightRejectsMissingSchema(t *testing.T) {
 	// Exercised through the same catalogue query the preflight runs, with a
 	// schema that is not there.
 	var usage bool
-	err := db.QueryRow(
+	err := db.QueryRowContext(context.Background(),
 		`SELECT has_schema_privilege(current_user, 'aigw_absent', 'USAGE')`).Scan(&usage)
 	if err == nil {
 		t.Error("has_schema_privilege on a missing schema did not error — the preflight's existence check is what catches it")

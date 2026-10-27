@@ -69,8 +69,13 @@ func (s *Service) evict(inv KeyInvalidation) {
 	}
 	if inv.KeyHash != "" {
 		s.Cache.Delete(cacheKeyForHash(inv.KeyHash))
+		// A peer may be telling us the key now exists.
+		s.forgetNegative(inv.KeyHash)
 	}
 	if inv.KeyID != "" {
 		s.Cache.Delete(cacheKeyForID(inv.KeyID))
+		// The last-known view goes with the cached one: a revoked key must
+		// not be resurrected from it during an outage.
+		s.forgetKeySummary(inv.KeyID)
 	}
 }

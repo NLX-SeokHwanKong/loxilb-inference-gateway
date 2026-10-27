@@ -16,6 +16,7 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"time"
@@ -30,8 +31,8 @@ import (
 )
 
 // addUserResponse performs an authorized create and maps the outcome.
-func addUserResponse(user *cmn.User) middleware.Responder {
-	if _, err := ApiHooks.NetUserAdd(user); err != nil {
+func addUserResponse(ctx context.Context, user *cmn.User) middleware.Responder {
+	if _, err := ApiHooks.NetUserAdd(ctx, user); err != nil {
 		tk.LogIt(tk.LogDebug, "api: Error occur : %v\n", err.Error())
 		return &ErrorResponse{Payload: ResultErrorResponseErrorMessage(err.Error())}
 	}
@@ -70,7 +71,7 @@ func UsersPostUsers(params users.PostAuthUsersParams) middleware.Responder {
 	// and the whole management API is open, so this endpoint must not be
 	// stricter than the rest of it.
 	if !managementAuthConfigured() {
-		return addUserResponse(&user)
+		return addUserResponse(params.HTTPRequest.Context(), &user)
 	}
 
 	// A credential was presented: it decides the request either way. Falling
@@ -90,7 +91,7 @@ func UsersPostUsers(params users.PostAuthUsersParams) middleware.Responder {
 			}
 			return errorResponseWithCode(http.StatusForbidden, err.Error())
 		}
-		return addUserResponse(&user)
+		return addUserResponse(params.HTTPRequest.Context(), &user)
 	}
 
 	// No credential: the bootstrap path. The peer address comes from the
@@ -104,7 +105,7 @@ func UsersPostUsers(params users.PostAuthUsersParams) middleware.Responder {
 		tk.LogIt(tk.LogCritical, "Rejected unauthenticated user creation from non-loopback peer %v\n", r.RemoteAddr)
 		return errorResponseWithCode(http.StatusUnauthorized, "Missing or invalid credentials")
 	}
-	if _, err := ApiHooks.NetUserBootstrap(&user); err != nil {
+	if _, err := ApiHooks.NetUserBootstrap(params.HTTPRequest.Context(), &user); err != nil {
 		if errors.Is(err, cmn.ErrBootstrapClosed) {
 			tk.LogIt(tk.LogCritical, "Rejected unauthenticated user creation: bootstrap already closed\n")
 			return errorResponseWithCode(http.StatusUnauthorized, "Missing or invalid credentials")
@@ -119,7 +120,7 @@ func UsersPostUsers(params users.PostAuthUsersParams) middleware.Responder {
 // This function is used to delete a user
 func UsersDeleteUsers(params users.DeleteAuthUsersIDParams, principal interface{}) middleware.Responder {
 	tk.LogIt(tk.LogTrace, "api: User %s API called. url : %s\n", params.HTTPRequest.Method, params.HTTPRequest.URL)
-	err := ApiHooks.NetUserDel(int(params.ID))
+	err := ApiHooks.NetUserDel(params.HTTPRequest.Context(), int(params.ID))
 	if err != nil {
 		tk.LogIt(tk.LogDebug, "api: Error occur : %v\n", err.Error())
 		return &ErrorResponse{Payload: ResultErrorResponseErrorMessage(err.Error())}
@@ -131,7 +132,7 @@ func UsersDeleteUsers(params users.DeleteAuthUsersIDParams, principal interface{
 // This function is used to get all users
 func UsersGetUsers(params users.GetAuthUsersParams, principal interface{}) middleware.Responder {
 	tk.LogIt(tk.LogTrace, "api: User %s API called. url : %s\n", params.HTTPRequest.Method, params.HTTPRequest.URL)
-	res, err := ApiHooks.NetUserGet()
+	res, err := ApiHooks.NetUserGet(params.HTTPRequest.Context())
 	if err != nil {
 		tk.LogIt(tk.LogDebug, "api: Error occur : %v\n", err.Error())
 		return &ErrorResponse{Payload: ResultErrorResponseErrorMessage(err.Error())}
@@ -177,13 +178,13 @@ func UsersPutUsers(params users.PutAuthUsersIDParams, principal interface{}) mid
 	// password never leaves the request.
 	roleFrom := ""
 	if user.Role != "" {
-		roleFrom = currentUserRole(user.ID)
+		roleFrom = currentUserRole(params.HTTPRequest.Context(), user.ID)
 	}
 	AuditDetail(params.HTTPRequest, func(d *audit.MgmtDetail) {
 		d.Username = user.Username
 		d.RoleFrom, d.RoleTo = roleFrom, user.Role
 	})
-	err := ApiHooks.NetUserUpdate(&user)
+	err := ApiHooks.NetUserUpdate(params.HTTPRequest.Context(), &user)
 	if err != nil {
 		tk.LogIt(tk.LogDebug, "api: Error occur : %v\n", err.Error())
 		return &ErrorResponse{Payload: ResultErrorResponseErrorMessage(err.Error())}
@@ -194,8 +195,8 @@ func UsersPutUsers(params users.PutAuthUsersIDParams, principal interface{}) mid
 // currentUserRole is the role stored for the account before an update, so
 // a role change can be recorded with both values. Empty when the account
 // or the store cannot be read: the update itself reports that.
-func currentUserRole(id int) string {
-	users, err := ApiHooks.NetUserGet()
+func currentUserRole(ctx context.Context, id int) string {
+	users, err := ApiHooks.NetUserGet(ctx)
 	if err != nil {
 		return ""
 	}

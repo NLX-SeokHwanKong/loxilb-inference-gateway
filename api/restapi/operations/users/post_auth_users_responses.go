@@ -282,3 +282,48 @@ func (o *PostAuthUsersServiceUnavailable) WriteResponse(rw http.ResponseWriter, 
 		}
 	}
 }
+
+// PostAuthUsersGatewayTimeoutCode is the HTTP code returned for type PostAuthUsersGatewayTimeout
+const PostAuthUsersGatewayTimeoutCode int = 504
+
+/*
+PostAuthUsersGatewayTimeout Write outcome unknown (result store_outcome_unknown). The statement was handed to the management credential store and the store did not answer within the operation budget; the store may still apply it when it resumes. Not a 503: nothing says the write did not happen. Read the resource back before deciding whether to retry.
+
+swagger:response postAuthUsersGatewayTimeout
+*/
+type PostAuthUsersGatewayTimeout struct {
+
+	/*
+	  In: Body
+	*/
+	Payload *models.Error `json:"body,omitempty"`
+}
+
+// NewPostAuthUsersGatewayTimeout creates PostAuthUsersGatewayTimeout with default headers values
+func NewPostAuthUsersGatewayTimeout() *PostAuthUsersGatewayTimeout {
+
+	return &PostAuthUsersGatewayTimeout{}
+}
+
+// WithPayload adds the payload to the post auth users gateway timeout response
+func (o *PostAuthUsersGatewayTimeout) WithPayload(payload *models.Error) *PostAuthUsersGatewayTimeout {
+	o.Payload = payload
+	return o
+}
+
+// SetPayload sets the payload to the post auth users gateway timeout response
+func (o *PostAuthUsersGatewayTimeout) SetPayload(payload *models.Error) {
+	o.Payload = payload
+}
+
+// WriteResponse to the client
+func (o *PostAuthUsersGatewayTimeout) WriteResponse(rw http.ResponseWriter, producer runtime.Producer) {
+
+	rw.WriteHeader(504)
+	if o.Payload != nil {
+		payload := o.Payload
+		if err := producer.Produce(rw, payload); err != nil {
+			panic(err) // let the recovery middleware deal with this
+		}
+	}
+}

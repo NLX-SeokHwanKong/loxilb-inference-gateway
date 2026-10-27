@@ -16,6 +16,7 @@
 package user
 
 import (
+	"context"
 	"database/sql"
 	"time"
 
@@ -111,11 +112,15 @@ func connectStore(p mgmtDialParams) (*sql.DB, error) {
 	}
 
 	// From here on the pool is ours and every failure has to release it.
-	if err := preflight(db); err != nil {
+	// The preflight and the DDL are budgeted like any operation: a store
+	// that accepted the dial and then stalled must not hold the boot.
+	ctx, cancel := opContext(context.Background())
+	defer cancel()
+	if err := preflight(ctx, db); err != nil {
 		db.Close()
 		return nil, err
 	}
-	if err := ensureSchema(db); err != nil {
+	if err := ensureSchema(ctx, db); err != nil {
 		db.Close()
 		return nil, err
 	}

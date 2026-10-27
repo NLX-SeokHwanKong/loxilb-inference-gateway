@@ -16,6 +16,7 @@
 package handler
 
 import (
+	"context"
 	"time"
 
 	"github.com/go-openapi/runtime/middleware"
@@ -55,7 +56,7 @@ const depLatencyClassSlow = 250 * time.Millisecond
 // readiness computation wants. Identity beyond the type name (IDs,
 // digests) is deliberately not copied onto this surface - reachability
 // and latency class only.
-func probeDependencies() ([]*models.DependencyDiagnostic, []string) {
+func probeDependencies(ctx context.Context) ([]*models.DependencyDiagnostic, []string) {
 	deps, err := ApiHooks.NetRecoveryDepsGet()
 	if err != nil {
 		return nil, []string{"dependency identities unavailable: " + err.Error()}
@@ -64,7 +65,7 @@ func probeDependencies() ([]*models.DependencyDiagnostic, []string) {
 	var failures []string
 	for _, d := range deps {
 		start := time.Now()
-		perr := ApiHooks.NetRecoveryDepReady(d.Type)
+		perr := ApiHooks.NetRecoveryDepReady(ctx, d.Type)
 		elapsed := time.Since(start)
 
 		depType, required := d.Type, d.Required
@@ -99,7 +100,7 @@ func ConfigGetDiagnostics(params operations.GetDiagnosticsParams, principal any)
 	boot := snapshot.BootRestoreStateGet()
 	lastRestore := snapshot.LastRestore()
 	autoPersistState := snapshot.AutoPersistStateGet()
-	depDiags, depFailures := probeDependencies()
+	depDiags, depFailures := probeDependencies(params.HTTPRequest.Context())
 	reasons := snapshot.ReadinessReasons(snapshot.BootConfigSettled(), boot, lastRestore, autoPersistState, depFailures)
 
 	ready := len(reasons) == 0
@@ -110,14 +111,14 @@ func ConfigGetDiagnostics(params operations.GetDiagnosticsParams, principal any)
 	bootLegacy, bootDegraded := boot.LegacyFallback, boot.Degraded
 
 	payload := &models.DiagnosticsStatus{
-		Version:          &version,
-		BuildInfo:        cmn.BuildInfo,
-		Product:          cmn.Product,
-		APIVersion:       apiSpecIdentity,
-		UptimeSeconds:    &uptime,
-		Ready:            &ready,
-		ReadyReasons:     reasons,
-		MaintenanceState: &maintState,
+		Version:              &version,
+		BuildInfo:            cmn.BuildInfo,
+		Product:              cmn.Product,
+		APIVersion:           apiSpecIdentity,
+		UptimeSeconds:        &uptime,
+		Ready:                &ready,
+		ReadyReasons:         reasons,
+		MaintenanceState:     &maintState,
 		ExternalDependencies: depDiags,
 		Boot: &models.BootStatus{
 			Profile:        boot.Profile,

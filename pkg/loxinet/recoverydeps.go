@@ -27,6 +27,7 @@
 package loxinet
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"sort"
@@ -179,7 +180,7 @@ func (na *NetAPIStruct) NetRecoveryDepVerify(dep cmn.RecoveryDependency) (string
 // belongs: NetRecoveryDepVerify keeps its configured-only database checks
 // so a store outage never holds a restore hostage, while readiness
 // truthfully reports that same outage.
-func (na *NetAPIStruct) NetRecoveryDepReady(depType string) error {
+func (na *NetAPIStruct) NetRecoveryDepReady(ctx context.Context, depType string) error {
 	switch depType {
 	case cmn.RecoveryDepEngineContracts:
 		// Compiled into the binary: present by construction.
@@ -195,7 +196,7 @@ func (na *NetAPIStruct) NetRecoveryDepReady(depType string) error {
 		if mh.AIKeyService == nil {
 			return fmt.Errorf("data-plane API-key store not initialized")
 		}
-		if err := mh.AIKeyService.Ready(); err != nil {
+		if err := mh.AIKeyService.Ready(ctx); err != nil {
 			return fmt.Errorf("data-plane API-key store not answering: %v", err)
 		}
 		return nil
@@ -204,7 +205,7 @@ func (na *NetAPIStruct) NetRecoveryDepReady(depType string) error {
 		if mh.UserService == nil {
 			return fmt.Errorf("management auth store not initialized")
 		}
-		if err := mh.UserService.Ready(); err != nil {
+		if err := mh.UserService.Ready(ctx); err != nil {
 			return fmt.Errorf("management auth store not answering: %v", err)
 		}
 		return nil

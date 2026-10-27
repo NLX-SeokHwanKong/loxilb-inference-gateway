@@ -22,6 +22,7 @@
 package loxinet
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -274,7 +275,7 @@ func TestNetRecoveryDepVerifyAuditSinkFile(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), missing) {
 		t.Fatalf("a missing file: got %v, want an error naming %s", err, missing)
 	}
-	if err := na.NetRecoveryDepReady(cmn.RecoveryDepAuditSinkFile); err != nil {
+	if err := na.NetRecoveryDepReady(context.Background(), cmn.RecoveryDepAuditSinkFile); err != nil {
 		t.Fatalf("readiness has nothing to probe for a node-local file: %v", err)
 	}
 }

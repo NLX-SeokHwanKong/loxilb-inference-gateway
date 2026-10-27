@@ -16,6 +16,7 @@
 package aikey
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -47,7 +48,7 @@ func TestUserRateLimitValidationRefusals(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := svc.SetUserRateLimit(tc.entry)
+			err := svc.SetUserRateLimit(context.Background(), tc.entry)
 			if err == nil {
 				t.Fatalf("entry must be refused at validation")
 			}
@@ -84,7 +85,7 @@ func TestRateLimitDefaultsValidationRefusals(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := svc.SetRateLimitDefaults(tc.entry)
+			err := svc.SetRateLimitDefaults(context.Background(), tc.entry)
 			if err == nil {
 				t.Fatalf("entry must be refused at validation")
 			}
@@ -111,7 +112,7 @@ func TestUserRateLimitRoundTrip(t *testing.T) {
 			{Model: "mistral-7b", TokensPerMin: 300},
 		},
 	}
-	if err := svc.SetUserRateLimit(entry); err != nil {
+	if err := svc.SetUserRateLimit(context.Background(), entry); err != nil {
 		t.Fatalf("set: %v", err)
 	}
 
@@ -124,7 +125,7 @@ func TestUserRateLimitRoundTrip(t *testing.T) {
 		t.Fatalf("model read: got (%d,%v) want (400,nil)", mtpm, err)
 	}
 
-	full, err := svc.GetUserRateLimitEntry("t1", "alice")
+	full, err := svc.GetUserRateLimitEntry(context.Background(), "t1", "alice")
 	if err != nil {
 		t.Fatalf("config read: %v", err)
 	}
@@ -135,26 +136,26 @@ func TestUserRateLimitRoundTrip(t *testing.T) {
 	// Model limits REPLACE as a set: re-post with one model, the other must
 	// be gone — a merge here would resurrect removed limits forever.
 	entry.ModelLimits = []cmn.UserModelRateLimit{{Model: "llama-70b", TokensPerMin: 200}}
-	if err := svc.SetUserRateLimit(entry); err != nil {
+	if err := svc.SetUserRateLimit(context.Background(), entry); err != nil {
 		t.Fatalf("replace: %v", err)
 	}
-	full, err = svc.GetUserRateLimitEntry("t1", "alice")
+	full, err = svc.GetUserRateLimitEntry(context.Background(), "t1", "alice")
 	if err != nil || len(full.ModelLimits) != 1 || full.ModelLimits[0].TokensPerMin != 200 {
 		t.Fatalf("after replace: %+v, %v", full, err)
 	}
 
-	list, err := svc.ListUserRateLimits("t1")
+	list, err := svc.ListUserRateLimits(context.Background(), "t1")
 	if err != nil || len(list) != 1 || list[0].UserID != "alice" {
 		t.Fatalf("list: %+v, %v", list, err)
 	}
 
-	if err := svc.DeleteUserRateLimit("t1", "alice"); err != nil {
+	if err := svc.DeleteUserRateLimit(context.Background(), "t1", "alice"); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 	// A missing user rate-limit row reports itself as a user rate-limit row,
 	// not as an API key. It still satisfies errors.Is(err, ErrNotFound), which
 	// is what the REST layer classifies 404 on.
-	_, err = svc.GetUserRateLimitEntry("t1", "alice")
+	_, err = svc.GetUserRateLimitEntry(context.Background(), "t1", "alice")
 	if !errors.Is(err, ErrUserRateLimitNotFound) {
 		t.Fatalf("after delete: want ErrUserRateLimitNotFound, got %v", err)
 	}
@@ -164,7 +165,7 @@ func TestUserRateLimitRoundTrip(t *testing.T) {
 	if errors.Is(err, ErrKeyNotFound) {
 		t.Fatalf("after delete: a user rate-limit row must not report as a missing API key: %v", err)
 	}
-	if err := svc.DeleteUserRateLimit("t1", "alice"); !errors.Is(err, ErrUserRateLimitNotFound) {
+	if err := svc.DeleteUserRateLimit(context.Background(), "t1", "alice"); !errors.Is(err, ErrUserRateLimitNotFound) {
 		t.Fatalf("double delete: want ErrUserRateLimitNotFound, got %v", err)
 	}
 	// The hot path reads the confirmed "no row" — zeroes with nil error.
@@ -179,7 +180,7 @@ func TestUserRateLimitRoundTrip(t *testing.T) {
 // for refuses instead of reading as unlimited.
 func TestUserRateLimitOutageServesLastKnown(t *testing.T) {
 	svc := storeFixture(t)
-	if err := svc.SetUserRateLimit(cmn.UserRateLimitEntry{TenantID: "t1", UserID: "alice", RPS: 7}); err != nil {
+	if err := svc.SetUserRateLimit(context.Background(), cmn.UserRateLimitEntry{TenantID: "t1", UserID: "alice", RPS: 7}); err != nil {
 		t.Fatalf("set: %v", err)
 	}
 	// Prime the miss for bob too: the store CONFIRMS he has no row.
@@ -211,12 +212,12 @@ func TestUserRateLimitOutageServesLastKnown(t *testing.T) {
 func TestRateLimitDefaultsRoundTrip(t *testing.T) {
 	svc := storeFixture(t)
 
-	if err := svc.SetRateLimitDefaults(cmn.RateLimitDefaultsEntry{
+	if err := svc.SetRateLimitDefaults(context.Background(), cmn.RateLimitDefaultsEntry{
 		Scope: cmn.RateLimitScopeGlobal, DefaultUserRPS: 3, DefaultTenantTPM: 9000,
 	}); err != nil {
 		t.Fatalf("set global: %v", err)
 	}
-	if err := svc.SetRateLimitDefaults(cmn.RateLimitDefaultsEntry{
+	if err := svc.SetRateLimitDefaults(context.Background(), cmn.RateLimitDefaultsEntry{
 		Scope: cmn.RateLimitScopeRule, RuleIdent: "10.0.0.1:2040", VipSharedRPS: 2,
 	}); err != nil {
 		t.Fatalf("set rule: %v", err)
@@ -235,10 +236,10 @@ func TestRateLimitDefaultsRoundTrip(t *testing.T) {
 		t.Fatalf("unnamed rule: ok=%v err=%v, want (false, nil)", ok, err)
 	}
 
-	if err := svc.DeleteRateLimitDefaults(cmn.RateLimitScopeGlobal, ""); err != nil {
+	if err := svc.DeleteRateLimitDefaults(context.Background(), cmn.RateLimitScopeGlobal, ""); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
-	_, err = svc.GetRateLimitDefaultsEntry(cmn.RateLimitScopeGlobal, "")
+	_, err = svc.GetRateLimitDefaultsEntry(context.Background(), cmn.RateLimitScopeGlobal, "")
 	if !errors.Is(err, ErrRateLimitDefaultsNotFound) {
 		t.Fatalf("after delete: want ErrRateLimitDefaultsNotFound, got %v", err)
 	}
@@ -255,7 +256,7 @@ func TestRateLimitDefaultsRoundTrip(t *testing.T) {
 // validation see the new values.
 func TestPatchAPIKeyRateLimits(t *testing.T) {
 	svc := storeFixture(t)
-	_, keyID, err := svc.CreateAPIKey(cmn.ApiKeyEntry{
+	_, keyID, err := svc.CreateAPIKey(context.Background(), cmn.ApiKeyEntry{
 		TenantID: "t1", Name: "patch-me", AllowedModels: []string{"m1"},
 		RateLimitRPS: 10, BurstSize: 20, TokensPerMin: 3000,
 	})
@@ -264,7 +265,7 @@ func TestPatchAPIKeyRateLimits(t *testing.T) {
 	}
 
 	newRPS := 4
-	if err := svc.PatchAPIKeyRateLimits(keyID, &newRPS, nil, nil); err != nil {
+	if err := svc.PatchAPIKeyRateLimits(context.Background(), keyID, &newRPS, nil, nil); err != nil {
 		t.Fatalf("patch rps: %v", err)
 	}
 	key, err := svc.GetAPIKeyByID(keyID)
@@ -279,15 +280,15 @@ func TestPatchAPIKeyRateLimits(t *testing.T) {
 	}
 
 	neg := -1
-	if err := svc.PatchAPIKeyRateLimits(keyID, nil, nil, &neg); err == nil {
+	if err := svc.PatchAPIKeyRateLimits(context.Background(), keyID, nil, nil, &neg); err == nil {
 		t.Fatalf("negative tpm must be refused")
 	}
-	if err := svc.PatchAPIKeyRateLimits("no-such-key", &newRPS, nil, nil); !errors.Is(err, ErrKeyNotFound) {
+	if err := svc.PatchAPIKeyRateLimits(context.Background(), "no-such-key", &newRPS, nil, nil); !errors.Is(err, ErrKeyNotFound) {
 		t.Fatalf("unknown key: want ErrKeyNotFound, got %v", err)
 	}
 	// All-nil is a no-op, not an error: PATCH bodies naming only
 	// allowed_models/enabled route the rate fields here as nils.
-	if err := svc.PatchAPIKeyRateLimits(keyID, nil, nil, nil); err != nil {
+	if err := svc.PatchAPIKeyRateLimits(context.Background(), keyID, nil, nil, nil); err != nil {
 		t.Fatalf("all-nil patch: %v", err)
 	}
 }
@@ -318,7 +319,7 @@ func TestUserModelRateLimitRemovalLeavesNoCachedQuota(t *testing.T) {
 			{Model: "mistral-7b", TokensPerMin: 300},
 		},
 	}
-	if err := svc.SetUserRateLimit(entry); err != nil {
+	if err := svc.SetUserRateLimit(context.Background(), entry); err != nil {
 		t.Fatalf("set: %v", err)
 	}
 	// Prime the hot path for BOTH models: a cache that was never populated
@@ -333,7 +334,7 @@ func TestUserModelRateLimitRemovalLeavesNoCachedQuota(t *testing.T) {
 
 	// Replace the set with llama only. mistral's row is deleted.
 	entry.ModelLimits = []cmn.UserModelRateLimit{{Model: "llama-70b", TokensPerMin: 200}}
-	if err := svc.SetUserRateLimit(entry); err != nil {
+	if err := svc.SetUserRateLimit(context.Background(), entry); err != nil {
 		t.Fatalf("replace: %v", err)
 	}
 	if tpm, err := svc.GetUserModelRateLimit("t1", "alice", "mistral-7b"); err != nil || tpm != 0 {
@@ -356,7 +357,7 @@ func TestUserModelRateLimitRemovalLeavesNoCachedQuota(t *testing.T) {
 
 	// The DELETE path clears model rows the same wholesale way.
 	svc = storeFixture(t)
-	if err := svc.SetUserRateLimit(cmn.UserRateLimitEntry{
+	if err := svc.SetUserRateLimit(context.Background(), cmn.UserRateLimitEntry{
 		TenantID: "t1", UserID: "bob", RPS: 5,
 		ModelLimits: []cmn.UserModelRateLimit{{Model: "llama-70b", TokensPerMin: 400}},
 	}); err != nil {
@@ -365,7 +366,7 @@ func TestUserModelRateLimitRemovalLeavesNoCachedQuota(t *testing.T) {
 	if tpm, err := svc.GetUserModelRateLimit("t1", "bob", "llama-70b"); err != nil || tpm != 400 {
 		t.Fatalf("prime bob: got (%d,%v) want (400,nil)", tpm, err)
 	}
-	if err := svc.DeleteUserRateLimit("t1", "bob"); err != nil {
+	if err := svc.DeleteUserRateLimit(context.Background(), "t1", "bob"); err != nil {
 		t.Fatalf("delete bob: %v", err)
 	}
 	if tpm, err := svc.GetUserModelRateLimit("t1", "bob", "llama-70b"); err != nil || tpm != 0 {
@@ -405,13 +406,13 @@ func TestTenantAndKeySurfacesRefuseAliasingIdentities(t *testing.T) {
 	}
 	for _, tc := range bad {
 		t.Run("tenant_ratelimit/"+tc.name, func(t *testing.T) {
-			assertValidationRefusal(t, svc.SetTenantRateLimit(tc.tenant, 1, 0, 0))
+			assertValidationRefusal(t, svc.SetTenantRateLimit(context.Background(), tc.tenant, 1, 0, 0))
 		})
 		t.Run("tenant_model_ratelimit/"+tc.name, func(t *testing.T) {
-			assertValidationRefusal(t, svc.SetTenantModelRateLimit(tc.tenant, "gpt-4", 10))
+			assertValidationRefusal(t, svc.SetTenantModelRateLimit(context.Background(), tc.tenant, "gpt-4", 10))
 		})
 		t.Run("apikey_create/"+tc.name, func(t *testing.T) {
-			_, _, err := svc.CreateAPIKey(cmn.ApiKeyEntry{TenantID: tc.tenant, Name: "k"})
+			_, _, err := svc.CreateAPIKey(context.Background(), cmn.ApiKeyEntry{TenantID: tc.tenant, Name: "k"})
 			assertValidationRefusal(t, err)
 		})
 	}
@@ -420,7 +421,7 @@ func TestTenantAndKeySurfacesRefuseAliasingIdentities(t *testing.T) {
 	// side, and the ad-hoc check this surface used to carry saw only the pipe.
 	for _, model := range []string{"gpt|4", "um:t1|alice|gpt-4", "kq:abc"} {
 		t.Run("tenant_model_ratelimit/model "+model, func(t *testing.T) {
-			assertValidationRefusal(t, svc.SetTenantModelRateLimit("t1", model, 10))
+			assertValidationRefusal(t, svc.SetTenantModelRateLimit(context.Background(), "t1", model, 10))
 		})
 	}
 
@@ -431,15 +432,15 @@ func TestTenantAndKeySurfacesRefuseAliasingIdentities(t *testing.T) {
 		name string
 		err  error
 	}{
-		{"tenant_ratelimit", svc.SetTenantRateLimit("t1", 1, 0, 0)},
-		{"tenant_model_ratelimit", svc.SetTenantModelRateLimit("t1", "gpt-4", 10)},
+		{"tenant_ratelimit", svc.SetTenantRateLimit(context.Background(), "t1", 1, 0, 0)},
+		{"tenant_model_ratelimit", svc.SetTenantModelRateLimit(context.Background(), "t1", "gpt-4", 10)},
 	} {
 		if !errors.Is(tc.err, ErrDBUnavailable) {
 			t.Errorf("%s: a valid identity was refused before the store (got %v) — "+
 				"the guard is rejecting ordinary names", tc.name, tc.err)
 		}
 	}
-	if _, _, err := svc.CreateAPIKey(cmn.ApiKeyEntry{TenantID: "t1", Name: "k"}); !errors.Is(err, ErrDBUnavailable) {
+	if _, _, err := svc.CreateAPIKey(context.Background(), cmn.ApiKeyEntry{TenantID: "t1", Name: "k"}); !errors.Is(err, ErrDBUnavailable) {
 		t.Errorf("apikey_create: a valid tenant was refused before the store (got %v)", err)
 	}
 }

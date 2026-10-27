@@ -18,6 +18,7 @@ package common
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net"
@@ -2609,6 +2610,15 @@ var ErrAiModelProfileNotFound = errors.New("model-profile: not found in publishe
 // the credential, and maps to HTTP 503.
 var ErrDBUnavailable = errors.New("user database unavailable")
 
+// ErrStoreOutcomeUnknown is returned by a store WRITE whose statement was
+// handed to the server and then not answered within the operation budget.
+// It is deliberately not ErrDBUnavailable: that one means the store was
+// never asked, so the caller may retry at once; this one means the server
+// may still commit the statement after the caller has given up, so the
+// caller must read the row back before deciding whether to retry. It maps to
+// HTTP 504 with the code the plane's handlers document.
+var ErrStoreOutcomeUnknown = errors.New("store write outcome unknown: the statement was sent and not answered within the budget; read back before retrying")
+
 // ErrKeyStoreUnconfigured is returned by the data-plane API-key hooks when no
 // key store has been configured at all. It is distinct from ErrDBUnavailable:
 // that one means a store exists and cannot be reached, this one means the
@@ -2833,7 +2843,7 @@ type NetHookInterface interface {
 	// NetRecoveryDepVerify, whose database checks are configured-only so
 	// a store outage can never hold a restore hostage -- readiness is
 	// where reachability belongs.
-	NetRecoveryDepReady(depType string) error
+	NetRecoveryDepReady(ctx context.Context, depType string) error
 	// NetKvExactTokenizerReady reports whether a KV-exact tokenizer for
 	// modelName can be loaded right now, with the same fresh probe rule
 	// admission uses. The capability surface reads it so a client asking
@@ -2915,19 +2925,19 @@ type NetHookInterface interface {
 	NetBFDAdd(bm *BFDMod) (int, error)
 	NetBFDDel(bm *BFDMod) (int, error)
 
-	NetUserAdd(um *User) (int, error)
-	NetUserBootstrap(um *User) (int, error)
-	NetUserGet() ([]User, error)
+	NetUserAdd(ctx context.Context, um *User) (int, error)
+	NetUserBootstrap(ctx context.Context, um *User) (int, error)
+	NetUserGet(ctx context.Context) ([]User, error)
 	// NetUserDelegationAllowed reports whether the named account may
 	// delegate: whether an originator a request names on its behalf is to
 	// be trusted. An unknown account is not allowed; a store that cannot
 	// answer returns its error and the caller treats that as not allowed.
-	NetUserDelegationAllowed(username string) (bool, error)
-	NetUserDel(ID int) error
-	NetUserUpdate(um *User) error
-	NetUserLogin(um *User) (string, bool, error)
-	NetUserLogout(token string) error
-	NetUserValidate(token string) (interface{}, error)
+	NetUserDelegationAllowed(ctx context.Context, username string) (bool, error)
+	NetUserDel(ctx context.Context, ID int) error
+	NetUserUpdate(ctx context.Context, um *User) error
+	NetUserLogin(ctx context.Context, um *User) (string, bool, error)
+	NetUserLogout(ctx context.Context, token string) error
+	NetUserValidate(ctx context.Context, token string) (interface{}, error)
 
 	// OAuth2
 	NetOauthUserTokenStore(userEmail, token, refreshToken string, expiry time.Time) (string, bool, error)
@@ -2995,33 +3005,39 @@ type NetHookInterface interface {
 	NetIPsecCertificateExportAll() ([]IPsecCertificateMod, error)
 	NetIPsecCACertificateExportAll() ([]IPsecCACertificateMod, error)
 
-	// AI Gateway - API key lifecycle management
-	NetAPIKeyCreate(entry ApiKeyEntry) (string, string, error)
-	NetAPIKeyList(tenantID string) ([]ApiKeySummary, error)
-	NetAPIKeyGet(keyID string) (*ApiKeySummary, error)
-	NetAPIKeyRevoke(keyID string) error
-	NetAPIKeyDelete(keyID string) error
-	NetAPIKeyPatch(keyID string, allowedModels []string, enabled *bool) error
-	NetAPIKeyRateLimitPatch(keyID string, rps, burstSize, tokensPerMin *int) error
-	NetTenantRateLimitSet(tenantID string, rps, tokensPerMin, burstPct int, modelLimits []TenantModelRateLimit) error
-	NetTenantRateLimitGet(tenantID string) (*TenantRateLimitEntry, error)
+	// AI Gateway - API key lifecycle management.
+	//
+	// Every hook that reaches a store takes the request's context first:
+	// the store call it ends in runs under the operation budget AND under
+	// the client's connection, so a client that hangs up cancels its own
+	// statement instead of leaving a handler to finish a write nobody will
+	// read the result of. (The same holds for the NetUser* hooks above.)
+	NetAPIKeyCreate(ctx context.Context, entry ApiKeyEntry) (string, string, error)
+	NetAPIKeyList(ctx context.Context, tenantID string) ([]ApiKeySummary, error)
+	NetAPIKeyGet(ctx context.Context, keyID string) (*ApiKeySummary, error)
+	NetAPIKeyRevoke(ctx context.Context, keyID string) error
+	NetAPIKeyDelete(ctx context.Context, keyID string) error
+	NetAPIKeyPatch(ctx context.Context, keyID string, allowedModels []string, enabled *bool) error
+	NetAPIKeyRateLimitPatch(ctx context.Context, keyID string, rps, burstSize, tokensPerMin *int) error
+	NetTenantRateLimitSet(ctx context.Context, tenantID string, rps, tokensPerMin, burstPct int, modelLimits []TenantModelRateLimit) error
+	NetTenantRateLimitGet(ctx context.Context, tenantID string) (*TenantRateLimitEntry, error)
 
 	// AI Gateway - objectives (named priorities) and the class fields of
 	// tenants and keys. All of it lives in the key store.
-	NetAIObjectiveGet() (AIObjectiveList, error)
-	NetAIObjectiveAdd(*AIObjectiveEntry) (int, error)
-	NetAIObjectiveDel(name string) (int, error)
-	NetTenantClassPatch(tenantID string, patch AIClassPatch) error
-	NetAPIKeyClassPatch(keyID string, patch AIClassPatch) error
+	NetAIObjectiveGet(ctx context.Context) (AIObjectiveList, error)
+	NetAIObjectiveAdd(ctx context.Context, e *AIObjectiveEntry) (int, error)
+	NetAIObjectiveDel(ctx context.Context, name string) (int, error)
+	NetTenantClassPatch(ctx context.Context, tenantID string, patch AIClassPatch) error
+	NetAPIKeyClassPatch(ctx context.Context, keyID string, patch AIClassPatch) error
 
 	// AI Gateway - QoS ladder: per-user limits and configurable defaults.
-	NetUserRateLimitSet(entry UserRateLimitEntry) error
-	NetUserRateLimitGet(tenantID, userID string) (*UserRateLimitEntry, error)
-	NetUserRateLimitList(tenantID string) ([]UserRateLimitEntry, error)
-	NetUserRateLimitDelete(tenantID, userID string) error
-	NetRateLimitDefaultsSet(entry RateLimitDefaultsEntry) error
-	NetRateLimitDefaultsGet(scope, ruleIdent string) (*RateLimitDefaultsEntry, error)
-	NetRateLimitDefaultsDelete(scope, ruleIdent string) error
+	NetUserRateLimitSet(ctx context.Context, entry UserRateLimitEntry) error
+	NetUserRateLimitGet(ctx context.Context, tenantID, userID string) (*UserRateLimitEntry, error)
+	NetUserRateLimitList(ctx context.Context, tenantID string) ([]UserRateLimitEntry, error)
+	NetUserRateLimitDelete(ctx context.Context, tenantID, userID string) error
+	NetRateLimitDefaultsSet(ctx context.Context, entry RateLimitDefaultsEntry) error
+	NetRateLimitDefaultsGet(ctx context.Context, scope, ruleIdent string) (*RateLimitDefaultsEntry, error)
+	NetRateLimitDefaultsDelete(ctx context.Context, scope, ruleIdent string) error
 
 	// Bridge-VID allocator indirection.
 	// Thin wrappers over pkg/loxinet.{GetOrAllocBridgeVid,LookupBridgeVid,

@@ -48,7 +48,10 @@ type mockRateLimitService struct {
 	tenantBurst int
 	modelTPM    map[string]int // per-model tokens_per_min; nil = no model quotas
 	keyByID     map[string]*cmn.ApiKeySummary
-	limitsErr   error
+	// keyByIDErr, when set, is what GetAPIKeyByID answers for every ID: the
+	// store-outage shape (wrapping cmn.ErrDBUnavailable) or a verdict.
+	keyByIDErr error
+	limitsErr  error
 
 	// Ladder rows. userRows is keyed "tenant|user"; userModelTPM
 	// "tenant|user|model"; defaults nil = no defaults rows configured.
@@ -70,6 +73,9 @@ func (m *mockRateLimitService) GetTenantModelRateLimit(_, model string) (int, er
 }
 
 func (m *mockRateLimitService) GetAPIKeyByID(keyID string) (*cmn.ApiKeySummary, error) {
+	if m.keyByIDErr != nil {
+		return nil, m.keyByIDErr
+	}
 	if m.keyByID != nil {
 		if key, ok := m.keyByID[keyID]; ok {
 			return key, nil

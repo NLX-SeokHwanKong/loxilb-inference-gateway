@@ -17,6 +17,7 @@
 package loxinet
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -1519,47 +1520,47 @@ func (na *NetAPIStruct) NetGoBGPPolicyApplyDel(param *cmn.GoBGPPolicyApply) (int
 }
 
 // NetUserAdd - Add a user in loxilb
-func (na *NetAPIStruct) NetUserAdd(param *cmn.User) (int, error) {
-	return mh.UserService.AddUser(*param)
+func (na *NetAPIStruct) NetUserAdd(ctx context.Context, param *cmn.User) (int, error) {
+	return mh.UserService.AddUser(ctx, *param)
 }
 
 // NetUserBootstrap - Create the first user in loxilb, only while none exists
-func (na *NetAPIStruct) NetUserBootstrap(param *cmn.User) (int, error) {
-	return mh.UserService.BootstrapUser(*param)
+func (na *NetAPIStruct) NetUserBootstrap(ctx context.Context, param *cmn.User) (int, error) {
+	return mh.UserService.BootstrapUser(ctx, *param)
 }
 
 // NetUserGet - Get a user in loxilb
-func (na *NetAPIStruct) NetUserGet() ([]cmn.User, error) {
-	return mh.UserService.GetUsers()
+func (na *NetAPIStruct) NetUserGet(ctx context.Context) ([]cmn.User, error) {
+	return mh.UserService.GetUsers(ctx)
 }
 
 // NetUserDelegationAllowed - whether the account may delegate
-func (na *NetAPIStruct) NetUserDelegationAllowed(username string) (bool, error) {
-	return mh.UserService.DelegationAllowed(username)
+func (na *NetAPIStruct) NetUserDelegationAllowed(ctx context.Context, username string) (bool, error) {
+	return mh.UserService.DelegationAllowed(ctx, username)
 }
 
 // NetUserDel - Delete a user in loxilb
-func (na *NetAPIStruct) NetUserDel(ID int) error {
-	return mh.UserService.DeleteUser(ID)
+func (na *NetAPIStruct) NetUserDel(ctx context.Context, ID int) error {
+	return mh.UserService.DeleteUser(ctx, ID)
 }
 
 // NetUserUpdate - Update a user in loxilb
-func (na *NetAPIStruct) NetUserUpdate(param *cmn.User) error {
-	return mh.UserService.UpdateUser(*param)
+func (na *NetAPIStruct) NetUserUpdate(ctx context.Context, param *cmn.User) error {
+	return mh.UserService.UpdateUser(ctx, *param)
 }
 
 // NetUserLogin - Validate a user in loxilb
-func (na *NetAPIStruct) NetUserLogin(param *cmn.User) (string, bool, error) {
-	return mh.UserService.Login(param.Username, param.Password)
+func (na *NetAPIStruct) NetUserLogin(ctx context.Context, param *cmn.User) (string, bool, error) {
+	return mh.UserService.Login(ctx, param.Username, param.Password)
 }
 
-func (na *NetAPIStruct) NetUserValidate(token string) (interface{}, error) {
-	return mh.UserService.ValidateToken(token)
+func (na *NetAPIStruct) NetUserValidate(ctx context.Context, token string) (interface{}, error) {
+	return mh.UserService.ValidateToken(ctx, token)
 }
 
 // NetUserLogout - Validate a user in loxilb
-func (na *NetAPIStruct) NetUserLogout(tokenString string) error {
-	return mh.UserService.Logout(tokenString)
+func (na *NetAPIStruct) NetUserLogout(ctx context.Context, tokenString string) error {
+	return mh.UserService.Logout(ctx, tokenString)
 }
 
 // NetOauthUserTokenStore - User Log in loxilb using OAuth
@@ -2032,24 +2033,24 @@ func keyStoreAbsentErr() error {
 }
 
 // NetAPIKeyCreate - Create a new API key for a tenant.
-func (na *NetAPIStruct) NetAPIKeyCreate(entry cmn.ApiKeyEntry) (string, string, error) {
+func (na *NetAPIStruct) NetAPIKeyCreate(ctx context.Context, entry cmn.ApiKeyEntry) (string, string, error) {
 	if mh.AIKeyService == nil {
 		return "", "", keyStoreAbsentErr()
 	}
-	return mh.AIKeyService.CreateAPIKey(entry)
+	return mh.AIKeyService.CreateAPIKey(ctx, entry)
 }
 
 // NetAPIKeyList - List API keys. If tenantID is empty, returns all keys.
 // Each key carries its class fields as the store holds them.
-func (na *NetAPIStruct) NetAPIKeyList(tenantID string) ([]cmn.ApiKeySummary, error) {
+func (na *NetAPIStruct) NetAPIKeyList(ctx context.Context, tenantID string) ([]cmn.ApiKeySummary, error) {
 	if mh.AIKeyService == nil {
 		return nil, keyStoreAbsentErr()
 	}
-	keys, err := mh.AIKeyService.ListAPIKeys(tenantID)
+	keys, err := mh.AIKeyService.ListAPIKeys(ctx, tenantID)
 	if err != nil {
 		return nil, err
 	}
-	classes, err := mh.AIKeyService.ListAPIKeyClasses()
+	classes, err := mh.AIKeyService.ListAPIKeyClasses(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -2062,7 +2063,7 @@ func (na *NetAPIStruct) NetAPIKeyList(tenantID string) ([]cmn.ApiKeySummary, err
 // NetAPIKeyGet - Retrieve a single API key by its key_id, with its class
 // fields as the store holds them. The summary the store hands out may be
 // its cached one, so the class is laid over a copy.
-func (na *NetAPIStruct) NetAPIKeyGet(keyID string) (*cmn.ApiKeySummary, error) {
+func (na *NetAPIStruct) NetAPIKeyGet(ctx context.Context, keyID string) (*cmn.ApiKeySummary, error) {
 	if mh.AIKeyService == nil {
 		return nil, keyStoreAbsentErr()
 	}
@@ -2071,45 +2072,45 @@ func (na *NetAPIStruct) NetAPIKeyGet(keyID string) (*cmn.ApiKeySummary, error) {
 		return nil, err
 	}
 	out := *key
-	if out.AIClassPolicy, err = mh.AIKeyService.GetAPIKeyClass(keyID); err != nil {
+	if out.AIClassPolicy, err = mh.AIKeyService.GetAPIKeyClass(ctx, keyID); err != nil {
 		return nil, err
 	}
 	return &out, nil
 }
 
 // NetAPIKeyRevoke - Disable an API key and evict it from cache.
-func (na *NetAPIStruct) NetAPIKeyRevoke(keyID string) error {
+func (na *NetAPIStruct) NetAPIKeyRevoke(ctx context.Context, keyID string) error {
 	if mh.AIKeyService == nil {
 		return keyStoreAbsentErr()
 	}
-	return mh.AIKeyService.RevokeAPIKey(keyID)
+	return mh.AIKeyService.RevokeAPIKey(ctx, keyID)
 }
 
 // NetAPIKeyDelete - Permanently delete an API key and evict it from cache.
-func (na *NetAPIStruct) NetAPIKeyDelete(keyID string) error {
+func (na *NetAPIStruct) NetAPIKeyDelete(ctx context.Context, keyID string) error {
 	if mh.AIKeyService == nil {
 		return keyStoreAbsentErr()
 	}
-	return mh.AIKeyService.DeleteAPIKey(keyID)
+	return mh.AIKeyService.DeleteAPIKey(ctx, keyID)
 }
 
 // NetAPIKeyPatch - Update allowed_models and/or enabled for an API key.
-func (na *NetAPIStruct) NetAPIKeyPatch(keyID string, allowedModels []string, enabled *bool) error {
+func (na *NetAPIStruct) NetAPIKeyPatch(ctx context.Context, keyID string, allowedModels []string, enabled *bool) error {
 	if mh.AIKeyService == nil {
 		return keyStoreAbsentErr()
 	}
-	return mh.AIKeyService.PatchAPIKey(keyID, allowedModels, enabled)
+	return mh.AIKeyService.PatchAPIKey(ctx, keyID, allowedModels, enabled)
 }
 
 // NetAPIKeyRateLimitPatch - Update an existing key's rate-limit fields (the
 // PATCH gap fix: they were settable at creation and then frozen). The live
 // RPS bucket is reset in the same call — the push path — so the new limit
 // binds on the next request instead of after the config cache's TTL.
-func (na *NetAPIStruct) NetAPIKeyRateLimitPatch(keyID string, rps, burstSize, tokensPerMin *int) error {
+func (na *NetAPIStruct) NetAPIKeyRateLimitPatch(ctx context.Context, keyID string, rps, burstSize, tokensPerMin *int) error {
 	if mh.AIKeyService == nil {
 		return keyStoreAbsentErr()
 	}
-	if err := mh.AIKeyService.PatchAPIKeyRateLimits(keyID, rps, burstSize, tokensPerMin); err != nil {
+	if err := mh.AIKeyService.PatchAPIKeyRateLimits(ctx, keyID, rps, burstSize, tokensPerMin); err != nil {
 		return err
 	}
 	if rps != nil || burstSize != nil {
@@ -2124,15 +2125,15 @@ func (na *NetAPIStruct) NetAPIKeyRateLimitPatch(keyID string, rps, burstSize, to
 
 // NetTenantRateLimitSet - Upsert per-tenant rate limit configuration,
 // including any per-model token quotas carried alongside it.
-func (na *NetAPIStruct) NetTenantRateLimitSet(tenantID string, rps, tokensPerMin, burstPct int, modelLimits []cmn.TenantModelRateLimit) error {
+func (na *NetAPIStruct) NetTenantRateLimitSet(ctx context.Context, tenantID string, rps, tokensPerMin, burstPct int, modelLimits []cmn.TenantModelRateLimit) error {
 	if mh.AIKeyService == nil {
 		return keyStoreAbsentErr()
 	}
-	if err := mh.AIKeyService.SetTenantRateLimit(tenantID, rps, tokensPerMin, burstPct); err != nil {
+	if err := mh.AIKeyService.SetTenantRateLimit(ctx, tenantID, rps, tokensPerMin, burstPct); err != nil {
 		return err
 	}
 	for _, ml := range modelLimits {
-		if err := mh.AIKeyService.SetTenantModelRateLimit(tenantID, ml.Model, ml.TokensPerMin); err != nil {
+		if err := mh.AIKeyService.SetTenantModelRateLimit(ctx, tenantID, ml.Model, ml.TokensPerMin); err != nil {
 			return err
 		}
 	}
@@ -2156,15 +2157,15 @@ func (na *NetAPIStruct) NetTenantRateLimitSet(tenantID string, rps, tokensPerMin
 
 // NetTenantRateLimitGet - Retrieve the full rate limit entry for a tenant,
 // with its class fields.
-func (na *NetAPIStruct) NetTenantRateLimitGet(tenantID string) (*cmn.TenantRateLimitEntry, error) {
+func (na *NetAPIStruct) NetTenantRateLimitGet(ctx context.Context, tenantID string) (*cmn.TenantRateLimitEntry, error) {
 	if mh.AIKeyService == nil {
 		return nil, keyStoreAbsentErr()
 	}
-	entry, err := mh.AIKeyService.GetTenantRateLimitEntry(tenantID)
+	entry, err := mh.AIKeyService.GetTenantRateLimitEntry(ctx, tenantID)
 	if err != nil {
 		return nil, err
 	}
-	if entry.AIClassPolicy, err = mh.AIKeyService.GetTenantClass(tenantID); err != nil {
+	if entry.AIClassPolicy, err = mh.AIKeyService.GetTenantClass(ctx, tenantID); err != nil {
 		return nil, err
 	}
 	return entry, nil
@@ -2172,53 +2173,53 @@ func (na *NetAPIStruct) NetTenantRateLimitGet(tenantID string) (*cmn.TenantRateL
 
 // NetTenantClassPatch - change the class fields of a tenant that the patch
 // names. The tenant's limits are not touched.
-func (na *NetAPIStruct) NetTenantClassPatch(tenantID string, patch cmn.AIClassPatch) error {
+func (na *NetAPIStruct) NetTenantClassPatch(ctx context.Context, tenantID string, patch cmn.AIClassPatch) error {
 	if mh.AIKeyService == nil {
 		return keyStoreAbsentErr()
 	}
-	return mh.AIKeyService.PatchTenantClass(tenantID, patch)
+	return mh.AIKeyService.PatchTenantClass(ctx, tenantID, patch)
 }
 
 // NetAPIKeyClassPatch - change the class fields of a key that the patch
 // names.
-func (na *NetAPIStruct) NetAPIKeyClassPatch(keyID string, patch cmn.AIClassPatch) error {
+func (na *NetAPIStruct) NetAPIKeyClassPatch(ctx context.Context, keyID string, patch cmn.AIClassPatch) error {
 	if mh.AIKeyService == nil {
 		return keyStoreAbsentErr()
 	}
-	return mh.AIKeyService.PatchAPIKeyClass(keyID, patch)
+	return mh.AIKeyService.PatchAPIKeyClass(ctx, keyID, patch)
 }
 
 // NetAIObjectiveGet - list the objectives as the store holds them, or, while
 // it does not answer, as this gateway applies them, with their source.
-func (na *NetAPIStruct) NetAIObjectiveGet() (cmn.AIObjectiveList, error) {
+func (na *NetAPIStruct) NetAIObjectiveGet(ctx context.Context) (cmn.AIObjectiveList, error) {
 	if mh.AIKeyService == nil {
 		return cmn.AIObjectiveList{}, keyStoreAbsentErr()
 	}
-	return mh.AIKeyService.ObjectiveList()
+	return mh.AIKeyService.ObjectiveList(ctx)
 }
 
 // NetAIObjectiveAdd - create or replace an objective. The class snapshot
 // is refreshed by the store before it returns, so the next request on this
 // node is decided with it.
-func (na *NetAPIStruct) NetAIObjectiveAdd(e *cmn.AIObjectiveEntry) (int, error) {
+func (na *NetAPIStruct) NetAIObjectiveAdd(ctx context.Context, e *cmn.AIObjectiveEntry) (int, error) {
 	if mh.AIKeyService == nil {
 		return -1, keyStoreAbsentErr()
 	}
 	if e == nil {
 		return -1, cmn.NewValidationError("name", "an objective is required")
 	}
-	if err := mh.AIKeyService.SetObjective(*e); err != nil {
+	if err := mh.AIKeyService.SetObjective(ctx, *e); err != nil {
 		return -1, err
 	}
 	return 0, nil
 }
 
 // NetAIObjectiveDel - delete an objective.
-func (na *NetAPIStruct) NetAIObjectiveDel(name string) (int, error) {
+func (na *NetAPIStruct) NetAIObjectiveDel(ctx context.Context, name string) (int, error) {
 	if mh.AIKeyService == nil {
 		return -1, keyStoreAbsentErr()
 	}
-	if err := mh.AIKeyService.DeleteObjective(name); err != nil {
+	if err := mh.AIKeyService.DeleteObjective(ctx, name); err != nil {
 		return -1, err
 	}
 	return 0, nil
@@ -2229,11 +2230,11 @@ func (na *NetAPIStruct) NetAIObjectiveDel(name string) (int, error) {
 // new limit binds on the next request on this node instead of after the
 // config cache's TTL. (Peers converge within their own TTL — the same
 // posture tenant limits have always had.)
-func (na *NetAPIStruct) NetUserRateLimitSet(entry cmn.UserRateLimitEntry) error {
+func (na *NetAPIStruct) NetUserRateLimitSet(ctx context.Context, entry cmn.UserRateLimitEntry) error {
 	if mh.AIKeyService == nil {
 		return keyStoreAbsentErr()
 	}
-	if err := mh.AIKeyService.SetUserRateLimit(entry); err != nil {
+	if err := mh.AIKeyService.SetUserRateLimit(ctx, entry); err != nil {
 		return err
 	}
 	getGlobalRL().UpdateUser(entry.TenantID, entry.UserID, entry.RPS, entry.BurstSize)
@@ -2253,29 +2254,29 @@ func (na *NetAPIStruct) NetUserRateLimitSet(entry cmn.UserRateLimitEntry) error 
 }
 
 // NetUserRateLimitGet - Retrieve one user's explicit rate-limit entry.
-func (na *NetAPIStruct) NetUserRateLimitGet(tenantID, userID string) (*cmn.UserRateLimitEntry, error) {
+func (na *NetAPIStruct) NetUserRateLimitGet(ctx context.Context, tenantID, userID string) (*cmn.UserRateLimitEntry, error) {
 	if mh.AIKeyService == nil {
 		return nil, keyStoreAbsentErr()
 	}
-	return mh.AIKeyService.GetUserRateLimitEntry(tenantID, userID)
+	return mh.AIKeyService.GetUserRateLimitEntry(ctx, tenantID, userID)
 }
 
 // NetUserRateLimitList - List a tenant's explicit user rate-limit rows.
-func (na *NetAPIStruct) NetUserRateLimitList(tenantID string) ([]cmn.UserRateLimitEntry, error) {
+func (na *NetAPIStruct) NetUserRateLimitList(ctx context.Context, tenantID string) ([]cmn.UserRateLimitEntry, error) {
 	if mh.AIKeyService == nil {
 		return nil, keyStoreAbsentErr()
 	}
-	return mh.AIKeyService.ListUserRateLimits(tenantID)
+	return mh.AIKeyService.ListUserRateLimits(ctx, tenantID)
 }
 
 // NetUserRateLimitDelete - Remove one user's explicit rate-limit rows; the
 // user falls back to the configured defaults, then to unlimited. The live
 // bucket is reset to unlimited in the same call.
-func (na *NetAPIStruct) NetUserRateLimitDelete(tenantID, userID string) error {
+func (na *NetAPIStruct) NetUserRateLimitDelete(ctx context.Context, tenantID, userID string) error {
 	if mh.AIKeyService == nil {
 		return keyStoreAbsentErr()
 	}
-	if err := mh.AIKeyService.DeleteUserRateLimit(tenantID, userID); err != nil {
+	if err := mh.AIKeyService.DeleteUserRateLimit(ctx, tenantID, userID); err != nil {
 		return err
 	}
 	getGlobalRL().UpdateUser(tenantID, userID, 0, 0)
@@ -2283,27 +2284,27 @@ func (na *NetAPIStruct) NetUserRateLimitDelete(tenantID, userID string) error {
 }
 
 // NetRateLimitDefaultsSet - Upsert a defaults row (QoS ladder level 3).
-func (na *NetAPIStruct) NetRateLimitDefaultsSet(entry cmn.RateLimitDefaultsEntry) error {
+func (na *NetAPIStruct) NetRateLimitDefaultsSet(ctx context.Context, entry cmn.RateLimitDefaultsEntry) error {
 	if mh.AIKeyService == nil {
 		return keyStoreAbsentErr()
 	}
-	return mh.AIKeyService.SetRateLimitDefaults(entry)
+	return mh.AIKeyService.SetRateLimitDefaults(ctx, entry)
 }
 
 // NetRateLimitDefaultsGet - Retrieve one defaults row.
-func (na *NetAPIStruct) NetRateLimitDefaultsGet(scope, ruleIdent string) (*cmn.RateLimitDefaultsEntry, error) {
+func (na *NetAPIStruct) NetRateLimitDefaultsGet(ctx context.Context, scope, ruleIdent string) (*cmn.RateLimitDefaultsEntry, error) {
 	if mh.AIKeyService == nil {
 		return nil, keyStoreAbsentErr()
 	}
-	return mh.AIKeyService.GetRateLimitDefaultsEntry(scope, ruleIdent)
+	return mh.AIKeyService.GetRateLimitDefaultsEntry(ctx, scope, ruleIdent)
 }
 
 // NetRateLimitDefaultsDelete - Remove one defaults row.
-func (na *NetAPIStruct) NetRateLimitDefaultsDelete(scope, ruleIdent string) error {
+func (na *NetAPIStruct) NetRateLimitDefaultsDelete(ctx context.Context, scope, ruleIdent string) error {
 	if mh.AIKeyService == nil {
 		return keyStoreAbsentErr()
 	}
-	return mh.AIKeyService.DeleteRateLimitDefaults(scope, ruleIdent)
+	return mh.AIKeyService.DeleteRateLimitDefaults(ctx, scope, ruleIdent)
 }
 
 // NetGetOrAllocBridgeVid - : thin wrapper over the

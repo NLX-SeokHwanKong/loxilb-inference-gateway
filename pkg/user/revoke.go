@@ -16,9 +16,11 @@
 package user
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/loxilb-io/loxilb/pkg/pgstore"
 
 	tk "github.com/loxilb-io/loxilib"
 )
@@ -60,8 +62,8 @@ func (s *UserService) publishEviction(hashes []string) {
 // concurrently is either already visible here or blocked behind this
 // transaction — never deleted without also being evicted from the peers'
 // caches, where it would keep working for the rest of its cached life.
-func tokenHashesFor(tx *sql.Tx, username string) ([]string, error) {
-	rows, err := tx.Query(SelectTokenHashesForUserQuery, username)
+func tokenHashesFor(ctx context.Context, tx *sql.Tx, username string) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, SelectTokenHashesForUserQuery, username)
 	if err != nil {
 		return nil, fmt.Errorf("mgmt: cannot read tokens for %q: %w", username, err)
 	}
@@ -102,14 +104,18 @@ func (s *UserService) evictLocal(hashes []string) {
 // Store, local cache and peers are updated in that order, and the peers are
 // told only after the transaction commits: publishing an eviction for a
 // deletion that then rolled back would have peers drop live sessions.
-func (s *UserService) revokeSessions(handle DBTX, username string, within func(*sql.Tx) error) error {
+//
+// The transaction runs under the caller's deadline: a stall after COMMIT was
+// sent is reported as outcome unknown, because the server may still apply
+// the revocation when it resumes.
+func (s *UserService) revokeSessions(ctx context.Context, handle DBTX, username string, within func(*sql.Tx) error) error {
 	beginner, ok := handle.(txBeginner)
 	if !ok {
 		return errors.New("mgmt: store handle does not support transactions")
 	}
-	tx, err := beginner.Begin()
+	tx, err := beginner.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("mgmt: cannot begin a revocation transaction: %w", err)
+		return fmt.Errorf("mgmt: cannot begin a revocation transaction: %w", pgstore.ClassifyWriteErr(err))
 	}
 	defer tx.Rollback()
 
@@ -122,7 +128,7 @@ func (s *UserService) revokeSessions(handle DBTX, username string, within func(*
 	// caches are what keeps a revoked session alive. The FK is the backstop
 	// for paths that forget to revoke; it must not be allowed to erase the
 	// evidence the revocation path needs.
-	hashes, err := tokenHashesFor(tx, username)
+	hashes, err := tokenHashesFor(ctx, tx, username)
 	if err != nil {
 		return err
 	}
@@ -134,11 +140,11 @@ func (s *UserService) revokeSessions(handle DBTX, username string, within func(*
 	// Explicit delete as well as the cascade: a role change updates the user
 	// rather than deleting it, so nothing cascades, and the sessions carrying
 	// the old role have to go. Harmless when the cascade already ran.
-	if _, err := tx.Exec(DeleteTokensForUserQuery, username); err != nil {
-		return fmt.Errorf("mgmt: cannot revoke tokens for %q: %w", username, err)
+	if _, err := tx.ExecContext(ctx, DeleteTokensForUserQuery, username); err != nil {
+		return fmt.Errorf("mgmt: cannot revoke tokens for %q: %w", username, pgstore.ClassifyWriteErr(err))
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("mgmt: cannot commit the revocation: %w", err)
+		return fmt.Errorf("mgmt: cannot commit the revocation: %w", pgstore.ClassifyWriteErr(err))
 	}
 
 	s.evictLocal(hashes)
@@ -153,7 +159,7 @@ func (s *UserService) revokeSessions(handle DBTX, username string, within func(*
 // from DBTX so a test double that has no use for transactions is not forced
 // to implement one.
 type txBeginner interface {
-	Begin() (*sql.Tx, error)
+	BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error)
 }
 
 // ApplyTokenInvalidation evicts one management token from this process's

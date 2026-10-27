@@ -51,7 +51,7 @@ func ConfigPostAIObjective(params ai.PostConfigAiObjectiveParams, principal inte
 		return &ErrorResponse{Payload: ResultErrorResponseErrorMessage("name is required")}
 	}
 	entry := cmn.AIObjectiveEntry{Name: *attr.Name, Services: attr.Services, Priority: attr.Priority}
-	if _, err := ApiHooks.NetAIObjectiveAdd(&entry); err != nil {
+	if _, err := ApiHooks.NetAIObjectiveAdd(params.HTTPRequest.Context(), &entry); err != nil {
 		return objectiveStoreError(err)
 	}
 	return &ResultResponse{Result: "Success"}
@@ -63,7 +63,7 @@ func ConfigGetAIObjectiveAll(params ai.GetConfigAiObjectiveAllParams, principal 
 	tk.LogIt(tk.LogTrace, "api: AIObjective %s API called. url : %s\n",
 		params.HTTPRequest.Method, params.HTTPRequest.URL)
 
-	res, err := ApiHooks.NetAIObjectiveGet()
+	res, err := ApiHooks.NetAIObjectiveGet(params.HTTPRequest.Context())
 	if err != nil {
 		return objectiveStoreError(err)
 	}
@@ -93,7 +93,7 @@ func ConfigDeleteAIObjective(params ai.DeleteConfigAiObjectiveNameParams, princi
 	tk.LogIt(tk.LogTrace, "api: AIObjective %s API called. url : %s\n",
 		params.HTTPRequest.Method, params.HTTPRequest.URL)
 
-	if _, err := ApiHooks.NetAIObjectiveDel(params.Name); err != nil {
+	if _, err := ApiHooks.NetAIObjectiveDel(params.HTTPRequest.Context(), params.Name); err != nil {
 		return objectiveStoreError(err)
 	}
 	return &ResultResponse{Result: "Success"}

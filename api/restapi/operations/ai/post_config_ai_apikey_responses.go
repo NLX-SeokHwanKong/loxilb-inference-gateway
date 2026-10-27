@@ -327,3 +327,48 @@ func (o *PostConfigAiApikeyServiceUnavailable) WriteResponse(rw http.ResponseWri
 		}
 	}
 }
+
+// PostConfigAiApikeyGatewayTimeoutCode is the HTTP code returned for type PostConfigAiApikeyGatewayTimeout
+const PostConfigAiApikeyGatewayTimeoutCode int = 504
+
+/*
+PostConfigAiApikeyGatewayTimeout Write outcome unknown (code ai_key_store_outcome_unknown). The statement was handed to the API-key store and the store did not answer within the operation budget; the store may still apply it when it resumes. Not a 503: nothing says the write did not happen. Read the resource back (GET) before deciding whether to retry; a blind retry of a non-idempotent write can create a second row.
+
+swagger:response postConfigAiApikeyGatewayTimeout
+*/
+type PostConfigAiApikeyGatewayTimeout struct {
+
+	/*
+	  In: Body
+	*/
+	Payload *models.Error `json:"body,omitempty"`
+}
+
+// NewPostConfigAiApikeyGatewayTimeout creates PostConfigAiApikeyGatewayTimeout with default headers values
+func NewPostConfigAiApikeyGatewayTimeout() *PostConfigAiApikeyGatewayTimeout {
+
+	return &PostConfigAiApikeyGatewayTimeout{}
+}
+
+// WithPayload adds the payload to the post config ai apikey gateway timeout response
+func (o *PostConfigAiApikeyGatewayTimeout) WithPayload(payload *models.Error) *PostConfigAiApikeyGatewayTimeout {
+	o.Payload = payload
+	return o
+}
+
+// SetPayload sets the payload to the post config ai apikey gateway timeout response
+func (o *PostConfigAiApikeyGatewayTimeout) SetPayload(payload *models.Error) {
+	o.Payload = payload
+}
+
+// WriteResponse to the client
+func (o *PostConfigAiApikeyGatewayTimeout) WriteResponse(rw http.ResponseWriter, producer runtime.Producer) {
+
+	rw.WriteHeader(504)
+	if o.Payload != nil {
+		payload := o.Payload
+		if err := producer.Produce(rw, payload); err != nil {
+			panic(err) // let the recovery middleware deal with this
+		}
+	}
+}

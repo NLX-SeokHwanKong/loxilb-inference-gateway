@@ -16,6 +16,7 @@
 package user
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"testing"
@@ -25,7 +26,7 @@ import (
 
 func delegationOf(t *testing.T, svc *UserService, name string) bool {
 	t.Helper()
-	users, err := svc.GetUsers()
+	users, err := svc.GetUsers(context.Background())
 	if err != nil {
 		t.Fatalf("GetUsers: %v", err)
 	}
@@ -48,23 +49,23 @@ func TestUsersAddDelegationAllowedMigration(t *testing.T) {
 	svc := storeFixture(t)
 	db := svc.db.(*sql.DB)
 	// The pre-migration shape: the column never existed.
-	if _, err := db.Exec(fmt.Sprintf(`ALTER TABLE %s.users DROP COLUMN delegation_allowed`, Schema)); err != nil {
+	if _, err := db.ExecContext(context.Background(), fmt.Sprintf(`ALTER TABLE %s.users DROP COLUMN delegation_allowed`, Schema)); err != nil {
 		t.Fatalf("drop column: %v", err)
 	}
 	insertUserRow(t, svc, "legacy", mustHash(t, "Admin123!"), "admin")
-	if _, err := svc.GetUsers(); err == nil {
+	if _, err := svc.GetUsers(context.Background()); err == nil {
 		t.Fatal("GetUsers succeeded against a store without the column; the listing does not select it")
 	}
 
 	// The boot-time provisioning migrates the table in place.
-	if err := ensureSchema(db); err != nil {
+	if err := ensureSchema(context.Background(), db); err != nil {
 		t.Fatalf("ensureSchema on the legacy store: %v", err)
 	}
 	if delegationOf(t, svc, "legacy") {
 		t.Fatal("a pre-existing account reads delegation_allowed=true after the migration")
 	}
 	// Running it again is a no-op.
-	if err := ensureSchema(db); err != nil {
+	if err := ensureSchema(context.Background(), db); err != nil {
 		t.Fatalf("ensureSchema twice: %v", err)
 	}
 }
@@ -79,20 +80,20 @@ func TestUpdateUserDelegationAllowed(t *testing.T) {
 		t.Fatal("a new account is created with delegation allowed")
 	}
 	on, off := true, false
-	if err := svc.UpdateUser(cmn.User{ID: id, Username: "svc-account", Password: "Viewer99!", DelegationAllowed: &on}); err != nil {
+	if err := svc.UpdateUser(context.Background(), cmn.User{ID: id, Username: "svc-account", Password: "Viewer99!", DelegationAllowed: &on}); err != nil {
 		t.Fatalf("UpdateUser(on): %v", err)
 	}
 	if !delegationOf(t, svc, "svc-account") {
 		t.Fatal("the flag was not applied")
 	}
 	// A password change that says nothing about the flag keeps it.
-	if err := svc.UpdateUser(cmn.User{ID: id, Username: "svc-account", Password: "Rotate77!"}); err != nil {
+	if err := svc.UpdateUser(context.Background(), cmn.User{ID: id, Username: "svc-account", Password: "Rotate77!"}); err != nil {
 		t.Fatalf("UpdateUser(absent): %v", err)
 	}
 	if !delegationOf(t, svc, "svc-account") {
 		t.Fatal("a password change revoked the delegation")
 	}
-	if err := svc.UpdateUser(cmn.User{ID: id, Username: "svc-account", Password: "Admin123!", DelegationAllowed: &off}); err != nil {
+	if err := svc.UpdateUser(context.Background(), cmn.User{ID: id, Username: "svc-account", Password: "Admin123!", DelegationAllowed: &off}); err != nil {
 		t.Fatalf("UpdateUser(off): %v", err)
 	}
 	if delegationOf(t, svc, "svc-account") {
@@ -107,17 +108,17 @@ func TestDelegationAllowedLookup(t *testing.T) {
 	insertUserRow(t, svc, "plain", mustHash(t, "Admin123!"), "admin")
 	insertUserRow(t, svc, "delegating", mustHash(t, "Admin123!"), "admin")
 	on := true
-	if err := svc.UpdateUser(cmn.User{ID: userID(t, svc, "delegating"), Username: "delegating", Password: "Viewer99!", DelegationAllowed: &on}); err != nil {
+	if err := svc.UpdateUser(context.Background(), cmn.User{ID: userID(t, svc, "delegating"), Username: "delegating", Password: "Viewer99!", DelegationAllowed: &on}); err != nil {
 		t.Fatalf("UpdateUser: %v", err)
 	}
 	for name, want := range map[string]bool{"plain": false, "delegating": true, "nobody": false} {
-		got, err := svc.DelegationAllowed(name)
+		got, err := svc.DelegationAllowed(context.Background(), name)
 		if err != nil || got != want {
 			t.Errorf("DelegationAllowed(%q) = %v, %v; want %v", name, got, err, want)
 		}
 	}
 	var down *UserService
-	if _, err := down.DelegationAllowed("plain"); err == nil {
+	if _, err := down.DelegationAllowed(context.Background(), "plain"); err == nil {
 		t.Fatal("a service without a store answered instead of reporting it")
 	}
 }

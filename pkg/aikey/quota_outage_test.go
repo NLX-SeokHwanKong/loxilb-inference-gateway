@@ -16,6 +16,7 @@
 package aikey
 
 import (
+	"context"
 	"errors"
 	"testing"
 )
@@ -43,10 +44,10 @@ func detachStore(svc *Service) {
 // assertions cannot be satisfied by the ordinary cache either.
 func TestQuotaOutageEnforcesLastKnown(t *testing.T) {
 	svc := storeFixture(t)
-	if err := svc.SetTenantRateLimit("t-lim", 25, 120000, 40); err != nil {
+	if err := svc.SetTenantRateLimit(context.Background(), "t-lim", 25, 120000, 40); err != nil {
 		t.Fatalf("set tenant limit: %v", err)
 	}
-	if err := svc.SetTenantModelRateLimit("t-lim", "llama-3-70b", 9000); err != nil {
+	if err := svc.SetTenantModelRateLimit(context.Background(), "t-lim", "llama-3-70b", 9000); err != nil {
 		t.Fatalf("set model limit: %v", err)
 	}
 
@@ -89,13 +90,13 @@ func TestQuotaOutageEnforcesLastKnown(t *testing.T) {
 // the stale limit, and not a refusal.
 func TestQuotaOutageClearedLimitStaysCleared(t *testing.T) {
 	svc := storeFixture(t)
-	if err := svc.SetTenantModelRateLimit("t-clr", "llama-3-70b", 9000); err != nil {
+	if err := svc.SetTenantModelRateLimit(context.Background(), "t-clr", "llama-3-70b", 9000); err != nil {
 		t.Fatalf("set model limit: %v", err)
 	}
 	if tpm, err := svc.GetTenantModelRateLimit("t-clr", "llama-3-70b"); err != nil || tpm != 9000 {
 		t.Fatalf("read before clear = (%d,%v), want (9000,nil)", tpm, err)
 	}
-	if err := svc.SetTenantModelRateLimit("t-clr", "llama-3-70b", 0); err != nil {
+	if err := svc.SetTenantModelRateLimit(context.Background(), "t-clr", "llama-3-70b", 0); err != nil {
 		t.Fatalf("clear model limit: %v", err)
 	}
 

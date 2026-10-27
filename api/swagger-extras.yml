@@ -817,6 +817,18 @@ paths:
             # The raw arm writes {"error": ...} via writeKeyStoreFailure
             # (api/restapi/handler/ai_apikey.go), which is SimpleError.
             $ref: '#/definitions/SimpleError'
+        '504':
+          description: >-
+            Write outcome unknown (SimpleError with error equal to
+            ai_key_store_outcome_unknown). The statement was handed to the
+            API-key store and the store did not answer within the operation
+            budget; the store may still apply it when it resumes. Not a 503:
+            nothing says the write did not happen. Read the key back (GET)
+            before deciding whether to retry.
+          schema:
+            # Same raw arm as the 503 above: writeKeyStoreFailure writes
+            # {"error": ...}.
+            $ref: '#/definitions/SimpleError'
 
 definitions:
   RawError:

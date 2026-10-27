@@ -18,6 +18,7 @@ package aikey
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -31,6 +32,7 @@ import (
 	tk "github.com/loxilb-io/loxilib"
 
 	cmn "github.com/loxilb-io/loxilb/common"
+	"github.com/loxilb-io/loxilb/pkg/pgstore"
 )
 
 // ClassSnapshot is everything the store says about objectives and classes,
@@ -105,6 +107,9 @@ type classState struct {
 	// onChange is told after every published snapshot.
 	onChange atomic.Pointer[func(*ClassSnapshot)]
 	started  atomic.Bool
+	// budgetClamped records that the refresh budget's clamp was logged, so
+	// a misconfiguration is reported once rather than every interval.
+	budgetClamped atomic.Bool
 	// readGen hands each store read its ticket (ClassSnapshot.Gen).
 	readGen atomic.Uint64
 	// pubMu makes "newer than what is published" and the publication one
@@ -211,36 +216,45 @@ func (s *Service) publishClasses(snap *ClassSnapshot) bool {
 
 // RefreshClasses reads objectives and class rows from the store and
 // publishes them. On any failure the snapshot in force stays.
-func (s *Service) RefreshClasses() error {
+//
+// The read runs under the refresh budget, and under ctx: the four
+// statements share one deadline, so a store that stalls while keeping its
+// connections open fails the read inside the budget, the health is noted
+// as not reachable, and the snapshot in force stays. Before the budget a
+// stalled read held the refresher goroutine, and with it the health
+// report, for as long as the stall lasted.
+func (s *Service) RefreshClasses(ctx context.Context) error {
 	// The ticket is taken before anything is asked: a read that starts
 	// after a write committed has a higher one than any read that started
 	// before it.
 	gen := s.class.readGen.Add(1)
-	err := s.refreshClasses(gen)
+	err := s.refreshClasses(ctx, gen)
 	s.noteStoreRead(gen, err)
 	return err
 }
 
-func (s *Service) refreshClasses(gen uint64) error {
+func (s *Service) refreshClasses(ctx context.Context, gen uint64) error {
 	db, err := s.store()
 	if err != nil {
 		return err
 	}
-	objs, err := readObjectives(db)
+	ctx, cancel := pgstore.WithBudget(ctx, s.refreshBudget())
+	defer cancel()
+	objs, err := readObjectives(ctx, db)
 	if err != nil {
-		return fmt.Errorf("aikey: read objectives: %w", err)
+		return fmt.Errorf("aikey: read objectives: %w", readErr(err))
 	}
-	tenants, err := readClassRows(db, sqlSelectTenantClasses)
+	tenants, err := readClassRows(ctx, db, sqlSelectTenantClasses)
 	if err != nil {
-		return fmt.Errorf("aikey: read tenant classes: %w", err)
+		return fmt.Errorf("aikey: read tenant classes: %w", readErr(err))
 	}
-	keys, err := readClassRows(db, sqlSelectKeyClasses)
+	keys, err := readClassRows(ctx, db, sqlSelectKeyClasses)
 	if err != nil {
-		return fmt.Errorf("aikey: read key classes: %w", err)
+		return fmt.Errorf("aikey: read key classes: %w", readErr(err))
 	}
-	limits, err := readLimitRows(db)
+	limits, err := readLimitRows(ctx, db)
 	if err != nil {
-		return fmt.Errorf("aikey: read limit rows: %w", err)
+		return fmt.Errorf("aikey: read limit rows: %w", readErr(err))
 	}
 	snap := &ClassSnapshot{Objectives: objs, Tenants: tenants, Keys: keys,
 		ReadAt: time.Now().UTC(), Source: cmn.AIClassSourceStore, Gen: gen, limits: limits}
@@ -260,10 +274,29 @@ func (s *Service) refreshClasses(gen uint64) error {
 
 // refreshClassesAfterWrite applies a local write at once. A failure is not
 // the write's: the row is stored, and the next interval reads it.
+//
+// It takes its own budget rather than the write's context: the write has
+// committed, and a client that hung up at that moment must not cancel the
+// snapshot the next request on this node is decided with.
 func (s *Service) refreshClassesAfterWrite() {
-	if err := s.RefreshClasses(); err != nil {
+	if err := s.RefreshClasses(context.Background()); err != nil {
 		tk.LogIt(tk.LogError, "[AIKey] Classes not refreshed after a write: %v\n", err)
 	}
+}
+
+// refreshBudget is the refresh read's deadline: the configured budget, but
+// never more than half the refresh interval, so one stalled read is over
+// before the next tick starts and no two reads of the store overlap.
+func (s *Service) refreshBudget() time.Duration {
+	budget := pgstore.RefreshTimeout()
+	if cap := ClassRefreshInterval() / 2; budget > cap {
+		if s.class.budgetClamped.CompareAndSwap(false, true) {
+			tk.LogIt(tk.LogWarning, "[AIKey] %s=%v exceeds half the refresh interval (%s): clamped to %v\n",
+				pgstore.RefreshTimeoutEnv, budget, classRefreshEnv, cap)
+		}
+		budget = cap
+	}
+	return budget
 }
 
 func lkgContent(snap *ClassSnapshot) classLKGFile {
@@ -432,7 +465,7 @@ func (s *Service) AppliedObjectives() (objs []cmn.AIObjectiveEntry, source strin
 
 // classTick is one refresh interval.
 func (s *Service) classTick() {
-	if err := s.RefreshClasses(); err != nil {
+	if err := s.RefreshClasses(context.Background()); err != nil {
 		s.loadClassLKG()
 	}
 	if snap := s.class.snap.Load(); snap != nil && snap.Source == cmn.AIClassSourceLKG {

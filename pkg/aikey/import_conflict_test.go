@@ -1,6 +1,7 @@
 package aikey
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -16,10 +17,17 @@ type importConflictDB struct {
 	calls int
 }
 
-func (d *importConflictDB) Exec(_ string, _ ...any) (sql.Result, error) { d.calls++; return nil, d.err }
-func (*importConflictDB) Query(string, ...any) (*sql.Rows, error)       { panic("unexpected Query") }
-func (*importConflictDB) QueryRow(string, ...any) *sql.Row              { panic("unexpected QueryRow") }
-func (*importConflictDB) Ping() error                                   { return nil }
+func (d *importConflictDB) ExecContext(_ context.Context, _ string, _ ...any) (sql.Result, error) {
+	d.calls++
+	return nil, d.err
+}
+func (*importConflictDB) QueryContext(context.Context, string, ...any) (*sql.Rows, error) {
+	panic("unexpected Query")
+}
+func (*importConflictDB) QueryRowContext(context.Context, string, ...any) *sql.Row {
+	panic("unexpected QueryRow")
+}
+func (*importConflictDB) PingContext(context.Context) error { return nil }
 
 // Drive CreateAPIKey's actual insert failure, including wrapped PostgreSQL errors.
 func TestImportedCredentialUniqueViolationIsSecretFreeConflict(t *testing.T) {
@@ -28,7 +36,7 @@ func TestImportedCredentialUniqueViolationIsSecretFreeConflict(t *testing.T) {
 	for _, err := range []error{driver, fmt.Errorf("wrapped: %w", driver)} {
 		db := &importConflictDB{err: err}
 		svc := &Service{db: db}
-		raw, id, got := svc.CreateAPIKey(cmn.ApiKeyEntry{TenantID: "fixture-tenant", ApiKey: secret})
+		raw, id, got := svc.CreateAPIKey(context.Background(), cmn.ApiKeyEntry{TenantID: "fixture-tenant", ApiKey: secret})
 		var conflict *cmn.ConflictError
 		if !errors.As(got, &conflict) {
 			t.Fatalf("got %T, want typed conflict", got)
@@ -63,10 +71,19 @@ func TestImportConflictDoesNotReclassifyOtherFailures(t *testing.T) {
 			}
 			db := &importConflictDB{err: original}
 			svc := &Service{db: db}
-			raw, id, got := svc.CreateAPIKey(cmn.ApiKeyEntry{TenantID: "fixture-tenant", ApiKey: tc.key})
+			raw, id, got := svc.CreateAPIKey(context.Background(), cmn.ApiKeyEntry{TenantID: "fixture-tenant", ApiKey: tc.key})
+			// The write-outcome classifier may wrap the cause (a plain error
+			// is "outcome unknown" to it), but it must stay in the chain,
+			// and nothing here may turn it into the public conflict.
 			var conflict *cmn.ConflictError
-			if got != original || errors.As(got, &conflict) || raw != "" || id != "" || db.calls != 1 {
+			if !errors.Is(got, original) || errors.As(got, &conflict) || raw != "" || id != "" || db.calls != 1 {
 				t.Fatal("unrelated failure reclassified")
+			}
+			if tc.plain && !errors.Is(got, cmn.ErrStoreOutcomeUnknown) {
+				t.Fatalf("a driver error of unknown shape must be reported as outcome unknown, got %v", got)
+			}
+			if !tc.plain && errors.Is(got, cmn.ErrStoreOutcomeUnknown) {
+				t.Fatalf("a server verdict must not be reported as outcome unknown, got %v", got)
 			}
 		})
 	}
@@ -77,12 +94,12 @@ func TestImportConflictDoesNotReclassifyOtherFailures(t *testing.T) {
 func TestImportedCredentialDuplicatePostgresConflict(t *testing.T) {
 	svc := storeFixture(t)
 	entry := cmn.ApiKeyEntry{TenantID: "fixture-tenant", ApiKey: "fixture-imported-key-only", Enabled: true}
-	raw, first, err := svc.CreateAPIKey(entry)
+	raw, first, err := svc.CreateAPIKey(context.Background(), entry)
 	if err != nil || raw != "" || first == "" {
 		t.Fatalf("first import failed: %v", err)
 	}
 	entry.TenantID = "fixture-other-tenant"
-	raw, id, err := svc.CreateAPIKey(entry)
+	raw, id, err := svc.CreateAPIKey(context.Background(), entry)
 	var conflict *cmn.ConflictError
 	if !errors.As(err, &conflict) || raw != "" || id != "" || err.Error() != "imported API key is already registered" {
 		t.Fatal("duplicate import was not sanitized typed conflict")

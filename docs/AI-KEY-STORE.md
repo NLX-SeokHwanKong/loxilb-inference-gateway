@@ -158,6 +158,126 @@ Keys already in cache keep validating across the restart window, so this is not
 immediately traffic-affecting — but treat it as a maintenance action, because a
 gateway that restarts with a stale password comes up unable to reach the store.
 
+## Time budgets and the write-outcome contract
+
+Every statement the gateway runs against the key store, and against the
+management credential store, carries a context deadline. A PostgreSQL that
+stalls while keeping its TCP connections open (a hung or overloaded server, a
+stalled volume, a path that black-holes packets, a paused container) answers
+a statement with no deadline never: before these budgets a management write
+committed after its client had given up, `/status/ready` hung, and a
+cache-miss key lookup parked the proxy worker thread that asked. The budgets
+are environment variables in milliseconds; keep each well below the client
+timeout in front of the gateway so the gateway answers first.
+
+| Variable | Default | Bounds |
+|---|---|---|
+| `LLB_AI_STORE_OP_TIMEOUT_MS` | 3000 | One management operation (a configuration read or write, retries included, plus the snapshot refresh a write performs before it returns). Also sent to the server as the session `statement_timeout`. |
+| `LLB_AI_STORE_PING_TIMEOUT_MS` | 1000 | The readiness ping behind `/status/ready` and the housekeeping ping. |
+| `LLB_AI_STORE_REFRESH_TIMEOUT_MS` | 3000 | One read of the objective/class/limit snapshot; clamped to half of `LLB_AI_OBJECTIVE_REFRESH_SEC`. |
+| `LLB_AI_KEY_LOOKUP_TIMEOUT_MS` | 300 | One data-path store round trip: the key lookup on a cache miss and the quota-row reads behind a request. This is the longest a proxy worker is ever parked by the store. |
+
+Idle pooled connections are dropped after 60 s, so a connection that idled
+through a stall is not handed to a later statement indefinitely.
+
+**What a write answers during a stall.** A deadline bounds the wait; it cannot
+retract a statement that already reached the server. The API therefore
+distinguishes two failures, and clients must treat them differently:
+
+- **503 `ai_key_store_unavailable`** (management-plane wording: *Credential
+  store unavailable*): the statement was never handed to the store. Nothing
+  was written; retrying is safe.
+- **504 `ai_key_store_outcome_unknown`** (management-plane result
+  `store_outcome_unknown`): the statement was sent and the store did not
+  answer within the budget. The server may still apply it when it resumes.
+  **Read the resource back before retrying.** A blind retry of a
+  non-idempotent write, such as creating a generated API key, can create a
+  second row.
+
+Reads never answer 504: a read whose budget expires is a 503.
+
+**Readiness.** `/status/ready` probes each store under the ping budget and
+answers 503 within it when a store stalls; `GET /config/ai/objective` keeps
+answering from the applied snapshot with `store_reachable=false` once a
+refresh has failed. `/version` answering says nothing about the store.
+
+**Data path.** A request whose key is cached is validated without touching
+the store. A cache miss during a stall is refused with 503
+`policy_store_unavailable` and `Retry-After`: inside the lookup budget for the
+first few misses, and immediately once the store-health circuit below has
+opened. The answer is the same one a cold outage gives.
+
+### Data-path isolation
+
+The lookup budget bounds one round trip. On its own it still costs every cache
+miss one full wait while the store stalls, on every proxy worker that asks.
+Two guards sit in front of the data-path reads (the key lookup on a cache miss,
+the quota-row reads behind a request); the management plane, the readiness
+ping and the snapshot refresher do not consult them.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `LLB_AI_KEY_LOOKUP_MAX_INFLIGHT` | 2 | Data-path round trips allowed on the store at once. A worker that finds no slot waits for one only until its lookup budget expires, so wait plus statement never exceed one budget. Deployments that raise `LLB_PROXY_WORKERS` well above the default and see high key churn may want this raised with it. |
+| `LLB_AI_KEY_LOOKUP_CIRCUIT_FAILURES` | 3 | Consecutive store failures that open the circuit. 0 disables it. |
+| `LLB_AI_KEY_LOOKUP_CIRCUIT_COOLDOWN_MS` | 5000 | How long the circuit stays open before one probe read is let through. |
+| `LLB_AI_KEY_NEGATIVE_CACHE_MS` | 2000 | How long a key hash the store answered "no such key" for is refused without asking again. 0 disables it. |
+| `LLB_AI_KEY_NEGATIVE_CACHE_CAP` | 4096 | Entries the negative cache holds; the oldest goes first. |
+
+**The circuit.** It is closed while the store answers. A failure is a round
+trip the store did not answer: the budget expired or the connection failed. A
+row, and the store's "no such row", are answers and reset the count. So is an
+error the server itself returned, such as a permission or schema error: the
+store was reached and replied at once, no worker was parked, and the request
+is refused on its own arm, but the count does not move, so the next read
+after the cause is fixed is served without waiting out a cool-down. A store
+that is not connected yet fails fast without a round trip; it shows as
+zero-duration `unavailable` samples and does not move the circuit, so a
+reconnect is used as soon as it lands. After `LLB_AI_KEY_LOOKUP_CIRCUIT_FAILURES` failures in a
+row the circuit opens: every data-path miss is refused at once without
+contacting the store, and every quota read answers from the last value the
+store confirmed to this process (or from the last-known-good file), refusing
+only a tenant, user or key the store never described. After the cool-down the
+circuit is half-open: exactly one miss is let through as a probe, every other
+miss is still refused; the probe's success closes the circuit, its failure
+opens it again for a fresh cool-down. A refused in-flight slot is contention,
+not a failure, and never opens the circuit. A statement that completes after
+the circuit changed state is counted in the metrics and moves nothing.
+
+**Two independent signals.** `store_reachable` (on `GET /config/ai/objective`
+and `/diagnostics`) is the snapshot refresher's view: a 3 s-budget read every
+refresh interval. `loxilb_ai_key_store_circuit_open` is the data path's view:
+300 ms-budget reads driven by cache misses. They can disagree, and both are
+right about what they measure. In particular the circuit **stays open after
+the store recovers until a cache miss arrives to run the half-open probe**: a
+gauge that reads 1 on a gateway with no miss traffic is not an outage. It
+drops within one cool-down of recovery only while misses keep arriving.
+
+**Key limits during an outage.** A key's rate limit and token quota come from
+its row. Both the by-hash validation and the by-ID read keep the last view the
+store confirmed, so a key this process has validated keeps its limits enforced
+through an outage even after the cached entry aged out. A key the process has
+never seen described (validated on a peer, or evicted by the cache cap) is
+refused with 503 `policy_store_unavailable` rather than admitted on zero
+limits.
+
+**Negative cache.** A hash the store said does not exist is refused for
+`LLB_AI_KEY_NEGATIVE_CACHE_MS` without another round trip. Creating that key
+here, or a peer's invalidation for its hash, clears the entry at once; a key
+created on a peer whose hash was probed here just before can therefore be
+refused 401 for up to the TTL. That is the accepted trade for not spending a
+slot and a budget per unknown key under a flood.
+
+**Metrics.** `loxilb_ai_key_store_lookup_seconds{result}` is the time a worker
+spent on one data-path round trip, by how it ended (`miss_found`,
+`miss_invalid`, `timeout`, `refused_circuit`, `refused_inflight`,
+`unavailable`, the last covering a connection that failed, a server-side error
+and a store not yet connected; cache hits are not round trips and are not
+counted);
+`loxilb_ai_key_store_circuit_open` and `loxilb_ai_key_store_lookup_inflight`
+are the two gauges. Samples piling up at the 0.3 s bucket edge are the stall
+signature; `refused_circuit` rising with `circuit_open` at 1 is the guard
+doing its job.
+
 ## Troubleshooting
 
 **`key store preflight failed: schema "aigw" does not exist`**
