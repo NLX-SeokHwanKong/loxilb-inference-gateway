@@ -28,14 +28,21 @@ p3c_old=0
 p3c_new=0
 down=0
 code=0
-
-sleep 5
+# Sampled from the client's start: a fixed wait before the first sample
+# let the client finish unobserved. A finish seen before min_samples
+# samples is a failed measurement, not a pass.
+samples=0
+min_samples=3
 
 for((i=0;i<200;i++)) do
     fin=`tail -n 100 user.out | grep "Client: Sending packets.(5000/5000)"`
     if [[ ! -z $fin ]]; then
         fin=1
-        echo "sctp_test done."
+        echo "sctp_test done after $samples samples."
+        if [[ $samples -lt $min_samples ]]; then
+            echo "Measurement failed: fewer than $min_samples samples before the client finished"
+            code=1
+        fi
         break;
     fi
     $dexec $master loxicmd get ct --servName=sctpmh1 
@@ -44,6 +51,7 @@ for((i=0;i<200;i++)) do
     p2c_new=$(sudo docker exec -i $master loxicmd get ct --servName=sctpmh1 | grep "124.124.124.1 | 2.2.2.1" | xargs | cut -d '|' -f 11)
     p3c_new=$(sudo docker exec -i $master loxicmd get ct --servName=sctpmh1 | grep "125.125.125.1 | 1.1.1.1" | xargs | cut -d '|' -f 11)
     
+    samples=$(( $samples + 1 ))
     echo "Counters: $p1c_new $p2c_new $p3c_new"
 
     if [[ $p1c_new -gt $p1c_old ]]; then
@@ -83,7 +91,7 @@ for((i=0;i<200;i++)) do
     p2c_old=$p1c_new
     p2c_old=$p1c_new
     echo -e "\n"
-    sleep 5
+    sleep 1
 done
 
 sudo rm -rf *.out

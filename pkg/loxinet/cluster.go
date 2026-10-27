@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"time"
 
 	nlp "github.com/loxilb-io/loxilb/api/loxinlp"
@@ -92,6 +93,15 @@ type CIStateH struct {
 	OSrc6       string
 	initRules   bool
 	initRules6  bool
+	// bfdCfgMtx serialises BFD session adds and deletes, which mh.mtx no
+	// longer keeps atomic. Lock order for BFD configuration:
+	//  - a BFD notification takes mh.mtx while it holds the BFD table lock
+	//    (BFDMtx), so BFDMtx is never taken while holding mh.mtx;
+	//  - bfdCfgMtx is taken first, never while holding mh.mtx or BFDMtx;
+	//    under it, mh.mtx is held only around CIStateH state and released
+	//    before the BFD table is entered;
+	//  - callers of CIBFDSessionAdd/Del must not hold mh.mtx.
+	bfdCfgMtx sync.Mutex
 }
 
 func (ch *CIStateH) BFDSessionNotify(instance string, _ string, ciState string) {
@@ -613,49 +623,32 @@ func (ch *CIStateH) ClusterNodeDelete(node cmn.ClusterNodeMod) (int, error) {
 }
 
 // CIBFDSessionAdd - routine to add BFD session
+// Locking: see bfdCfgMtx. The caller must not hold mh.mtx.
 func (ch *CIStateH) CIBFDSessionAdd(bm cmn.BFDMod) (int, error) {
 
-	if ch == nil || ch.Bs == nil {
+	if ch == nil {
 		return -1, cmn.ErrBFDUnavailable
 	}
 
-	if bm.Interval != 0 && bm.Interval < bfd.BFDMinSysTXIntervalUs {
-		tk.LogIt(tk.LogError, "[CLUSTER] BFD session Interval value too low\n")
-		return -1, errors.New("bfd interval too low")
+	ch.bfdCfgMtx.Lock()
+	defer ch.bfdCfgMtx.Unlock()
+
+	mh.mtx.Lock()
+	bfdSessConfigArgs, first, err := ch.bfdSessionAddArgs(bm)
+	mh.mtx.Unlock()
+	if err != nil {
+		return -1, err
 	}
 
-	_, found := ch.ClusterMap[bm.Instance]
-	if !found {
-		tk.LogIt(tk.LogError, "[CLUSTER] BFD SU - Cluster Instance %s not found\n", bm.Instance)
-		return -1, errors.New("cluster instance not found")
-	}
-
-	ip := net.ParseIP(bm.RemoteIP.String())
-	if ip == nil {
-		return -1, errors.New("remoteIP address malformed")
-	}
-
-	if !ch.SpawnKa {
-		myIP := net.ParseIP(bm.SourceIP.String())
-		if myIP == nil {
-			return -1, errors.New("source address malformed")
-		}
-
-		tk.LogIt(tk.LogInfo, "[CLUSTER] Cluster Instance %s starting BFD..\n", bm.Instance)
-		ch.SpawnKa = true
-
-		ch.RemoteIP = bm.RemoteIP
-		ch.SourceIP = bm.SourceIP
-		ch.Interval = int64(bm.Interval)
-		bfdSessConfigArgs := bfd.ConfigArgs{RemoteIP: bm.RemoteIP.String(), SourceIP: bm.SourceIP.String(),
-			Port: cmn.BFDPort, Interval: uint32(bm.Interval),
-			Multi: bm.RetryCount, Instance: bm.Instance}
+	if first {
 		// Register before acknowledging configuration, but retain the initial
 		// HA synchronization/cool-off gate before sending or processing BFD.
 		ready := make(chan struct{})
 		bfdSessConfigArgs.StartGate = ready
 		if err := ch.Bs.BFDAddRemote(bfdSessConfigArgs, ch); err != nil {
+			mh.mtx.Lock()
 			ch.SpawnKa = false
+			mh.mtx.Unlock()
 			return -1, err
 		}
 		go func() {
@@ -667,9 +660,6 @@ func (ch *CIStateH) CIBFDSessionAdd(bm cmn.BFDMod) (int, error) {
 		}()
 
 	} else {
-		bfdSessConfigArgs := bfd.ConfigArgs{RemoteIP: bm.RemoteIP.String(), SourceIP: bm.SourceIP.String(),
-			Port: cmn.BFDPort, Interval: uint32(bm.Interval),
-			Multi: bm.RetryCount, Instance: bm.Instance}
 		err := ch.Bs.BFDAddRemote(bfdSessConfigArgs, ch)
 		if err != nil {
 			tk.LogIt(tk.LogCritical, "KA - Cant add BFD remote: %s\n", err.Error())
@@ -680,30 +670,91 @@ func (ch *CIStateH) CIBFDSessionAdd(bm cmn.BFDMod) (int, error) {
 	return 0, nil
 }
 
-// CIBFDSessionDel - routine to delete BFD session
-func (ch *CIStateH) CIBFDSessionDel(bm cmn.BFDMod) (int, error) {
+// bfdSessionAddArgs - validates a BFD session add and, for the first session,
+// records the KA parameters. Runs under mh.mtx.
+func (ch *CIStateH) bfdSessionAddArgs(bm cmn.BFDMod) (bfd.ConfigArgs, bool, error) {
+	var args bfd.ConfigArgs
 
-	if ch == nil || ch.Bs == nil {
-		return -1, cmn.ErrBFDUnavailable
+	if ch.Bs == nil {
+		return args, false, cmn.ErrBFDUnavailable
+	}
+
+	if bm.Interval != 0 && bm.Interval < bfd.BFDMinSysTXIntervalUs {
+		tk.LogIt(tk.LogError, "[CLUSTER] BFD session Interval value too low\n")
+		return args, false, errors.New("bfd interval too low")
 	}
 
 	_, found := ch.ClusterMap[bm.Instance]
+	if !found {
+		tk.LogIt(tk.LogError, "[CLUSTER] BFD SU - Cluster Instance %s not found\n", bm.Instance)
+		return args, false, errors.New("cluster instance not found")
+	}
+
+	ip := net.ParseIP(bm.RemoteIP.String())
+	if ip == nil {
+		return args, false, errors.New("remoteIP address malformed")
+	}
+
+	args = bfd.ConfigArgs{RemoteIP: bm.RemoteIP.String(), SourceIP: bm.SourceIP.String(),
+		Port: cmn.BFDPort, Interval: uint32(bm.Interval),
+		Multi: bm.RetryCount, Instance: bm.Instance}
+
+	if ch.SpawnKa {
+		return args, false, nil
+	}
+
+	myIP := net.ParseIP(bm.SourceIP.String())
+	if myIP == nil {
+		return args, false, errors.New("source address malformed")
+	}
+
+	tk.LogIt(tk.LogInfo, "[CLUSTER] Cluster Instance %s starting BFD..\n", bm.Instance)
+	ch.SpawnKa = true
+
+	ch.RemoteIP = bm.RemoteIP
+	ch.SourceIP = bm.SourceIP
+	ch.Interval = int64(bm.Interval)
+	return args, true, nil
+}
+
+// CIBFDSessionDel - routine to delete BFD session
+// Locking: see bfdCfgMtx. The caller must not hold mh.mtx.
+func (ch *CIStateH) CIBFDSessionDel(bm cmn.BFDMod) (int, error) {
+
+	if ch == nil {
+		return -1, cmn.ErrBFDUnavailable
+	}
+
+	ch.bfdCfgMtx.Lock()
+	defer ch.bfdCfgMtx.Unlock()
+
+	mh.mtx.Lock()
+	bs := ch.Bs
+	_, found := ch.ClusterMap[bm.Instance]
+	mh.mtx.Unlock()
+
+	if bs == nil {
+		return -1, cmn.ErrBFDUnavailable
+	}
+
 	if !found {
 		tk.LogIt(tk.LogError, "[CLUSTER] BFD SU - Cluster Instance %s not found\n", bm.Instance)
 		return -1, errors.New("cluster instance not found")
 	}
 
 	bfdSessConfigArgs := bfd.ConfigArgs{RemoteIP: bm.RemoteIP.String()}
-	err := ch.Bs.BFDDeleteRemote(bfdSessConfigArgs)
+	err := bs.BFDDeleteRemote(bfdSessConfigArgs)
 	if err != nil {
 		tk.LogIt(tk.LogCritical, "KA - Cant delete BFD remote\n")
 		return -1, err
 	}
-	remaining, err := ch.Bs.BFDGet()
+	remaining, err := bs.BFDGet()
 	if err != nil {
 		return -1, err
 	}
+	mh.mtx.Lock()
 	ch.SpawnKa = len(remaining) > 0
+	mh.mtx.Unlock()
 	tk.LogIt(tk.LogInfo, "KA - BFD remote %s:%s deleted\n", bm.Instance, bm.RemoteIP.String())
 	return 0, nil
 }
