@@ -747,7 +747,7 @@ type LoadbalanceEntryServiceArguments struct {
 	// true connects to the EPP without TLS. The default (false) uses TLS without certificate verification, matching the insecureSkipVerify DestinationRule the llm-d charts install for the EPP's self-signed certificate. Only meaningful with eppEndpoint; accepted but inert otherwise.
 	EppPlaintext bool `json:"eppPlaintext,omitempty"`
 
-	// Longest wait, in milliseconds, for the EPP's request-phase decision (destination, header and body mutations) before the request is treated as an EPP failure and eppFailureMode applies. Omitted or 0 resolves to 3000. Only meaningful with eppEndpoint; accepted but inert otherwise.
+	// Longest wait, in milliseconds, for the EPP's request-phase decision (destination, header and body mutations) before the request is treated as an EPP failure and eppFailureMode applies. The wait starts when the request is submitted and includes connecting to the EPP when no connection is up. Omitted or 0 resolves to 3000. Only meaningful with eppEndpoint; accepted but inert otherwise.
 	// Maximum: 600000
 	// Minimum: 0
 	EppTimeoutMs int64 `json:"eppTimeoutMs,omitempty"`
