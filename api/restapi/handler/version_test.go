@@ -50,7 +50,7 @@ func TestVersionAdvertisesFeatures(t *testing.T) {
 	for _, f := range got.Features {
 		seen[f]++
 	}
-	for _, want := range []string{cmn.FeatureAPIKeyAuth, cmn.FeatureJWTAuthProfile} {
+	for _, want := range []string{cmn.FeatureEpp, cmn.FeatureAPIKeyAuth, cmn.FeatureJWTAuthProfile} {
 		switch seen[want] {
 		case 0:
 			t.Errorf("features %v lack %q", got.Features, want)

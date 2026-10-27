@@ -8,7 +8,7 @@
 # This scenario runs the gateway WITHOUT --userservice (as ai-model-routing):
 # the CLI needs no token and the REST oracle sends no Authorization header.
 #
-# The gateway advertises only api_key_auth and jwt_auth_profile in /version.
+# The gateway advertises api_key_auth, epp and jwt_auth_profile in /version.
 # Every band, objective and netidentity command therefore prints one line on
 # stderr — "warning: gateway does not advertise <feature>; sending anyway, the
 # gateway's answer decides" — and sends the request; the exit code is the
@@ -187,7 +187,7 @@ cli get lbversion; check_eq "C0 get lbversion (exit)" 0 "$CLI_RC"; warn_check "C
 echo "$CLI_STDOUT" | sed 's/^/      /'
 check_has "C0 the product column" "$(echo "$V" | jq -r .product)" "$CLI_STDOUT"
 check_has "C0 the features line equals /version" "features: $(echo "$V" | jq -r '.features | join(", ")')" "$CLI_STDOUT"
-check_eq "C0 this gateway advertises api_key_auth and jwt_auth_profile only" "api_key_auth jwt_auth_profile" "$(echo "$V" | jq -r '.features | sort | join(" ")')"
+check_eq "C0 this gateway advertises api_key_auth, epp and jwt_auth_profile" "api_key_auth epp jwt_auth_profile" "$(echo "$V" | jq -r '.features | sort | join(" ")')"
 
 # ── C1: equivalence with the scenario's curl configuration ──────────────────
 echo ""
