@@ -48,6 +48,10 @@ jobs:
         scenario: [k3d-incluster-inference-svc, k3d-incluster-inference-gwapi, k3d-incluster-inference-epp, k3d-helm-inference-gwapi]
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The EPP scenario builds the image from this checkout, and the
+          # Dockerfile needs loxilb-ebpf (and its nested libbpf) present.
+          submodules: recursive
       - name: Install PyYAML (manifest renderer)
         run: python3 -m pip install --quiet pyyaml
       # Authenticate to avoid anonymous ghcr pull limits (the image is public).
