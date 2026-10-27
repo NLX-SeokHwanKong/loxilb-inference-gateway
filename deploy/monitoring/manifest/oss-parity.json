@@ -1,17 +1,17 @@
 {
  "schema_version": 1,
  "provenance": {
-  "generated_at": "2026-10-26T23:32:17+00:00",
-  "source_revision": "4002bde92bd7f2b121f84c23c5d6b71f5a607980",
+  "generated_at": "2026-10-27T02:34:22+00:00",
+  "source_revision": "a6c7a0d33718204d7292d04c30eb34ceef39d3c0",
   "upstream_repository": "https://github.com/loxilb-io/loxilb",
   "upstream_revision": "4fa515f08017e845470218990a0a8961f5426e7e"
  },
  "contract": {
-  "gateway_families": 349,
+  "gateway_families": 354,
   "upstream_families": 60,
   "present_identical": 35,
   "present_divergent": 0,
-  "absent": 314,
+  "absent": 319,
   "upstream_only": 25
  },
  "upstream_only": [
@@ -809,6 +809,65 @@
     "labels": [
      "engine",
      "service"
+    ]
+   }
+  },
+  {
+   "name": "loxilb_ai_epp_candidates_rejected_total",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "counter",
+    "labels": [
+     "reason"
+    ]
+   }
+  },
+  {
+   "name": "loxilb_ai_epp_duration_seconds",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "histogram",
+    "labels": []
+   }
+  },
+  {
+   "name": "loxilb_ai_epp_inflight",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "gauge",
+    "labels": []
+   }
+  },
+  {
+   "name": "loxilb_ai_epp_pending",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "gauge",
+    "labels": []
+   }
+  },
+  {
+   "name": "loxilb_ai_epp_requests_total",
+   "owner": "loxilb",
+   "class": "default",
+   "parity": "absent",
+   "present_upstream": false,
+   "gateway": {
+    "type": "counter",
+    "labels": [
+     "outcome"
     ]
    }
   },

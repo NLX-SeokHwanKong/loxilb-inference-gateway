@@ -54,6 +54,7 @@ it*, *how to test it*, and *how to extend it*.
 | [`23-ai-admission-flow-control.md`](23-ai-admission-flow-control.md) | **AI admission flow control**: the capacity gate's modes and ceilings, the bounded per-pool queue (`fc_max_queue_depth`, `fc_max_queue_wait_ms`, the depth × 1 MiB memory bound and its guards), the refusal contract (`429`/`503`/`504`, `Retry-After`, admission headers), the maintenance drain, and the `loxilb_ai_admission_*` metrics |
 | [`24-backend-tls-argument-changes.md`](24-backend-tls-argument-changes.md) | **Backend TLS argument changes**: which `mtls_backend` and backend cert-ID arguments a create request may no longer carry, what a read returns, and what happens to configuration persisted by an earlier release |
 | [`25-backend-tls-verification.md`](25-backend-tls-verification.md) | **Backend TLS verification and client certificates**: registering a CA bundle and a client certificate, referring to them from an `e2ehttps` rule, what a verified endpoint must present, changing the policy of a serving rule, rotation |
+| [`26-endpoint-picker-epp.md`](26-endpoint-picker-epp.md) | **Endpoint Picker (EPP) operator notes**: what `eppTimeoutMs` covers (dial included), the endpoint subset hint and the EPP `subset-filter` it needs, candidates outside the rule, the listener kept after the last rule is deleted (`503 no_route`), restarts on a host-network node |
 
 ---
 
