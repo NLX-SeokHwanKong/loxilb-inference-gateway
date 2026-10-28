@@ -55,7 +55,6 @@ models:
       bgp:
         label: typed
         arg: bgp
-        wire: BGP
         desc_sha256: 1c92f18ef6827f23c71f7169428bfd62e42053c5bfe009f3bbd4114f7a73548a
       monitor:
         label: typed
@@ -160,7 +159,8 @@ models:
         arg: api_key_auth
         desc_sha256: d83f2ea0a513c26ed8081be780e8f0fdf745c64d29db82ff672d28ce789801f4
       jwt_auth_profile:
-        label: extra-only
+        label: typed
+        arg: jwt_auth_profile
         desc_sha256: f11311472ecae43df73650620acb607485c1158e07233bfadb632f90a2ae4d74
       max_stream_duration_sec:
         label: extra-only
