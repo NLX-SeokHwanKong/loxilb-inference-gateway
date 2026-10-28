@@ -182,14 +182,14 @@ operations:
   impact: global
   reversible: true
   tier: operator
-  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; owner decision pending (PR-0 report)'
+  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; D13: raised to admin-confirm in PR-A2 (CAMPAIGN-GUIDE Rev 1.2 §5)'
 - op: POST /config/bgp/neigh
   tools:
   - bgp_neigh_set
   impact: global
   reversible: true
   tier: operator
-  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; owner decision pending (PR-0 report)'
+  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; D13: raised to admin-confirm in PR-A2 (CAMPAIGN-GUIDE Rev 1.2 §5)'
 - op: GET /config/bgp/neigh/all
   tools:
   - bgp_neigh_list
@@ -207,7 +207,7 @@ operations:
   impact: global
   reversible: true
   tier: operator
-  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; owner decision pending (PR-0 report)'
+  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; D13: raised to admin-confirm in PR-A2 (CAMPAIGN-GUIDE Rev 1.2 §5)'
 - op: POST /config/bgp/policy/definedsets/{defineset_type}
   pending: P4
   impact: global
@@ -333,21 +333,21 @@ operations:
   impact: global
   reversible: false
   tier: operator
-  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; owner decision pending (PR-0 report)'
+  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; D13: raised to admin-confirm in PR-A2 (CAMPAIGN-GUIDE Rev 1.2 §5)'
 - op: POST /config/gpu/disable
   tools:
   - gpu_mode_set
   impact: global
   reversible: true
   tier: operator
-  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; owner decision pending (PR-0 report)'
+  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; D13: raised to admin-confirm in PR-A2 (CAMPAIGN-GUIDE Rev 1.2 §5)'
 - op: POST /config/gpu/enable
   tools:
   - gpu_mode_set
   impact: global
   reversible: true
   tier: operator
-  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; owner decision pending (PR-0 report)'
+  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; D13: raised to admin-confirm in PR-A2 (CAMPAIGN-GUIDE Rev 1.2 §5)'
 - op: GET /config/gpu/status
   tools:
   - gpu_status
@@ -512,14 +512,14 @@ operations:
   impact: global
   reversible: true
   tier: operator
-  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; owner decision pending (PR-0 report)'
+  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; D13: raised to admin-confirm in PR-A2 (CAMPAIGN-GUIDE Rev 1.2 §5)'
 - op: POST /config/llamafirewall/enable
   tools:
   - llamafw_enable_set
   impact: global
   reversible: true
   tier: operator
-  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; owner decision pending (PR-0 report)'
+  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; D13: raised to admin-confirm in PR-A2 (CAMPAIGN-GUIDE Rev 1.2 §5)'
 - op: POST /config/llamafirewall/health
   tools:
   - llamafw_health_check
@@ -532,7 +532,7 @@ operations:
   impact: global
   reversible: true
   tier: operator
-  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; owner decision pending (PR-0 report)'
+  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; D13: raised to admin-confirm in PR-A2 (CAMPAIGN-GUIDE Rev 1.2 §5)'
 - op: GET /config/llamafirewall/stats
   tools:
   - llamafw_stats
@@ -547,7 +547,8 @@ operations:
   impact: service
   reversible: true
   tier: operator
-  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; owner decision pending (PR-0 report)'
+  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; D13: raised to admin-confirm in PR-A2 (CAMPAIGN-GUIDE Rev 1.2 §5)'
+  note: "D13 / PR-A2 split: pre-read the composite key GET /config/loadbalancer/externalipaddress/{ip_address}/port/{port}/protocol/{proto}; a POST that would replace an existing rule is admin-confirm with the diff in the preview; a POST that creates a new rule stays operator. Impact is service, not global: the PR-0 self-test message (lb_create has impact global) came from the throw-away entry POST /config/ai/zzz-global, which credited a fake operation to lb_create with impact global; the tool itself is service because a POST on an existing composite key replaces that rule's endpoints."
 - op: DELETE /config/loadbalancer/all
   excluded: delete-all is instance-scope and never agent-driven; D3
   note: owner-approved 2026-10-28
@@ -657,7 +658,7 @@ operations:
   impact: instance
   reversible: true
   tier: operator
-  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; owner decision pending (PR-0 report)'
+  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; D13: raised to admin-confirm in PR-A2 (CAMPAIGN-GUIDE Rev 1.2 §5)'
 - op: POST /config/persist
   pending: P1b
   impact: instance
@@ -668,14 +669,14 @@ operations:
   impact: global
   reversible: true
   tier: operator
-  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; owner decision pending (PR-0 report)'
+  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; D13: raised to admin-confirm in PR-A2 (CAMPAIGN-GUIDE Rev 1.2 §5)'
 - op: POST /config/pii/enable
   tools:
   - pii_enable_set
   impact: global
   reversible: true
   tier: operator
-  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; owner decision pending (PR-0 report)'
+  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; D13: raised to admin-confirm in PR-A2 (CAMPAIGN-GUIDE Rev 1.2 §5)'
 - op: GET /config/pii/stats
   tools:
   - pii_stats
@@ -690,7 +691,7 @@ operations:
   impact: global
   reversible: true
   tier: operator
-  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; owner decision pending (PR-0 report)'
+  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; D13: raised to admin-confirm in PR-A2 (CAMPAIGN-GUIDE Rev 1.2 §5)'
 - op: POST /config/policy
   excluded: L2-4 write CRUD is excluded by policy; D1
   note: owner-approved 2026-10-28
@@ -733,7 +734,7 @@ operations:
   impact: global
   reversible: true
   tier: operator
-  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; owner decision pending (PR-0 report)'
+  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; D13: raised to admin-confirm in PR-A2 (CAMPAIGN-GUIDE Rev 1.2 §5)'
 - op: GET /config/securityrate/all
   tools:
   - secrate_get
@@ -745,7 +746,7 @@ operations:
   impact: global
   reversible: false
   tier: operator
-  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; owner decision pending (PR-0 report)'
+  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; D13: raised to admin-confirm in PR-A2 (CAMPAIGN-GUIDE Rev 1.2 §5)'
 - op: POST /config/session
   excluded: L2-4 write CRUD is excluded by policy; D1
   note: owner-approved 2026-10-28
