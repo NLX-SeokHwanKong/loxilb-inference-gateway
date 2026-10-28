@@ -69,6 +69,7 @@ AUTH=(-H "Authorization: Bearer $JWT")
 echo "$JWT" | $dexec llb1 loxicmd set login --provider manual >/dev/null 2>&1
 export LLB1_ADMIN_PASSWORD="$ADMIN_PW"
 
+BTOKEN="ci-burst-token-0123456789abcdef0"
 VTOKEN="ci-viewer-token-0123456789abcdef"
 OTOKEN="ci-operator-token-0123456789abcd"
 ATOKEN="ci-admin-token-0123456789abcdef0"
@@ -84,6 +85,7 @@ clients:
   - { name: ci-viewer,   role: viewer,   token: $VTOKEN }
   - { name: ci-operator, role: operator, token: $OTOKEN }
   - { name: ci-admin,    role: admin,    token: $ATOKEN }
+  - { name: ci-burst,    role: viewer,   token: $BTOKEN, rps: 1, burst: 2 }
 audit_dir: ./.mcp-audit
 secrets_dir: ./.mcp-audit/secrets
 EOF
@@ -355,6 +357,29 @@ grep -q '"tool":"secrate_set"' .mcp-audit/audit.jsonl && pass "audit.jsonl recor
 [[ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "${AUTH[@]}" -X DELETE "$REST/config/securityrate")" == 2* ]] \
     && pass "DELETE /config/securityrate (REST, no tool yet) restores the unconfigured state" || fail "DELETE /config/securityrate failed"
 mcp_call "$ATOKEN" secrate_get | grep -q '"connRateEnabled":true' && fail "protection still on after the DELETE" || pass "secrate_get shows no protection enabled again"
+
+# ---------- 3d. the request budget (D20) ----------
+# ci-burst has a budget of 2 requests refilled at 1/s: the session's
+# initialize and initialized notification spend it, so the next request
+# inside the second is refused. The refusal is a 429 with Retry-After and a
+# JSON body, recorded as a rate_limit audit event, and the budget recovers.
+echo "### request budget"
+MCP_PACE=0 mcp_session "$BTOKEN" && pass "ci-burst session established (budget 2 at 1/s)" || fail "no ci-burst session"
+hdrs=$(mktemp)
+body=$(curl -s -D "$hdrs" "$MCP" -H "Authorization: Bearer $BTOKEN" -H "Mcp-Session-Id: $SESSION" \
+    -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" \
+    -d '{"jsonrpc":"2.0","id":9,"method":"tools/list","params":{}}')
+status=$(awk 'NR==1{print $2}' "$hdrs"); retry=$(awk 'tolower($1)=="retry-after:"{print $2}' "$hdrs" | tr -d '\r'); rm -f "$hdrs"
+[[ "$status" == "429" ]] && pass "third request inside the second is refused with 429" || fail "request past the budget answered HTTP $status: $body"
+[[ "$retry" =~ ^[0-9]+$ && "$retry" -ge 1 ]] && pass "429 carries Retry-After ($retry s)" || fail "Retry-After header missing or not whole seconds: '$retry'"
+echo "$body" | python3 -c 'import sys,json; b=json.load(sys.stdin); assert b["error"]=="rate_limited" and b["client"]=="ci-burst" and b["retry_after_sec"]>=1 and b["limit"]=={"rps":1,"burst":2}, b' 2>/dev/null \
+    && pass "429 body names the client, its budget (rps 1, burst 2) and retry_after_sec" || fail "429 body: $body"
+grep -q '"rate_limit"' .mcp-audit/audit.jsonl && grep '"rate_limit"' .mcp-audit/audit.jsonl | grep -q 'ci-burst' \
+    && pass "audit.jsonl records the rate_limit event for ci-burst" || fail "no rate_limit audit event for ci-burst"
+sleep "$((retry + 1))"
+res=$(MCP_PACE=0 mcp_rpc "$BTOKEN" tools/list)
+echo "$res" | grep -q '"tools"' && pass "the budget recovers after Retry-After" || fail "after Retry-After: $res"
+SESSION=$ADMIN_SESSION
 
 # ---------- 4. AI ops ----------
 

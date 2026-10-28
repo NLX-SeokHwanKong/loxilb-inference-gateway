@@ -43,12 +43,17 @@ type Target struct {
 	TimeoutSec         int    `yaml:"timeout_sec"`
 }
 
-// ClientToken authenticates one MCP client in HTTP mode.
+// ClientToken authenticates one MCP client in HTTP mode and sets its
+// request budget: a token bucket of Burst requests refilled at RPS per
+// second (T8). Zero keeps the bridge default for that field (10 rps,
+// burst 20); neither can be turned off.
 type ClientToken struct {
-	Name     string `yaml:"name"`
-	Role     string `yaml:"role"`
-	Token    string `yaml:"token"`
-	TokenEnv string `yaml:"token_env"`
+	Name     string  `yaml:"name"`
+	Role     string  `yaml:"role"`
+	Token    string  `yaml:"token"`
+	TokenEnv string  `yaml:"token_env"`
+	RPS      float64 `yaml:"rps"`
+	Burst    float64 `yaml:"burst"`
 }
 
 // Config is the bridge configuration file (YAML, mode 0600 recommended).
@@ -145,9 +150,19 @@ func (c *Config) validate() error {
 		if (cl.Token == "") == (cl.TokenEnv == "") {
 			return fmt.Errorf("client %q: exactly one of token or token_env required", cl.Name)
 		}
+		if cl.RPS < 0 || (cl.RPS > 0 && cl.RPS < minClientRPS) {
+			return fmt.Errorf("client %q: rps must be 0 (default) or at least %g", cl.Name, minClientRPS)
+		}
+		if cl.Burst < 0 || (cl.Burst > 0 && cl.Burst < 1) {
+			return fmt.Errorf("client %q: burst must be 0 (default) or at least 1", cl.Name)
+		}
 	}
 	return nil
 }
+
+// minClientRPS is the slowest refill a client may be given: the budget is
+// a brake, never a switch.
+const minClientRPS = 1.0 / 60
 
 // resolveEnv returns v, or the env var content when envKey is set.
 func resolveEnv(v, envKey, what string) (string, error) {
