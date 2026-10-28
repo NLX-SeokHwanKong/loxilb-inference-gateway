@@ -80,9 +80,19 @@ MCP=http://127.0.0.1:8891
 
 # ---------- minimal MCP-over-HTTP client ----------
 
+# The bridge meters every HTTP request per client with a token bucket of
+# burst 20 refilled at 10/s (T8); a request past the budget is answered
+# with a plain-text HTTP 429, not an SSE frame. Each request here waits
+# MCP_PACE first so the scenario stays under the refill rate whatever the
+# runner's speed; a burst of 23 viewer reads inside 0.3 s hit the bucket
+# on the hosted runner once.
+MCP_PACE=${MCP_PACE:-0.11}
+pace() { sleep "$MCP_PACE"; }
+
 # mcp_session <token>: initialize a session, cache its id in $SESSION.
 mcp_session() {
     local hdrs; hdrs=$(mktemp)
+    pace
     curl -s -o /dev/null -D "$hdrs" "$MCP" \
         -H "Authorization: Bearer $1" -H "Content-Type: application/json" \
         -H "Accept: application/json, text/event-stream" \
@@ -90,6 +100,7 @@ mcp_session() {
     SESSION=$(awk 'tolower($1)=="mcp-session-id:"{print $2}' "$hdrs" | tr -d '\r')
     rm -f "$hdrs"
     [[ -z "$SESSION" ]] && return 1
+    pace
     curl -s -o /dev/null "$MCP" \
         -H "Authorization: Bearer $1" -H "Mcp-Session-Id: $SESSION" \
         -H "Content-Type: application/json" \
@@ -98,17 +109,21 @@ mcp_session() {
 }
 
 RPCID=1
-# mcp_rpc <token> <method> [params-json]: raw JSON-RPC, prints the result line.
+# mcp_rpc <token> <method> [params-json]: raw JSON-RPC, prints the result
+# line; an answer that is not an SSE frame (HTTP 401/429 text) is printed
+# as is, so a refusal reads as what it was.
 mcp_rpc() {
     RPCID=$((RPCID+1))
-    local params="$3"
+    local params="$3" body line
     [[ -z "$params" ]] && params='{}'
-    curl -s "$MCP" \
+    pace
+    body=$(curl -s "$MCP" \
         -H "Authorization: Bearer $1" -H "Mcp-Session-Id: $SESSION" \
         -H "Content-Type: application/json" \
         -H "Accept: application/json, text/event-stream" \
-        -d "{\"jsonrpc\":\"2.0\",\"id\":$RPCID,\"method\":\"$2\",\"params\":$params}" |
-        sed -n 's/^data: //p'
+        -d "{\"jsonrpc\":\"2.0\",\"id\":$RPCID,\"method\":\"$2\",\"params\":$params}")
+    line=$(sed -n 's/^data: //p' <<< "$body")
+    if [[ -n "$line" ]]; then echo "$line"; else echo "$body"; fi
 }
 
 # jfield <result-line> <python-expr>: a field of the tool's structured result
