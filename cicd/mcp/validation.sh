@@ -125,6 +125,17 @@ ADMIN_SESSION=$SESSION
 echo "### observe"
 res=$(mcp_call "$ATOKEN" health_overview)
 echo "$res" | grep -q '"reachable":true' && pass "health_overview reachable" || fail "health_overview: $res"
+# GET /status/ready is folded into health_overview; the verdict is present
+# whether the gateway answered 200 or 503.
+echo "$res" | grep -q '"ready":\(true\|false\)' && pass "health_overview carries the /status/ready verdict" || fail "health_overview without ready: $res"
+res=$(mcp_call "$ATOKEN" version_get)
+if echo "$res" | grep -q '"product":"loxilb-inference-gateway"'; then
+    pass "version_get reports product and features"
+else
+    # VersionGetEntry.product/features are absent on builds that predate
+    # them (swagger says so); the bridge then reports plain loxilb.
+    echo "  [SKIP] version_get product/features (this gateway build predates the field)"
+fi
 
 res=$(mcp_call "$ATOKEN" lb_list)
 mcpRules=$(echo "$res" | grep -o '"total_count":[0-9]*' | head -1 | cut -d: -f2)
@@ -180,6 +191,37 @@ res=$(mcp_call "$ATOKEN" lb_delete "{\"external_ip\":\"20.20.20.3\",\"port\":202
 echo "$res" | grep -q '"action":"executed"' && pass "typed AI lb_delete executed with its full rule key" || fail "typed AI lb_delete execute: $res"
 mcp_call "$ATOKEN" lb_list | grep -q '20.20.20.3' && fail "typed AI rule still present after delete" || pass "typed AI rule gone after delete"
 
+# ---------- 2b. jwt credential policy (gap W1) ----------
+# The bridge gains the profile tool in PR-B3; until then the profile is
+# created through REST. A profile needs no reachable JWKS to be stored (the
+# keyset is fetched asynchronously), so an .invalid issuer is enough for the
+# create/observe/delete contract. Reuses the 20.20.20.3 VIP bound in config.sh.
+echo "### jwt credential policy"
+REST="http://$llbIP:11111/netlox/v1"
+prof=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X POST "$REST/config/ai/jwtauthprofile" \
+    -H 'Content-Type: application/json' \
+    -d '{"name":"ci-jwt","issuer":"https://issuer.ci.invalid","jwks_url":"https://issuer.ci.invalid/jwks.json","audiences":["ci"]}')
+if [[ "$prof" == "200" || "$prof" == "201" || "$prof" == "204" ]]; then
+    res=$(mcp_call "$ATOKEN" lb_create '{"external_ip":"20.20.20.3","port":2020,"protocol":"tcp","mode":4,"host":"jwt.ci","api_key_auth":"jwt","endpoints":[{"ip":"31.31.31.1","port":8080}]}')
+    echo "$res" | grep -q '"isError":true' && echo "$res" | grep -q 'jwt_auth_profile' \
+        && pass "lb_create refuses api_key_auth=jwt without jwt_auth_profile before any request" \
+        || fail "jwt without profile not refused: $res"
+    res=$(mcp_call "$ATOKEN" lb_create '{"external_ip":"20.20.20.3","port":2020,"protocol":"tcp","mode":4,"host":"jwt.ci","api_key_auth":"jwt","jwt_auth_profile":"ci-jwt","endpoints":[{"ip":"31.31.31.1","port":8080}]}')
+    echo "$res" | grep -q '"action":"executed"' && pass "lb_create with api_key_auth=jwt executed" || fail "jwt lb_create: $res"
+    sleep 2
+    res=$(mcp_call "$ATOKEN" lb_list '{"filter":"20.20.20.3"}')
+    echo "$res" | grep -q '"api_key_auth":"jwt"' && echo "$res" | grep -q '"jwt_auth_profile":"ci-jwt"' \
+        && pass "lb_list observes the jwt policy and its profile" \
+        || fail "lb_list missing jwt contract: $res"
+    res=$(mcp_call "$ATOKEN" lb_delete '{"external_ip":"20.20.20.3","port":2020,"protocol":"tcp","host_url":"jwt.ci"}')
+    tok=$(echo "$res" | sed -n 's/.*"confirm_token":"\([^"]*\)".*/\1/p')
+    res=$(mcp_call "$ATOKEN" lb_delete "{\"external_ip\":\"20.20.20.3\",\"port\":2020,\"protocol\":\"tcp\",\"host_url\":\"jwt.ci\",\"confirm_token\":\"$tok\"}")
+    echo "$res" | grep -q '"action":"executed"' && pass "jwt rule deleted with token" || fail "jwt lb_delete: $res"
+    curl -s -o /dev/null --max-time 10 -X DELETE "$REST/config/ai/jwtauthprofile/ci-jwt"
+else
+    echo "  [SKIP] jwt credential policy (profile create answered HTTP $prof; the build has no usable jwtauthprofile API)"
+fi
+
 # ---------- 3. guardrails ----------
 
 echo "### guardrails"
@@ -229,6 +271,9 @@ fi
 # ---------- 5. RCA / diagnostics ----------
 
 echo "### rca"
+res=$(mcp_call "$ATOKEN" diagnose_l4_errors)
+# GET /diagnostics is folded into every diagnose tool as evidence.diagnostics.
+echo "$res" | grep -q '"diagnostics":{' && pass "diagnose_l4_errors carries the /diagnostics projection" || fail "no diagnostics evidence: $res"
 res=$(mcp_call "$ATOKEN" diagnose_l4_errors)
 echo "$res" | grep -q '"evidence"' && pass "diagnose_l4_errors returns evidence" || fail "diagnose_l4_errors: $res"
 res=$(mcp_call "$ATOKEN" capacity_report)

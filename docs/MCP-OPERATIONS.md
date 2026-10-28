@@ -127,11 +127,19 @@ arguments.
 ## Tool catalog
 
 **Seed / health** — `version_get`, `health_overview`, `lb_list`, `ct_list`,
-`metrics_snapshot`.
+`metrics_snapshot`. `version_get` returns `product` and `features[]` from
+`GET /version` when the build reports them (`loxilb-inference-gateway`;
+tokens such as `epp`, `api_key_auth`, `jwt_auth_profile`), so an agent can
+tell a gateway-only or EPP-capable build from upstream loxilb before it sends
+the matching rule fields. `health_overview` carries the same two fields plus
+`ready` / `ready_reasons` from `GET /status/ready` (a 503 not-ready answer is
+reported as a verdict, not an error; a build without the endpoint shows
+`errors.ready`).
 
 **Fleet (read)** — `targets_list` (configured targets + default),
-`fleet_overview` (concurrent health probe of every target; unreachable
-targets degrade into per-target error sections).
+`fleet_overview` (concurrent health probe of every target with the same
+`product`/`features`/`ready` fields; unreachable targets degrade into
+per-target error sections).
 
 **Analysis (read)** — `meta_get`, `cluster_state_get`, `trace_status_get`,
 `l4trace_status_get`, `trace_catalog_list`, `nodegraph_get` (backend 501 in
@@ -154,13 +162,24 @@ this fork), `status_get`, `logs_tail`, `log_archives_list`, `log_archive_get`,
 
 `lb_create` exposes typed AI routing arguments instead of requiring callers to
 guess Gateway JSON casing: `host`, `path_prefix`, `model_name`, `sse_mode`,
-`pd_disagg_mode`, `pd_cache_aware_mode`, `api_key_auth`, `kv_exact_mode`,
-`kv_engine_type`, `kv_zmq_port`, `kv_block_size`, plus endpoint `ep_role` and
-`nixl_port`. The bridge maps those names to the REST contract. Omit
-`api_key_auth` to preserve a backend-owned `X-Api-Key`; `disabled` and
+`pd_disagg_mode`, `pd_cache_aware_mode`, `api_key_auth`, `jwt_auth_profile`,
+`kv_exact_mode`, `kv_engine_type`, `kv_zmq_port`, `kv_block_size`, plus
+endpoint `ep_role` and `nixl_port`. The bridge maps those names to the REST
+contract. The permitted values and descriptions of `sel`, `mode` and
+`api_key_auth` are generated from swagger (`zz_swagger_enums_gen.go`) and
+validated before any request is built, so the schema names every selector
+(CHWBL, GPU-aware, WRR-hash, ...) and every credential policy the API knows.
+Omit `api_key_auth` to preserve a backend-owned `X-Api-Key`; `disabled` and
 `required` both reserve and strip that header, while only `required` enforces
-Gateway authentication. `lb_list` projects the same routing fields and endpoint
-roles so an agent can observe the created contract. `service_extra` remains for
+an API key; `jwt` validates a Bearer JWT against `jwt_auth_profile`, and
+`apikey-or-jwt` accepts either credential. Both JWT modes require
+`jwt_auth_profile` to name a configured profile, and the bridge refuses the
+call without it. `lb_list` projects the same routing fields and endpoint
+roles, plus `id`, `admin_state_up`, `security`, `jwt_auth_profile`,
+`epp_endpoint`, `kv_exact_api_mode`, `kv_model_profile` and the three
+data-plane read-back values `fc_effective`, `backend_tls_effective`,
+`half_close_effective`, so an agent sees what was configured and what is in
+force. `service_extra` remains for
 untyped advanced fields and rejects collisions with supplied typed arguments.
 Its keys are validated before any request is built: each must be a
 `serviceArguments` property of the REST contract (the list is generated from
@@ -188,7 +207,12 @@ lift), `gpu_mode_set`, `gpu_conversations_cleanup`, `llamafw_enable_set`,
 **Diagnostics / RCA (read)** — `diagnose_l4_errors`, `diagnose_ai_latency`,
 `diagnose_endpoint`, `capacity_report`. Each returns a correlated evidence
 bundle (sections degrade independently into `errors`) plus machine-readable
-`suggested_actions[] {tool, args, rationale, risk}`. The tool gathers, the
+`suggested_actions[] {tool, args, rationale, risk}`. Every bundle starts with
+`evidence.diagnostics`, a sanitized projection of `GET /diagnostics` (build
+identity, uptime, `ready` and its reasons, maintenance state, eBPF
+attachments, map utilization, dependency checks), so a finding is read
+against the gateway's own verdict; a build without the endpoint shows
+`errors.diagnostics`. The tool gathers, the
 model concludes, a human approves mutations — the confirm-token flow is the
 approval gate; nothing in `suggested_actions` auto-executes.
 

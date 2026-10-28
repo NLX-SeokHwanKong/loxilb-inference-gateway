@@ -167,11 +167,15 @@ func RegisterManagement(s *sdk.Server, role guard.Role, pol *guard.Policy, deps 
 		sdk.AddTool(s, &sdk.Tool{
 			Name: "lb_create",
 			Description: "Create a load-balancer rule (POST /config/loadbalancer): external_ip, port, protocol, endpoints, " +
-				"optional name/sel/mode and typed AI routing fields. api_key_auth is independent of sse_mode and " +
-				"pd_disagg_mode; omit it to preserve a backend-owned X-Api-Key, use disabled to reserve and strip " +
-				"that namespace without enforcement, or required to enforce and strip. service_extra remains available " +
+				"optional name/sel/mode and typed AI routing fields. sel, mode and api_key_auth carry the REST " +
+				"contract's own permitted values and descriptions (generated from swagger). api_key_auth is independent " +
+				"of sse_mode and pd_disagg_mode; omit it to preserve a backend-owned X-Api-Key, disabled reserves and " +
+				"strips that namespace without enforcement, required enforces X-Api-Key, jwt validates a Bearer JWT " +
+				"against jwt_auth_profile, apikey-or-jwt accepts either; both JWT modes require jwt_auth_profile. " +
+				"A POST on an existing external_ip/port/protocol replaces that rule. service_extra remains available " +
 				"for advanced serviceArguments fields not yet typed.",
 			Annotations: mutAnnotations("Create LB rule", true),
+			InputSchema: lbCreateInputSchema(),
 		}, deps.lbCreate())
 	})
 	reg(mut("endpoint_host_state_set"), func() {
@@ -462,30 +466,31 @@ type lbEndpointIn struct {
 }
 
 type lbCreateIn struct {
-	Target       string         `json:"target,omitempty" jsonschema:"target loxilb instance name; omit for default"`
-	ExternalIP   string         `json:"external_ip" jsonschema:"service VIP"`
-	Port         int            `json:"port" jsonschema:"service port"`
-	Protocol     string         `json:"protocol" jsonschema:"tcp|udp|sctp|icmp"`
-	Name         string         `json:"name,omitempty" jsonschema:"optional service name"`
-	Sel          int            `json:"sel,omitempty" jsonschema:"endpoint selector: 0 rr (default), 1 hash, 2 priority, 3 persist, 4 lc"`
-	Mode         int            `json:"mode,omitempty" jsonschema:"LB mode: 0 default, 1 onearm, 2 fullnat, 3 dsr, 4 fullproxy/AI"`
-	BGP          bool           `json:"bgp,omitempty" jsonschema:"advertise service via BGP"`
-	Monitor      bool           `json:"monitor,omitempty" jsonschema:"enable endpoint liveness monitoring"`
-	Timeout      int            `json:"timeout,omitempty" jsonschema:"session inactivity timeout seconds"`
-	Host         string         `json:"host,omitempty" jsonschema:"HTTP host match for a full-proxy AI service"`
-	PathPrefix   string         `json:"path_prefix,omitempty" jsonschema:"optional request path prefix"`
-	ModelName    string         `json:"model_name,omitempty" jsonschema:"model routing key"`
-	SSEMode      *bool          `json:"sse_mode,omitempty" jsonschema:"enable SSE handling; independent of api_key_auth"`
-	PDDisaggMode *bool          `json:"pd_disagg_mode,omitempty" jsonschema:"enable the multi-tier prefill/decode routing ladder"`
-	PDCacheAware *bool          `json:"pd_cache_aware_mode,omitempty" jsonschema:"enable Tier-1 prefix affinity on a P/D service"`
-	APIKeyAuth   string         `json:"api_key_auth,omitempty" jsonschema:"data-plane X-Api-Key policy: omitted, disabled, or required"`
-	KVExactMode  int            `json:"kv_exact_mode,omitempty" jsonschema:"KV topology: 0 off, 1 role-partitioned P/D, 3 single-pool"`
-	KVEngineType string         `json:"kv_engine_type,omitempty" jsonschema:"KV engine contract: vllm, sglang, trtllm, or llamacpp"`
-	KVZMQPort    int            `json:"kv_zmq_port,omitempty" jsonschema:"base KV-event publisher port"`
-	KVBlockSize  int            `json:"kv_block_size,omitempty" jsonschema:"engine KV block size in tokens"`
-	Endpoints    []lbEndpointIn `json:"endpoints" jsonschema:"backend endpoints (at least one)"`
-	ServiceExtra map[string]any `json:"service_extra,omitempty" jsonschema:"additional serviceArguments fields; every key must be a serviceArguments property of the REST contract, read-back (*_effective) and excluded keys are refused"`
-	ConfirmToken string         `json:"confirm_token,omitempty" jsonschema:"unused for lb_create; present for schema symmetry"`
+	Target         string         `json:"target,omitempty" jsonschema:"target loxilb instance name; omit for default"`
+	ExternalIP     string         `json:"external_ip" jsonschema:"service VIP"`
+	Port           int            `json:"port" jsonschema:"service port"`
+	Protocol       string         `json:"protocol" jsonschema:"tcp|udp|sctp|icmp"`
+	Name           string         `json:"name,omitempty" jsonschema:"optional service name"`
+	Sel            int            `json:"sel,omitempty" jsonschema:"endpoint selection algorithm; permitted values and meanings come from the REST contract (generated description)"`
+	Mode           int            `json:"mode,omitempty" jsonschema:"NAT/proxy mode; permitted values and meanings come from the REST contract (generated description)"`
+	BGP            bool           `json:"bgp,omitempty" jsonschema:"advertise service via BGP"`
+	Monitor        bool           `json:"monitor,omitempty" jsonschema:"enable endpoint liveness monitoring"`
+	Timeout        int            `json:"timeout,omitempty" jsonschema:"session inactivity timeout seconds"`
+	Host           string         `json:"host,omitempty" jsonschema:"HTTP host match for a full-proxy AI service"`
+	PathPrefix     string         `json:"path_prefix,omitempty" jsonschema:"optional request path prefix"`
+	ModelName      string         `json:"model_name,omitempty" jsonschema:"model routing key"`
+	SSEMode        *bool          `json:"sse_mode,omitempty" jsonschema:"enable SSE handling; independent of api_key_auth"`
+	PDDisaggMode   *bool          `json:"pd_disagg_mode,omitempty" jsonschema:"enable the multi-tier prefill/decode routing ladder"`
+	PDCacheAware   *bool          `json:"pd_cache_aware_mode,omitempty" jsonschema:"enable Tier-1 prefix affinity on a P/D service"`
+	APIKeyAuth     string         `json:"api_key_auth,omitempty" jsonschema:"data-plane credential policy; permitted values come from the REST contract (generated description)"`
+	JWTAuthProfile string         `json:"jwt_auth_profile,omitempty" jsonschema:"name of a configured JWT auth profile; required when api_key_auth is jwt or apikey-or-jwt"`
+	KVExactMode    int            `json:"kv_exact_mode,omitempty" jsonschema:"KV topology: 0 off, 1 role-partitioned P/D, 3 single-pool"`
+	KVEngineType   string         `json:"kv_engine_type,omitempty" jsonschema:"KV engine contract: vllm, sglang, trtllm, or llamacpp"`
+	KVZMQPort      int            `json:"kv_zmq_port,omitempty" jsonschema:"base KV-event publisher port"`
+	KVBlockSize    int            `json:"kv_block_size,omitempty" jsonschema:"engine KV block size in tokens"`
+	Endpoints      []lbEndpointIn `json:"endpoints" jsonschema:"backend endpoints (at least one)"`
+	ServiceExtra   map[string]any `json:"service_extra,omitempty" jsonschema:"additional serviceArguments fields; every key must be a serviceArguments property of the REST contract, read-back (*_effective) and excluded keys are refused"`
+	ConfirmToken   string         `json:"confirm_token,omitempty" jsonschema:"unused for lb_create; present for schema symmetry"`
 }
 
 func (d *Deps) lbCreate() sdk.ToolHandlerFor[lbCreateIn, mutOut] {
@@ -506,8 +511,18 @@ func (d *Deps) lbCreate() sdk.ToolHandlerFor[lbCreateIn, mutOut] {
 		if len(in.Endpoints) == 0 {
 			return nil, mutOut{}, fmt.Errorf("endpoints: at least one endpoint is required")
 		}
-		if in.APIKeyAuth != "" && in.APIKeyAuth != "disabled" && in.APIKeyAuth != "required" {
-			return nil, mutOut{}, fmt.Errorf("api_key_auth: must be omitted, disabled, or required")
+		if !intInEnum("serviceArguments.sel", in.Sel) {
+			return nil, mutOut{}, fmt.Errorf("sel: must be one of %s", enumValues("serviceArguments.sel"))
+		}
+		if !intInEnum("serviceArguments.mode", in.Mode) {
+			return nil, mutOut{}, fmt.Errorf("mode: must be one of %s", enumValues("serviceArguments.mode"))
+		}
+		if in.APIKeyAuth != "" && !enumAllows("serviceArguments.api_key_auth", in.APIKeyAuth) {
+			return nil, mutOut{}, fmt.Errorf("api_key_auth: must be omitted or one of %s", enumValues("serviceArguments.api_key_auth"))
+		}
+		jwtMode := in.APIKeyAuth == "jwt" || in.APIKeyAuth == "apikey-or-jwt"
+		if jwtMode && strings.TrimSpace(in.JWTAuthProfile) == "" {
+			return nil, mutOut{}, fmt.Errorf("jwt_auth_profile: required when api_key_auth is %s (it must name a configured profile)", in.APIKeyAuth)
 		}
 		if in.KVExactMode != 0 && in.KVExactMode != 1 && in.KVExactMode != 3 {
 			return nil, mutOut{}, fmt.Errorf("kv_exact_mode: must be 0, 1, or 3")
@@ -523,7 +538,7 @@ func (d *Deps) lbCreate() sdk.ToolHandlerFor[lbCreateIn, mutOut] {
 			svc["name"] = in.Name
 		}
 		if in.BGP {
-			svc["BGP"] = true
+			svc["bgp"] = true
 		}
 		if in.Monitor {
 			svc["monitor"] = true
@@ -551,6 +566,9 @@ func (d *Deps) lbCreate() sdk.ToolHandlerFor[lbCreateIn, mutOut] {
 		}
 		if in.APIKeyAuth != "" {
 			svc["api_key_auth"] = in.APIKeyAuth
+		}
+		if in.JWTAuthProfile != "" {
+			svc["jwt_auth_profile"] = in.JWTAuthProfile
 		}
 		if in.KVExactMode != 0 {
 			svc["kvExactMode"] = in.KVExactMode

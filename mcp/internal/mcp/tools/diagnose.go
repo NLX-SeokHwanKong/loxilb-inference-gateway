@@ -120,6 +120,33 @@ func (o *diagnoseOut) finish() {
 	}
 }
 
+// diagnosticsKeys is the projection of GET /diagnostics every diagnose tool
+// attaches as evidence["diagnostics"]: identity, readiness, maintenance and
+// attachment state, so a finding is read against the gateway's own verdict.
+// Nested reasons may carry propagated error text, hence sanitizeAny.
+var diagnosticsKeys = []string{
+	"version", "product", "api_version", "uptime_seconds",
+	"ready", "ready_reasons", "maintenance_state",
+	"ebpf_attachments", "maps", "external_dependencies",
+}
+
+// attachDiagnostics adds the GET /diagnostics projection to out; an older
+// build without the endpoint degrades into errors.diagnostics.
+func (d *Deps) attachDiagnostics(ctx context.Context, c *client.Client, out *diagnoseOut) {
+	diag, err := c.Diagnostics(ctx)
+	if err != nil {
+		out.fail("diagnostics", err)
+		return
+	}
+	proj := map[string]any{}
+	for _, k := range diagnosticsKeys {
+		if v, ok := diag[k]; ok {
+			proj[k] = sanitizeAny(v, 0)
+		}
+	}
+	out.Evidence["diagnostics"] = proj
+}
+
 // finishDiagnose finalizes a diagnosis and stamps each suggested action with
 // this bridge's autopilot status so an agent knows which follow-ups it may
 // execute without a confirm token (§3.7).
@@ -190,6 +217,7 @@ func (d *Deps) diagnoseL4Errors() sdk.ToolHandlerFor[targetIn, diagnoseOut] {
 			return nil, diagnoseOut{}, err
 		}
 		out := newDiagnoseOut(c.Name())
+		d.attachDiagnostics(ctx, c, &out)
 
 		// 1. L4 error counters by reason/proto (always-on, unsampled).
 		var errTotal float64
@@ -317,6 +345,7 @@ func (d *Deps) diagnoseAILatency() sdk.ToolHandlerFor[targetIn, diagnoseOut] {
 			return nil, diagnoseOut{}, err
 		}
 		out := newDiagnoseOut(c.Name())
+		d.attachDiagnostics(ctx, c, &out)
 
 		// 1. Latency histograms + KV/session counters from one scrape.
 		var kvFound, kvMissing float64
@@ -438,6 +467,7 @@ func (d *Deps) diagnoseEndpoint() sdk.ToolHandlerFor[diagnoseEndpointIn, diagnos
 			return nil, diagnoseOut{}, fmt.Errorf("host is required")
 		}
 		out := newDiagnoseOut(c.Name())
+		d.attachDiagnostics(ctx, c, &out)
 		host := strings.ToLower(strings.TrimSpace(in.Host))
 
 		// 1. Probe entries for this host.
@@ -551,6 +581,7 @@ func (d *Deps) capacityReport() sdk.ToolHandlerFor[targetIn, diagnoseOut] {
 			return nil, diagnoseOut{}, err
 		}
 		out := newDiagnoseOut(c.Name())
+		d.attachDiagnostics(ctx, c, &out)
 
 		// 1. Conntrack usage vs capacity + rule/endpoint gauges.
 		var ctUsedPct float64 = -1
