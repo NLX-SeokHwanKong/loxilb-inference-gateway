@@ -287,8 +287,11 @@ echo "$res" | grep -q '"isError":true' && echo "$res" | grep -q 'enables no per-
     && pass "secrate_set refuses a change that leaves every protection off, before any token" || fail "all-off change not refused: $res"
 mcp_call "$ATOKEN" secrate_get | grep -q '"ratePerSec":777' && fail "refused change reached the gateway" || pass "refused change changed nothing (secrate_get)"
 res=$(mcp_call "$ATOKEN" secrate_set '{"conn_rate_enabled":true,"rate_per_sec":777}')
+# current.ratePerSec is 0 on a freshly booted image and 50 after a DELETE
+# (the gateway keeps its built-in thresholds, disabled), so the check is on
+# the flag the GET omits, not on the threshold value.
 [[ "$(jfield "$res" 'r["action"]')" == "preview" && "$(jfield "$res" 'r["impact"]')" == "global" \
-   && "$(jfield "$res" 'r["current"]["ratePerSec"]')" == "0" && "$(jfield "$res" 'r["current"]["connRateEnabled"]')" == "False" \
+   && "$(jfield "$res" 'isinstance(r["current"]["ratePerSec"],int)')" == "True" && "$(jfield "$res" 'r["current"]["connRateEnabled"]')" == "False" \
    && "$(jfield "$res" 'r["proposed"]["connRateEnabled"]')" == "True" ]] \
     && pass "secrate_set previews current (zero defaults for the omitted keys), proposed and impact" || fail "secrate_set preview: $res"
 tok=$(jfield "$res" 'r["confirm_token"]')
@@ -334,11 +337,15 @@ done
 [[ -z "$missing" ]] && pass "viewer lists the 17 control-plane reads" || fail "viewer misses:$missing"
 
 # read_leg <tool> <args> <python-expr on r> <label>: OK when the expression
-# is true, SKIP when the gateway answered 503/501, FAILED otherwise.
+# is true; SKIP when the gateway answered 503/501 (no store behind the
+# endpoint) or 404 "path ... was not found" (the published image predates
+# the endpoint; the contract gate holds the bridge to the swagger of the
+# tree, not of the image); FAILED otherwise.
 read_leg() {
     local res; res=$(mcp_call "$VTOKEN" "$1" "$2")
     if echo "$res" | grep -q '"isError":true'; then
         if echo "$res" | grep -qE 'HTTP 50[13]'; then echo "  [SKIP] $4 (gateway: $(echo "$res" | grep -oE 'HTTP 50[13][^"]{0,60}' | head -1))"; return; fi
+        if echo "$res" | grep -qE 'HTTP 404: .*path [^ ]* was not found'; then echo "  [SKIP] $4 (this gateway build predates the endpoint: $(echo "$res" | grep -oE 'path [^ ]* was not found' | head -1))"; return; fi
         fail "$4: $res"; return
     fi
     [[ "$(jfield "$res" "$3")" == "True" ]] && pass "$4" || fail "$4: $res"
@@ -367,7 +374,7 @@ read_leg maintenance_get '{}' 'len(r.get("state",""))>0' "maintenance_get report
 read_leg halfclose_get '{}' '"allow" in r and r["capSeconds"]>=1' "halfclose_get reports allow and capSeconds"
 read_leg audit_status '{}' '"available" in r' "audit_status reports the trail state"
 read_leg audit_policy_get '{}' '"max_segment_bytes" in r' "audit_policy_get reports the segment limits"
-read_leg audit_sink_get '{}' '"enabled" in r or "address" in r' "audit_sink_get reports the primary sink"
+read_leg audit_sink_get '{}' '"sink" in r and r["named"]==False and (r["sink"]=={} or "address" in r["sink"])' "audit_sink_get reports the primary sink (an empty object when none is configured)"
 read_leg config_snapshot_get '{}' 'r["truncated"]==False and r["size_bytes"]>0 and "snapshot" in r' "config_snapshot_get returns the whole snapshot with size and sha256"
 read_leg config_snapshot_get '{"max_bytes":64}' 'r["truncated"]==True and "sections" in r and "snapshot" not in r' "config_snapshot_get over max_bytes describes the sections instead"
 read_leg ai_objective_list '{}' '"objectives" in r and "source" in r' "ai_objective_list reports objectives and their source"

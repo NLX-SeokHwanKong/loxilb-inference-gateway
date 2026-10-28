@@ -479,12 +479,16 @@ func (d *Deps) auditSinkGet() sdk.ToolHandlerFor[auditSinkGetIn, map[string]any]
 			}
 		}
 		d.audit("audit_sink_get", c.Name(), true, "")
-		return nil, map[string]any{
+		out := map[string]any{
 			"target": c.Name(),
 			"named":  in.Name != "",
 			"sink":   sanitizeAny(raw, 0),
 			"note":   "certificate material is named by path and never served",
-		}, nil
+		}
+		if m, _ := raw.(map[string]any); len(m) == 0 {
+			out["note"] = "no remote audit sink is configured on this target (the gateway answered an empty object)"
+		}
+		return nil, out, nil
 	}
 }
 
