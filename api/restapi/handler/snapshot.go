@@ -684,19 +684,106 @@ func autoPersistFire() {
 	}
 }
 
-// autoPersistEligible reports whether a request is a mutating config call
-// whose success should kick the debouncer. Snapshot-family endpoints are
-// excluded: persist IS the write, and restore/import write through on
-// commit themselves.
-func autoPersistEligible(r *http.Request) bool {
+// apiBasePath is the basePath of api/swagger.yml; the lifecycle registry
+// holds route templates without it.
+const apiBasePath = "/netlox/v1"
+
+// lifecycleRoute is one lifecycle registry entry split into path segments
+// for matching a request against its swagger template.
+type lifecycleRoute struct {
+	segs     []string
+	literals int
+	class    snapshot.LifecycleClass
+}
+
+// lifecycleRoutes is the lifecycle registry keyed by upper-case method,
+// compiled once.
+var lifecycleRoutes = compileLifecycleRoutes()
+
+func compileLifecycleRoutes() map[string][]lifecycleRoute {
+	routes := make(map[string][]lifecycleRoute)
+	for _, rl := range snapshot.RouteLifecycleIndex() {
+		segs := strings.Split(strings.Trim(rl.Path, "/"), "/")
+		lr := lifecycleRoute{segs: segs, class: rl.Class}
+		for _, s := range segs {
+			if !strings.HasPrefix(s, "{") {
+				lr.literals++
+			}
+		}
+		m := strings.ToUpper(rl.Method)
+		routes[m] = append(routes[m], lr)
+	}
+	return routes
+}
+
+// lifecycleClassOf returns the lifecycle class of the registry route a
+// request matches. A {param} segment matches any one segment; when several
+// templates match, the one with the most literal segments wins, as in the
+// router.
+func lifecycleClassOf(r *http.Request) (snapshot.LifecycleClass, bool) {
+	p := r.URL.EscapedPath()
+	if !strings.HasPrefix(p, apiBasePath+"/") {
+		return "", false
+	}
+	segs := strings.Split(strings.Trim(strings.TrimPrefix(p, apiBasePath), "/"), "/")
+	var best *lifecycleRoute
+	for i := range lifecycleRoutes[r.Method] {
+		lr := &lifecycleRoutes[r.Method][i]
+		if len(lr.segs) != len(segs) {
+			continue
+		}
+		match := true
+		for j, s := range lr.segs {
+			if !strings.HasPrefix(s, "{") && s != segs[j] {
+				match = false
+				break
+			}
+		}
+		if match && (best == nil || lr.literals > best.literals) {
+			best = lr
+		}
+	}
+	if best == nil {
+		return "", false
+	}
+	return best.class, true
+}
+
+var unregisteredMutationOnce sync.Once
+
+// configMutationScope says what a successful request moves. counted: it
+// is a mutating call under /config/ other than the lifecycle operations,
+// or a change to an audit sink, and advances the config generation
+// watermark; logins, maintenance and audit operations are not
+// configuration and do not. kick: its route is one the lifecycle registry
+// classes as snapshot, whose state the document carries, so it also marks
+// the config dirty and kicks the debouncer. API keys and rate limits live
+// in the key store, runtime-only and out-of-scope settings are not in the
+// document, and the lifecycle operations write through themselves
+// (persist IS the write).
+func configMutationScope(r *http.Request) (counted, kick bool) {
 	switch r.Method {
 	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
 	default:
-		return false
+		return false, false
 	}
-	p := r.URL.Path
-	// The audit sinks are configuration the document carries, under their
-	// own tree. The audit policy and the rotation are not in the document.
+	counted = isConfigMutationPath(r.URL.Path)
+	if class, ok := lifecycleClassOf(r); ok {
+		return counted, class == snapshot.ClassSnapshot
+	}
+	// The registry covers every mutating route of the API, so a request
+	// reaching here matched no route of it; keep the prefix rule.
+	unregisteredMutationOnce.Do(func() {
+		tk.LogIt(tk.LogDebug, "auto-persist: %s %s matches no lifecycle registry route; prefix rule applied\n", r.Method, r.URL.Path)
+	})
+	return counted, counted
+}
+
+// isConfigMutationPath is the path rule of a configuration change: under
+// /config/ but not a lifecycle operation, or an audit sink. The audit
+// sinks are configuration the document carries, under their own tree; the
+// audit policy and the rotation are not.
+func isConfigMutationPath(p string) bool {
 	if strings.HasSuffix(p, "/audit/sink") || strings.Contains(p, "/audit/sinks/") {
 		return true
 	}
@@ -709,6 +796,13 @@ func autoPersistEligible(r *http.Request) bool {
 		}
 	}
 	return true
+}
+
+// autoPersistEligible reports whether a request's success should kick the
+// debouncer.
+func autoPersistEligible(r *http.Request) bool {
+	_, kick := configMutationScope(r)
+	return kick
 }
 
 // statusRecorder captures the response status so the middleware only kicks
@@ -742,19 +836,26 @@ func (r *statusRecorder) Flush() {
 }
 
 // AutoPersistMiddleware kicks the auto-persist debouncer after every
-// successful mutating config API call (wired in setupMiddlewares next to
-// the snapshot freeze). It also records the mutation for the config-dirty
-// gauge — including when auto-persist is disabled, where the gauge staying
-// 1 until a manual persist is exactly the operational signal.
+// successful mutating call on a snapshot-class route (wired in
+// setupMiddlewares next to the snapshot freeze). It also records the
+// mutation for the config-dirty gauge — including when auto-persist is
+// disabled, where the gauge staying 1 until a manual persist is exactly the
+// operational signal — and advances the config generation for every
+// counted mutation, snapshot-class or not.
 func AutoPersistMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !autoPersistEligible(r) {
+		counted, kick := configMutationScope(r)
+		if !counted {
 			next.ServeHTTP(w, r)
 			return
 		}
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rec, r)
-		if rec.status >= 200 && rec.status < 300 {
+		if rec.status < 200 || rec.status >= 300 {
+			return
+		}
+		snapshot.CountConfigMutation()
+		if kick {
 			snapshot.MarkConfigMutated()
 			if autoPersist != nil {
 				autoPersist.Kick()
