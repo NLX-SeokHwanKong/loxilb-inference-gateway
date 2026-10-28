@@ -1241,6 +1241,25 @@ var secrateRequired = map[string]any{
 	"ratePerSec": 0, "udpEnabled": false, "udpPktThreshold": 0, "udpBandwidthMB": 0,
 }
 
+// secrateProtects reports whether a configuration enables a per-source
+// protection or sets a positive aggregate budget. POST /config/securityrate
+// refuses a body that does neither, so a gateway that has no protection
+// enabled cannot be put back into that state through the POST; DELETE
+// /config/securityrate is the disable path (no tool yet).
+func secrateProtects(cfg map[string]any) bool {
+	for _, k := range []string{"synEnabled", "connRateEnabled", "udpEnabled"} {
+		if on, _ := cfg[k].(bool); on {
+			return true
+		}
+	}
+	for _, k := range []string{"aggregateSynThreshold", "aggregateConnRatePerSec", "aggregateUdpPktThreshold", "aggregateUdpBandwidthMB"} {
+		if n, _ := jsonNormalize(cfg[k]).(float64); n > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // secrateCounterKeys are the counters PUT /config/securityrate/reset zeroes.
 var secrateCounterKeys = []string{
 	"synBlocked", "synPassed", "synCookies", "connBlocked", "connPassed", "udpBlocked", "udpPassed",
@@ -1303,6 +1322,9 @@ func (d *Deps) secrateSet() sdk.ToolHandlerFor[secrateSetIn, mutOut] {
 				delete(proposed, k) // an absent list (whitelistIps) is sent as absent, not null
 			}
 		}
+		if !secrateProtects(proposed) {
+			return nil, mutOut{}, fmt.Errorf("the proposed configuration enables no per-source protection and sets no aggregate budget, which POST /config/securityrate refuses; nothing was sent (DELETE /config/securityrate is the disable path and has no tool yet)")
+		}
 		args := in
 		args.ConfirmToken = ""
 		out, stop, err := d.gateChange("secrate_set", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
@@ -1314,10 +1336,14 @@ func (d *Deps) secrateSet() sdk.ToolHandlerFor[secrateSetIn, mutOut] {
 					}
 				}
 			}
+			rollback := &rollbackSpec{Tool: "secrate_set", Args: rb}
+			if !secrateProtects(current) {
+				rollback = &rollbackSpec{Note: "not reversible through secrate_set: the target had no protection enabled, a configuration POST /config/securityrate refuses; DELETE /config/securityrate restores it (no tool yet)"}
+			}
 			return changePlan{
 				Current:  current,
 				Proposed: proposed,
-				Rollback: &rollbackSpec{Tool: "secrate_set", Args: rb},
+				Rollback: rollback,
 				Impact:   "global",
 			}, nil
 		})

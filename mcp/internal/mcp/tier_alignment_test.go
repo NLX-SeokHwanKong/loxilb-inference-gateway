@@ -226,7 +226,7 @@ func TestTierAlignmentPreviewShowsCurrentAndDiff(t *testing.T) {
 	if cur["ratePerSec"] != float64(500) || cur["synThreshold"] != float64(1000) {
 		t.Errorf("current not read from the gateway: %v", cur)
 	}
-	if cur["connRateEnabled"] != false || cur["synEnabled"] != false {
+	if cur["connRateEnabled"] != false || cur["udpEnabled"] != false || cur["synEnabled"] != true {
 		t.Errorf("fields the GET omits must read as their zero value: %v", cur)
 	}
 	prop, _ := out["proposed"].(map[string]any)
@@ -422,4 +422,63 @@ func resultText(res *sdk.CallToolResult) string {
 		}
 	}
 	return sb.String()
+}
+
+// A target with no protection enabled (the plain image): the GET carries
+// none of the eight required keys, and POST /config/securityrate refuses a
+// body that keeps every protection off. The gate must refuse such a change
+// before it issues a token, and a change that switches a protection on
+// cannot promise a secrate_set rollback into the refused state.
+func TestSecrateSetOnAnUnconfiguredTarget(t *testing.T) {
+	mock := newMockLoxilb(t)
+	mock.securityRateJSON = `{"whitelistIps":null}`
+	b := newTestBridge(t, testConfig(mock.srv.URL))
+	cs := session(t, b, guard.RoleAdmin)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &sdk.CallToolParams{Name: "secrate_set", Arguments: map[string]any{"rate_per_sec": 777}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.IsError || !strings.Contains(resultText(res), "enables no per-source protection") {
+		t.Fatalf("a change that leaves every protection off must be refused before the preview: %v", res)
+	}
+	if mock.sawMutation("POST /netlox/v1/config/securityrate") {
+		t.Fatal("the refused change reached the gateway")
+	}
+
+	args := map[string]any{"conn_rate_enabled": true, "rate_per_sec": 777}
+	res, err = cs.CallTool(ctx, &sdk.CallToolParams{Name: "secrate_set", Arguments: args})
+	if err != nil || res.IsError {
+		t.Fatalf("preview: %v %v", err, res)
+	}
+	out := callOut(t, res)
+	if out["action"] != "preview" {
+		t.Fatalf("want preview, got %v", out["action"])
+	}
+	cur, _ := out["current"].(map[string]any)
+	for _, k := range []string{"synEnabled", "synThreshold", "cookieThreshold", "connRateEnabled", "ratePerSec", "udpEnabled", "udpPktThreshold", "udpBandwidthMB"} {
+		if _, ok := cur[k]; !ok {
+			t.Errorf("current lacks the zero default for %s: %v", k, cur)
+		}
+	}
+	rb, _ := out["rollback"].(map[string]any)
+	if tool, _ := rb["tool"].(string); tool != "" {
+		t.Errorf("rollback must not promise a %s call into a state the POST refuses: %v", tool, rb)
+	}
+	if note, _ := rb["note"].(string); !strings.Contains(note, "DELETE /config/securityrate") {
+		t.Errorf("rollback note must name the disable path: %v", rb)
+	}
+	if mock.sawMutation("POST /netlox/v1/config/securityrate") {
+		t.Fatal("preview sent the POST")
+	}
+	token, _ := out["confirm_token"].(string)
+	res, err = cs.CallTool(ctx, &sdk.CallToolParams{Name: "secrate_set", Arguments: withToken(args, token)})
+	if err != nil || res.IsError {
+		t.Fatalf("apply: %v %v", err, res)
+	}
+	body := mock.lastBody()
+	if body["connRateEnabled"] != true || body["ratePerSec"] != float64(777) || body["synEnabled"] != false || body["udpBandwidthMB"] != float64(0) {
+		t.Errorf("POST body is not the zero-defaulted current overlaid with the change: %v", body)
+	}
 }
