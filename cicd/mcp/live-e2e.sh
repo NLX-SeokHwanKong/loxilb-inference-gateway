@@ -26,6 +26,11 @@ MUTATE=0
 export VIP="${VIP:-198.51.100.7}"   # RFC 5737 TEST-NET-2, safe throwaway VIP
 export VPORT="${VPORT:-19999}"
 export VEP="${VEP:-198.51.100.8}"
+# JWT_PROFILE names an existing JWT auth profile on the target; set, the
+# --mutate round-trip adds an api_key_auth=jwt rule. Since #362 a full-proxy
+# rule needs a VIP the target holds, so JWT_VIP must be such an address.
+export JWT_PROFILE="${JWT_PROFILE:-}"
+export JWT_VIP="${JWT_VIP:-$VIP}"
 
 for a in "$@"; do
     case "$a" in
@@ -218,6 +223,37 @@ if MUTATE:
         gone = isinstance(v, dict) and not any(r.get("external_ip") == VIP for r in v.get("rules", []))
         (ok if gone else bad)("VIP gone after delete")
 
+        # api_key_auth=jwt arm: needs a JWT auth profile that already exists
+        # on the target (the bridge gains the profile tool in PR-B3). Name it
+        # in JWT_PROFILE; unset, the arm is reported as skipped, not passed.
+        prof = os.environ.get("JWT_PROFILE", "")
+        JVIP = os.environ.get("JWT_VIP", VIP)
+        if prof:
+            e, v, _ = m.call("lb_create", external_ip=JVIP, port=VPORT, protocol="tcp", mode=4,
+                             host="jwt.live-e2e", api_key_auth="jwt",
+                             endpoints=[{"ip": VEP, "port": 80}])
+            (ok if e else bad)("lb_create api_key_auth=jwt without jwt_auth_profile is refused")
+            e, v, _ = m.call("lb_create", external_ip=JVIP, port=VPORT, protocol="tcp", mode=4,
+                             host="jwt.live-e2e", api_key_auth="jwt", jwt_auth_profile=prof,
+                             endpoints=[{"ip": VEP, "port": 80}])
+            jcreated = isinstance(v, dict) and v.get("action") == "executed"
+            created = created or jcreated
+            (ok if jcreated else bad)("lb_create api_key_auth=jwt executed" if jcreated else f"jwt lb_create: {v}")
+            if jcreated:
+                e, v, _ = m.call("lb_list", filter=JVIP)
+                rules = v.get("rules", []) if isinstance(v, dict) else []
+                seen = any(r.get("api_key_auth") == "jwt" and r.get("jwt_auth_profile") == prof for r in rules)
+                (ok if seen else bad)("lb_list observes api_key_auth=jwt and jwt_auth_profile")
+                e, v, _ = m.call("lb_delete", external_ip=JVIP, port=VPORT, protocol="tcp", host_url="jwt.live-e2e")
+                tok = v.get("confirm_token") if isinstance(v, dict) else None
+                e, v, _ = m.call("lb_delete", external_ip=JVIP, port=VPORT, protocol="tcp",
+                                 host_url="jwt.live-e2e", confirm_token=tok)
+                jdone = isinstance(v, dict) and v.get("action") == "executed"
+                (ok if jdone else bad)("jwt rule deleted with token")
+                created = created and not jdone
+        else:
+            print("  [SKIP] api_key_auth=jwt arm (set JWT_PROFILE=<existing profile name> to run it)")
+
         try:
             with open(os.path.join(AUDIT, "audit.jsonl")) as f:
                 a = f.read()
@@ -236,7 +272,11 @@ if MUTATE:
                                   '{"jsonrpc":"2.0","method":"notifications/initialized"}\n'
                                   '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":'
                                   '{"name":"lb_delete","arguments":{"external_ip":"%s",'
-                                  '"port":%d,"protocol":"tcp"}}}\n' % (VIP, VPORT)),
+                                  '"port":%d,"protocol":"tcp"}}}\n'
+                                  '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":'
+                                  '{"name":"lb_delete","arguments":{"external_ip":"%s",'
+                                  '"port":%d,"protocol":"tcp","host_url":"jwt.live-e2e"}}}\n'
+                                  % (VIP, VPORT, os.environ.get("JWT_VIP", VIP), VPORT)),
                            text=True, capture_output=True, timeout=15)
         m.close()
 
