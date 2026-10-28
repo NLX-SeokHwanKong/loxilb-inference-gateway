@@ -36,6 +36,10 @@ defaults:
   run:
     working-directory: mcp
 
+env:
+  # The gateway image tag Stage-1 pulls and runs (see the stage1 job, D19).
+  STAGE1_IMAGE_TAG: latest-u24
+
 jobs:
   test:
     name: vet + test
@@ -111,11 +115,20 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GHCR_TOKEN || github.token }}
+      # D19: Stage-1 drives a main-built gateway image, chosen by this one
+      # variable. latest-u24 is rebuilt from main on every push that touches
+      # the gateway and daily at 10:00 UTC (docker-image-u24.yml); :latest
+      # is a dispatch-only build (docker-image.yml) and lags main by weeks.
+      # common.sh honours LOXILB_DOCKER_IMAGE as a bare tag.
       - name: pull the testbed images
         run: |
-          docker pull ghcr.io/loxilb-io/loxilb-inference-gateway:latest
+          docker pull ghcr.io/loxilb-io/loxilb-inference-gateway:${STAGE1_IMAGE_TAG}
           docker pull ghcr.io/loxilb-io/nettest:latest
+          docker pull postgres:18.6
+          docker run --rm --entrypoint /root/loxilb-io/loxilb/loxilb ghcr.io/loxilb-io/loxilb-inference-gateway:${STAGE1_IMAGE_TAG} --version || true
       - name: config + validation + rmconfig
+        env:
+          LOXILB_DOCKER_IMAGE: ${{ env.STAGE1_IMAGE_TAG }}
         run: |
           set +e
           {
@@ -129,7 +142,7 @@ jobs:
             echo '## Stage-1 docker scenario (cicd/mcp)'
             echo
             echo '```'
-            grep -E '^(SCENARIO-mcp|###)|^ *\[(OK|FAILED|SKIP)\]' "$RUNNER_TEMP/mcp-stage1.log"
+            grep -E '^(SCENARIO-mcp|###)|^ *\[(OK|FAILED|SKIP|NOTE)\]|store accepting|store provisioned|gateway REST ready|testbed ready' "$RUNNER_TEMP/mcp-stage1.log"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$rc"

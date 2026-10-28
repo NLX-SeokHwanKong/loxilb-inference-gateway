@@ -14,7 +14,8 @@
 #                    existing key is refused (operator) / previewed (admin);
 #                    secrate_set preview -> confirm -> read-back -> rollback
 #   4 ai ops         ai_apikey create(file)/list/update/delete confirm flow,
-#                    ai_ratelimit_set/get
+#                    ai_ratelimit_set/get, against the PostgreSQL store the
+#                    topology runs (config.sh, --userservice)
 #   5 rca            diagnose_l4_errors / capacity_report evidence bundles,
 #                    ai_traffic_report accounting caveat
 # The AI 429-under-traffic drill and the 12h soak need an SSE backend and
@@ -50,6 +51,24 @@ else
     exit 1
 fi
 
+# ---------- target credentials ----------
+# llb1 runs --userservice (config.sh): every REST call carries a bearer, the
+# bridge logs in with the same credentials (username/password_env), and
+# loxicmd inside llb1 reads the token file config.sh installed.
+ADMIN_USER=admin
+ADMIN_PW='Admin123!'
+REST="http://$llbIP:11111/netlox/v1"
+JWT=$(curl -s --max-time 10 -X POST "$REST/auth/login" -H 'Content-Type: application/json' \
+    -d "{\"username\":\"$ADMIN_USER\",\"password\":\"$ADMIN_PW\"}" \
+    | python3 -c 'import sys,json; print(json.load(sys.stdin).get("token",""))' 2>/dev/null)
+if [[ -z "$JWT" ]]; then
+    echo "SCENARIO-mcp [FAILED] (REST login on llb1 failed; config.sh runs the gateway with --userservice)"
+    exit 1
+fi
+AUTH=(-H "Authorization: Bearer $JWT")
+echo "$JWT" | $dexec llb1 loxicmd set login --provider manual >/dev/null 2>&1
+export LLB1_ADMIN_PASSWORD="$ADMIN_PW"
+
 VTOKEN="ci-viewer-token-0123456789abcdef"
 OTOKEN="ci-operator-token-0123456789abcd"
 ATOKEN="ci-admin-token-0123456789abcdef0"
@@ -59,6 +78,8 @@ default_target: llb1
 targets:
   llb1:
     url: http://$llbIP:11111
+    username: $ADMIN_USER
+    password_env: LLB1_ADMIN_PASSWORD
 clients:
   - { name: ci-viewer,   role: viewer,   token: $VTOKEN }
   - { name: ci-operator, role: operator, token: $OTOKEN }
@@ -221,9 +242,8 @@ mcp_call "$ATOKEN" lb_list | grep -q '20.20.20.3' && fail "typed AI rule still p
 # keyset is fetched asynchronously), so an .invalid issuer is enough for the
 # create/observe/delete contract. Reuses the 20.20.20.3 VIP bound in config.sh.
 echo "### jwt credential policy"
-REST="http://$llbIP:11111/netlox/v1"
 prof=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X POST "$REST/config/ai/jwtauthprofile" \
-    -H 'Content-Type: application/json' \
+    "${AUTH[@]}" -H 'Content-Type: application/json' \
     -d '{"name":"ci-jwt","issuer":"https://issuer.ci.invalid","jwks_url":"https://issuer.ci.invalid/jwks.json","audiences":["ci"]}')
 if [[ "$prof" == "200" || "$prof" == "201" || "$prof" == "204" ]]; then
     res=$(mcp_call "$ATOKEN" lb_create '{"external_ip":"20.20.20.3","port":2020,"protocol":"tcp","mode":4,"host":"jwt.ci","api_key_auth":"jwt","endpoints":[{"ip":"31.31.31.1","port":8080}]}')
@@ -241,7 +261,7 @@ if [[ "$prof" == "200" || "$prof" == "201" || "$prof" == "204" ]]; then
     tok=$(echo "$res" | sed -n 's/.*"confirm_token":"\([^"]*\)".*/\1/p')
     res=$(mcp_call "$ATOKEN" lb_delete "{\"external_ip\":\"20.20.20.3\",\"port\":2020,\"protocol\":\"tcp\",\"host_url\":\"jwt.ci\",\"confirm_token\":\"$tok\"}")
     echo "$res" | grep -q '"action":"executed"' && pass "jwt rule deleted with token" || fail "jwt lb_delete: $res"
-    curl -s -o /dev/null --max-time 10 -X DELETE "$REST/config/ai/jwtauthprofile/ci-jwt"
+    curl -s -o /dev/null --max-time 10 "${AUTH[@]}" -X DELETE "$REST/config/ai/jwtauthprofile/ci-jwt"
 else
     echo "  [SKIP] jwt credential policy (profile create answered HTTP $prof; the build has no usable jwtauthprofile API)"
 fi
@@ -273,7 +293,7 @@ echo "$res" | grep -q '"name":"lb_create"' && pass "operator still sees lb_creat
 # would replace it.
 REPLACE='{"external_ip":"20.20.20.1","port":2020,"protocol":"tcp","endpoints":[{"ip":"31.31.31.1","port":9090}]}'
 LBKEY="$REST/config/loadbalancer/externalipaddress/20.20.20.1/port/2020/protocol/tcp"
-baseline_intact() { curl -s --max-time 10 "$LBKEY" | grep -q '"targetPort":8080' && ! curl -s --max-time 10 "$LBKEY" | grep -q '"targetPort":9090'; }
+baseline_intact() { curl -s --max-time 10 "${AUTH[@]}" "$LBKEY" | grep -q '"targetPort":8080' && ! curl -s --max-time 10 "${AUTH[@]}" "$LBKEY" | grep -q '"targetPort":9090'; }
 res=$(mcp_call "$OTOKEN" lb_create "$REPLACE")
 echo "$res" | grep -q '"isError":true' && echo "$res" | grep -q 'admin-confirm' \
     && pass "operator lb_create on an existing key is refused" || fail "operator replace not refused: $res"
@@ -332,7 +352,7 @@ res=$(mcp_call "$ATOKEN" secrate_set "{\"rate_per_sec\":$prev,\"confirm_token\":
 [[ "$(jfield "$res" 'r["action"]')" == "executed" && "$(jfield "$res" 'r["read_back"]["ratePerSec"]')" == "$prev" ]] \
     && pass "rollback applied; read_back shows ratePerSec $prev" || fail "rollback: $res"
 grep -q '"tool":"secrate_set"' .mcp-audit/audit.jsonl && pass "audit.jsonl records secrate_set" || fail "secrate_set audit entry missing"
-[[ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X DELETE "$REST/config/securityrate")" == 2* ]] \
+[[ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "${AUTH[@]}" -X DELETE "$REST/config/securityrate")" == 2* ]] \
     && pass "DELETE /config/securityrate (REST, no tool yet) restores the unconfigured state" || fail "DELETE /config/securityrate failed"
 mcp_call "$ATOKEN" secrate_get | grep -q '"connRateEnabled":true' && fail "protection still on after the DELETE" || pass "secrate_get shows no protection enabled again"
 
@@ -405,7 +425,17 @@ read_leg ai_objective_list '{}' '"objectives" in r and "source" in r' "ai_object
 read_leg ai_netidentity_list '{}' '"bindings" in r' "ai_netidentity_list reports bindings"
 read_leg ai_jwtprofile_list '{}' 'isinstance(r["count"],int)' "ai_jwtprofile_list reports profiles"
 read_leg ai_user_ratelimit_list '{"tenant_id":"cicd"}' '"users" in r' "ai_user_ratelimit_list reports a tenant's rows"
-read_leg ai_ratelimit_defaults_get '{"scope":"global"}' '"defaults" in r' "ai_ratelimit_defaults_get reports the global row"
+# A fresh store holds no defaults row until PR-B2's ai_ratelimit_defaults_set
+# writes one; the gateway's verdict for that state is a 404 "rate-limit
+# defaults row not found", passed through as is.
+res=$(mcp_call "$VTOKEN" ai_ratelimit_defaults_get '{"scope":"global"}')
+if echo "$res" | grep -q '"isError":true'; then
+    echo "$res" | grep -q 'HTTP 404: .*defaults row not found' \
+        && pass "ai_ratelimit_defaults_get passes the gateway's verdict on an unset global row (HTTP 404)" \
+        || fail "ai_ratelimit_defaults_get global: $res"
+else
+    [[ "$(jfield "$res" '"defaults" in r')" == "True" ]] && pass "ai_ratelimit_defaults_get reports the global row" || fail "ai_ratelimit_defaults_get global: $res"
+fi
 read_leg ai_model_profile_list '{}' '"profiles" in r' "ai_model_profile_list reports the published registry"
 res=$(mcp_call "$VTOKEN" ai_ratelimit_defaults_get '{"scope":"tenant"}')
 echo "$res" | grep -q '"isError":true' && echo "$res" | grep -q 'not global or rule' \
@@ -414,6 +444,9 @@ SESSION=$ADMIN_SESSION
 
 echo "### ai ops"
 SESSION=$ADMIN_SESSION
+# config.sh seeded tenant cicd-seed with one key; the store answers for real.
+mcp_call "$ATOKEN" ai_apikey_list '{"tenant_id":"cicd-seed"}' | grep -q '"name":"seed-key"' \
+    && pass "ai_apikey_list shows the seeded key of tenant cicd-seed" || fail "seeded key not listed"
 res=$(mcp_call "$ATOKEN" ai_apikey_create '{"tenant_id":"cicd","name":"mcp-ci","rate_limit_rps":5}')
 if echo "$res" | grep -q '"key_file"'; then
     pass "ai_apikey_create wrote key to file"
@@ -434,8 +467,7 @@ if echo "$res" | grep -q '"key_file"'; then
     res=$(mcp_call "$ATOKEN" ai_apikey_delete "{\"key_id\":\"$kid\",\"confirm_token\":\"$tok\"}")
     echo "$res" | grep -q '"action":"executed"' && pass "ai_apikey_delete executed" || fail "ai_apikey_delete execute: $res"
 else
-    # AI gateway store may be disabled in the plain LB image; treat as skip.
-    echo "  [SKIP] ai_apikey_* (create failed: $(echo "$res" | head -c 120))"
+    fail "ai_apikey_create against the topology's store: $(echo "$res" | head -c 200)"
 fi
 
 res=$(mcp_call "$ATOKEN" ai_ratelimit_set '{"tenant_id":"cicd","rps":5,"tokens_per_min":1000}')
@@ -444,7 +476,7 @@ if echo "$res" | grep -q '"action":"executed"'; then
     mcp_call "$ATOKEN" ai_ratelimit_get '{"tenant_id":"cicd"}' | grep -q '"rps":5' \
         && pass "ai_ratelimit_get reads back rps=5" || fail "ai_ratelimit_get readback"
 else
-    echo "  [SKIP] ai_ratelimit_* (set failed: $(echo "$res" | head -c 120))"
+    fail "ai_ratelimit_set against the topology's store: $(echo "$res" | head -c 200)"
 fi
 
 # ---------- 5. RCA / diagnostics ----------
