@@ -169,8 +169,10 @@ e, v, _ = s.call("diagnose_l4_errors")
 (ok if isinstance(v, dict) and "evidence" in v else bad)("diagnose_l4_errors evidence bundle")
 
 e, v, _ = s.call("ai_traffic_report")
-has_f12 = isinstance(v, dict) and any("F12" in c for c in v.get("caveats", []))
-(ok if has_f12 else bad)("ai_traffic_report surfaces F12 caveat")
+# The caveat is identified by its text; the internal finding label it once
+# carried left the tool in 2026-08.
+has_caveat = isinstance(v, dict) and any("accounting caveat" in c for c in v.get("caveats", []))
+(ok if has_caveat else bad)("ai_traffic_report surfaces the accounting caveat")
 
 # ---------------- security guardrails ----------------
 print("### security guardrails")
