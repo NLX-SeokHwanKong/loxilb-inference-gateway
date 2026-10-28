@@ -75,6 +75,9 @@ const (
 	MkfsScript     = "/usr/local/sbin/mkllb_bpffs"
 	BpfFsCheckFile = "/opt/loxilb/dp/bpf/intf_map"
 	MkMountCG2     = "/usr/local/sbin/mkllb_cgroup 1"
+	// CgroupMountPath is where mkllb_cgroup mounts the cgroup2 hierarchy the
+	// sockops/sockmap bootstrap joins (CGROUP_MOUNT_PATH in the data path).
+	CgroupMountPath = "/opt/loxilb/cgroup"
 )
 
 type loxiNetH struct {
@@ -534,7 +537,21 @@ func loxiNetInit() {
 
 	if !opts.Opts.BgpPeerMode {
 		if mh.lSockPolicy || mh.sockMapEn {
-			RunCommand(MkMountCG2, false)
+			// The mount script is not fatal on its own; the mount state is
+			// what matters. A restarted container keeps the directory from
+			// its previous boot but not the mount, and the data path would
+			// otherwise abort inside its init with a bare ENOENT.
+			// In proxy-only mode the data path drops both flags and joins
+			// no cgroup, so the mount is not required there.
+			_, mountErr := RunCommand(MkMountCG2, false)
+			if err := checkCgroup2Mount(CgroupMountPath); err != nil && !mh.disBPF {
+				mountNote := "mount command exited 0"
+				if mountErr != nil {
+					mountNote = fmt.Sprintf("%s: %v", MkMountCG2, mountErr)
+				}
+				tk.LogIt(tk.LogCritical, "sockmap/localsockpolicy needs cgroup2 mounted at %s; mount failed or was skipped (container restarted without a fresh rootfs, no CAP_SYS_ADMIN, kernel < 5.7, or cgroup v1 host): %v; %s. See docs/sockmap-acceleration.md\n", CgroupMountPath, err, mountNote)
+				os.Exit(1)
+			}
 		}
 
 		// CRITICAL FIX: Clean up stale ring buffer files before eBPF initialization
