@@ -30,6 +30,11 @@ config_docker_host --host1 llb1 --host2 l3h1 --ptype phy --addr 10.10.10.254/24
 config_docker_host --host1 llb1 --host2 l3ep1 --ptype phy --addr 31.31.31.254/24
 
 sleep 5
+# The typed AI rule (validation.sh, mode=4) listens on 20.20.20.3; since #362 a
+# full-proxy rule whose VIP the gateway does not hold is refused at create, so
+# the VIP is bound on llb1 first, as the httpsproxy scenarios do.
+$dexec llb1 ip addr add 20.20.20.3/32 dev lo
+
 # Baseline TCP LB the observe checks look at; the manage round-trip creates
 # and deletes its own second VIP (20.20.20.2) through MCP.
 create_lb_rule llb1 20.20.20.1 --tcp=2020:8080 --endpoints=31.31.31.1:1

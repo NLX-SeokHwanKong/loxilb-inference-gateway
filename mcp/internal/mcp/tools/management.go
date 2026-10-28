@@ -484,7 +484,7 @@ type lbCreateIn struct {
 	KVZMQPort    int            `json:"kv_zmq_port,omitempty" jsonschema:"base KV-event publisher port"`
 	KVBlockSize  int            `json:"kv_block_size,omitempty" jsonschema:"engine KV block size in tokens"`
 	Endpoints    []lbEndpointIn `json:"endpoints" jsonschema:"backend endpoints (at least one)"`
-	ServiceExtra map[string]any `json:"service_extra,omitempty" jsonschema:"additional serviceArguments fields passed through verbatim"`
+	ServiceExtra map[string]any `json:"service_extra,omitempty" jsonschema:"additional serviceArguments fields; every key must be a serviceArguments property of the REST contract, read-back (*_effective) and excluded keys are refused"`
 	ConfirmToken string         `json:"confirm_token,omitempty" jsonschema:"unused for lb_create; present for schema symmetry"`
 }
 
@@ -563,6 +563,9 @@ func (d *Deps) lbCreate() sdk.ToolHandlerFor[lbCreateIn, mutOut] {
 		}
 		if in.KVBlockSize > 0 {
 			svc["kvBlockSize"] = in.KVBlockSize
+		}
+		if err := validateServiceExtra(in.ServiceExtra); err != nil {
+			return nil, mutOut{}, err
 		}
 		for k, v := range in.ServiceExtra {
 			if _, taken := svc[k]; taken {

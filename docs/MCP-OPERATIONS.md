@@ -105,6 +105,16 @@ listing the tools. `diagnose_*` suggested actions carry `autopilot:
 true|false` so an agent knows which follow-ups it may run directly. Leave
 empty until the team trusts the audit trail for the specific action.
 
+Some tools can never be put on autopilot, whatever the configuration says:
+`guard.NeverAutopilot` holds every tool whose change is global (every tenant
+or service: BGP, security rate, GPU mode, LlamaFirewall, PII) or
+instance-wide (`config_import`, `config_params_set`, and the planned
+`maintenance_set`, objective / network-identity / JWT-profile / rate-limit
+defaults writers, half-close release, sockmap reset, OTLP and OPA
+destinations). Listing one of them in `autopilot_tools` is ignored and logged.
+The contract gate (below) keeps the set a superset of every manifest entry
+whose impact is `global` or `instance`.
+
 ## Secrets handling
 
 `ai_apikey_create` never returns raw key material by default: the key is
@@ -152,6 +162,11 @@ guess Gateway JSON casing: `host`, `path_prefix`, `model_name`, `sse_mode`,
 Gateway authentication. `lb_list` projects the same routing fields and endpoint
 roles so an agent can observe the created contract. `service_extra` remains for
 untyped advanced fields and rejects collisions with supplied typed arguments.
+Its keys are validated before any request is built: each must be a
+`serviceArguments` property of the REST contract (the list is generated from
+`api/swagger.yml`), read-back values (`fc_effective`,
+`backend_tls_effective`, `half_close_effective`) are refused, and so is any
+property `mcp/contract/fields.yml` marks `excluded-field`.
 
 **AI-gateway ops** — read: `ai_apikey_list`, `ai_apikey_get`,
 `ai_ratelimit_get`, `ai_kv_inventory_get`, `gpu_status`,
@@ -266,3 +281,45 @@ trail, and cleans up — including a `--no-confirm` safety-net delete if any ste
 fails, so a run never leaves state on the target. The two-step confirm-token
 flow is why the harness holds one session open: the token is in-memory,
 single-use, and per process. Exit code 0 means every check passed.
+
+### Contract gate
+
+`mcp/contract/` keeps the bridge in step with the REST API. The `contract`
+job of `mcp-ci.yml` runs on every change to `mcp/**`, `api/swagger.yml`,
+`api/swagger-extras.yml` or `tools/metric-manifest/**` and fails when:
+
+- `coverage.yml` and swagger disagree: an operation of `api/swagger*.yml` has
+  no entry (`tools:`, `pending: P1a|P1b|P2|P3|P4`, or `excluded: "reason"`),
+  or an entry names an operation that no longer exists.
+- a `tools:` entry names a tool the bridge does not register, or the tier
+  the manifest states is not the one the code enforces (read-only → viewer,
+  destructive → admin-confirm, otherwise operator).
+- a mutation's tier is weaker than its blast radius allows. The minimum tier
+  is **derived** from `impact` and `reversible`: `none` → viewer; `object` or
+  `tenant` and reversible → operator, irreversible → admin-confirm; `service`,
+  `global`, `instance` → admin-confirm, and `global`/`instance` are never
+  autopilot-eligible. A weaker tier passes only with a `tier_gap:` reason,
+  counted against `budget.tier_gap_max`.
+- a REST path literal in `internal/mcp/tools` or `internal/mcp/client`
+  matches no swagger operation, or the manifest does not credit the tool
+  whose handler contains it.
+- `pending` entries exceed `budget.pending_max`, or a `fields:` allowlist
+  names a property swagger does not have. A raised budget is a warning.
+- `fields.yml` leaves a property of `serviceArguments`, `endpoints[]`,
+  `ApiKeyCreateRequest` or `TenantRateLimitMod` unlabelled, or a `typed`
+  property has no matching tool argument. A changed swagger description is a
+  warning naming the field (`desc_sha256`).
+- a tool argument or result field is named like a secret (`pem`,
+  `private_key`, `secret`, `password`, `token` other than `confirm_token`,
+  `api_key` on an input).
+- a `loxilb_*` name under `mcp/internal` or `mcp/deploy` is not a family
+  `tools/metric-manifest` finds in the gateway (`metrics-exceptions.yml`
+  carries the known defects until their fix lands).
+- `go generate ./...` changes `internal/mcp/tools/zz_swagger_enums_gen.go`:
+  the swagger property lists, enum values and enum descriptions the tools
+  package compiles in are generated, never copied.
+
+The job's step summary lists the pending operations by phase, the mapped
+mutations by impact and tier, the recorded tier gaps, and the gateway metric
+families the bridge never references. The tests skip when `api/` is not
+beside the module, so `go install` of the bridge keeps working.

@@ -23,6 +23,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"fmt"
+	"log"
 	"path"
 	"strings"
 )
@@ -110,18 +111,71 @@ func (p *Policy) Permits(role Role, t ToolMeta) bool {
 	return true
 }
 
+// NeverAutopilot names the tools that may never skip the preview-and-confirm
+// step, whatever the configuration says: instance-scope and global-scope
+// mutations, where a confused or prompt-injected agent would cause an
+// outage with one call. The set holds the names of tools that exist today
+// and of the tools planned to take these operations over, so a later PR
+// cannot register one of them outside the gate by forgetting the entry.
+// The contract test in mcp/contract keeps this set a superset of every
+// manifest entry whose impact is global or instance.
+var NeverAutopilot = map[string]struct{}{
+	// existing tools of global or instance impact
+	"bgp_global_set":            {},
+	"bgp_neigh_set":             {},
+	"bgp_policy_apply":          {},
+	"config_import":             {},
+	"config_params_set":         {},
+	"gpu_conversations_cleanup": {},
+	"gpu_mode_set":              {},
+	"llamafw_configure":         {},
+	"llamafw_enable_set":        {},
+	"llamafw_scanners_set":      {},
+	"pii_configure":             {},
+	"pii_enable_set":            {},
+	"pii_url_patterns_set":      {},
+	"secrate_reset":             {},
+	"secrate_set":               {},
+	// planned tools (campaign guide, change-gate requirement 6)
+	"ai_jwtprofile_delete":         {},
+	"ai_jwtprofile_set":            {},
+	"ai_netidentity_delete":        {},
+	"ai_netidentity_set":           {},
+	"ai_objective_delete":          {},
+	"ai_objective_set":             {},
+	"ai_ratelimit_defaults_delete": {},
+	"ai_ratelimit_defaults_set":    {},
+	"halfclose_release":            {},
+	"lb_sockmap_reset":             {},
+	"maintenance_set":              {},
+	"opa_watcher_delete":           {},
+	"opa_watcher_set":              {},
+	"trace_otlp_set":               {},
+}
+
 // AutopilotAllowed reports whether the named tool may skip the confirm-token
-// step. Exact match only; a nil policy has no autopilot tools.
+// step. Exact match only; a nil policy has no autopilot tools. A tool in
+// NeverAutopilot is refused regardless of the list, and an attempt to list
+// it is logged once per call so a misconfiguration is visible.
 func (p *Policy) AutopilotAllowed(name string) bool {
 	if p == nil {
 		return false
 	}
+	listed := false
 	for _, t := range p.Autopilot {
 		if strings.TrimSpace(t) == name {
-			return true
+			listed = true
+			break
 		}
 	}
-	return false
+	if !listed {
+		return false
+	}
+	if _, never := NeverAutopilot[name]; never {
+		log.Printf("autopilot refused for %s: the tool is never autopilot-eligible (configuration ignored)", name)
+		return false
+	}
+	return true
 }
 
 func matchAny(globs []string, name string) bool {
