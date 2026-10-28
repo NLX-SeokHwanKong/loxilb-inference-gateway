@@ -84,9 +84,11 @@ homebrew_casks:
     hooks:
       post:
         # The binaries are unsigned, so Gatekeeper would quarantine them.
-        install: |
-          if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/loxilb-mcp"]
+        # install_steps is the declarative form GoReleaser v2.19 requires
+        # (the `install:` Ruby block is deprecated and fails `goreleaser check`).
+        install_steps: |
+          on_macos do
+            run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ .StagedPath }}/loxilb-mcp"]
           end
 
 # Multi-arch container image on GitHub Packages (GHCR). One buildx build across
