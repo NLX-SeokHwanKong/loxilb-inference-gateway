@@ -1,15 +1,30 @@
 # CI for the standalone loxilb-mcp module. Runs on PRs and pushes that touch
-# mcp/**: vet, test, cross-compile the full OS/arch matrix, and validate the
-# GoReleaser config with a snapshot build (no publish). This is what gates a
-# merge — the release workflow only runs once a tag is pushed.
+# mcp/** or the REST contract the bridge is checked against (api/swagger*.yml,
+# tools/metric-manifest): vet, test, the contract gate, cross-compile the
+# full OS/arch matrix, and validate the GoReleaser config with a snapshot
+# build (no publish). This is what gates a merge — the release workflow only
+# runs once a tag is pushed.
 name: mcp-ci
 
 on:
   push:
     branches: [main]
-    paths: ['mcp/**', '.github/workflows/mcp-ci.yml']
+    paths:
+      - 'mcp/**'
+      - 'api/swagger.yml'
+      - 'api/swagger-extras.yml'
+      - 'tools/metric-manifest/**'
+      - '.github/workflows/mcp-ci.yml'
   pull_request:
-    paths: ['mcp/**', '.github/workflows/mcp-ci.yml']
+    paths:
+      - 'mcp/**'
+      - 'api/swagger.yml'
+      - 'api/swagger-extras.yml'
+      - 'tools/metric-manifest/**'
+      - '.github/workflows/mcp-ci.yml'
+  # Manual run on any branch (gh workflow run mcp-ci.yml --ref <branch>):
+  # lets a contract-gate change be exercised before a PR exists.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -30,6 +45,33 @@ jobs:
           cache-dependency-path: mcp/go.sum
       - run: go vet ./...
       - run: go test -race ./...
+
+  # The bridge <-> REST contract gate (mcp/contract): the operation manifest
+  # against swagger and the registered tools, the tier derivation rule, the
+  # field contract, the secrets denylist, the metric references, and the
+  # generated swagger tables. The tests write their report to the step
+  # summary: pending operations by phase, the tier table, the metric backlog.
+  contract:
+    name: contract gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }   # origin/main is needed for the budget ratchet
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: mcp/go.mod
+          cache-dependency-path: |
+            mcp/go.sum
+            go.sum
+      - name: generated tables are current
+        run: |
+          go generate ./...
+          git diff --exit-code -- . || {
+            echo '::error::zz_swagger_enums_gen.go is stale: run `go generate ./...` in mcp/ and commit the result'
+            exit 1
+          }
+      - name: contract tests
+        run: go test -count=1 -v ./contract/...
 
   crosscompile:
     name: build ${{ matrix.goos }}/${{ matrix.goarch }}
