@@ -720,7 +720,7 @@ operations:
 - op: DELETE /config/securityrate
   pending: P1b
   impact: global
-  note: 'PR-B2: fold into secrate_set(enabled=false) per GAP §3.2; owner-approved 2026-10-28'
+  note: 'PR-B2 secrate_disable (D18, 2026-10-28): POST /config/securityrate refuses an all-off body, so this DELETE is the only way back to the unconfigured state and an agent that enabled protection through secrate_set has no rollback inside the bridge until it exists; own tool, impact global, admin-confirm, NeverAutopilot; the preview carries the current configuration as the rollback arguments (rollback = secrate_set with that body); replaces the earlier fold-into-secrate_set(enabled=false) plan; owner-approved 2026-10-28'
 - op: POST /config/securityrate
   tools:
   - secrate_set
