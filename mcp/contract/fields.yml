@@ -1,0 +1,528 @@
+# mcp/contract/fields.yml - the field contract of the request models the bridge builds.
+#
+# Every swagger property of each model carries one label, enforced by
+# mcp/contract/fields_test.go:
+#   typed           the bridge has a typed argument (arg:) and sends the property (wire:,
+#                   default = the property name) in the request body
+#   extra-only      reachable only through lb_create.service_extra (serviceArguments)
+#   read-back       returned on GET, never sent by the bridge
+#   excluded-field  never sent, with a reason (secret material, not wired)
+#   pending         not typed yet; phase: names the PR that types it
+# desc_sha256 is the SHA-256 of the swagger description; a change is a warning
+# naming the field (early signal of semantic drift of an unchanged field).
+version: 1
+models:
+  serviceArguments:
+    source: definitions.LoadbalanceEntry.properties.serviceArguments.properties
+    fields:
+      id:
+        label: extra-only
+        desc_sha256: 7eedd0b79e7d885b844a24df10224a118d006c72a5a889bff3d16497356fabfc
+      adminStateUp:
+        label: extra-only
+        desc_sha256: 1fb76de6e73d9936774a0b0a70bd9ef82cf01c8d60ade3d7baa05e40c6f4d138
+      projectId:
+        label: extra-only
+        desc_sha256: fb2171dc73e9c56c983cf21e9c5e39a02039a0e7c0e04744ede81441be7ce1aa
+      connectionLimit:
+        label: extra-only
+        desc_sha256: 322ab2b28b5e285fc2da5383762ee2a14e1d20953e2464a637513f3003102b01
+      annotations:
+        label: extra-only
+        desc_sha256: cded1e69f6ec7875bd05f30101fcfd6535e3b04890907f5f060ac8019cb7297f
+      externalIP:
+        label: typed
+        arg: external_ip
+        desc_sha256: b9d5f4324aeca916d4f0f36543b584251b12dee218f2e8f72ad0a4b6fd814c37
+      privateIP:
+        label: extra-only
+        desc_sha256: 5918907965bb40d14ba0ae6c8cfe45a89a76af3efc63bf889cccbd7e50d76ff7
+      port:
+        label: typed
+        arg: port
+        desc_sha256: e39f94b9bbe29c85f35b036cb103519d2b757286177e3c96151a303fe2a8d1f4
+      portMax:
+        label: extra-only
+        desc_sha256: 525a97070fd18dd286fd3898b81ec9e17a5f5ec1cf1d122a0456a47eb0b1bd8a
+      protocol:
+        label: typed
+        arg: protocol
+        desc_sha256: 76b06c1495381acb359ab44c8443125d783e44a6d435c2ac7a102dc855238334
+      sel:
+        label: typed
+        arg: sel
+        desc_sha256: ecb28680d97ee53c70400a74a8cb0332c24d296831b2ff420b3026f32194f8bc
+      bgp:
+        label: typed
+        arg: bgp
+        wire: BGP
+        desc_sha256: 1c92f18ef6827f23c71f7169428bfd62e42053c5bfe009f3bbd4114f7a73548a
+      monitor:
+        label: typed
+        arg: monitor
+        desc_sha256: f05fc63e1f61dce7c2189e09cf001faca416120da9f3201c0c81bec4e2cb195a
+      probetype:
+        label: extra-only
+        desc_sha256: 8b2bc6133a1f5a74d70301de8669c8611e0266017cca0a002f7d6d987189af3e
+      probeport:
+        label: extra-only
+        desc_sha256: 60a6885583a71be490254d4f6091d7d6f2b52dacc64d41152c9e9c4ebbcb7502
+      probereq:
+        label: extra-only
+        desc_sha256: 243e207337f82b4f3fc3ba8bab93beb2a6694b23885b6f81ce4dd29e357b356f
+      proberesp:
+        label: extra-only
+        desc_sha256: 1ddb75c9c8d09cac45c44cd1ef37ea4c5bddd351e978842715d06d9ba9e6c0f6
+      managed:
+        label: extra-only
+        desc_sha256: a80d948fab27a40ae29abc3d12a3463465131f8ca198a291869d8d33eb3f714a
+      mode:
+        label: typed
+        arg: mode
+        desc_sha256: 3c72ba2e9da14122bcc02c201257bd5f6c758c7d1f1b03d322d3c89ddf33d10c
+      security:
+        label: extra-only
+        desc_sha256: 0833a5915b9509d792e383ac6810788b2118d3e1b60e6f9872231ab2919bc44d
+      block:
+        label: extra-only
+        desc_sha256: 88ab71ce9448754db6b86cb8c5f9a12577ba76de189bb9e606f6a0f7ee0cf7a0
+      inactiveTimeOut:
+        label: typed
+        arg: timeout
+        desc_sha256: 76004de3653de1ada2de7d13d1c05508504448635cc252d070ad8c1ea336b336
+      probeTimeout:
+        label: extra-only
+        desc_sha256: ebcc0d6aa44c09e756edf1f8f3fd3fd8d267bd2ddc0978943e5780596ea2e93e
+      probeRetries:
+        label: extra-only
+        desc_sha256: 7f65745b3b1205a14acc16aaea978a7df5a1b42b7f34a880026a2ff44609165a
+      timeoutMemberConnect:
+        label: extra-only
+        desc_sha256: 49aef68b2f3d48ee4179e957f854f604d3b5cc1728fb1aa59b158452d3557394
+      timeoutMemberData:
+        label: extra-only
+        desc_sha256: 2a3c99a2cb60f0f2e4c7b32e019decf164676b4e3833007d5bbe782a0e1d813e
+      timeoutTcpInspect:
+        label: extra-only
+        desc_sha256: 98e52407b83e8806baa3a58e25afdd62538a0d8bbe1ff138d8175f68381a2bac
+      name:
+        label: typed
+        arg: name
+        desc_sha256: 531eb88658a78bca4843201a9bf0803ccc45c3646586618bc7ee3b62e87a0665
+      snat:
+        label: extra-only
+        desc_sha256: 54b9a4bbb74d1c89c5c1f482d02be12b634a3519f50b33dcced525d983b7edfe
+      oper:
+        label: extra-only
+        desc_sha256: 16a874305647f37bf78c88c5d1a6a8da8f87e4f455d32010b86a92b713eaceeb
+      host:
+        label: typed
+        arg: host
+        desc_sha256: 5af2cf4b52dbbc7f537c20d7586967cd358e62c81b13a045f4d946cbbd19709a
+      path_prefix:
+        label: typed
+        arg: path_prefix
+        desc_sha256: 88f7d0d1dbb8958f832400d9643dcdd48258d164f8b32ff33e037ed042419639
+      path_match_mode:
+        label: extra-only
+        desc_sha256: 0534cec90e96e0a156a62218fc3258f45cad433702cc5d7a59ffdeb0d85e6a46
+      proxyprotocolv2:
+        label: extra-only
+        desc_sha256: c236a03513dd031f8e9e14047eee0a95a1e1724407cf3b7e5d80cce2966e72a0
+      sockMapMode:
+        label: extra-only
+        desc_sha256: cfa9c99fd7f48860ce4b16733b4ea107c747322ebab1eb2708ed7529175d664b
+      half_close_mode:
+        label: extra-only
+        desc_sha256: d10fa7ab46d2ee211888eb0f8710f74a184d3854ba49e4f8c43a4bea954c9689
+      half_close_effective:
+        label: read-back
+        desc_sha256: 746530eb35e7351f97c5b8cf8c3968eb71ba20461bd07f8fbc4eeec9048a550d
+      egress:
+        label: extra-only
+        desc_sha256: a394891edae7089d3226b7c5a337de65077a97d664ebd18bb9ee5c8b0c1cc4f9
+      trace_type:
+        label: extra-only
+        desc_sha256: befccdf3a742deb7317a69c983e53b59904d886ec30d689de10beabff721072e
+      backend_protocol:
+        label: extra-only
+        desc_sha256: 67747e05d37abfde8d766f86b695c6f31e5f978fe748f2852ae730c16b958212
+      model_name:
+        label: typed
+        arg: model_name
+        desc_sha256: 7d46e8751758c87a358a96c6b82376f9a9dcda80e0f644f448a393140f8a4b71
+      sse_mode:
+        label: typed
+        arg: sse_mode
+        desc_sha256: 2baf857684492e60ac4b0eaf1a653e71aacc24cc9ce009b7158015bf9bd69fd4
+      api_key_auth:
+        label: typed
+        arg: api_key_auth
+        desc_sha256: d83f2ea0a513c26ed8081be780e8f0fdf745c64d29db82ff672d28ce789801f4
+      jwt_auth_profile:
+        label: extra-only
+        desc_sha256: f11311472ecae43df73650620acb607485c1158e07233bfadb632f90a2ae4d74
+      max_stream_duration_sec:
+        label: extra-only
+        desc_sha256: 90e4d1a92e8a59a5bbf8fda67eb05c428a518ac3e08e328da24f6e0be429a82d
+      backend_keepalive_interval_sec:
+        label: extra-only
+        desc_sha256: ce1c871d149e6501f98ca0229510e2b7a3a0190101370839d7b9c8b2c9c9fbfd
+      cb_enable:
+        label: extra-only
+        desc_sha256: b4a32e587d770841ca692677f6ebf3fc44b8a087bc21a38c8a95c65e442baa21
+      pd_disagg_mode:
+        label: typed
+        arg: pd_disagg_mode
+        desc_sha256: 6fc05aa5146422907c443da63f936415c7beabac636b1fdedaa3957c94cc4c14
+      pd_cache_aware_mode:
+        label: typed
+        arg: pd_cache_aware_mode
+        desc_sha256: 75a7256d9797f658ee20b13b50b9e940dab4794f888f341f2976716b7e189739
+      pd_session_ttl_sec:
+        label: extra-only
+        desc_sha256: c517b32b2da43f069c3104b8a86a9b788d8c3b6d3c70f0030d14bfa9d60c5d49
+      pd_prefill_timeout_sec:
+        label: extra-only
+        desc_sha256: 36db23db55d85ab478a6d13819f549f01e4e1395122996ad39c49e3c99433324
+      pd_cache_threshold:
+        label: extra-only
+        desc_sha256: 6bd4569cbd1fb7f3b7af6a61e7995285a6b38f5d9b12e83fd1bd5db40192aa97
+      pd_balance_abs_threshold:
+        label: extra-only
+        desc_sha256: ec9c996640c7c382e72f9e63229709f285aa0a80753c4725dfd56514ff44c0d8
+      fc_max_queue_depth:
+        label: extra-only
+        desc_sha256: 1b23ae8589f0d9733bb6ae73425580001a5e886a7a01feb3ac29558b2dba2bb3
+      fc_max_queue_wait_ms:
+        label: extra-only
+        desc_sha256: d1c1cf0c8e56d2d29d6f7e26a70fccb9ccfed7ef96b3f4ac58b32af678c7ce91
+      fc_mode:
+        label: extra-only
+        desc_sha256: 8f67320bc113eb7298afa03678b1ee2de59dab26dbb0af6e54ff1adfdc2699a5
+      fc_max_outstanding:
+        label: extra-only
+        desc_sha256: 3d009dfcad536e28e39805eef575ca108d204f069517343b27fb7fd1dbe41981
+      fc_ep_max_inflight:
+        label: extra-only
+        desc_sha256: 47d407179225c79330ff0dd281eb2d75093bcc55a5335038e3a16bb0ebbc14f6
+      fc_prefill_max_inflight:
+        label: extra-only
+        desc_sha256: c9a596e9d52f780186b913411793d64857cc1bbff85d9d7632a9a09e2d661940
+      fc_decode_max_inflight:
+        label: extra-only
+        desc_sha256: f6ab6940372a09d89db6c27471ee0b263bf8ec38706a1c47898979c29da0d644
+      fc_telemetry_stale_ms:
+        label: extra-only
+        desc_sha256: 205df2fda95bd7431c43047d515c09f714a7409c88f96f30521d6f2be07f9e45
+      fc_adaptive:
+        label: extra-only
+        desc_sha256: b37471b540073ca8c4fd6a04bf4e90d0febf03a5557f2cbedda42ba34283a0cf
+      fc_warmup_ms:
+        label: extra-only
+        desc_sha256: f2a3f4646ced34611001a5d3c002cf76d4c5a736b878fe0c98104eed3e9fad55
+      fc_ttft_target_ms:
+        label: extra-only
+        desc_sha256: a13479c995efab2fb3c36ca1906709bd3030517d7393adac2fba81275d2e7beb
+      fc_tenant_max_share_pct:
+        label: extra-only
+        desc_sha256: d32b9f4956fd24f3bda6685e9218b476137f8627bcd853bbd84d64fdb27a5465
+      fc_expose_headers:
+        label: extra-only
+        desc_sha256: 0f15aa36b5e434567be2fd2f9293d1e9c9e5343d66b6d98f918bcecf4a2313ff
+      fc_wake_policy:
+        label: extra-only
+        desc_sha256: c638363f4ad645a2f3a93eb09c955bca083bfb0b58069e40f0e47f64c16c690e
+      fc_band_weights:
+        label: extra-only
+        desc_sha256: 07304fe4e34f9749c707172e146d161e2642d3b4cb43e540aa88e3c4c1c04f15
+      fc_band_min_share_pct:
+        label: extra-only
+        desc_sha256: b3fe819126d689c80068cd3b5a9aeab68c0054c5ff8556b8ce3106bc2b21cf85
+      fc_critical_reserve_pct:
+        label: extra-only
+        desc_sha256: e6fb440c37d4c9e220c1047e99ad279f832aff19d80d02dc828378c2eeb79f27
+      fc_band_wait_ms:
+        label: extra-only
+        desc_sha256: 932e5b339f7258a05ad93ca842164cea32b21d82ef98f226f11daf42f5751dcc
+      fc_band_queue_pct:
+        label: extra-only
+        desc_sha256: 894c6c0cb1bb2b8997b2f3bd03d65da155e4c122b06bff2d5b689d142ffeceb2
+      fc_shed_queue:
+        label: extra-only
+        desc_sha256: d3c42b9e2a0ee8269bf5f9f81fa093ed99b78f4c4cf18d5e0226c5031b70c46a
+      fc_tenant_wake:
+        label: extra-only
+        desc_sha256: 0b1bc234887af44ce7c7a0e96b07cc3547d4e0a1e382f99bf63bd2d258fa9d45
+      fc_llmd_headers:
+        label: extra-only
+        desc_sha256: 89d4253adda62491f6c617c3391fd69861a102a08d1e5cafab7bfc990f99e92c
+      ai_default_reservation:
+        label: extra-only
+        desc_sha256: b3aa4b6e8f4979d03fabfc86e7f0b283c26758179e1f85a93c56a9b3d3cd0ed4
+      ai_default_max_tokens:
+        label: extra-only
+        desc_sha256: a3ff08c0ffaf01c107e17ea0367f562e942e7716297ff350673035e9e0bfe0c3
+      ai_objective_strict:
+        label: extra-only
+        desc_sha256: 2e043be26f48c3fdb4544a1439ee950e23bdb492989dbd016cd7d22a318b49de
+      fc_effective:
+        label: read-back
+        desc_sha256: d44541bb4fcf46fb61db70250de3d5bc691280bacf90b80f5e637e3b3d3538d9
+      kvExactMode:
+        label: typed
+        arg: kv_exact_mode
+        desc_sha256: 74632db6147a9fa50fb29cc26ae15b17543bf677fa874419304ceafa2f962efc
+      kvBlockSize:
+        label: typed
+        arg: kv_block_size
+        desc_sha256: 22d1b7d14429a320c79fd829c71e5dca219f24871a5313ce5d2d49bbc5d23d88
+      kvHashAlgo:
+        label: extra-only
+        desc_sha256: c6b50de20d40bdd96541f816eabd8bc601ce849be6340e3768847de265a43f5d
+      kvZmqPort:
+        label: typed
+        arg: kv_zmq_port
+        desc_sha256: 7dc8deba53632580d7665de7e758cf2e5857be02ba1ca1ae73bdcb9d5ce229ad
+      kvWarmupSec:
+        label: extra-only
+        desc_sha256: 12f843b7301843576a8530277439e5e64116abc8c41f9ee2b330869d3fabe1c1
+      kvEngineType:
+        label: typed
+        arg: kv_engine_type
+        desc_sha256: 1d6d7201648bbc1c13273912470499a38b32a80a67de2938c235158a9733a583
+      kvDpRankCount:
+        label: extra-only
+        desc_sha256: b817e03f2474f7d11746f41cd66956dfcc1e0debac5b07d2e64f7da02f1c699b
+      kvExactApiMode:
+        label: extra-only
+        desc_sha256: 50b16050746f60fd1fbcaadb2d35be543243704cee857dd0788723e2eb87a8b5
+      kvModelProfile:
+        label: extra-only
+        desc_sha256: c082f1f6ae867f3eeb567af3b7e7cb6ac890ec77bde801b4b46ec04b57e41b9a
+      pdBootstrapPort:
+        label: extra-only
+        desc_sha256: 4f1d82cb85691c85caeb6b03cef7a103364fda68a7996a78822076f4b21fd7f7
+      eppEndpoint:
+        label: extra-only
+        desc_sha256: 6899d560611913731a9afc293ff18c37007a2a0dc24e6785d79e7c59f77aec20
+      eppFailureMode:
+        label: extra-only
+        desc_sha256: dc91ab632978a51b3867208b2a609e286a517f265c4f4c187ea322eddf0ad5d0
+      eppTimeoutMs:
+        label: extra-only
+        desc_sha256: 4c40a615cf651ac5c9ade82b1e85d3fe3ecc264906590655caec3744e6201dec
+      eppPlaintext:
+        label: extra-only
+        desc_sha256: 4daf5e2b76541d6bd850a465653ab965e722872368b50c1ce8f97a76cd11afaf
+      mcp_protocol_version:
+        label: extra-only
+        desc_sha256: 09bb08ce1e9b5aef261bf4f8e13dc7d43e3b83fbdb8fcccee07e1d98d177208e
+      session_header_name:
+        label: extra-only
+        desc_sha256: 16322ff0c74c6c5b58b993d6b303c46a7462bbcadb9e4dab435f04110164e80a
+      chwbl_prefix_hash_level:
+        label: extra-only
+        desc_sha256: 7794b1d8b67346860c0be3eb8c5fb199aec298f2efc8a6b815a3e9f295c4612d
+      chwbl_prefix_hash_flags:
+        label: extra-only
+        desc_sha256: 46473db1bdd17b6b446138840f32dbd414e3e5870089e72c077ecf9bce7113c1
+      chwbl_mean_load_factor:
+        label: extra-only
+        desc_sha256: 82e12ec296e1296ac51abe195ff30c40f4eaa7f53a2103c428b9a244c48006cf
+      chwbl_replication:
+        label: extra-only
+        desc_sha256: f5ba7485ac2d8fe9844a770a31d6ab96032df5b342cb34522626910a49384ffb
+      chwbl_enable_cache_salt:
+        label: extra-only
+        desc_sha256: 33b2aa94e7763efb1d8a31ea25e1daf5f5e7540cc7855f8f0892738f4e83732d
+      mtls_frontend:
+        label: extra-only
+        desc_sha256: da326969f2ad25bff7e138a7c2bf12e5626354a35c1d21f3433574fb50c05d69
+      mtls_backend:
+        label: extra-only
+        desc_sha256: d1904627a208227bbba170f30ad9568c2e718a48d3ed526d407ecd756da128b8
+      vip_qos_policy_id:
+        label: extra-only
+        desc_sha256: ae9d008a65d5abb4eb78744ea27bf1ae4dd4659da5b5576636e2c0e0890b15fa
+      alpn_protocols:
+        label: extra-only
+        desc_sha256: 3d0c6af5c1ce221353cd25c89581aa3a673dec4c82850beed034e39481de13ee
+      tls_ciphers:
+        label: extra-only
+        desc_sha256: a0e05ad28de75fe28b563847c5607a3a53d34aef068214ba5145bbde366b5b13
+      tls_versions:
+        label: extra-only
+        desc_sha256: 05d1400725006b358592d2ad405caa2302515bcd321c8c409331ff5c91dff0dd
+      hsts_max_age:
+        label: extra-only
+        desc_sha256: ebf7554de020148ad205be7121ef4865f160b3ee3909c957f70676ed834e6f47
+      hsts_include_subdomains:
+        label: extra-only
+        desc_sha256: cd3c60430e94e649e65a4380aa0d3e4827c2f104af46e7754c58d08f56edc81e
+      hsts_preload:
+        label: extra-only
+        desc_sha256: 13a4cfb91c1527271aad60144fd08dde2a811aca5e781d5c943a05188c945e70
+      backend_ca_cert_id:
+        label: extra-only
+        desc_sha256: b3b6260fdb36cb2b04ace0fa782d7318a8386d2dfd4f61bb5dcb9bf27798000c
+      backend_client_cert_id:
+        label: extra-only
+        desc_sha256: 1a6fc45a4a3fef8fa5e04ccbc4a32fb72b5d8fbc9cd62627e26e2f0faf5d1ea9
+      backend_tls_server_name:
+        label: extra-only
+        desc_sha256: 377fdb22a9b95f088265133871f2da7ccdbfb7f726dbea1428a02a997bd956a7
+      backend_tls_effective:
+        label: read-back
+        desc_sha256: 063f86fe389e267f1c3aefc36066d7ef8d000518143fa8fba9e7e54108f42099
+  endpoints:
+    source: definitions.LoadbalanceEntry.properties.endpoints.items.properties
+    fields:
+      endpointIP:
+        label: typed
+        arg: ip
+        desc_sha256: f7d1fe661b88b782a4faff4c8b29f1e6d1c01d76d630117fd13e69c571595c28
+      weight:
+        label: typed
+        arg: weight
+        desc_sha256: 4682e9ac0772bb775f8109271f02cce90b60caeb2cf28f8c624307ac2d150fb6
+      targetPort:
+        label: typed
+        arg: port
+        desc_sha256: 270a2bef1d7095dcbf6dbd9b4dc6724a7109b1037da8ba177f4c24e8d60264fc
+      ep_role:
+        label: typed
+        arg: ep_role
+        desc_sha256: 843209167321419debbb140248cd3252a405eddeaa01c7243ab89120d7e98066
+      nixl_port:
+        label: typed
+        arg: nixl_port
+        desc_sha256: 982ca1464d97beeb306044454ed094e217be2fd622e1b3fdb36227d1a3ab9d2a
+      backup:
+        label: pending
+        phase: P1b
+        desc_sha256: 92cda6d2a3e8f33e76da1a78081683f19da580a3433bf93d1186e88a63ac0448
+      subnetId:
+        label: pending
+        phase: P1b
+        desc_sha256: b76cceb8481c482e0020a6b78b9cabadf41ddc54db4db78a6986830763d9acea
+      monitorAddress:
+        label: pending
+        phase: P1b
+        desc_sha256: 4e23c74c9d75e924133ae61eafe8101b67033d8ab1145973d4e72c6012f9e53c
+      httpMethod:
+        label: excluded-field
+        reason: 'swagger: not wired into monitoring'
+        desc_sha256: 78372e03987e12789f18a94ce99f6efaf9b8a6fa925750ef62c61ba5dfe9d4db
+      urlPath:
+        label: excluded-field
+        reason: 'swagger: not wired into monitoring'
+        desc_sha256: b3771fab9f970c315cffe0b9358eef780be0593e0cf60ad96a417bb2863bf2c3
+      expectedCodes:
+        label: excluded-field
+        reason: 'swagger: not wired into monitoring'
+        desc_sha256: 02914e8e08994fb2a3fc5d5bccb99e5a204abdce81922ae0fd0dcd0bb9cb5a4a
+      httpVersion:
+        label: excluded-field
+        reason: 'swagger: not wired into monitoring'
+        desc_sha256: ecc4dddf0723d3914265830f26ba8b3730aa074193332b1ae8521ae56b51ee62
+      domainName:
+        label: excluded-field
+        reason: 'swagger: not wired into monitoring'
+        desc_sha256: c624e8cc1d350c43138e38252c7d023bec8e0281d87725aa606966368702553a
+      state:
+        label: read-back
+        desc_sha256: 989566034df56658dae116d4e089d4610aff196ae3c1e59f6ad533e2a54da895
+      counter:
+        label: read-back
+        desc_sha256: 3c6c3101b242d18b37f3de8db4e7d3b722816e1242f63773c3b27d409df64cb9
+  ApiKeyCreateRequest:
+    source: definitions.ApiKeyCreateRequest.properties
+    fields:
+      tenant_id:
+        label: typed
+        arg: tenant_id
+        desc_sha256: 3c08ea2eaa8553770405cf553c2750157936044de3ac3dd202437e7953fa0e72
+      name:
+        label: typed
+        arg: name
+        desc_sha256: 8f957165e05362cc353f33b95491aca2adb858fa6d9a48344ce477e4b32445c8
+      api_key:
+        label: excluded-field
+        reason: credential import; §7.14 secrets policy, removed from the plan by Rev 1.1
+        desc_sha256: 0ffd20cfcd1900bd1388795d7e1e5478cda4a38c95475a21f19a2cbf1e4bbea1
+      allowed_models:
+        label: typed
+        arg: allowed_models
+        desc_sha256: 3dbe7ff3e0e6b2b38dec488106916185c8e7d94f9bd91a786634391a00173190
+      rate_limit_rps:
+        label: typed
+        arg: rate_limit_rps
+        desc_sha256: 9dc2b82b178db86851619618ad22488fa52c05d3639a13a95efd16a16a223d06
+      burst_size:
+        label: typed
+        arg: burst_size
+        desc_sha256: b1b84df83a98040ea6fdf882e446593e4316e0d961dd9437e3478e6d8e0b6f8a
+      tokens_per_min:
+        label: typed
+        arg: tokens_per_min
+        desc_sha256: 1201785e92e912add7920a3d58cf939f1c4ce106e4190ffb48e9961c09a50740
+      expires_at:
+        label: typed
+        arg: expires_at
+        desc_sha256: 5765ec6ccbb5dce4371631e39bf6a9d3eff19079ce92ea3fa62109f89fe40dd0
+      enabled:
+        label: pending
+        phase: P1b
+        desc_sha256: 600029c1fa7ec03f92a971075ec74a6b981d862e8ea9c19925fcc27b94c02680
+      client_op_id:
+        label: pending
+        phase: P1b
+        desc_sha256: 6ab50dc7d6fdbdc9e9c092d2a72c0808d625110154dd57e99d90f72fbeb7f119
+      priority_class:
+        label: pending
+        phase: P1b
+        desc_sha256: c6660f2fc3272b4a9774499ba6696f9733d4a91c1bbd744bb598eedab27a0500
+      default_objective:
+        label: pending
+        phase: P1b
+        desc_sha256: 6d038efab02ee403a0f8749cb931eba2c4394b2e744ceb541e40aaa457e9c96b
+      allowed_objectives:
+        label: pending
+        phase: P1b
+        desc_sha256: 1a630e3cee0b703e46ca7fffe0656e72ecce53ec118f2e89c2e127533bbbec5c
+  TenantRateLimitMod:
+    source: definitions.TenantRateLimitMod.properties
+    fields:
+      tenant_id:
+        label: typed
+        arg: tenant_id
+        desc_sha256: 02a444998ba6ac80b819c41a816aa5d4c78f47455943463dfc2d3f6c9ef78648
+      rps:
+        label: typed
+        arg: rps
+        desc_sha256: 5542d8c66e86a9b72a7c0c87a4ecb7f2796f7362075020387ca1c9df5c7ae475
+      tokens_per_min:
+        label: typed
+        arg: tokens_per_min
+        desc_sha256: 59a1a68ffac2f1f2305658e1c16b993c9b3fd6051f30bffd717c29fe66c85bcc
+      burst_pct:
+        label: typed
+        arg: burst_pct
+        desc_sha256: 674bc72bba366d2f1685fd112a5e9ffc9bdbcab8492008940977c3d86951183c
+      model_limits:
+        label: pending
+        phase: P1b
+        desc_sha256: 7cbfe8c6e6ad8ba623a531d36eea88b77341254df9b586ec39fc9d94bd1210f0
+      priority_class:
+        label: pending
+        phase: P1b
+        desc_sha256: e3ac7f6d649b6a749ee93fee475e958fb938b8b476753f7db817224c7bac75bf
+      default_objective:
+        label: pending
+        phase: P1b
+        desc_sha256: 60f18bc85278a37f18c572ec6b2b0ef1f71456cee6083514d2f0fbd0d376bb77
+      allowed_objectives:
+        label: pending
+        phase: P1b
+        desc_sha256: 896c4e2a217e64819eb4b256c5775afcf0b07c987661deb607c9e80bfa2d2415

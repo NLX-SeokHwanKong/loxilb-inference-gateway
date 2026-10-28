@@ -1,0 +1,10 @@
+# mcp/contract/metrics-exceptions.yml - metric names the bridge references
+# that tools/metric-manifest does not find in the gateway source.
+#
+# Each entry is a known defect with the PR that removes it. The metrics test
+# reports these as warnings instead of failures and FAILS when a listed name
+# starts to exist (stale exception) so the list can only shrink.
+version: 1
+known_missing:
+  - name: loxilb_active_conntracks
+    reason: "GAP-ANALYSIS W6: metricsReferenceDoc names a family that does not exist; the real one is loxilb_active_conntrack_entries. Fixed in PR-A."

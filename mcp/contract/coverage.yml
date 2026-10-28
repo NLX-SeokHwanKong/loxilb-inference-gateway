@@ -1,0 +1,985 @@
+# mcp/contract/coverage.yml - the operation manifest of the loxilb-mcp bridge.
+#
+# One entry per "METHOD path" of api/swagger.yml and api/swagger-extras.yml.
+# Enforced by mcp/contract/coverage_test.go (see docs/MCP-OPERATIONS.md,
+# "Contract gate"). Every entry is exactly one of:
+#   tools: [...]      mapped; carries impact (none|object|tenant|service|global|instance),
+#                     reversible (for mutations) and tier (viewer|operator|admin-confirm).
+#                     The test derives the minimum tier from impact+reversible; a weaker
+#                     tier fails unless tier_gap: states why (counted against the budget).
+#   pending: P1a|P1b|P2|P3|P4   not reachable yet; counted against budget.pending_max.
+#   excluded: "reason"          will not be reachable; a recorded decision.
+# Budgets are ratchets: they may only go down. A raise is a warning in the CI summary.
+version: 1
+budget:
+  pending_max: 86
+  tier_gap_max: 16
+operations:
+- op: GET /audit/policy
+  pending: P1a
+  note: read; PR-B1; default, awaiting owner
+- op: POST /audit/policy
+  excluded: the audited must not configure the auditor; D9
+  note: default, awaiting owner
+- op: POST /audit/rotate
+  excluded: the audited must not configure the auditor; D9
+  note: default, awaiting owner
+- op: GET /audit/sink
+  pending: P1a
+  note: read; PR-B1; default, awaiting owner
+- op: POST /audit/sink
+  excluded: the audited must not configure the auditor; D9
+  note: default, awaiting owner
+- op: DELETE /audit/sinks/{name}
+  excluded: the audited must not configure the auditor; D9
+  note: default, awaiting owner
+- op: GET /audit/sinks/{name}
+  pending: P1a
+  note: read; PR-B1; default, awaiting owner
+- op: PUT /audit/sinks/{name}
+  excluded: the audited must not configure the auditor; D9
+  note: default, awaiting owner
+- op: GET /audit/status
+  pending: P1a
+  note: read; PR-B1; default, awaiting owner
+- op: POST /auth/login
+  excluded: used only by the bridge's own login (client.login); not a tool; D2
+  note: default, awaiting owner
+- op: POST /auth/logout
+  excluded: management auth / user administration is not an agent task; D2
+  note: default, awaiting owner
+- op: POST /auth/token/upgrade
+  excluded: management auth / user administration is not an agent task; D2
+  note: default, awaiting owner
+- op: GET /auth/users
+  excluded: management auth / user administration is not an agent task; D2
+  note: default, awaiting owner
+- op: POST /auth/users
+  excluded: management auth / user administration is not an agent task; D2
+  note: default, awaiting owner
+- op: DELETE /auth/users/{id}
+  excluded: management auth / user administration is not an agent task; D2
+  note: default, awaiting owner
+- op: PUT /auth/users/{id}
+  excluded: management auth / user administration is not an agent task; D2
+  note: default, awaiting owner
+- op: GET /config/ai/apikey
+  tools:
+  - ai_apikey_list
+  impact: none
+- op: POST /config/ai/apikey
+  tools:
+  - ai_apikey_create
+  impact: tenant
+  reversible: true
+  tier: operator
+- op: DELETE /config/ai/apikey/{key_id}
+  tools:
+  - ai_apikey_delete
+  impact: object
+  reversible: false
+  tier: admin-confirm
+- op: GET /config/ai/apikey/{key_id}
+  tools:
+  - ai_apikey_get
+  impact: none
+- op: PATCH /config/ai/apikey/{key_id}
+  tools:
+  - ai_apikey_update
+  impact: object
+  reversible: true
+  tier: operator
+- op: GET /config/ai/jwtauthprofile
+  pending: P1a
+  note: read; PR-B1; default, awaiting owner
+- op: POST /config/ai/jwtauthprofile
+  pending: P1b
+  impact: global
+  note: 'D11: opens on a stated use-case; admin-confirm, never autopilot; default, awaiting owner'
+- op: DELETE /config/ai/jwtauthprofile/{name}
+  pending: P1b
+  impact: global
+  note: 'D11: opens on a stated use-case; admin-confirm, never autopilot; default, awaiting owner'
+- op: GET /config/ai/kv/inventory
+  tools:
+  - ai_kv_inventory_get
+  impact: none
+- op: GET /config/ai/model-profiles
+  pending: P1a
+  note: read; PR-B1; default, awaiting owner
+- op: GET /config/ai/model-profiles/{profile_id}
+  pending: P1a
+  note: read; PR-B1; default, awaiting owner
+- op: GET /config/ai/netidentity
+  pending: P1a
+  note: read; PR-B1; default, awaiting owner
+- op: POST /config/ai/netidentity
+  pending: P1b
+  impact: global
+  note: 'D11: opens on a stated use-case; admin-confirm, never autopilot; default, awaiting owner'
+- op: DELETE /config/ai/netidentity/{name}
+  pending: P1b
+  impact: global
+  note: 'D11: opens on a stated use-case; admin-confirm, never autopilot; default, awaiting owner'
+- op: GET /config/ai/objective
+  pending: P1a
+  note: read; PR-B1; default, awaiting owner
+- op: POST /config/ai/objective
+  pending: P1b
+  impact: global
+  note: 'D11: opens on a stated use-case; admin-confirm, never autopilot; default, awaiting owner'
+- op: DELETE /config/ai/objective/{name}
+  pending: P1b
+  impact: global
+  note: 'D11: opens on a stated use-case; admin-confirm, never autopilot; default, awaiting owner'
+- op: POST /config/ai/ratelimit/defaults
+  pending: P1b
+  impact: global
+  note: 'D11: opens on a stated use-case; admin-confirm, never autopilot; default, awaiting owner'
+- op: DELETE /config/ai/ratelimit/defaults/{scope}
+  pending: P1b
+  impact: global
+  note: 'D11: opens on a stated use-case; admin-confirm, never autopilot; default, awaiting owner'
+- op: GET /config/ai/ratelimit/defaults/{scope}
+  pending: P1a
+  note: read; PR-B1; default, awaiting owner
+- op: POST /config/ai/tenant/ratelimit
+  tools:
+  - ai_ratelimit_set
+  impact: tenant
+  reversible: true
+  tier: operator
+- op: GET /config/ai/tenant/ratelimit/{tenant_id}
+  tools:
+  - ai_ratelimit_get
+  impact: none
+- op: POST /config/ai/user/ratelimit
+  pending: P1b
+  impact: tenant
+  note: PR-B2 ai_user_ratelimit_set; operator with preview; default, awaiting owner
+- op: GET /config/ai/user/ratelimit/{tenant_id}
+  pending: P1a
+  note: read; PR-B1; default, awaiting owner
+- op: DELETE /config/ai/user/ratelimit/{tenant_id}/{user_id}
+  pending: P1b
+  impact: tenant
+  note: PR-B2 ai_user_ratelimit_delete; re-creatable from the preview, operator; default, awaiting owner
+- op: GET /config/ai/user/ratelimit/{tenant_id}/{user_id}
+  pending: P1a
+  note: read; PR-B1; default, awaiting owner
+- op: POST /config/bfd
+  excluded: L2-4 write CRUD is excluded by policy; D1
+  note: default, awaiting owner
+- op: GET /config/bfd/all
+  pending: P4
+  note: L2-4 read; no owner use-case yet; default, awaiting owner
+- op: DELETE /config/bfd/remoteIP/{remote_ip}
+  excluded: L2-4 write CRUD is excluded by policy; D1
+  note: default, awaiting owner
+- op: POST /config/bgp/global
+  tools:
+  - bgp_global_set
+  impact: global
+  reversible: true
+  tier: operator
+  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; owner decision pending (PR-0 report)'
+- op: POST /config/bgp/neigh
+  tools:
+  - bgp_neigh_set
+  impact: global
+  reversible: true
+  tier: operator
+  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; owner decision pending (PR-0 report)'
+- op: GET /config/bgp/neigh/all
+  tools:
+  - bgp_neigh_list
+  impact: none
+- op: DELETE /config/bgp/neigh/{ip_address}
+  pending: P4
+  impact: global
+  note: D1 keep-list; impact global, admin-confirm if ever opened; default, awaiting owner
+- op: DELETE /config/bgp/policy/apply
+  excluded: not in the D1 keep-list (inverse of bgp_policy_apply); L2-4 write CRUD is excluded by policy; D1
+  note: default, awaiting owner
+- op: POST /config/bgp/policy/apply
+  tools:
+  - bgp_policy_apply
+  impact: global
+  reversible: true
+  tier: operator
+  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; owner decision pending (PR-0 report)'
+- op: POST /config/bgp/policy/definedsets/{defineset_type}
+  pending: P4
+  impact: global
+  note: D1 keep-list; impact global, admin-confirm if ever opened; default, awaiting owner
+- op: DELETE /config/bgp/policy/definedsets/{defineset_type}/{type_name}
+  pending: P4
+  impact: global
+  note: D1 keep-list; impact global, admin-confirm if ever opened; default, awaiting owner
+- op: GET /config/bgp/policy/definedsets/{defineset_type}/{type_name}
+  pending: P4
+  note: read; opens with the network-ai-synergy track; default, awaiting owner
+- op: POST /config/bgp/policy/definitions
+  pending: P4
+  impact: global
+  note: D1 keep-list; impact global, admin-confirm if ever opened; default, awaiting owner
+- op: GET /config/bgp/policy/definitions/all
+  tools:
+  - bgp_policy_list
+  impact: none
+- op: DELETE /config/bgp/policy/definitions/{policy_name}
+  pending: P4
+  impact: global
+  note: D1 keep-list; impact global, admin-confirm if ever opened; default, awaiting owner
+- op: POST /config/cert
+  pending: P2
+  impact: service
+  note: cert_create by cert_file/key_file under SecretsDir; admin-confirm; PR-C; default, awaiting owner
+- op: DELETE /config/cert/{certId}
+  pending: P2
+  impact: service
+  note: cert_delete; admin-confirm; PR-C; default, awaiting owner
+- op: GET /config/cert/{certId}
+  pending: P2
+  note: read; PR-C; default, awaiting owner
+- op: PUT /config/cert/{certId}
+  pending: P2
+  impact: service
+  note: cert_rotate by file reference; admin-confirm; PR-C; default, awaiting owner
+- op: POST /config/cistate
+  excluded: HA-internal cluster-state report; D3
+  note: default, awaiting owner
+- op: GET /config/cistate/all
+  tools:
+  - cluster_state_get
+  impact: none
+- op: GET /config/conntrack/all
+  tools:
+  - ct_list
+  - health_overview
+  - capacity_report
+  - fleet_overview
+  impact: none
+- op: POST /config/cors
+  excluded: K8s metadata machine protocol; D3
+  note: default, awaiting owner
+- op: GET /config/cors/all
+  excluded: K8s metadata machine protocol; D3
+  note: default, awaiting owner
+- op: DELETE /config/cors/{cors_url}
+  excluded: K8s metadata machine protocol; D3
+  note: default, awaiting owner
+- op: GET /config/dpu/debug
+  pending: P2
+  note: read; PR-C; default, awaiting owner
+- op: POST /config/dpu/debug
+  pending: P2
+  impact: instance
+  note: write not in the PR-C list; needs an owner use-case (§7.15); PR-C; default, awaiting owner
+- op: GET /config/dpu/hwcounters
+  pending: P2
+  note: read; PR-C; default, awaiting owner
+- op: POST /config/endpoint
+  pending: P4
+  impact: object
+  note: endpoint-monitor add; not named by D1 or any §5 row, owner to place; default, awaiting owner
+- op: GET /config/endpoint/all
+  tools:
+  - endpoint_list
+  - diagnose_endpoint
+  impact: none
+- op: DELETE /config/endpoint/epipaddress/{ip_address}
+  pending: P4
+  impact: object
+  note: endpoint-monitor delete; not named by D1 or any §5 row, owner to place; default, awaiting owner
+- op: POST /config/endpointhoststate
+  tools:
+  - endpoint_host_state_set
+  impact: object
+  reversible: true
+  tier: operator
+- op: GET /config/export
+  tools:
+  - config_export
+  impact: none
+- op: POST /config/fdb
+  excluded: L2-4 write CRUD is excluded by policy; D1
+  note: default, awaiting owner
+- op: GET /config/fdb/all
+  pending: P4
+  note: L2-4 read; no owner use-case yet; default, awaiting owner
+- op: DELETE /config/fdb/{mac_address}/dev/{if_name}
+  excluded: L2-4 write CRUD is excluded by policy; D1
+  note: default, awaiting owner
+- op: DELETE /config/firewall
+  tools:
+  - fw_delete
+  impact: object
+  reversible: true
+  tier: admin-confirm
+- op: POST /config/firewall
+  tools:
+  - fw_create
+  impact: object
+  reversible: true
+  tier: operator
+- op: GET /config/firewall/all
+  tools:
+  - fw_list
+  impact: none
+- op: POST /config/gpu/conversations/cleanup
+  tools:
+  - gpu_conversations_cleanup
+  impact: global
+  reversible: false
+  tier: operator
+  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; owner decision pending (PR-0 report)'
+- op: POST /config/gpu/disable
+  tools:
+  - gpu_mode_set
+  impact: global
+  reversible: true
+  tier: operator
+  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; owner decision pending (PR-0 report)'
+- op: POST /config/gpu/enable
+  tools:
+  - gpu_mode_set
+  impact: global
+  reversible: true
+  tier: operator
+  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; owner decision pending (PR-0 report)'
+- op: GET /config/gpu/status
+  tools:
+  - gpu_status
+  - diagnose_ai_latency
+  impact: none
+- op: GET /config/halfclose
+  pending: P1a
+  note: read; PR-B1; default, awaiting owner
+- op: POST /config/halfclose
+  pending: P1b
+  impact: global
+  note: 'D11: opens on a stated use-case; admin-confirm, never autopilot; default, awaiting owner'
+- op: POST /config/halfclose/release
+  pending: P1b
+  impact: global
+  note: 'D11: opens on a stated use-case; admin-confirm, never autopilot; default, awaiting owner'
+- op: POST /config/import
+  tools:
+  - config_import
+  impact: instance
+  reversible: false
+  tier: admin-confirm
+- op: DELETE /config/ipfilter
+  tools:
+  - ipfilter_set
+  impact: object
+  reversible: true
+  tier: operator
+- op: POST /config/ipfilter
+  tools:
+  - ipfilter_set
+  impact: object
+  reversible: true
+  tier: operator
+- op: GET /config/ipfilter/all
+  tools:
+  - ipfilter_list
+  impact: none
+- op: GET /config/ipsec
+  pending: P2
+  note: read; PR-C; default, awaiting owner
+- op: POST /config/ipsec
+  excluded: IPsec write; L2-4 write CRUD is excluded by policy; D1
+  note: default, awaiting owner
+- op: POST /config/ipsec/ca-certificates
+  excluded: IPsec write; L2-4 write CRUD is excluded by policy; D1
+  note: default, awaiting owner
+- op: GET /config/ipsec/ca-certificates/all
+  pending: P2
+  note: read; PR-C; default, awaiting owner
+- op: DELETE /config/ipsec/ca-certificates/{name}
+  excluded: IPsec write; L2-4 write CRUD is excluded by policy; D1
+  note: default, awaiting owner
+- op: GET /config/ipsec/ca-certificates/{name}
+  pending: P2
+  note: read; PR-C; default, awaiting owner
+- op: POST /config/ipsec/certificates
+  excluded: IPsec write; L2-4 write CRUD is excluded by policy; D1
+  note: default, awaiting owner
+- op: GET /config/ipsec/certificates/all
+  pending: P2
+  note: read; PR-C; default, awaiting owner
+- op: POST /config/ipsec/certificates/validate
+  excluded: takes certificate material inline, which §7.14 forbids as a tool argument; IPsec write; D1
+  note: default, awaiting owner
+- op: DELETE /config/ipsec/certificates/{name}
+  excluded: IPsec write; L2-4 write CRUD is excluded by policy; D1
+  note: default, awaiting owner
+- op: GET /config/ipsec/certificates/{name}
+  pending: P2
+  note: read; PR-C; default, awaiting owner
+- op: GET /config/ipsec/sas/all
+  tools:
+  - ipsec_status_get
+  impact: none
+- op: DELETE /config/ipsec/stats
+  excluded: IPsec write; L2-4 write CRUD is excluded by policy; D1
+  note: default, awaiting owner
+- op: GET /config/ipsec/stats
+  tools:
+  - ipsec_status_get
+  impact: none
+- op: POST /config/ipsec/tunnels
+  excluded: IPsec write; L2-4 write CRUD is excluded by policy; D1
+  note: default, awaiting owner
+- op: GET /config/ipsec/tunnels/all
+  tools:
+  - ipsec_status_get
+  impact: none
+- op: DELETE /config/ipsec/tunnels/{name}
+  excluded: IPsec write; L2-4 write CRUD is excluded by policy; D1
+  note: default, awaiting owner
+- op: GET /config/ipsec/tunnels/{name}
+  pending: P2
+  note: read; PR-C; default, awaiting owner
+- op: PUT /config/ipsec/tunnels/{name}
+  excluded: IPsec write; L2-4 write CRUD is excluded by policy; D1
+  note: default, awaiting owner
+- op: POST /config/ipsec/tunnels/{name}/action
+  excluded: IPsec write; L2-4 write CRUD is excluded by policy; D1
+  note: default, awaiting owner
+- op: GET /config/ipsec/tunnels/{name}/peerconfig
+  pending: P2
+  note: read; PR-C; default, awaiting owner
+- op: POST /config/ipv4address
+  excluded: L2-4 write CRUD is excluded by policy; D1
+  note: default, awaiting owner
+- op: GET /config/ipv4address/all
+  tools:
+  - net_ip_list
+  impact: none
+- op: DELETE /config/ipv4address/{ip_address}/{mask}/dev/{if_name}
+  excluded: L2-4 write CRUD is excluded by policy; D1
+  note: default, awaiting owner
+- op: POST /config/ipv6address
+  excluded: L2-4 write CRUD is excluded by policy; D1
+  note: default, awaiting owner
+- op: GET /config/ipv6address/all
+  tools:
+  - net_ip_list
+  impact: none
+- op: DELETE /config/ipv6address/{ip_address}/{mask}/dev/{if_name}
+  excluded: L2-4 write CRUD is excluded by policy; D1
+  note: default, awaiting owner
+- op: POST /config/l4trace/disable
+  pending: P2
+  impact: global
+  note: l4trace_enable_set; operator with preview; PR-C; default, awaiting owner
+- op: POST /config/l4trace/enable
+  pending: P2
+  impact: global
+  note: l4trace_enable_set; operator with preview; PR-C; default, awaiting owner
+- op: PUT /config/l4trace/sampling
+  pending: P2
+  impact: global
+  note: l4trace_sampling_set; upper bound from config; PR-C; default, awaiting owner
+- op: POST /config/l4trace/stats/reset
+  pending: P2
+  impact: global
+  note: l4trace_stats_reset; PR-C; default, awaiting owner
+- op: GET /config/l4trace/status
+  tools:
+  - l4trace_status_get
+  impact: none
+- op: GET /config/l7policy
+  pending: P2
+  note: read; PR-C; default, awaiting owner
+- op: POST /config/l7policy
+  pending: P2
+  impact: service
+  note: l7policy_create; admin-confirm; PR-C; default, awaiting owner
+- op: DELETE /config/l7policy/id/{id}
+  pending: P2
+  impact: service
+  note: l7policy_delete; admin-confirm; PR-C; default, awaiting owner
+- op: GET /config/l7policy/id/{id}
+  pending: P2
+  note: read; PR-C; default, awaiting owner
+- op: POST /config/llamafirewall/configure
+  tools:
+  - llamafw_configure
+  impact: global
+  reversible: true
+  tier: operator
+  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; owner decision pending (PR-0 report)'
+- op: POST /config/llamafirewall/enable
+  tools:
+  - llamafw_enable_set
+  impact: global
+  reversible: true
+  tier: operator
+  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; owner decision pending (PR-0 report)'
+- op: POST /config/llamafirewall/health
+  tools:
+  - llamafw_health_check
+  impact: none
+  tier: operator
+  note: 'trigger: runs a health probe, changes no configuration'
+- op: POST /config/llamafirewall/scanners
+  tools:
+  - llamafw_scanners_set
+  impact: global
+  reversible: true
+  tier: operator
+  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; owner decision pending (PR-0 report)'
+- op: GET /config/llamafirewall/stats
+  tools:
+  - llamafw_stats
+  impact: none
+- op: GET /config/llamafirewall/status
+  tools:
+  - llamafw_status
+  impact: none
+- op: POST /config/loadbalancer
+  tools:
+  - lb_create
+  impact: service
+  reversible: true
+  tier: operator
+  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; owner decision pending (PR-0 report)'
+- op: DELETE /config/loadbalancer/all
+  excluded: delete-all is instance-scope and never agent-driven; D3
+  note: default, awaiting owner
+- op: GET /config/loadbalancer/all
+  tools:
+  - lb_list
+  - health_overview
+  - capacity_report
+  - fleet_overview
+  impact: none
+- op: DELETE /config/loadbalancer/externalipaddress/{ip_address}/port/{port}/portmax/{portmax}/protocol/{proto}
+  tools:
+  - lb_delete
+  impact: service
+  reversible: true
+  tier: admin-confirm
+- op: DELETE /config/loadbalancer/externalipaddress/{ip_address}/port/{port}/protocol/{proto}
+  tools:
+  - lb_delete
+  impact: service
+  reversible: true
+  tier: admin-confirm
+- op: GET /config/loadbalancer/externalipaddress/{ip_address}/port/{port}/protocol/{proto}
+  pending: P1a
+  note: read; PR-B1; default, awaiting owner
+- op: PATCH /config/loadbalancer/externalipaddress/{ip_address}/port/{port}/protocol/{proto}
+  pending: P1b
+  impact: service
+  note: PR-B2 lb_update; phase-1 fields allowlist, admin-confirm; default, awaiting owner
+- op: GET /config/loadbalancer/externalipaddress/{ip_address}/port/{port}/protocol/{proto}/kvexactstatus
+  pending: P1a
+  note: read; PR-B1; default, awaiting owner
+- op: POST /config/loadbalancer/externalipaddress/{ip_address}/port/{port}/protocol/{proto}/sockmapreset
+  pending: P1b
+  impact: service
+  note: 'D11: opens on a stated use-case; admin-confirm, never autopilot; default, awaiting owner'
+- op: GET /config/loadbalancer/externalipaddress/{ip_address}/port/{port}/protocol/{proto}/stats
+  pending: P1a
+  note: read; PR-B1; default, awaiting owner
+- op: GET /config/loadbalancer/externalipaddress/{ip_address}/port/{port}/protocol/{proto}/status
+  pending: P1a
+  note: read; PR-B1; default, awaiting owner
+- op: DELETE /config/loadbalancer/hosturl/{hosturl}/externalipaddress/{ip_address}/port/{port}/portmax/{portmax}/protocol/{proto}
+  pending: P1b
+  impact: service
+  note: 'PR-B2: lb_delete gains the hosturl+portmax variant; default, awaiting owner'
+- op: DELETE /config/loadbalancer/hosturl/{hosturl}/externalipaddress/{ip_address}/port/{port}/protocol/{proto}
+  tools:
+  - lb_delete
+  impact: service
+  reversible: true
+  tier: admin-confirm
+- op: GET /config/loadbalancer/id/{id}
+  pending: P1a
+  note: read; PR-B1; default, awaiting owner
+- op: DELETE /config/loadbalancer/name/{lb_name}
+  tools:
+  - lb_delete
+  impact: service
+  reversible: true
+  tier: admin-confirm
+- op: DELETE /config/metrics
+  excluded: instance-scope metrics on/off; removed from the plan by Rev 1.1 (§0 table, §5)
+  note: default, awaiting owner
+- op: GET /config/metrics
+  tools:
+  - metrics_config_get
+  impact: none
+- op: POST /config/metrics
+  excluded: instance-scope metrics on/off; removed from the plan by Rev 1.1 (§0 table, §5)
+  note: default, awaiting owner
+- op: POST /config/mirror
+  excluded: L2-4 write CRUD is excluded by policy; D1
+  note: default, awaiting owner
+- op: GET /config/mirror/all
+  pending: P4
+  note: L2-4 read; no owner use-case yet; default, awaiting owner
+- op: DELETE /config/mirror/ident/{ident}
+  excluded: L2-4 write CRUD is excluded by policy; D1
+  note: default, awaiting owner
+- op: POST /config/neighbor
+  excluded: L2-4 write CRUD is excluded by policy; D1
+  note: default, awaiting owner
+- op: GET /config/neighbor/all
+  tools:
+  - net_neighbor_list
+  impact: none
+- op: DELETE /config/neighbor/{ip_address}/dev/{if_name}
+  excluded: L2-4 write CRUD is excluded by policy; D1
+  note: default, awaiting owner
+- op: DELETE /config/opa/watcher
+  excluded: points the gateway at an agent-chosen URL; excluded until the bridge config gains a destination allowlist; D10
+  note: default, awaiting owner
+- op: GET /config/opa/watcher
+  pending: P2
+  note: read; PR-C; default, awaiting owner
+- op: POST /config/opa/watcher
+  excluded: points the gateway at an agent-chosen URL; excluded until the bridge config gains a destination allowlist; D10
+  note: default, awaiting owner
+- op: GET /config/params
+  tools:
+  - config_params_get
+  impact: none
+- op: POST /config/params
+  tools:
+  - config_params_set
+  impact: instance
+  reversible: true
+  tier: operator
+  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; owner decision pending (PR-0 report)'
+- op: POST /config/persist
+  pending: P1b
+  impact: instance
+  note: PR-B2 config_persist; operator; default, awaiting owner
+- op: POST /config/pii/configure
+  tools:
+  - pii_configure
+  impact: global
+  reversible: true
+  tier: operator
+  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; owner decision pending (PR-0 report)'
+- op: POST /config/pii/enable
+  tools:
+  - pii_enable_set
+  impact: global
+  reversible: true
+  tier: operator
+  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; owner decision pending (PR-0 report)'
+- op: GET /config/pii/stats
+  tools:
+  - pii_stats
+  impact: none
+- op: GET /config/pii/status
+  tools:
+  - pii_status
+  impact: none
+- op: POST /config/pii/url-patterns
+  tools:
+  - pii_url_patterns_set
+  impact: global
+  reversible: true
+  tier: operator
+  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; owner decision pending (PR-0 report)'
+- op: POST /config/policy
+  excluded: L2-4 write CRUD is excluded by policy; D1
+  note: default, awaiting owner
+- op: GET /config/policy/all
+  pending: P4
+  note: L2-4 read; no owner use-case yet; default, awaiting owner
+- op: DELETE /config/policy/ident/{ident}
+  excluded: L2-4 write CRUD is excluded by policy; D1
+  note: default, awaiting owner
+- op: GET /config/port/all
+  tools:
+  - net_port_list
+  impact: none
+- op: POST /config/restore
+  excluded: instance-scope, irreversible from the agent's point of view; a human restores; D4
+  note: default, awaiting owner
+- op: POST /config/route
+  tools:
+  - net_route_create
+  impact: object
+  reversible: true
+  tier: operator
+- op: GET /config/route/all
+  tools:
+  - net_route_list
+  impact: none
+- op: DELETE /config/route/destinationIPNet/{ip_address}/{mask}
+  tools:
+  - net_route_delete
+  impact: object
+  reversible: true
+  tier: admin-confirm
+- op: DELETE /config/securityrate
+  pending: P1b
+  impact: global
+  note: 'PR-B2: fold into secrate_set(enabled=false) per GAP §3.2; default, awaiting owner'
+- op: POST /config/securityrate
+  tools:
+  - secrate_set
+  impact: global
+  reversible: true
+  tier: operator
+  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; owner decision pending (PR-0 report)'
+- op: GET /config/securityrate/all
+  tools:
+  - secrate_get
+  - capacity_report
+  impact: none
+- op: PUT /config/securityrate/reset
+  tools:
+  - secrate_reset
+  impact: global
+  reversible: false
+  tier: operator
+  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; owner decision pending (PR-0 report)'
+- op: POST /config/session
+  excluded: L2-4 write CRUD is excluded by policy; D1
+  note: default, awaiting owner
+- op: GET /config/session/all
+  tools:
+  - session_list
+  impact: none
+- op: DELETE /config/session/ident/{ident}
+  excluded: L2-4 write CRUD is excluded by policy; D1
+  note: default, awaiting owner
+- op: POST /config/sessionulcl
+  excluded: L2-4 write CRUD is excluded by policy; D1
+  note: default, awaiting owner
+- op: GET /config/sessionulcl/all
+  tools:
+  - session_ulcl_list
+  impact: none
+- op: DELETE /config/sessionulcl/ident/{ident}/ulclAddress/{ip_address}
+  excluded: L2-4 write CRUD is excluded by policy; D1
+  note: default, awaiting owner
+- op: GET /config/snapshot
+  pending: P1a
+  note: read; PR-B1; default, awaiting owner
+- op: DELETE /config/trace/catalog/{catalog_id}/parser
+  pending: P2
+  impact: global
+  note: trace_catalog_parser_delete; PR-C; default, awaiting owner
+- op: GET /config/trace/catalog/{catalog_id}/parser
+  pending: P2
+  note: read; PR-C; default, awaiting owner
+- op: PUT /config/trace/catalog/{catalog_id}/parser
+  pending: P2
+  impact: global
+  note: trace_catalog_parser_set; PR-C; default, awaiting owner
+- op: GET /config/trace/catalogs
+  tools:
+  - trace_catalog_list
+  impact: none
+- op: POST /config/trace/disable
+  pending: P2
+  impact: global
+  note: trace_enable_set; operator with preview; PR-C; default, awaiting owner
+- op: POST /config/trace/enable
+  pending: P2
+  impact: global
+  note: trace_enable_set; operator with preview; PR-C; default, awaiting owner
+- op: GET /config/trace/otlp
+  pending: P2
+  note: read; PR-C; default, awaiting owner
+- op: POST /config/trace/otlp
+  excluded: points the gateway at an agent-chosen URL; excluded until the bridge config gains a destination allowlist; D10
+  note: default, awaiting owner
+- op: GET /config/trace/parsers
+  pending: P2
+  note: read; PR-C; default, awaiting owner
+- op: GET /config/trace/status
+  tools:
+  - trace_status_get
+  impact: none
+- op: POST /config/tunnel/vxlan
+  excluded: L2-4 write CRUD is excluded by policy; D1
+  note: default, awaiting owner
+- op: GET /config/tunnel/vxlan/all
+  tools:
+  - net_vxlan_list
+  impact: none
+- op: DELETE /config/tunnel/vxlan/{vxlanID}
+  excluded: L2-4 write CRUD is excluded by policy; D1
+  note: default, awaiting owner
+- op: POST /config/tunnel/vxlan/{vxlanID}/peer
+  excluded: L2-4 write CRUD is excluded by policy; D1
+  note: default, awaiting owner
+- op: DELETE /config/tunnel/vxlan/{vxlanID}/peer/{PeerIP}
+  excluded: L2-4 write CRUD is excluded by policy; D1
+  note: default, awaiting owner
+- op: POST /config/vlan
+  excluded: L2-4 write CRUD is excluded by policy; D1
+  note: default, awaiting owner
+- op: GET /config/vlan/all
+  tools:
+  - net_vlan_list
+  impact: none
+- op: DELETE /config/vlan/{vlan_id}
+  excluded: L2-4 write CRUD is excluded by policy; D1
+  note: default, awaiting owner
+- op: POST /config/vlan/{vlan_id}/member
+  excluded: L2-4 write CRUD is excluded by policy; D1
+  note: default, awaiting owner
+- op: DELETE /config/vlan/{vlan_id}/member/{if_name}/tagged/{tagged}
+  excluded: L2-4 write CRUD is excluded by policy; D1
+  note: default, awaiting owner
+- op: GET /config/worker/metrics
+  tools:
+  - gpu_worker_metrics_get
+  impact: none
+- op: POST /config/worker/metrics
+  excluded: external worker-agent push protocol; D3
+  note: default, awaiting owner
+- op: GET /diagnostics
+  pending: P1a
+  note: read; PR-A folds it into diagnose_*, PR-B1 adds diagnostics_get; default, awaiting owner
+- op: GET /log-archives
+  tools:
+  - log_archives_list
+  impact: none
+- op: GET /log-archives/{filename}
+  tools:
+  - log_archive_get
+  impact: none
+- op: GET /logs
+  tools:
+  - logs_tail
+  - diagnose_l4_errors
+  - diagnose_endpoint
+  impact: none
+- op: GET /maintenance
+  pending: P1a
+  note: read; PR-B1; default, awaiting owner
+- op: PUT /maintenance
+  pending: P1b
+  impact: instance
+  note: 'PR-B3 maintenance_set; D5: admin-confirm for enter and leave, never autopilot; default, awaiting owner'
+- op: GET /meta
+  tools:
+  - meta_get
+  impact: none
+- op: GET /metrics
+  tools:
+  - metrics_snapshot
+  - health_overview
+  - ai_traffic_report
+  - diagnose_l4_errors
+  - diagnose_ai_latency
+  - fleet_overview
+  impact: none
+- op: GET /metrics/epdisttraffic
+  tools:
+  - metrics_legacy_get
+  impact: none
+- op: GET /metrics/errorcount
+  tools:
+  - metrics_legacy_get
+  impact: none
+- op: GET /metrics/flowcount
+  tools:
+  - metrics_legacy_get
+  impact: none
+- op: GET /metrics/fwdrops
+  tools:
+  - metrics_legacy_get
+  impact: none
+- op: GET /metrics/hostcount
+  tools:
+  - metrics_legacy_get
+  impact: none
+- op: GET /metrics/lbprocessedtraffic
+  tools:
+  - metrics_legacy_get
+  impact: none
+- op: GET /metrics/lbrulecount
+  tools:
+  - metrics_legacy_get
+  impact: none
+- op: GET /metrics/newflowcount
+  tools:
+  - metrics_legacy_get
+  impact: none
+- op: GET /metrics/processedtraffic
+  tools:
+  - metrics_legacy_get
+  impact: none
+- op: GET /metrics/reqcountperclient
+  tools:
+  - metrics_legacy_get
+  impact: none
+- op: GET /metrics/requestcount
+  tools:
+  - metrics_legacy_get
+  impact: none
+- op: GET /metrics/servicedisttraffic
+  tools:
+  - metrics_legacy_get
+  - capacity_report
+  impact: none
+- op: GET /nodegraph/all
+  tools:
+  - nodegraph_get
+  impact: none
+- op: GET /nodegraph/{service}
+  tools:
+  - nodegraph_get
+  impact: none
+- op: GET /oauth/{provider}
+  excluded: management auth / user administration is not an agent task; D2
+  note: default, awaiting owner
+- op: GET /oauth/{provider}/callback
+  excluded: management auth / user administration is not an agent task; D2
+  note: default, awaiting owner
+- op: GET /oauth/{provider}/token
+  excluded: management auth / user administration is not an agent task; D2
+  note: default, awaiting owner
+- op: DELETE /sni/certificates
+  pending: P2
+  impact: service
+  note: sni_cert_delete; admin-confirm; PR-C; default, awaiting owner
+- op: GET /sni/certificates
+  pending: P2
+  note: read; PR-C; default, awaiting owner
+- op: POST /sni/certificates
+  pending: P2
+  impact: service
+  note: sni_cert_set by certId; admin-confirm; PR-C; default, awaiting owner
+- op: GET /status/capabilities
+  pending: P1a
+  note: read; PR-B1; default, awaiting owner
+- op: GET /status/device
+  tools:
+  - status_get
+  - capacity_report
+  impact: none
+- op: GET /status/filesystem
+  tools:
+  - status_get
+  impact: none
+- op: GET /status/process
+  tools:
+  - status_get
+  impact: none
+- op: GET /status/ready
+  pending: P1a
+  note: read; PR-A folds it into health_overview/fleet_overview, PR-B1 adds the tool; default, awaiting owner
+- op: GET /version
+  tools:
+  - version_get
+  - health_overview
+  - fleet_overview
+  impact: none
