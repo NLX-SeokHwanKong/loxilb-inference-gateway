@@ -21,12 +21,15 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/loxilb-io/loxilb-inference-gateway/mcp/internal/mcp/client"
 	"github.com/loxilb-io/loxilb-inference-gateway/mcp/internal/mcp/guard"
 )
 
@@ -497,7 +500,28 @@ func (d *Deps) auditSinkGet() sdk.ToolHandlerFor[auditSinkGetIn, map[string]any]
 const (
 	snapshotDefaultMaxBytes = 256 * 1024
 	snapshotHardMaxBytes    = 2 * 1024 * 1024
+	// snapshotGateRetrySec is how long the gateway's own auto-persist holds
+	// the snapshot gate after a successful config write (its quiet period,
+	// pkg/snapshot/autopersist.go), the longest a caller refused with 409
+	// has to wait. The tool does not retry on the caller's behalf: the
+	// verdict says why and how long, and the agent decides.
+	snapshotGateRetrySec = 3
 )
+
+// snapshotGateBusy is the structured, retryable verdict for the gateway's
+// 409 on GET /config/snapshot ("another snapshot or restore operation is in
+// progress"): a tool error whose text and structured content are the same
+// object, so a client reads error, retry_after_sec and detail either way.
+func snapshotGateBusy(se *client.StatusError) (*sdk.CallToolResult, map[string]any) {
+	out := map[string]any{
+		"error":           "snapshot_gate_busy",
+		"retry_after_sec": snapshotGateRetrySec,
+		"detail":          se.Result(),
+	}
+	text, _ := json.Marshal(out)
+	return &sdk.CallToolResult{IsError: true,
+		Content: []sdk.Content{&sdk.TextContent{Text: string(text)}}}, out
+}
 
 type snapshotGetIn struct {
 	Target     string `json:"target,omitempty" jsonschema:"target loxilb instance name; omit for default"`
@@ -525,6 +549,11 @@ func (d *Deps) configSnapshotGet() sdk.ToolHandlerFor[snapshotGetIn, map[string]
 		var raw json.RawMessage
 		if err := c.GetQ(ctx, "/config/snapshot", q, &raw); err != nil {
 			d.audit("config_snapshot_get", c.Name(), false, err.Error())
+			var se *client.StatusError
+			if errors.As(err, &se) && se.Code == http.StatusConflict {
+				res, out := snapshotGateBusy(se)
+				return res, out, nil
+			}
 			return nil, nil, err
 		}
 		d.audit("config_snapshot_get", c.Name(), true, "")

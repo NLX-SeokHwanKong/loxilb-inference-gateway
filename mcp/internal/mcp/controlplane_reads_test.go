@@ -279,3 +279,44 @@ func TestConfigSnapshotGetCapsAndRedacts(t *testing.T) {
 		t.Errorf("sections must list the top-level keys with their sizes: %v", out)
 	}
 }
+
+// The gateway refuses GET /config/snapshot with 409 while its own
+// auto-persist (or a restore) holds the snapshot gate. The tool maps that
+// one answer to a structured, retryable error and retries nothing itself
+// (D21): the text and the structured content carry the same object.
+func TestConfigSnapshotGetMapsTheSnapshotGateBusyAnswer(t *testing.T) {
+	mock := newMockLoxilb(t)
+	mock.snapshotBusy = true
+	b := newTestBridge(t, testConfig(mock.srv.URL))
+	cs := session(t, b, guard.RoleViewer)
+
+	res, err := cs.CallTool(context.Background(), &sdk.CallToolParams{Name: "config_snapshot_get", Arguments: map[string]any{}})
+	if err != nil {
+		t.Fatalf("transport error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("a 409 must be a tool error, got %v", resultText(res))
+	}
+	var verdict map[string]any
+	if err := json.Unmarshal([]byte(resultText(res)), &verdict); err != nil {
+		t.Fatalf("the error text must be the structured verdict, got %q: %v", resultText(res), err)
+	}
+	if verdict["error"] != "snapshot_gate_busy" || verdict["retry_after_sec"] != float64(3) {
+		t.Fatalf("verdict: %v", verdict)
+	}
+	if d, _ := verdict["detail"].(string); !strings.Contains(d, "another snapshot or restore operation is in progress") {
+		t.Fatalf("detail must carry the gateway's text, got %v", verdict)
+	}
+	if out := callOut(t, res); out["error"] != "snapshot_gate_busy" || out["retry_after_sec"] != float64(3) {
+		t.Fatalf("structured content must carry the same verdict: %v", out)
+	}
+	n := 0
+	for _, r := range mock.requests {
+		if r == "GET /netlox/v1/config/snapshot" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("the tool must not retry on the caller's behalf: %d snapshot GETs", n)
+	}
+}

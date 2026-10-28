@@ -38,6 +38,9 @@ type mockLoxilb struct {
 	// protection on, the other two off (their flags omitted, as the gateway
 	// omits every zero-valued field).
 	securityRateJSON string
+	// snapshotBusy makes GET /config/snapshot answer the gateway's 409
+	// (auto-persist or a restore holds the snapshot gate).
+	snapshotBusy bool
 }
 
 // mockRuleJSON is the one rule the mock gateway holds (1.2.3.4:80/tcp, a
@@ -112,6 +115,11 @@ func newMockLoxilb(t *testing.T) *mockLoxilb {
 		case "/netlox/v1/audit/sinks/second":
 			w.Write([]byte(`{"name":"second","address":"siem2.example:6514","state":"connected","submitted":7,"filtered":1,"last_error":""}`))
 		case "/netlox/v1/config/snapshot":
+			if m.snapshotBusy {
+				w.WriteHeader(http.StatusConflict)
+				w.Write([]byte(`{"code":409,"message":"Resource conflict","result":"another snapshot or restore operation is in progress"}`))
+				return
+			}
 			w.Header().Set("X-Snapshot-Checksum", "sha256:snap")
 			w.Write([]byte(`{"schema":"1.12","checksum":"sha256:snap","loadbalancers":[{"name":"web"}],"auth":{"password":"hunter2","apiKey":"sk-secret-123"},"components":"` + r.URL.Query().Get("components") + `"}`))
 		case "/netlox/v1/config/gpu/status":

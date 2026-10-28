@@ -245,8 +245,8 @@ func (c *Client) doAllow(ctx context.Context, method, path string, in, out any, 
 		return fmt.Errorf("target %s: %s %s: read body: %w", c.name, method, path, err)
 	}
 	if resp.StatusCode >= 300 && !allow[resp.StatusCode] {
-		return fmt.Errorf("target %s: %s %s: %s", c.name, method, path,
-			statusSnippet(resp.StatusCode, raw))
+		return &StatusError{Target: c.name, Method: method, Path: path,
+			Code: resp.StatusCode, Body: strings.TrimSpace(string(raw))}
 	}
 	// 204-style success responses carry no body (e.g. DELETE /config/ai/apikey).
 	if out != nil && len(raw) > 0 {
@@ -258,6 +258,33 @@ func (c *Client) doAllow(ctx context.Context, method, path string, in, out any, 
 		}
 	}
 	return nil
+}
+
+// StatusError is a non-2xx answer from the target that no allow set
+// accepted. It is typed so a tool can map one status to a verdict of its own
+// (config_snapshot_get maps the snapshot gate's 409); Error() keeps the text
+// the bridge has always surfaced.
+type StatusError struct {
+	Target, Method, Path string
+	Code                 int
+	Body                 string // the answer body, whole up to maxBodyBytes
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("target %s: %s %s: %s", e.Target, e.Method, e.Path,
+		statusSnippet(e.Code, []byte(e.Body)))
+}
+
+// Result is the "result" field of a gateway error body ({"code","message",
+// "result"}), or the body itself when it is not one.
+func (e *StatusError) Result() string {
+	var g struct {
+		Result string `json:"result"`
+	}
+	if json.Unmarshal([]byte(e.Body), &g) == nil && g.Result != "" {
+		return g.Result
+	}
+	return e.Body
 }
 
 func statusSnippet(code int, body []byte) string {
