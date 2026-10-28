@@ -8,6 +8,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"github.com/loxilb-io/loxilb-inference-gateway/mcp/internal/mcp/guard"
 	"io"
 	"net/http"
 	"strings"
@@ -91,11 +92,11 @@ func TestLbCreateValidatesServiceExtraBeforeRequest(t *testing.T) {
 
 	bad := base
 	bad.ServiceExtra = map[string]any{"fc_effective": "enforce"}
-	if _, _, err := d.lbCreate()(context.Background(), nil, bad); err == nil {
+	if _, _, err := d.lbCreate(guard.RoleAdmin)(context.Background(), nil, bad); err == nil {
 		t.Fatal("read-back key accepted")
 	}
 	bad.ServiceExtra = map[string]any{"not_a_field": 1}
-	if _, _, err := d.lbCreate()(context.Background(), nil, bad); err == nil {
+	if _, _, err := d.lbCreate(guard.RoleAdmin)(context.Background(), nil, bad); err == nil {
 		t.Fatal("unknown key accepted")
 	}
 	if posts != 0 {
@@ -104,7 +105,7 @@ func TestLbCreateValidatesServiceExtraBeforeRequest(t *testing.T) {
 
 	good := base
 	good.ServiceExtra = map[string]any{"fc_mode": "observe"}
-	if _, out, err := d.lbCreate()(context.Background(), nil, good); err != nil || out.Action != "executed" {
+	if _, out, err := d.lbCreate(guard.RoleAdmin)(context.Background(), nil, good); err != nil || out.Action != "executed" {
 		t.Fatalf("valid key refused: err=%v out=%+v", err, out)
 	}
 	if posts != 1 {

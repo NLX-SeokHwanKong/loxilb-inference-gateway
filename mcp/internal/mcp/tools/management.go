@@ -27,6 +27,7 @@ import (
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/loxilb-io/loxilb-inference-gateway/mcp/internal/mcp/client"
 	"github.com/loxilb-io/loxilb-inference-gateway/mcp/internal/mcp/guard"
 )
 
@@ -172,11 +173,14 @@ func RegisterManagement(s *sdk.Server, role guard.Role, pol *guard.Policy, deps 
 				"of sse_mode and pd_disagg_mode; omit it to preserve a backend-owned X-Api-Key, disabled reserves and " +
 				"strips that namespace without enforcement, required enforces X-Api-Key, jwt validates a Bearer JWT " +
 				"against jwt_auth_profile, apikey-or-jwt accepts either; both JWT modes require jwt_auth_profile. " +
-				"A POST on an existing external_ip/port/protocol replaces that rule. service_extra remains available " +
-				"for advanced serviceArguments fields not yet typed.",
+				"The bridge pre-reads the rule key before it sends anything: a key that does not exist is a create " +
+				"and executes directly (operator); a key that exists would be replaced, which is an admin-confirm " +
+				"change — the call then answers a preview with current, proposed, diff and rollback plus a " +
+				"single-use confirm_token, and only an admin session repeating the call with that token applies it. " +
+				"service_extra remains available for advanced serviceArguments fields not yet typed.",
 			Annotations: mutAnnotations("Create LB rule", true),
 			InputSchema: lbCreateInputSchema(),
-		}, deps.lbCreate())
+		}, deps.lbCreate(role))
 	})
 	reg(mut("endpoint_host_state_set"), func() {
 		sdk.AddTool(s, &sdk.Tool{
@@ -199,20 +203,6 @@ func RegisterManagement(s *sdk.Server, role guard.Role, pol *guard.Policy, deps 
 			Annotations: mutAnnotations("Set IP filter", true),
 		}, deps.ipfilterSet())
 	})
-	reg(mut("secrate_set"), func() {
-		sdk.AddTool(s, &sdk.Tool{
-			Name:        "secrate_set",
-			Description: "Set security rate-limit config: SYN-flood, conn-rate and UDP-flood thresholds, whitelist IPs (POST /config/securityrate). Only supplied fields are sent.",
-			Annotations: mutAnnotations("Set security rate config", true),
-		}, deps.secrateSet())
-	})
-	reg(mut("secrate_reset"), func() {
-		sdk.AddTool(s, &sdk.Tool{
-			Name:        "secrate_reset",
-			Description: "Reset security rate-limit counters/state (PUT /config/securityrate/reset).",
-			Annotations: mutAnnotations("Reset security rate state", true),
-		}, deps.secrateReset())
-	})
 	reg(mut("net_route_create"), func() {
 		sdk.AddTool(s, &sdk.Tool{
 			Name:        "net_route_create",
@@ -220,36 +210,66 @@ func RegisterManagement(s *sdk.Server, role guard.Role, pol *guard.Policy, deps 
 			Annotations: mutAnnotations("Create route", true),
 		}, deps.netRouteCreate())
 	})
-	reg(mut("bgp_neigh_set"), func() {
+	// ---- admin-confirm: global/instance-scope changes and deletes ----
+	// Every tool here previews first (current, proposed, diff, rollback) and
+	// applies only with the single-use confirm_token the preview issued.
+
+	reg(dest("secrate_set"), func() {
 		sdk.AddTool(s, &sdk.Tool{
-			Name:        "bgp_neigh_set",
-			Description: "Create or update a BGP neighbor (POST /config/bgp/neigh): ip_address, remote_as, optional remote_port/multi_hop.",
-			Annotations: mutAnnotations("Set BGP neighbor", true),
+			Name: "secrate_set",
+			Description: "Set security rate-limit config: SYN-flood, conn-rate and UDP-flood thresholds, whitelist IPs " +
+				"(POST /config/securityrate). Global: applies to every service. Supplied fields are merged into the current " +
+				"configuration and the full result is sent. Two-step: the first call previews current, proposed, diff and " +
+				"rollback with a confirm_token; repeat with identical arguments plus the token to apply.",
+			Annotations: destAnnotations("Set security rate config"),
+		}, deps.secrateSet())
+	})
+	reg(dest("secrate_reset"), func() {
+		sdk.AddTool(s, &sdk.Tool{
+			Name: "secrate_reset",
+			Description: "Reset security rate-limit counters and blocked-source state (PUT /config/securityrate/reset). " +
+				"Global and not reversible: the counters cannot be restored. Two-step: preview with confirm_token, then " +
+				"repeat with the token to apply.",
+			Annotations: destAnnotations("Reset security rate state"),
+		}, deps.secrateReset())
+	})
+	reg(dest("bgp_neigh_set"), func() {
+		sdk.AddTool(s, &sdk.Tool{
+			Name: "bgp_neigh_set",
+			Description: "Create or update a BGP neighbor (POST /config/bgp/neigh): ip_address, remote_as, optional " +
+				"remote_port/multi_hop. Global: a peering change affects every advertised service. Two-step: preview " +
+				"(current neighbor entry, proposed, diff, rollback) with confirm_token, then repeat with the token to apply.",
+			Annotations: destAnnotations("Set BGP neighbor"),
 		}, deps.bgpNeighSet())
 	})
-	reg(mut("bgp_global_set"), func() {
+	reg(dest("bgp_global_set"), func() {
 		sdk.AddTool(s, &sdk.Tool{
-			Name:        "bgp_global_set",
-			Description: "Set BGP global config (POST /config/bgp/global): router_id, local_as, optional listen_port/next-hop-self.",
-			Annotations: mutAnnotations("Set BGP global config", true),
+			Name: "bgp_global_set",
+			Description: "Set BGP global config (POST /config/bgp/global): router_id, local_as, optional listen_port/next-hop-self. " +
+				"Global; the REST contract has no read of this object, so the preview shows the proposed values without " +
+				"a current state or a rollback call. Two-step: preview with confirm_token, then repeat with the token to apply.",
+			Annotations: destAnnotations("Set BGP global config"),
 		}, deps.bgpGlobalSet())
 	})
-	reg(mut("bgp_policy_apply"), func() {
+	reg(dest("bgp_policy_apply"), func() {
 		sdk.AddTool(s, &sdk.Tool{
-			Name:        "bgp_policy_apply",
-			Description: "Apply BGP policies to a neighbor (POST /config/bgp/policy/apply): ip_address, policy_type import|export, policy names, route_action accept|reject.",
-			Annotations: mutAnnotations("Apply BGP policy", true),
+			Name: "bgp_policy_apply",
+			Description: "Apply BGP policies to a neighbor (POST /config/bgp/policy/apply): ip_address, policy_type import|export, " +
+				"policy names, route_action accept|reject. Global; the REST contract has no read of applied policies, so the " +
+				"preview shows the proposed values without a current state or a rollback call. Two-step: preview with " +
+				"confirm_token, then repeat with the token to apply.",
+			Annotations: destAnnotations("Apply BGP policy"),
 		}, deps.bgpPolicyApply())
 	})
-	reg(mut("config_params_set"), func() {
+	reg(dest("config_params_set"), func() {
 		sdk.AddTool(s, &sdk.Tool{
-			Name:        "config_params_set",
-			Description: "Set operational parameters (POST /config/params): log_level one of trace|debug|info|warning|error|critical|emergency|alert|notice.",
-			Annotations: mutAnnotations("Set operational params", true),
+			Name: "config_params_set",
+			Description: "Set operational parameters (POST /config/params): log_level one of trace|debug|info|warning|error|critical|" +
+				"emergency|alert|notice. Instance-wide. Two-step: preview (current level, proposed, rollback) with confirm_token, " +
+				"then repeat with the token to apply.",
+			Annotations: destAnnotations("Set operational params"),
 		}, deps.configParamsSet())
 	})
-
-	// ---- destructive (admin, confirm-token) ----
 
 	reg(dest("lb_delete"), func() {
 		sdk.AddTool(s, &sdk.Tool{
@@ -292,13 +312,19 @@ func RegisterManagement(s *sdk.Server, role guard.Role, pol *guard.Policy, deps 
 // the preview step return action "preview" plus a confirm_token; executed
 // calls return action "executed".
 type mutOut struct {
-	Target            string `json:"target"`
-	Action            string `json:"action"` // preview | executed
-	Result            any    `json:"result,omitempty" jsonschema:"tool-specific result of an executed mutation (arbitrary JSON)"`
-	ConfirmToken      string `json:"confirm_token,omitempty"`
-	ConfirmExpiresSec int    `json:"confirm_expires_sec,omitempty"`
-	Preview           any    `json:"preview,omitempty" jsonschema:"object(s) a destructive call would change; present on action=preview (arbitrary JSON)"`
-	Warning           string `json:"warning,omitempty"`
+	Target            string        `json:"target"`
+	Action            string        `json:"action"` // preview | executed
+	Result            any           `json:"result,omitempty" jsonschema:"tool-specific result of an executed mutation (arbitrary JSON)"`
+	ConfirmToken      string        `json:"confirm_token,omitempty"`
+	ConfirmExpiresSec int           `json:"confirm_expires_sec,omitempty"`
+	Preview           any           `json:"preview,omitempty" jsonschema:"object(s) a destructive call would change; present on action=preview (arbitrary JSON)"`
+	Current           any           `json:"current,omitempty" jsonschema:"state before the change, as read from the API; present on action=preview (arbitrary JSON)"`
+	Proposed          any           `json:"proposed,omitempty" jsonschema:"state the change would produce; present on action=preview (arbitrary JSON)"`
+	Diff              any           `json:"diff,omitempty" jsonschema:"keys whose value changes, each as {from, to}; present on action=preview (arbitrary JSON)"`
+	Rollback          *rollbackSpec `json:"rollback,omitempty" jsonschema:"call that restores current; present on action=preview"`
+	Impact            string        `json:"impact,omitempty" jsonschema:"blast radius class of the operation (object|tenant|service|global|instance); present on action=preview"`
+	ReadBack          any           `json:"read_back,omitempty" jsonschema:"the object re-read from the API after the change applied (arbitrary JSON)"`
+	Warning           string        `json:"warning,omitempty"`
 }
 
 // gateDestructive implements the shared preview→confirm step (threat T4).
@@ -311,15 +337,7 @@ func (d *Deps) gateDestructive(tool, target, confirmToken string, args any, prev
 	}
 	// Autopilot tools (§3.7) skip the preview→confirm round trip; the bypass
 	// is audited separately from the tool_call line the execution writes.
-	if confirmToken == "" && d.Autopilot != nil && d.Autopilot(tool) {
-		var argMap map[string]any
-		if raw, err := json.Marshal(args); err == nil {
-			_ = json.Unmarshal(raw, &argMap)
-		}
-		d.Audit.Log(guard.Event{
-			Kind: guard.EventAutopilot, Tool: tool, Target: target,
-			Args: guard.Redact(argMap), OK: true,
-		})
+	if confirmToken == "" && d.autopilot(tool, target, args) {
 		return mutOut{}, false, nil
 	}
 	binding, err := guard.BindArgs(tool, target, args)
@@ -493,7 +511,14 @@ type lbCreateIn struct {
 	ConfirmToken   string         `json:"confirm_token,omitempty" jsonschema:"unused for lb_create; present for schema symmetry"`
 }
 
-func (d *Deps) lbCreate() sdk.ToolHandlerFor[lbCreateIn, mutOut] {
+// lbCreate is the create/replace split of POST /config/loadbalancer. The
+// gateway treats a POST on an existing rule key as a full replace, so the
+// bridge pre-reads the key before it sends anything: no rule there is a
+// create and executes directly (operator); a rule there is a replace, an
+// admin-confirm change that previews current, proposed, diff and rollback
+// and applies only with the token. role is the session's role: an operator
+// session is refused on the replace path before any request is built.
+func (d *Deps) lbCreate(role guard.Role) sdk.ToolHandlerFor[lbCreateIn, mutOut] {
 	return func(ctx context.Context, _ *sdk.CallToolRequest, in lbCreateIn) (*sdk.CallToolResult, mutOut, error) {
 		c, err := d.Resolve(in.Target)
 		if err != nil {
@@ -621,14 +646,172 @@ func (d *Deps) lbCreate() sdk.ToolHandlerFor[lbCreateIn, mutOut] {
 			eps = append(eps, item)
 		}
 		body := map[string]any{"serviceArguments": svc, "endpoints": eps}
+
+		// Pre-read the composite key: this decides create vs replace.
+		existing, err := d.lbExisting(ctx, c, in)
+		if err != nil {
+			return nil, mutOut{}, fmt.Errorf("pre-read of the rule key failed, nothing was sent: %w", err)
+		}
+		readBack := func() any {
+			rule, found, err := c.LBRuleByKey(ctx, in.ExternalIP, in.Port, strings.ToLower(in.Protocol))
+			if err != nil || !found {
+				return nil
+			}
+			return rule
+		}
+		if existing == nil {
+			if in.ConfirmToken != "" {
+				return nil, mutOut{}, fmt.Errorf("confirm_token given but no rule exists at %s:%d/%s: the preview it came from is stale; call again without the token to create",
+					in.ExternalIP, in.Port, strings.ToLower(in.Protocol))
+			}
+			var res any
+			if err := c.Post(ctx, "/config/loadbalancer", body, &res); err != nil {
+				d.auditMut("lb_create", c.Name(), in, false, err.Error())
+				return nil, mutOut{}, err
+			}
+			d.auditMut("lb_create", c.Name(), in, true, "")
+			return nil, executed(c.Name(), res, readBack()), nil
+		}
+		// Replace path: admin-confirm.
+		if role != guard.RoleAdmin {
+			return nil, mutOut{}, fmt.Errorf("a rule already exists at %s:%d/%s (host %q): replacing it is an admin-confirm change; "+
+				"an admin session previews it with lb_create and applies it with the confirm_token, or deletes it first with lb_delete",
+				in.ExternalIP, in.Port, strings.ToLower(in.Protocol), stringValue(mapValue(existing["serviceArguments"])["host"]))
+		}
+		args := in
+		args.ConfirmToken = ""
+		out, stop, err := d.gateChange("lb_create", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+			return changePlan{
+				Current:  pick(existing, "serviceArguments", "endpoints", "secondaryIPs", "allowedSources"),
+				Proposed: body,
+				Rollback: lbRollback(existing),
+				Impact:   "service",
+			}, nil
+		})
+		if err != nil || stop {
+			return nil, out, err
+		}
 		var res any
 		if err := c.Post(ctx, "/config/loadbalancer", body, &res); err != nil {
-			d.auditMut("lb_create", c.Name(), in, false, err.Error())
+			d.auditMut("lb_create", c.Name(), args, false, err.Error())
 			return nil, mutOut{}, err
 		}
-		d.auditMut("lb_create", c.Name(), in, true, "")
-		return nil, mutOut{Target: c.Name(), Action: "executed", Result: sanitizeAny(res, 0)}, nil
+		d.auditMut("lb_create", c.Name(), args, true, "")
+		return nil, executed(c.Name(), res, readBack()), nil
 	}
+}
+
+// lbExisting returns the rule a POST with these arguments would replace, or
+// nil when it would create one. The by-key GET answers the first rule on the
+// VIP:port/protocol triple; the gateway keys rules on host, path prefix,
+// path match mode and model as well, so a sibling on a shared VIP is
+// checked against the full list before the call counts as a create.
+func (d *Deps) lbExisting(ctx context.Context, c *client.Client, in lbCreateIn) (map[string]any, error) {
+	rule, found, err := c.LBRuleByKey(ctx, in.ExternalIP, in.Port, strings.ToLower(in.Protocol))
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, nil
+	}
+	if sameLBKey(rule, in) {
+		return rule, nil
+	}
+	rules, err := c.LBRules(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range rules {
+		svc := mapValue(r["serviceArguments"])
+		if stringValue(svc["externalIP"]) != in.ExternalIP || intValue(svc["port"]) != in.Port ||
+			!strings.EqualFold(stringValue(svc["protocol"]), in.Protocol) {
+			continue
+		}
+		if sameLBKey(r, in) {
+			return r, nil
+		}
+	}
+	return nil, nil
+}
+
+// sameLBKey reports whether the rule's host/path/model key fields equal the
+// ones the call carries (path_match_mode arrives through service_extra).
+func sameLBKey(rule map[string]any, in lbCreateIn) bool {
+	svc := mapValue(rule["serviceArguments"])
+	mode, _ := in.ServiceExtra["path_match_mode"].(string)
+	if mode == "disabled" {
+		mode = ""
+	}
+	have := stringValue(svc["path_match_mode"])
+	if have == "disabled" {
+		have = ""
+	}
+	return stringValue(svc["host"]) == in.Host &&
+		stringValue(svc["path_prefix"]) == in.PathPrefix &&
+		stringValue(svc["model_name"]) == in.ModelName &&
+		have == mode
+}
+
+// lbRollback rebuilds lb_create arguments from the rule a replace would
+// overwrite. Re-creating it is itself a replace of the new rule, so the
+// rollback goes through the same preview and token.
+func lbRollback(existing map[string]any) *rollbackSpec {
+	svc := mapValue(existing["serviceArguments"])
+	args := map[string]any{
+		"external_ip": svc["externalIP"],
+		"port":        svc["port"],
+		"protocol":    svc["protocol"],
+	}
+	copyIf := func(dst, src string) {
+		if v, ok := svc[src]; ok && v != nil && v != "" && v != false && v != float64(0) {
+			args[dst] = v
+		}
+	}
+	copyIf("name", "name")
+	copyIf("sel", "sel")
+	copyIf("mode", "mode")
+	copyIf("bgp", "bgp")
+	copyIf("monitor", "monitor")
+	copyIf("timeout", "inactiveTimeOut")
+	copyIf("host", "host")
+	copyIf("path_prefix", "path_prefix")
+	copyIf("model_name", "model_name")
+	copyIf("sse_mode", "sse_mode")
+	copyIf("pd_disagg_mode", "pd_disagg_mode")
+	copyIf("pd_cache_aware_mode", "pd_cache_aware_mode")
+	copyIf("api_key_auth", "api_key_auth")
+	copyIf("jwt_auth_profile", "jwt_auth_profile")
+	copyIf("kv_exact_mode", "kvExactMode")
+	copyIf("kv_engine_type", "kvEngineType")
+	copyIf("kv_zmq_port", "kvZmqPort")
+	copyIf("kv_block_size", "kvBlockSize")
+	var eps []map[string]any
+	for _, e := range listValue(existing["endpoints"]) {
+		em := mapValue(e)
+		ep := map[string]any{"ip": em["endpointIP"], "port": em["targetPort"]}
+		if w := intValue(em["weight"]); w > 0 {
+			ep["weight"] = w
+		}
+		if r := intValue(em["ep_role"]); r != 0 {
+			ep["ep_role"] = r
+		}
+		if n := intValue(em["nixl_port"]); n != 0 {
+			ep["nixl_port"] = n
+		}
+		eps = append(eps, ep)
+	}
+	args["endpoints"] = eps
+	return &rollbackSpec{
+		Tool: "lb_create",
+		Args: args,
+		Note: "re-creates the rule as it is now from its typed fields; serviceArguments the bridge does not type are not carried and must be restored through service_extra",
+	}
+}
+
+// listValue returns v as a list, or nil.
+func listValue(v any) []any {
+	l, _ := jsonNormalize(v).([]any)
+	return l
 }
 
 // ---- lb_delete ----
@@ -1023,14 +1206,38 @@ func (d *Deps) ipfilterSet() sdk.ToolHandlerFor[ipfilterSetIn, mutOut] {
 type secrateSetIn struct {
 	Target          string   `json:"target,omitempty" jsonschema:"target loxilb instance name; omit for default"`
 	SynEnabled      *bool    `json:"syn_enabled,omitempty" jsonschema:"enable SYN-flood protection"`
-	SynThreshold    int      `json:"syn_threshold,omitempty" jsonschema:"SYN/s threshold"`
-	CookieThreshold int      `json:"cookie_threshold,omitempty" jsonschema:"SYN-cookie activation threshold"`
+	SynThreshold    *int     `json:"syn_threshold,omitempty" jsonschema:"SYN/s threshold"`
+	CookieThreshold *int     `json:"cookie_threshold,omitempty" jsonschema:"SYN-cookie activation threshold"`
 	ConnRateEnabled *bool    `json:"conn_rate_enabled,omitempty" jsonschema:"enable new-connection rate limiting"`
-	RatePerSec      int      `json:"rate_per_sec,omitempty" jsonschema:"new connections per second"`
+	RatePerSec      *int     `json:"rate_per_sec,omitempty" jsonschema:"new connections per second"`
 	UDPEnabled      *bool    `json:"udp_enabled,omitempty" jsonschema:"enable UDP flood protection"`
-	UDPPktThreshold int      `json:"udp_pkt_threshold,omitempty" jsonschema:"UDP packets/s threshold"`
-	UDPBandwidthMB  int      `json:"udp_bandwidth_mb,omitempty" jsonschema:"UDP bandwidth cap MB/s"`
+	UDPPktThreshold *int     `json:"udp_pkt_threshold,omitempty" jsonschema:"UDP packets/s threshold"`
+	UDPBandwidthMB  *int     `json:"udp_bandwidth_mb,omitempty" jsonschema:"UDP bandwidth cap MB/s"`
 	WhitelistIPs    []string `json:"whitelist_ips,omitempty" jsonschema:"CIDRs bypassing the limits"`
+	ConfirmToken    string   `json:"confirm_token,omitempty" jsonschema:"single-use token from the preview step; omit to preview"`
+}
+
+// secrateFields maps the tool's argument names to the REST keys of
+// SecurityRateConfigMod, in both directions.
+var secrateFields = [][2]string{
+	{"syn_enabled", "synEnabled"}, {"syn_threshold", "synThreshold"}, {"cookie_threshold", "cookieThreshold"},
+	{"conn_rate_enabled", "connRateEnabled"}, {"rate_per_sec", "ratePerSec"}, {"udp_enabled", "udpEnabled"},
+	{"udp_pkt_threshold", "udpPktThreshold"}, {"udp_bandwidth_mb", "udpBandwidthMB"}, {"whitelist_ips", "whitelistIps"},
+}
+
+// secrateConfigKeys are the REST keys of the configuration (not the
+// counters) that GET /config/securityrate/all returns and POST accepts.
+var secrateConfigKeys = []string{
+	"synEnabled", "synThreshold", "cookieThreshold", "connRateEnabled", "ratePerSec",
+	"udpEnabled", "udpPktThreshold", "udpBandwidthMB", "whitelistIps",
+	"aggregateSynThreshold", "aggregateConnRatePerSec", "aggregateUdpPktThreshold", "aggregateUdpBandwidthMB",
+}
+
+// secrateCounterKeys are the counters PUT /config/securityrate/reset zeroes.
+var secrateCounterKeys = []string{
+	"synBlocked", "synPassed", "synCookies", "connBlocked", "connPassed", "udpBlocked", "udpPassed",
+	"udpBytesBlocked", "udpBytesPassed", "uniqueIps", "aggregateSynBlocked", "aggregateConnBlocked",
+	"aggregateUdpBlocked", "unsupportedPacketBlocked", "trackingFailures",
 }
 
 func (d *Deps) secrateSet() sdk.ToolHandlerFor[secrateSetIn, mutOut] {
@@ -1039,30 +1246,30 @@ func (d *Deps) secrateSet() sdk.ToolHandlerFor[secrateSetIn, mutOut] {
 		if err != nil {
 			return nil, mutOut{}, err
 		}
-		body := map[string]any{}
+		patch := map[string]any{}
 		if in.SynEnabled != nil {
-			body["synEnabled"] = *in.SynEnabled
+			patch["synEnabled"] = *in.SynEnabled
 		}
-		if in.SynThreshold > 0 {
-			body["synThreshold"] = in.SynThreshold
+		if in.SynThreshold != nil {
+			patch["synThreshold"] = *in.SynThreshold
 		}
-		if in.CookieThreshold > 0 {
-			body["cookieThreshold"] = in.CookieThreshold
+		if in.CookieThreshold != nil {
+			patch["cookieThreshold"] = *in.CookieThreshold
 		}
 		if in.ConnRateEnabled != nil {
-			body["connRateEnabled"] = *in.ConnRateEnabled
+			patch["connRateEnabled"] = *in.ConnRateEnabled
 		}
-		if in.RatePerSec > 0 {
-			body["ratePerSec"] = in.RatePerSec
+		if in.RatePerSec != nil {
+			patch["ratePerSec"] = *in.RatePerSec
 		}
 		if in.UDPEnabled != nil {
-			body["udpEnabled"] = *in.UDPEnabled
+			patch["udpEnabled"] = *in.UDPEnabled
 		}
-		if in.UDPPktThreshold > 0 {
-			body["udpPktThreshold"] = in.UDPPktThreshold
+		if in.UDPPktThreshold != nil {
+			patch["udpPktThreshold"] = *in.UDPPktThreshold
 		}
-		if in.UDPBandwidthMB > 0 {
-			body["udpBandwidthMB"] = in.UDPBandwidthMB
+		if in.UDPBandwidthMB != nil {
+			patch["udpBandwidthMB"] = *in.UDPBandwidthMB
 		}
 		if in.WhitelistIPs != nil {
 			for i, cidr := range in.WhitelistIPs {
@@ -1070,34 +1277,92 @@ func (d *Deps) secrateSet() sdk.ToolHandlerFor[secrateSetIn, mutOut] {
 					return nil, mutOut{}, err
 				}
 			}
-			body["whitelistIps"] = in.WhitelistIPs
+			patch["whitelistIps"] = in.WhitelistIPs
 		}
-		if len(body) == 0 {
+		if len(patch) == 0 {
 			return nil, mutOut{}, fmt.Errorf("no fields to set")
 		}
+		// The REST body requires every threshold, so the current configuration
+		// is read first and the supplied fields are merged into it.
+		cur, err := c.SecurityRate(ctx)
+		if err != nil {
+			return nil, mutOut{}, fmt.Errorf("read of the current security rate config failed, nothing was sent: %w", err)
+		}
+		current := pick(mapValue(cur), secrateConfigKeys...)
+		proposed := overlay(current, patch)
+		args := in
+		args.ConfirmToken = ""
+		out, stop, err := d.gateChange("secrate_set", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+			rb := map[string]any{}
+			for _, f := range secrateFields {
+				if _, changed := patch[f[1]]; changed {
+					if v, ok := current[f[1]]; ok {
+						rb[f[0]] = v
+					}
+				}
+			}
+			return changePlan{
+				Current:  current,
+				Proposed: proposed,
+				Rollback: &rollbackSpec{Tool: "secrate_set", Args: rb},
+				Impact:   "global",
+			}, nil
+		})
+		if err != nil || stop {
+			return nil, out, err
+		}
 		var res any
-		if err := c.Post(ctx, "/config/securityrate", body, &res); err != nil {
-			d.auditMut("secrate_set", c.Name(), in, false, err.Error())
+		if err := c.Post(ctx, "/config/securityrate", proposed, &res); err != nil {
+			d.auditMut("secrate_set", c.Name(), args, false, err.Error())
 			return nil, mutOut{}, err
 		}
-		d.auditMut("secrate_set", c.Name(), in, true, "")
-		return nil, mutOut{Target: c.Name(), Action: "executed", Result: sanitizeAny(res, 0)}, nil
+		d.auditMut("secrate_set", c.Name(), args, true, "")
+		after, _ := c.SecurityRate(ctx)
+		return nil, executed(c.Name(), res, pick(mapValue(after), secrateConfigKeys...)), nil
 	}
 }
 
-func (d *Deps) secrateReset() sdk.ToolHandlerFor[targetIn, mutOut] {
-	return func(ctx context.Context, _ *sdk.CallToolRequest, in targetIn) (*sdk.CallToolResult, mutOut, error) {
+type secrateResetIn struct {
+	Target       string `json:"target,omitempty" jsonschema:"target loxilb instance name; omit for default"`
+	ConfirmToken string `json:"confirm_token,omitempty" jsonschema:"single-use token from the preview step; omit to preview"`
+}
+
+func (d *Deps) secrateReset() sdk.ToolHandlerFor[secrateResetIn, mutOut] {
+	return func(ctx context.Context, _ *sdk.CallToolRequest, in secrateResetIn) (*sdk.CallToolResult, mutOut, error) {
 		c, err := d.Resolve(in.Target)
 		if err != nil {
 			return nil, mutOut{}, err
 		}
+		args := in
+		args.ConfirmToken = ""
+		out, stop, err := d.gateChange("secrate_reset", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+			cur, err := c.SecurityRate(ctx)
+			if err != nil {
+				return changePlan{}, fmt.Errorf("read of the current security rate counters failed, nothing was sent: %w", err)
+			}
+			current := pick(mapValue(cur), secrateCounterKeys...)
+			zero := map[string]any{}
+			for k := range current {
+				zero[k] = 0
+			}
+			return changePlan{
+				Current:  current,
+				Proposed: zero,
+				Rollback: &rollbackSpec{Note: "not reversible: the counters and the blocked-source state cannot be restored once reset"},
+				Impact:   "global",
+			}, nil
+		})
+		if err != nil || stop {
+			return nil, out, err
+		}
 		var res any
 		if err := c.Put(ctx, "/config/securityrate/reset", nil, &res); err != nil {
-			d.auditMut("secrate_reset", c.Name(), in, false, err.Error())
+			d.auditMut("secrate_reset", c.Name(), args, false, err.Error())
 			return nil, mutOut{}, err
 		}
-		d.auditMut("secrate_reset", c.Name(), in, true, "")
-		return nil, mutOut{Target: c.Name(), Action: "executed", Result: sanitizeAny(res, 0)}, nil
+		d.auditMut("secrate_reset", c.Name(), args, true, "")
+		after, _ := c.SecurityRate(ctx)
+		return nil, executed(c.Name(), res, pick(mapValue(after), secrateCounterKeys...)), nil
 	}
 }
 
@@ -1171,11 +1436,12 @@ func (d *Deps) netRouteDelete() sdk.ToolHandlerFor[routeDeleteIn, mutOut] {
 // ---- bgp tools ----
 
 type bgpNeighSetIn struct {
-	Target     string `json:"target,omitempty" jsonschema:"target loxilb instance name; omit for default"`
-	IPAddress  string `json:"ip_address" jsonschema:"neighbor IP"`
-	RemoteAs   int    `json:"remote_as" jsonschema:"neighbor AS number"`
-	RemotePort int    `json:"remote_port,omitempty" jsonschema:"neighbor BGP port (default 179)"`
-	MultiHop   bool   `json:"multi_hop,omitempty" jsonschema:"enable eBGP multihop"`
+	Target       string `json:"target,omitempty" jsonschema:"target loxilb instance name; omit for default"`
+	IPAddress    string `json:"ip_address" jsonschema:"neighbor IP"`
+	RemoteAs     int    `json:"remote_as" jsonschema:"neighbor AS number"`
+	RemotePort   int    `json:"remote_port,omitempty" jsonschema:"neighbor BGP port (default 179)"`
+	MultiHop     bool   `json:"multi_hop,omitempty" jsonschema:"enable eBGP multihop"`
+	ConfirmToken string `json:"confirm_token,omitempty" jsonschema:"single-use token from the preview step; omit to preview"`
 }
 
 func (d *Deps) bgpNeighSet() sdk.ToolHandlerFor[bgpNeighSetIn, mutOut] {
@@ -1197,13 +1463,53 @@ func (d *Deps) bgpNeighSet() sdk.ToolHandlerFor[bgpNeighSetIn, mutOut] {
 		if in.MultiHop {
 			body["setMultiHop"] = true
 		}
+		neighbor := func() map[string]any {
+			all, err := c.BGPNeighbors(ctx)
+			if err != nil {
+				return nil
+			}
+			for _, n := range all {
+				if stringValue(n["ipAddress"]) == in.IPAddress {
+					return n
+				}
+			}
+			return nil
+		}
+		args := in
+		args.ConfirmToken = ""
+		out, stop, err := d.gateChange("bgp_neigh_set", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+			cur := neighbor()
+			rb := &rollbackSpec{Note: "new neighbor: the bridge has no bgp_neigh_delete tool yet (manifest P4); remove it with the REST DELETE or loxicmd"}
+			if cur != nil {
+				rbArgs := map[string]any{"ip_address": in.IPAddress, "remote_as": cur["remoteAs"]}
+				if p := intValue(cur["remotePort"]); p > 0 {
+					rbArgs["remote_port"] = p
+				}
+				if boolValue(cur["multiHop"]) {
+					rbArgs["multi_hop"] = true
+				}
+				rb = &rollbackSpec{Tool: "bgp_neigh_set", Args: rbArgs}
+			}
+			var current any
+			if cur != nil {
+				current = pick(cur, "ipAddress", "remoteAs", "remotePort", "multiHop", "state")
+			}
+			return changePlan{Current: current, Proposed: body, Rollback: rb, Impact: "global"}, nil
+		})
+		if err != nil || stop {
+			return nil, out, err
+		}
 		var res any
 		if err := c.Post(ctx, "/config/bgp/neigh", body, &res); err != nil {
-			d.auditMut("bgp_neigh_set", c.Name(), in, false, err.Error())
+			d.auditMut("bgp_neigh_set", c.Name(), args, false, err.Error())
 			return nil, mutOut{}, err
 		}
-		d.auditMut("bgp_neigh_set", c.Name(), in, true, "")
-		return nil, mutOut{Target: c.Name(), Action: "executed", Result: sanitizeAny(res, 0)}, nil
+		d.auditMut("bgp_neigh_set", c.Name(), args, true, "")
+		var after any
+		if n := neighbor(); n != nil {
+			after = pick(n, "ipAddress", "remoteAs", "remotePort", "multiHop", "state")
+		}
+		return nil, executed(c.Name(), res, after), nil
 	}
 }
 
@@ -1213,7 +1519,12 @@ type bgpGlobalSetIn struct {
 	LocalAs        int    `json:"local_as,omitempty" jsonschema:"local AS number"`
 	ListenPort     int    `json:"listen_port,omitempty" jsonschema:"BGP listen port"`
 	SetNextHopSelf bool   `json:"set_next_hop_self,omitempty" jsonschema:"advertise self as next hop"`
+	ConfirmToken   string `json:"confirm_token,omitempty" jsonschema:"single-use token from the preview step; omit to preview"`
 }
+
+// noReadNote explains a preview without current state: the REST contract
+// offers no GET for the object, so the bridge cannot show it or undo it.
+const noReadNote = "the REST contract has no read of this object: the preview shows the proposed values only and no rollback call can be derived; note the previous values before confirming"
 
 func (d *Deps) bgpGlobalSet() sdk.ToolHandlerFor[bgpGlobalSetIn, mutOut] {
 	return func(ctx context.Context, _ *sdk.CallToolRequest, in bgpGlobalSetIn) (*sdk.CallToolResult, mutOut, error) {
@@ -1242,22 +1553,31 @@ func (d *Deps) bgpGlobalSet() sdk.ToolHandlerFor[bgpGlobalSetIn, mutOut] {
 		if len(body) == 0 {
 			return nil, mutOut{}, fmt.Errorf("no fields to set")
 		}
+		args := in
+		args.ConfirmToken = ""
+		out, stop, err := d.gateChange("bgp_global_set", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+			return changePlan{Current: nil, Proposed: body, Rollback: &rollbackSpec{Note: noReadNote}, Impact: "global"}, nil
+		})
+		if err != nil || stop {
+			return nil, out, err
+		}
 		var res any
 		if err := c.Post(ctx, "/config/bgp/global", body, &res); err != nil {
-			d.auditMut("bgp_global_set", c.Name(), in, false, err.Error())
+			d.auditMut("bgp_global_set", c.Name(), args, false, err.Error())
 			return nil, mutOut{}, err
 		}
-		d.auditMut("bgp_global_set", c.Name(), in, true, "")
-		return nil, mutOut{Target: c.Name(), Action: "executed", Result: sanitizeAny(res, 0)}, nil
+		d.auditMut("bgp_global_set", c.Name(), args, true, "")
+		return nil, executed(c.Name(), res, nil), nil
 	}
 }
 
 type bgpPolicyApplyIn struct {
-	Target      string   `json:"target,omitempty" jsonschema:"target loxilb instance name; omit for default"`
-	IPAddress   string   `json:"ip_address" jsonschema:"neighbor IP the policy applies to"`
-	PolicyType  string   `json:"policy_type" jsonschema:"import|export"`
-	Policies    []string `json:"policies" jsonschema:"policy definition names to apply"`
-	RouteAction string   `json:"route_action,omitempty" jsonschema:"accept|reject (default policy result)"`
+	Target       string   `json:"target,omitempty" jsonschema:"target loxilb instance name; omit for default"`
+	IPAddress    string   `json:"ip_address" jsonschema:"neighbor IP the policy applies to"`
+	PolicyType   string   `json:"policy_type" jsonschema:"import|export"`
+	Policies     []string `json:"policies" jsonschema:"policy definition names to apply"`
+	RouteAction  string   `json:"route_action,omitempty" jsonschema:"accept|reject (default policy result)"`
+	ConfirmToken string   `json:"confirm_token,omitempty" jsonschema:"single-use token from the preview step; omit to preview"`
 }
 
 func (d *Deps) bgpPolicyApply() sdk.ToolHandlerFor[bgpPolicyApplyIn, mutOut] {
@@ -1280,13 +1600,21 @@ func (d *Deps) bgpPolicyApply() sdk.ToolHandlerFor[bgpPolicyApplyIn, mutOut] {
 		if in.RouteAction != "" {
 			body["routeAction"] = strings.ToLower(in.RouteAction)
 		}
+		args := in
+		args.ConfirmToken = ""
+		out, stop, err := d.gateChange("bgp_policy_apply", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+			return changePlan{Current: nil, Proposed: body, Rollback: &rollbackSpec{Note: noReadNote}, Impact: "global"}, nil
+		})
+		if err != nil || stop {
+			return nil, out, err
+		}
 		var res any
 		if err := c.Post(ctx, "/config/bgp/policy/apply", body, &res); err != nil {
-			d.auditMut("bgp_policy_apply", c.Name(), in, false, err.Error())
+			d.auditMut("bgp_policy_apply", c.Name(), args, false, err.Error())
 			return nil, mutOut{}, err
 		}
-		d.auditMut("bgp_policy_apply", c.Name(), in, true, "")
-		return nil, mutOut{Target: c.Name(), Action: "executed", Result: sanitizeAny(res, 0)}, nil
+		d.auditMut("bgp_policy_apply", c.Name(), args, true, "")
+		return nil, executed(c.Name(), res, nil), nil
 	}
 }
 
@@ -1298,8 +1626,9 @@ var validLogLevels = map[string]bool{
 }
 
 type paramsSetIn struct {
-	Target   string `json:"target,omitempty" jsonschema:"target loxilb instance name; omit for default"`
-	LogLevel string `json:"log_level" jsonschema:"trace|debug|info|warning|error|critical|emergency|alert|notice"`
+	Target       string `json:"target,omitempty" jsonschema:"target loxilb instance name; omit for default"`
+	LogLevel     string `json:"log_level" jsonschema:"trace|debug|info|warning|error|critical|emergency|alert|notice"`
+	ConfirmToken string `json:"confirm_token,omitempty" jsonschema:"single-use token from the preview step; omit to preview"`
 }
 
 func (d *Deps) configParamsSet() sdk.ToolHandlerFor[paramsSetIn, mutOut] {
@@ -1312,13 +1641,33 @@ func (d *Deps) configParamsSet() sdk.ToolHandlerFor[paramsSetIn, mutOut] {
 		if !validLogLevels[lvl] {
 			return nil, mutOut{}, fmt.Errorf("log_level: %q", in.LogLevel)
 		}
+		body := map[string]any{"logLevel": lvl}
+		args := in
+		args.ConfirmToken = ""
+		out, stop, err := d.gateChange("config_params_set", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+			cur, err := c.OperParams(ctx)
+			if err != nil {
+				return changePlan{}, fmt.Errorf("read of the current parameters failed, nothing was sent: %w", err)
+			}
+			current := pick(cur, "logLevel")
+			return changePlan{
+				Current:  current,
+				Proposed: body,
+				Rollback: &rollbackSpec{Tool: "config_params_set", Args: map[string]any{"log_level": current["logLevel"]}},
+				Impact:   "instance",
+			}, nil
+		})
+		if err != nil || stop {
+			return nil, out, err
+		}
 		var res any
-		if err := c.Post(ctx, "/config/params", map[string]any{"logLevel": lvl}, &res); err != nil {
-			d.auditMut("config_params_set", c.Name(), in, false, err.Error())
+		if err := c.Post(ctx, "/config/params", body, &res); err != nil {
+			d.auditMut("config_params_set", c.Name(), args, false, err.Error())
 			return nil, mutOut{}, err
 		}
-		d.auditMut("config_params_set", c.Name(), in, true, "")
-		return nil, mutOut{Target: c.Name(), Action: "executed", Result: sanitizeAny(res, 0)}, nil
+		d.auditMut("config_params_set", c.Name(), args, true, "")
+		after, _ := c.OperParams(ctx)
+		return nil, executed(c.Name(), res, pick(after, "logLevel")), nil
 	}
 }
 

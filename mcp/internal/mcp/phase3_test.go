@@ -162,18 +162,32 @@ func TestPhase3RoleVisibility(t *testing.T) {
 
 	operator, _ := listNames(t, b, guard.RoleOperator)
 	for _, want := range []string{"ai_apikey_create", "ai_apikey_update", "ai_ratelimit_set",
-		"gpu_mode_set", "gpu_conversations_cleanup", "llamafw_enable_set", "llamafw_configure",
-		"llamafw_scanners_set", "llamafw_health_check", "pii_enable_set", "pii_configure",
-		"pii_url_patterns_set"} {
+		"llamafw_health_check"} {
 		if !operator[want] {
 			t.Errorf("operator: mutating tool %s missing", want)
+		}
+	}
+	// Global-scope AI changes are admin-confirm since PR-A2 (D13).
+	for _, absent := range []string{"gpu_mode_set", "gpu_conversations_cleanup", "llamafw_enable_set",
+		"llamafw_configure", "llamafw_scanners_set", "pii_enable_set", "pii_configure",
+		"pii_url_patterns_set", "ai_apikey_delete"} {
+		if operator[absent] {
+			t.Errorf("operator: admin-confirm tool %s visible", absent)
+		}
+	}
+	admin, _ := listNames(t, b, guard.RoleAdmin)
+	for _, want := range []string{"gpu_mode_set", "gpu_conversations_cleanup", "llamafw_enable_set",
+		"llamafw_configure", "llamafw_scanners_set", "pii_enable_set", "pii_configure",
+		"pii_url_patterns_set"} {
+		if !admin[want] {
+			t.Errorf("admin: admin-confirm tool %s missing", want)
 		}
 	}
 	if operator["ai_apikey_delete"] {
 		t.Error("operator: destructive ai_apikey_delete visible")
 	}
 
-	admin, _ := listNames(t, b, guard.RoleAdmin)
+	admin, _ = listNames(t, b, guard.RoleAdmin)
 	if !admin["ai_apikey_delete"] {
 		t.Error("admin: ai_apikey_delete missing")
 	}

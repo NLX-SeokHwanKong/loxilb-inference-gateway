@@ -189,74 +189,87 @@ func RegisterAI(s *sdk.Server, role guard.Role, pol *guard.Policy, deps *Deps) {
 			Annotations: mutAnnotations("Set tenant AI rate limit", true),
 		}, deps.aiRatelimitSet())
 	})
-	reg(mut("gpu_mode_set"), func() {
-		sdk.AddTool(s, &sdk.Tool{
-			Name:        "gpu_mode_set",
-			Description: "Enable or disable GPU-aware load balancing (POST /config/gpu/enable | /config/gpu/disable). Disabling reverts to standard CHWBL routing.",
-			Annotations: mutAnnotations("Set GPU-aware mode", true),
-		}, deps.gpuModeSet())
-	})
-	reg(mut("gpu_conversations_cleanup"), func() {
-		sdk.AddTool(s, &sdk.Tool{
-			Name:        "gpu_conversations_cleanup",
-			Description: "Remove stale GPU conversation mappings older than max_age_hours (POST /config/gpu/conversations/cleanup).",
-			Annotations: mutAnnotations("Clean up GPU conversations", true),
-		}, deps.gpuConversationsCleanup())
-	})
-	reg(mut("llamafw_enable_set"), func() {
-		sdk.AddTool(s, &sdk.Tool{
-			Name:        "llamafw_enable_set",
-			Description: "Enable or disable LlamaFirewall AI-security scanning (POST /config/llamafirewall/enable).",
-			Annotations: mutAnnotations("Toggle LlamaFirewall", true),
-		}, deps.enableFlagTool("llamafw_enable_set", "/config/llamafirewall/enable"))
-	})
-	reg(mut("llamafw_configure"), func() {
-		sdk.AddTool(s, &sdk.Tool{
-			Name: "llamafw_configure",
-			Description: "Configure LlamaFirewall scanning (POST /config/llamafirewall/configure): server URL, timeout, " +
-				"fail policy, block threshold, caching, scan/skip URL patterns. Only supplied fields are sent.",
-			Annotations: mutAnnotations("Configure LlamaFirewall", true),
-		}, deps.llamafwConfigure())
-	})
-	reg(mut("llamafw_scanners_set"), func() {
-		sdk.AddTool(s, &sdk.Tool{
-			Name: "llamafw_scanners_set",
-			Description: "Enable/disable individual LlamaFirewall scanners (POST /config/llamafirewall/scanners): " +
-				"prompt_guard, code_shield, regex, hidden_ascii, agent_alignment, pii_detection. Only supplied fields are sent.",
-			Annotations: mutAnnotations("Set LlamaFirewall scanners", true),
-		}, deps.llamafwScannersSet())
-	})
 	reg(mut("llamafw_health_check"), func() {
 		sdk.AddTool(s, &sdk.Tool{
 			Name:        "llamafw_health_check",
 			Description: "Trigger a connectivity/health check of the LlamaFirewall gRPC server (POST /config/llamafirewall/health).",
 			Annotations: mutAnnotations("LlamaFirewall health check", true),
-		}, deps.postSimple("llamafw_health_check", "/config/llamafirewall/health"))
+		}, deps.postSimple("llamafw_health_check", "/config/llamafirewall/health", llamafwStatus, "server_url", "connected", "last_health_check"))
 	})
-	reg(mut("pii_enable_set"), func() {
+
+	// ---- admin-confirm: global-scope changes and deletes ----
+	// Every tool here previews first (current, proposed, diff, rollback) and
+	// applies only with the single-use confirm_token the preview issued.
+
+	reg(dest("gpu_mode_set"), func() {
 		sdk.AddTool(s, &sdk.Tool{
-			Name:        "pii_enable_set",
-			Description: "Enable or disable PII detection for HTTP/HTTPS traffic (POST /config/pii/enable).",
-			Annotations: mutAnnotations("Toggle PII detection", true),
-		}, deps.enableFlagTool("pii_enable_set", "/config/pii/enable"))
+			Name: "gpu_mode_set",
+			Description: "Enable or disable GPU-aware load balancing (POST /config/gpu/enable | /config/gpu/disable). Disabling " +
+				"reverts to standard CHWBL routing. Global: changes the routing of every GPU-aware service. Two-step: preview " +
+				"(current, proposed, rollback) with confirm_token, then repeat with the token to apply.",
+			Annotations: destAnnotations("Set GPU-aware mode"),
+		}, deps.gpuModeSet())
 	})
-	reg(mut("pii_configure"), func() {
+	reg(dest("gpu_conversations_cleanup"), func() {
+		sdk.AddTool(s, &sdk.Tool{
+			Name: "gpu_conversations_cleanup",
+			Description: "Remove stale GPU conversation mappings older than max_age_hours (POST /config/gpu/conversations/cleanup). " +
+				"Global and not reversible. Two-step: preview with confirm_token, then repeat with the token to apply.",
+			Annotations: destAnnotations("Clean up GPU conversations"),
+		}, deps.gpuConversationsCleanup())
+	})
+	reg(dest("llamafw_enable_set"), func() {
+		sdk.AddTool(s, &sdk.Tool{
+			Name: "llamafw_enable_set",
+			Description: "Enable or disable LlamaFirewall AI-security scanning (POST /config/llamafirewall/enable). Global. " +
+				"Two-step: preview (current flag, proposed, rollback) with confirm_token, then repeat with the token to apply.",
+			Annotations: destAnnotations("Toggle LlamaFirewall"),
+		}, deps.enableFlagTool("llamafw_enable_set", "/config/llamafirewall/enable", llamafwStatus, "global"))
+	})
+	reg(dest("llamafw_configure"), func() {
+		sdk.AddTool(s, &sdk.Tool{
+			Name: "llamafw_configure",
+			Description: "Configure LlamaFirewall scanning (POST /config/llamafirewall/configure): server URL, timeout, " +
+				"fail policy, block threshold, caching, scan/skip URL patterns. Only supplied fields are sent. Global. " +
+				"Two-step: preview (current, proposed, diff, rollback) with confirm_token, then repeat with the token to apply.",
+			Annotations: destAnnotations("Configure LlamaFirewall"),
+		}, deps.llamafwConfigure())
+	})
+	reg(dest("llamafw_scanners_set"), func() {
+		sdk.AddTool(s, &sdk.Tool{
+			Name: "llamafw_scanners_set",
+			Description: "Enable/disable individual LlamaFirewall scanners (POST /config/llamafirewall/scanners): " +
+				"prompt_guard, code_shield, regex, hidden_ascii, agent_alignment, pii_detection. Only supplied fields are sent. " +
+				"Global. Two-step: preview (current, proposed, diff, rollback) with confirm_token, then repeat with the token to apply.",
+			Annotations: destAnnotations("Set LlamaFirewall scanners"),
+		}, deps.llamafwScannersSet())
+	})
+	reg(dest("pii_enable_set"), func() {
+		sdk.AddTool(s, &sdk.Tool{
+			Name: "pii_enable_set",
+			Description: "Enable or disable PII detection for HTTP/HTTPS traffic (POST /config/pii/enable). Global. " +
+				"Two-step: preview (current flag, proposed, rollback) with confirm_token, then repeat with the token to apply.",
+			Annotations: destAnnotations("Toggle PII detection"),
+		}, deps.enableFlagTool("pii_enable_set", "/config/pii/enable", piiStatus, "global"))
+	})
+	reg(dest("pii_configure"), func() {
 		sdk.AddTool(s, &sdk.Tool{
 			Name: "pii_configure",
 			Description: "Configure PII detection (POST /config/pii/configure): mode detect|mask|redact|anonymize, " +
-				"direction, fail mode, scan mode, Presidio analyzer/anonymizer URLs, score threshold, timeout. Only supplied fields are sent.",
-			Annotations: mutAnnotations("Configure PII detection", true),
+				"direction, fail mode, scan mode, Presidio analyzer/anonymizer URLs, score threshold, timeout. Only supplied " +
+				"fields are sent. Global. Two-step: preview (current, proposed, diff, rollback) with confirm_token, then repeat " +
+				"with the token to apply.",
+			Annotations: destAnnotations("Configure PII detection"),
 		}, deps.piiConfigure())
 	})
-	reg(mut("pii_url_patterns_set"), func() {
+	reg(dest("pii_url_patterns_set"), func() {
 		sdk.AddTool(s, &sdk.Tool{
-			Name:        "pii_url_patterns_set",
-			Description: "Add, replace, or clear the URL patterns selecting which requests are PII-scanned (POST /config/pii/url-patterns).",
-			Annotations: mutAnnotations("Set PII URL patterns", true),
+			Name: "pii_url_patterns_set",
+			Description: "Add, replace, or clear the URL patterns selecting which requests are PII-scanned (POST /config/pii/url-patterns). " +
+				"Global. Two-step: preview (current list, proposed list, rollback) with confirm_token, then repeat with the token to apply.",
+			Annotations: destAnnotations("Set PII URL patterns"),
 		}, deps.piiURLPatternsSet())
 	})
-
-	// ---- destructive (admin, confirm-token) ----
 
 	reg(dest("ai_apikey_delete"), func() {
 		sdk.AddTool(s, &sdk.Tool{
@@ -272,6 +285,15 @@ func RegisterAI(s *sdk.Server, role guard.Role, pol *guard.Policy, deps *Deps) {
 // stripKeyMaterial removes any raw-key-shaped field from decoded REST
 // responses before they reach model context (T5 defense in depth; list/get
 // responses must never carry key material, but do not rely on it).
+// status readers the change gate uses for the toggles and the trigger.
+func llamafwStatus(ctx context.Context, c *client.Client) (map[string]any, error) {
+	return c.LlamaFirewallStatus(ctx)
+}
+
+func piiStatus(ctx context.Context, c *client.Client) (map[string]any, error) {
+	return c.PIIStatus(ctx)
+}
+
 func stripKeyMaterial(v any) any {
 	switch t := v.(type) {
 	case map[string]any:
@@ -707,8 +729,9 @@ func (d *Deps) aiKvInventoryGet() sdk.ToolHandlerFor[kvInventoryIn, kvInventoryO
 // ---- gpu_mode_set / gpu_conversations_cleanup ----
 
 type gpuModeIn struct {
-	Target  string `json:"target,omitempty" jsonschema:"target loxilb instance name; omit for default"`
-	Enabled bool   `json:"enabled" jsonschema:"true to enable GPU-aware routing, false to disable"`
+	Target       string `json:"target,omitempty" jsonschema:"target loxilb instance name; omit for default"`
+	Enabled      bool   `json:"enabled" jsonschema:"true to enable GPU-aware routing, false to disable"`
+	ConfirmToken string `json:"confirm_token,omitempty" jsonschema:"single-use token from the preview step; omit to preview"`
 }
 
 func (d *Deps) gpuModeSet() sdk.ToolHandlerFor[gpuModeIn, mutOut] {
@@ -721,19 +744,39 @@ func (d *Deps) gpuModeSet() sdk.ToolHandlerFor[gpuModeIn, mutOut] {
 		if in.Enabled {
 			path = "/config/gpu/enable"
 		}
+		args := in
+		args.ConfirmToken = ""
+		out, stop, err := d.gateChange("gpu_mode_set", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+			st, err := c.GPUStatus(ctx)
+			if err != nil {
+				return changePlan{}, fmt.Errorf("read of the GPU status failed, nothing was sent: %w", err)
+			}
+			current := pick(st, "enabled", "routing_mode")
+			return changePlan{
+				Current:  current,
+				Proposed: map[string]any{"enabled": in.Enabled},
+				Rollback: &rollbackSpec{Tool: "gpu_mode_set", Args: map[string]any{"enabled": boolValue(current["enabled"])}},
+				Impact:   "global",
+			}, nil
+		})
+		if err != nil || stop {
+			return nil, out, err
+		}
 		var res any
 		if err := c.Post(ctx, path, nil, &res); err != nil {
-			d.auditMut("gpu_mode_set", c.Name(), in, false, err.Error())
+			d.auditMut("gpu_mode_set", c.Name(), args, false, err.Error())
 			return nil, mutOut{}, err
 		}
-		d.auditMut("gpu_mode_set", c.Name(), in, true, "")
-		return nil, mutOut{Target: c.Name(), Action: "executed", Result: sanitizeAny(res, 0)}, nil
+		d.auditMut("gpu_mode_set", c.Name(), args, true, "")
+		after, _ := c.GPUStatus(ctx)
+		return nil, executed(c.Name(), res, pick(after, "enabled", "routing_mode")), nil
 	}
 }
 
 type gpuCleanupIn struct {
-	Target      string `json:"target,omitempty" jsonschema:"target loxilb instance name; omit for default"`
-	MaxAgeHours int    `json:"max_age_hours,omitempty" jsonschema:"delete conversation mappings older than this (default 1)"`
+	Target       string `json:"target,omitempty" jsonschema:"target loxilb instance name; omit for default"`
+	MaxAgeHours  int    `json:"max_age_hours,omitempty" jsonschema:"delete conversation mappings older than this (default 1)"`
+	ConfirmToken string `json:"confirm_token,omitempty" jsonschema:"single-use token from the preview step; omit to preview"`
 }
 
 func (d *Deps) gpuConversationsCleanup() sdk.ToolHandlerFor[gpuCleanupIn, mutOut] {
@@ -743,57 +786,134 @@ func (d *Deps) gpuConversationsCleanup() sdk.ToolHandlerFor[gpuCleanupIn, mutOut
 			return nil, mutOut{}, err
 		}
 		path := "/config/gpu/conversations/cleanup"
+		maxAge := 1
 		if in.MaxAgeHours > 0 {
+			maxAge = in.MaxAgeHours
 			path += "?max_age_hours=" + strconv.Itoa(in.MaxAgeHours)
+		}
+		args := in
+		args.ConfirmToken = ""
+		out, stop, err := d.gateChange("gpu_conversations_cleanup", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+			st, err := c.GPUStatus(ctx)
+			if err != nil {
+				return changePlan{}, fmt.Errorf("read of the GPU status failed, nothing was sent: %w", err)
+			}
+			current := pick(st, "enabled", "routing_mode", "worker_count")
+			current["stale_conversation_mappings"] = "kept"
+			proposed := overlay(current, map[string]any{"stale_conversation_mappings": fmt.Sprintf("removed when older than %d h", maxAge)})
+			return changePlan{
+				Current:  current,
+				Proposed: proposed,
+				Rollback: &rollbackSpec{Note: "not reversible: removed conversation-to-worker mappings are rebuilt only by new traffic"},
+				Impact:   "global",
+			}, nil
+		})
+		if err != nil || stop {
+			return nil, out, err
 		}
 		var res any
 		if err := c.Post(ctx, path, nil, &res); err != nil {
-			d.auditMut("gpu_conversations_cleanup", c.Name(), in, false, err.Error())
+			d.auditMut("gpu_conversations_cleanup", c.Name(), args, false, err.Error())
 			return nil, mutOut{}, err
 		}
-		d.auditMut("gpu_conversations_cleanup", c.Name(), in, true, "")
-		return nil, mutOut{Target: c.Name(), Action: "executed", Result: sanitizeAny(res, 0)}, nil
+		d.auditMut("gpu_conversations_cleanup", c.Name(), args, true, "")
+		after, _ := c.GPUStatus(ctx)
+		return nil, executed(c.Name(), res, pick(after, "enabled", "routing_mode", "worker_count")), nil
 	}
 }
 
 // ---- shared simple mutators ----
 
+// statusReader fetches the object a toggle or trigger acts on.
+type statusReader func(ctx context.Context, c *client.Client) (map[string]any, error)
+
 type enableFlagIn struct {
-	Target  string `json:"target,omitempty" jsonschema:"target loxilb instance name; omit for default"`
-	Enabled bool   `json:"enabled" jsonschema:"true to enable, false to disable"`
+	Target       string `json:"target,omitempty" jsonschema:"target loxilb instance name; omit for default"`
+	Enabled      bool   `json:"enabled" jsonschema:"true to enable, false to disable"`
+	ConfirmToken string `json:"confirm_token,omitempty" jsonschema:"single-use token from the preview step; omit to preview"`
 }
 
-// enableFlagTool POSTs {"enabled": bool} to a fixed path.
-func (d *Deps) enableFlagTool(tool, path string) sdk.ToolHandlerFor[enableFlagIn, mutOut] {
+// enableFlagTool POSTs {"enabled": bool} to a fixed path behind the change
+// gate: the preview shows the flag as read now against the proposed value.
+func (d *Deps) enableFlagTool(tool, path string, read statusReader, impact string) sdk.ToolHandlerFor[enableFlagIn, mutOut] {
 	return func(ctx context.Context, _ *sdk.CallToolRequest, in enableFlagIn) (*sdk.CallToolResult, mutOut, error) {
 		c, err := d.Resolve(in.Target)
 		if err != nil {
 			return nil, mutOut{}, err
 		}
+		args := in
+		args.ConfirmToken = ""
+		out, stop, err := d.gateChange(tool, c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+			st, err := read(ctx, c)
+			if err != nil {
+				return changePlan{}, fmt.Errorf("read of the current state failed, nothing was sent: %w", err)
+			}
+			current := pick(st, "enabled")
+			return changePlan{
+				Current:  current,
+				Proposed: map[string]any{"enabled": in.Enabled},
+				Rollback: &rollbackSpec{Tool: tool, Args: map[string]any{"enabled": boolValue(current["enabled"])}},
+				Impact:   impact,
+			}, nil
+		})
+		if err != nil || stop {
+			return nil, out, err
+		}
 		var res any
 		if err := c.Post(ctx, path, map[string]any{"enabled": in.Enabled}, &res); err != nil {
-			d.auditMut(tool, c.Name(), in, false, err.Error())
+			d.auditMut(tool, c.Name(), args, false, err.Error())
 			return nil, mutOut{}, err
 		}
-		d.auditMut(tool, c.Name(), in, true, "")
-		return nil, mutOut{Target: c.Name(), Action: "executed", Result: sanitizeAny(res, 0)}, nil
+		d.auditMut(tool, c.Name(), args, true, "")
+		after, _ := read(ctx, c)
+		return nil, executed(c.Name(), res, pick(after, "enabled")), nil
 	}
 }
 
-// postSimple POSTs an empty body to a fixed path (trigger-style endpoints).
-func (d *Deps) postSimple(tool, path string) sdk.ToolHandlerFor[targetIn, mutOut] {
-	return func(ctx context.Context, _ *sdk.CallToolRequest, in targetIn) (*sdk.CallToolResult, mutOut, error) {
+type postSimpleIn struct {
+	Target       string `json:"target,omitempty" jsonschema:"target loxilb instance name; omit for default"`
+	Apply        bool   `json:"apply,omitempty" jsonschema:"operator convenience: run the trigger without the preview step (the tool changes no configuration)"`
+	ConfirmToken string `json:"confirm_token,omitempty" jsonschema:"single-use token from the preview step; omit to preview"`
+}
+
+// postSimple POSTs an empty body to a fixed path (trigger-style endpoints)
+// behind the change gate. The preview shows the object the trigger acts on;
+// at operator tier apply=true runs it without the token (§3.6 item 1).
+func (d *Deps) postSimple(tool, path string, read statusReader, keys ...string) sdk.ToolHandlerFor[postSimpleIn, mutOut] {
+	return func(ctx context.Context, _ *sdk.CallToolRequest, in postSimpleIn) (*sdk.CallToolResult, mutOut, error) {
 		c, err := d.Resolve(in.Target)
 		if err != nil {
 			return nil, mutOut{}, err
 		}
+		args := in
+		args.ConfirmToken = ""
+		if !in.Apply || in.ConfirmToken != "" {
+			out, stop, err := d.gateChange(tool, c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+				st, err := read(ctx, c)
+				if err != nil {
+					return changePlan{}, fmt.Errorf("read of the current state failed, nothing was sent: %w", err)
+				}
+				current := pick(st, keys...)
+				proposed := overlay(current, map[string]any{"last_health_check": "re-run on apply"})
+				return changePlan{
+					Current:  current,
+					Proposed: proposed,
+					Rollback: &rollbackSpec{Note: "a probe changes no configuration; there is nothing to roll back"},
+					Impact:   "none",
+				}, nil
+			})
+			if err != nil || stop {
+				return nil, out, err
+			}
+		}
 		var res any
 		if err := c.Post(ctx, path, nil, &res); err != nil {
-			d.auditMut(tool, c.Name(), in, false, err.Error())
+			d.auditMut(tool, c.Name(), args, false, err.Error())
 			return nil, mutOut{}, err
 		}
-		d.auditMut(tool, c.Name(), in, true, "")
-		return nil, mutOut{Target: c.Name(), Action: "executed", Result: sanitizeAny(res, 0)}, nil
+		d.auditMut(tool, c.Name(), args, true, "")
+		after, _ := read(ctx, c)
+		return nil, executed(c.Name(), res, pick(after, keys...)), nil
 	}
 }
 
@@ -810,7 +930,12 @@ type llamafwConfigureIn struct {
 	ConnectionPoolSize int      `json:"connection_pool_size,omitempty" jsonschema:"reusable gRPC connections (1-100)"`
 	ScanPatterns       []string `json:"scan_patterns,omitempty" jsonschema:"URL patterns to scan (empty = all)"`
 	SkipPatterns       []string `json:"skip_patterns,omitempty" jsonschema:"URL patterns to skip"`
+	ConfirmToken       string   `json:"confirm_token,omitempty" jsonschema:"single-use token from the preview step; omit to preview"`
 }
+
+// llamafwStatusKeys are the configuration fields GET /config/llamafirewall/status
+// exposes; timeout_sec and connection_pool_size are write-only there.
+var llamafwStatusKeys = []string{"server_url", "fail_closed", "block_threshold", "cache_enabled", "cache_ttl_sec", "scan_patterns", "skip_patterns"}
 
 func (d *Deps) llamafwConfigure() sdk.ToolHandlerFor[llamafwConfigureIn, mutOut] {
 	return func(ctx context.Context, _ *sdk.CallToolRequest, in llamafwConfigureIn) (*sdk.CallToolResult, mutOut, error) {
@@ -852,14 +977,46 @@ func (d *Deps) llamafwConfigure() sdk.ToolHandlerFor[llamafwConfigureIn, mutOut]
 		if len(body) == 0 {
 			return nil, mutOut{}, fmt.Errorf("no fields to set")
 		}
+		args := in
+		args.ConfirmToken = ""
+		out, stop, err := d.gateChange("llamafw_configure", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+			st, err := c.LlamaFirewallStatus(ctx)
+			if err != nil {
+				return changePlan{}, fmt.Errorf("read of the LlamaFirewall status failed, nothing was sent: %w", err)
+			}
+			current := pick(st, llamafwStatusKeys...)
+			rb := &rollbackSpec{Tool: "llamafw_configure", Args: rollbackArgs(current, body)}
+			if _, ok := body["timeout_sec"]; ok {
+				rb.Note = "timeout_sec and connection_pool_size are not readable from the status; restore them by hand"
+			} else if _, ok := body["connection_pool_size"]; ok {
+				rb.Note = "timeout_sec and connection_pool_size are not readable from the status; restore them by hand"
+			}
+			return changePlan{Current: current, Proposed: overlay(current, body), Rollback: rb, Impact: "global"}, nil
+		})
+		if err != nil || stop {
+			return nil, out, err
+		}
 		var res any
 		if err := c.Post(ctx, "/config/llamafirewall/configure", body, &res); err != nil {
-			d.auditMut("llamafw_configure", c.Name(), in, false, err.Error())
+			d.auditMut("llamafw_configure", c.Name(), args, false, err.Error())
 			return nil, mutOut{}, err
 		}
-		d.auditMut("llamafw_configure", c.Name(), in, true, "")
-		return nil, mutOut{Target: c.Name(), Action: "executed", Result: sanitizeAny(res, 0)}, nil
+		d.auditMut("llamafw_configure", c.Name(), args, true, "")
+		after, _ := c.LlamaFirewallStatus(ctx)
+		return nil, executed(c.Name(), res, pick(after, llamafwStatusKeys...)), nil
 	}
+}
+
+// rollbackArgs returns, for every key the patch sets, the value current
+// holds for it (the arguments that undo the patch when names coincide).
+func rollbackArgs(current, patch map[string]any) map[string]any {
+	out := map[string]any{}
+	for k := range patch {
+		if v, ok := current[k]; ok {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 type llamafwScannersIn struct {
@@ -870,6 +1027,7 @@ type llamafwScannersIn struct {
 	HiddenASCII    *bool  `json:"hidden_ascii,omitempty" jsonschema:"zero-width/invisible character detection"`
 	AgentAlignment *bool  `json:"agent_alignment,omitempty" jsonschema:"AI agent misalignment detection"`
 	PIIDetection   *bool  `json:"pii_detection,omitempty" jsonschema:"PII detection (complementary to Presidio)"`
+	ConfirmToken   string `json:"confirm_token,omitempty" jsonschema:"single-use token from the preview step; omit to preview"`
 }
 
 func (d *Deps) llamafwScannersSet() sdk.ToolHandlerFor[llamafwScannersIn, mutOut] {
@@ -893,13 +1051,32 @@ func (d *Deps) llamafwScannersSet() sdk.ToolHandlerFor[llamafwScannersIn, mutOut
 		if len(body) == 0 {
 			return nil, mutOut{}, fmt.Errorf("no scanners to set")
 		}
+		args := in
+		args.ConfirmToken = ""
+		out, stop, err := d.gateChange("llamafw_scanners_set", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+			st, err := c.LlamaFirewallStatus(ctx)
+			if err != nil {
+				return changePlan{}, fmt.Errorf("read of the LlamaFirewall status failed, nothing was sent: %w", err)
+			}
+			current := mapValue(st["scanners"])
+			return changePlan{
+				Current:  current,
+				Proposed: overlay(current, body),
+				Rollback: &rollbackSpec{Tool: "llamafw_scanners_set", Args: rollbackArgs(current, body)},
+				Impact:   "global",
+			}, nil
+		})
+		if err != nil || stop {
+			return nil, out, err
+		}
 		var res any
 		if err := c.Post(ctx, "/config/llamafirewall/scanners", body, &res); err != nil {
-			d.auditMut("llamafw_scanners_set", c.Name(), in, false, err.Error())
+			d.auditMut("llamafw_scanners_set", c.Name(), args, false, err.Error())
 			return nil, mutOut{}, err
 		}
-		d.auditMut("llamafw_scanners_set", c.Name(), in, true, "")
-		return nil, mutOut{Target: c.Name(), Action: "executed", Result: sanitizeAny(res, 0)}, nil
+		d.auditMut("llamafw_scanners_set", c.Name(), args, true, "")
+		after, _ := c.LlamaFirewallStatus(ctx)
+		return nil, executed(c.Name(), res, mapValue(after["scanners"])), nil
 	}
 }
 
@@ -915,7 +1092,12 @@ type piiConfigureIn struct {
 	AnonymizerURL  string   `json:"anonymizer_url,omitempty" jsonschema:"Presidio anonymizer gRPC endpoint"`
 	ScoreThreshold *float64 `json:"score_threshold,omitempty" jsonschema:"minimum PII confidence score (0.0-1.0)"`
 	TimeoutMs      int      `json:"timeout_ms,omitempty" jsonschema:"Presidio request timeout milliseconds"`
+	ConfirmToken   string   `json:"confirm_token,omitempty" jsonschema:"single-use token from the preview step; omit to preview"`
 }
+
+// piiConfigKeys are the configuration fields GET /config/pii/status exposes
+// that pii_configure can set.
+var piiConfigKeys = []string{"mode", "direction", "fail_mode", "scan_mode", "analyzer_url", "anonymizer_url", "score_threshold", "timeout_ms"}
 
 func (d *Deps) piiConfigure() sdk.ToolHandlerFor[piiConfigureIn, mutOut] {
 	return func(ctx context.Context, _ *sdk.CallToolRequest, in piiConfigureIn) (*sdk.CallToolResult, mutOut, error) {
@@ -974,13 +1156,32 @@ func (d *Deps) piiConfigure() sdk.ToolHandlerFor[piiConfigureIn, mutOut] {
 		if len(body) == 0 {
 			return nil, mutOut{}, fmt.Errorf("no fields to set")
 		}
+		args := in
+		args.ConfirmToken = ""
+		out, stop, err := d.gateChange("pii_configure", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+			st, err := c.PIIStatus(ctx)
+			if err != nil {
+				return changePlan{}, fmt.Errorf("read of the PII status failed, nothing was sent: %w", err)
+			}
+			current := pick(st, piiConfigKeys...)
+			return changePlan{
+				Current:  current,
+				Proposed: overlay(current, body),
+				Rollback: &rollbackSpec{Tool: "pii_configure", Args: rollbackArgs(current, body)},
+				Impact:   "global",
+			}, nil
+		})
+		if err != nil || stop {
+			return nil, out, err
+		}
 		var res any
 		if err := c.Post(ctx, "/config/pii/configure", body, &res); err != nil {
-			d.auditMut("pii_configure", c.Name(), in, false, err.Error())
+			d.auditMut("pii_configure", c.Name(), args, false, err.Error())
 			return nil, mutOut{}, err
 		}
-		d.auditMut("pii_configure", c.Name(), in, true, "")
-		return nil, mutOut{Target: c.Name(), Action: "executed", Result: sanitizeAny(res, 0)}, nil
+		d.auditMut("pii_configure", c.Name(), args, true, "")
+		after, _ := c.PIIStatus(ctx)
+		return nil, executed(c.Name(), res, pick(after, piiConfigKeys...)), nil
 	}
 }
 
@@ -990,9 +1191,10 @@ type piiURLPatternIn struct {
 }
 
 type piiURLPatternsIn struct {
-	Target   string            `json:"target,omitempty" jsonschema:"target loxilb instance name; omit for default"`
-	Mode     string            `json:"mode" jsonschema:"add|replace|clear"`
-	Patterns []piiURLPatternIn `json:"patterns,omitempty" jsonschema:"URL patterns (max 64; not needed for mode=clear)"`
+	Target       string            `json:"target,omitempty" jsonschema:"target loxilb instance name; omit for default"`
+	Mode         string            `json:"mode" jsonschema:"add|replace|clear"`
+	Patterns     []piiURLPatternIn `json:"patterns,omitempty" jsonschema:"URL patterns (max 64; not needed for mode=clear)"`
+	ConfirmToken string            `json:"confirm_token,omitempty" jsonschema:"single-use token from the preview step; omit to preview"`
 }
 
 func (d *Deps) piiURLPatternsSet() sdk.ToolHandlerFor[piiURLPatternsIn, mutOut] {
@@ -1014,8 +1216,9 @@ func (d *Deps) piiURLPatternsSet() sdk.ToolHandlerFor[piiURLPatternsIn, mutOut] 
 			return nil, mutOut{}, fmt.Errorf("patterns: %d exceeds the maximum of 64", len(in.Patterns))
 		}
 		body := map[string]any{"mode": mode}
+		var pats []map[string]any
 		if len(in.Patterns) > 0 {
-			pats := make([]map[string]any, 0, len(in.Patterns))
+			pats = make([]map[string]any, 0, len(in.Patterns))
 			for i, p := range in.Patterns {
 				if p.Pattern == "" {
 					return nil, mutOut{}, fmt.Errorf("patterns[%d].pattern is required", i)
@@ -1028,14 +1231,64 @@ func (d *Deps) piiURLPatternsSet() sdk.ToolHandlerFor[piiURLPatternsIn, mutOut] 
 			}
 			body["patterns"] = pats
 		}
+		args := in
+		args.ConfirmToken = ""
+		out, stop, err := d.gateChange("pii_url_patterns_set", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+			st, err := c.PIIStatus(ctx)
+			if err != nil {
+				return changePlan{}, fmt.Errorf("read of the PII status failed, nothing was sent: %w", err)
+			}
+			cur := listValue(st["url_patterns"])
+			var proposed []any
+			switch mode {
+			case "add":
+				proposed = append(append([]any{}, cur...), anySlice(pats)...)
+			case "replace":
+				proposed = anySlice(pats)
+			case "clear":
+				proposed = []any{}
+			}
+			rb := &rollbackSpec{Tool: "pii_url_patterns_set", Args: map[string]any{"mode": "clear"}}
+			if len(cur) > 0 {
+				var rbPats []map[string]any
+				for _, p := range cur {
+					pm := mapValue(p)
+					rp := map[string]any{"pattern": pm["pattern"]}
+					if boolValue(pm["is_exclude"]) || boolValue(pm["exclude"]) {
+						rp["exclude"] = true
+					}
+					rbPats = append(rbPats, rp)
+				}
+				rb.Args = map[string]any{"mode": "replace", "patterns": rbPats}
+			}
+			return changePlan{
+				Current:  map[string]any{"url_patterns": cur},
+				Proposed: map[string]any{"url_patterns": proposed},
+				Rollback: rb,
+				Impact:   "global",
+			}, nil
+		})
+		if err != nil || stop {
+			return nil, out, err
+		}
 		var res any
 		if err := c.Post(ctx, "/config/pii/url-patterns", body, &res); err != nil {
-			d.auditMut("pii_url_patterns_set", c.Name(), in, false, err.Error())
+			d.auditMut("pii_url_patterns_set", c.Name(), args, false, err.Error())
 			return nil, mutOut{}, err
 		}
-		d.auditMut("pii_url_patterns_set", c.Name(), in, true, "")
-		return nil, mutOut{Target: c.Name(), Action: "executed", Result: sanitizeAny(res, 0)}, nil
+		d.auditMut("pii_url_patterns_set", c.Name(), args, true, "")
+		after, _ := c.PIIStatus(ctx)
+		return nil, executed(c.Name(), res, pick(after, "url_patterns", "url_pattern_count")), nil
 	}
+}
+
+// anySlice widens a slice of objects for list operations.
+func anySlice(in []map[string]any) []any {
+	out := make([]any, 0, len(in))
+	for _, m := range in {
+		out = append(out, m)
+	}
+	return out
 }
 
 // ---- ai_traffic_report ----

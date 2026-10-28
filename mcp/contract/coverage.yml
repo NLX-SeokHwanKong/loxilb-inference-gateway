@@ -7,13 +7,16 @@
 #                     reversible (for mutations) and tier (viewer|operator|admin-confirm).
 #                     The test derives the minimum tier from impact+reversible; a weaker
 #                     tier fails unless tier_gap: states why (counted against the budget).
+#                     tool_tier: operator (only under tier admin-confirm) says the tool is
+#                     listed for operators because it gates the stronger path itself
+#                     (lb_create: create is operator, replace is admin-confirm).
 #   pending: P1a|P1b|P2|P3|P4   not reachable yet; counted against budget.pending_max.
 #   excluded: "reason"          will not be reachable; a recorded decision.
 # Budgets are ratchets: they may only go down. A raise is a warning in the CI summary.
 version: 1
 budget:
   pending_max: 84
-  tier_gap_max: 16
+  tier_gap_max: 0
 operations:
 - op: GET /audit/policy
   pending: P1a
@@ -181,15 +184,13 @@ operations:
   - bgp_global_set
   impact: global
   reversible: true
-  tier: operator
-  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; D13: raised to admin-confirm in PR-A2 (CAMPAIGN-GUIDE Rev 1.2 §5)'
+  tier: admin-confirm
 - op: POST /config/bgp/neigh
   tools:
   - bgp_neigh_set
   impact: global
   reversible: true
-  tier: operator
-  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; D13: raised to admin-confirm in PR-A2 (CAMPAIGN-GUIDE Rev 1.2 §5)'
+  tier: admin-confirm
 - op: GET /config/bgp/neigh/all
   tools:
   - bgp_neigh_list
@@ -206,8 +207,7 @@ operations:
   - bgp_policy_apply
   impact: global
   reversible: true
-  tier: operator
-  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; D13: raised to admin-confirm in PR-A2 (CAMPAIGN-GUIDE Rev 1.2 §5)'
+  tier: admin-confirm
 - op: POST /config/bgp/policy/definedsets/{defineset_type}
   pending: P4
   impact: global
@@ -332,22 +332,19 @@ operations:
   - gpu_conversations_cleanup
   impact: global
   reversible: false
-  tier: operator
-  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; D13: raised to admin-confirm in PR-A2 (CAMPAIGN-GUIDE Rev 1.2 §5)'
+  tier: admin-confirm
 - op: POST /config/gpu/disable
   tools:
   - gpu_mode_set
   impact: global
   reversible: true
-  tier: operator
-  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; D13: raised to admin-confirm in PR-A2 (CAMPAIGN-GUIDE Rev 1.2 §5)'
+  tier: admin-confirm
 - op: POST /config/gpu/enable
   tools:
   - gpu_mode_set
   impact: global
   reversible: true
-  tier: operator
-  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; D13: raised to admin-confirm in PR-A2 (CAMPAIGN-GUIDE Rev 1.2 §5)'
+  tier: admin-confirm
 - op: GET /config/gpu/status
   tools:
   - gpu_status
@@ -511,15 +508,13 @@ operations:
   - llamafw_configure
   impact: global
   reversible: true
-  tier: operator
-  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; D13: raised to admin-confirm in PR-A2 (CAMPAIGN-GUIDE Rev 1.2 §5)'
+  tier: admin-confirm
 - op: POST /config/llamafirewall/enable
   tools:
   - llamafw_enable_set
   impact: global
   reversible: true
-  tier: operator
-  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; D13: raised to admin-confirm in PR-A2 (CAMPAIGN-GUIDE Rev 1.2 §5)'
+  tier: admin-confirm
 - op: POST /config/llamafirewall/health
   tools:
   - llamafw_health_check
@@ -531,8 +526,7 @@ operations:
   - llamafw_scanners_set
   impact: global
   reversible: true
-  tier: operator
-  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; D13: raised to admin-confirm in PR-A2 (CAMPAIGN-GUIDE Rev 1.2 §5)'
+  tier: admin-confirm
 - op: GET /config/llamafirewall/stats
   tools:
   - llamafw_stats
@@ -546,9 +540,9 @@ operations:
   - lb_create
   impact: service
   reversible: true
-  tier: operator
-  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; D13: raised to admin-confirm in PR-A2 (CAMPAIGN-GUIDE Rev 1.2 §5)'
-  note: "D13 / PR-A2 split: pre-read the composite key GET /config/loadbalancer/externalipaddress/{ip_address}/port/{port}/protocol/{proto}; a POST that would replace an existing rule is admin-confirm with the diff in the preview; a POST that creates a new rule stays operator. Impact is service, not global: the PR-0 self-test message (lb_create has impact global) came from the throw-away entry POST /config/ai/zzz-global, which credited a fake operation to lb_create with impact global; the tool itself is service because a POST on an existing composite key replaces that rule's endpoints."
+  tier: admin-confirm
+  tool_tier: operator
+  note: "D13 (PR-A2) create/replace split, both paths in the code: lb_create pre-reads the composite key GET /config/loadbalancer/externalipaddress/{ip_address}/port/{port}/protocol/{proto} (and, on a shared VIP:port, the full list for the host/path/model key) before it sends anything. No rule at the key = create: executes directly, operator tier, that is why the tool is listed for operators (tool_tier). A rule at the key = replace: admin-confirm, the call previews current rule, proposed body, diff and a rollback that re-creates the current rule, and applies only with the token; an operator session is refused on this path before any request is built. Impact is service, not global: the PR-0 self-test message (lb_create has impact global) came from the throw-away entry"
 - op: DELETE /config/loadbalancer/all
   excluded: delete-all is instance-scope and never agent-driven; D3
   note: owner-approved 2026-10-28
@@ -572,8 +566,11 @@ operations:
   reversible: true
   tier: admin-confirm
 - op: GET /config/loadbalancer/externalipaddress/{ip_address}/port/{port}/protocol/{proto}
-  pending: P1a
-  note: read; PR-B1; owner-approved 2026-10-28
+  tools:
+  - lb_create
+  impact: none
+  tier: operator
+  note: "pre-read of lb_create's create/replace split (PR-A2, D13): decides whether the POST creates or replaces. A dedicated read tool (lb_get) is still PR-B1 and joins this list then; owner-approved 2026-10-28"
 - op: PATCH /config/loadbalancer/externalipaddress/{ip_address}/port/{port}/protocol/{proto}
   pending: P1b
   impact: service
@@ -657,8 +654,7 @@ operations:
   - config_params_set
   impact: instance
   reversible: true
-  tier: operator
-  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; D13: raised to admin-confirm in PR-A2 (CAMPAIGN-GUIDE Rev 1.2 §5)'
+  tier: admin-confirm
 - op: POST /config/persist
   pending: P1b
   impact: instance
@@ -668,15 +664,13 @@ operations:
   - pii_configure
   impact: global
   reversible: true
-  tier: operator
-  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; D13: raised to admin-confirm in PR-A2 (CAMPAIGN-GUIDE Rev 1.2 §5)'
+  tier: admin-confirm
 - op: POST /config/pii/enable
   tools:
   - pii_enable_set
   impact: global
   reversible: true
-  tier: operator
-  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; D13: raised to admin-confirm in PR-A2 (CAMPAIGN-GUIDE Rev 1.2 §5)'
+  tier: admin-confirm
 - op: GET /config/pii/stats
   tools:
   - pii_stats
@@ -690,8 +684,7 @@ operations:
   - pii_url_patterns_set
   impact: global
   reversible: true
-  tier: operator
-  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; D13: raised to admin-confirm in PR-A2 (CAMPAIGN-GUIDE Rev 1.2 §5)'
+  tier: admin-confirm
 - op: POST /config/policy
   excluded: L2-4 write CRUD is excluded by policy; D1
   note: owner-approved 2026-10-28
@@ -733,8 +726,7 @@ operations:
   - secrate_set
   impact: global
   reversible: true
-  tier: operator
-  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; D13: raised to admin-confirm in PR-A2 (CAMPAIGN-GUIDE Rev 1.2 §5)'
+  tier: admin-confirm
 - op: GET /config/securityrate/all
   tools:
   - secrate_get
@@ -745,8 +737,7 @@ operations:
   - secrate_reset
   impact: global
   reversible: false
-  tier: operator
-  tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; D13: raised to admin-confirm in PR-A2 (CAMPAIGN-GUIDE Rev 1.2 §5)'
+  tier: admin-confirm
 - op: POST /config/session
   excluded: L2-4 write CRUD is excluded by policy; D1
   note: owner-approved 2026-10-28

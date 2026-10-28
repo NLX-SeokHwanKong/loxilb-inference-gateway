@@ -65,9 +65,13 @@ func (r Role) String() string {
 
 // ToolMeta describes a tool for policy decisions.
 type ToolMeta struct {
-	Name        string
-	Domain      string // mgmt | analysis | monitoring | ai
-	Mutating    bool
+	Name     string
+	Domain   string // mgmt | analysis | monitoring | ai
+	Mutating bool
+	// Destructive marks the admin-confirm tier: the tool is listed for admin
+	// sessions only and applies a change only with the confirm token its
+	// preview issued. Deletes and every global- or instance-scope change
+	// (manifest impact global/instance, or a replacing lb_create) are here.
 	Destructive bool
 }
 
