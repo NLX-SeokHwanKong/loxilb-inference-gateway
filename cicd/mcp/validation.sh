@@ -10,6 +10,9 @@
 #                    round-trip + audit.jsonl entries
 #   3 guardrails     viewer role sees no mutating tools; delete without
 #                    confirm_token stays a preview
+#   3b change gate   operator lists no admin-confirm tool; lb_create on an
+#                    existing key is refused (operator) / previewed (admin);
+#                    secrate_set preview -> confirm -> read-back -> rollback
 #   4 ai ops         ai_apikey create(file)/list/update/delete confirm flow,
 #                    ai_ratelimit_set/get
 #   5 rca            diagnose_l4_errors / capacity_report evidence bundles,
@@ -230,6 +233,56 @@ res=$(mcp_rpc "$VTOKEN" tools/list)
 echo "$res" | grep -q '"name":"lb_create"' && fail "viewer sees lb_create" || pass "viewer sees no lb_create"
 echo "$res" | grep -q '"name":"ai_apikey_delete"' && fail "viewer sees ai_apikey_delete" || pass "viewer sees no ai_apikey_delete"
 echo "$res" | grep -q '"name":"diagnose_l4_errors"' && pass "viewer sees diagnose tools" || fail "viewer missing diagnose tools"
+
+# ---------- 3b. tier alignment: the change gate (D13) ----------
+# Global/instance-scope changes are admin-confirm: an operator session does
+# not list them, an admin session previews (current, proposed, diff,
+# rollback) and applies only with the token. lb_create splits create
+# (operator, direct) from replace (admin-confirm) by a pre-read of the key.
+echo "### change gate"
+mcp_session "$OTOKEN" && pass "operator session established" || fail "no operator session"
+OPERATOR_SESSION=$SESSION
+res=$(mcp_rpc "$OTOKEN" tools/list)
+echo "$res" | grep -q '"name":"secrate_set"' && fail "operator sees secrate_set" || pass "operator sees no secrate_set (admin-confirm)"
+echo "$res" | grep -q '"name":"gpu_mode_set"' && fail "operator sees gpu_mode_set" || pass "operator sees no gpu_mode_set (admin-confirm)"
+echo "$res" | grep -q '"name":"lb_create"' && pass "operator still sees lb_create" || fail "operator missing lb_create"
+
+# 20.20.20.1:2020/tcp is the baseline rule config.sh created (endpoint port 1);
+# a POST on that key would replace it.
+REPLACE='{"external_ip":"20.20.20.1","port":2020,"protocol":"tcp","endpoints":[{"ip":"31.31.31.1","port":8080}]}'
+LBKEY="$REST/config/loadbalancer/externalipaddress/20.20.20.1/port/2020/protocol/tcp"
+res=$(mcp_call "$OTOKEN" lb_create "$REPLACE")
+echo "$res" | grep -q '"isError":true' && echo "$res" | grep -q 'admin-confirm' \
+    && pass "operator lb_create on an existing key is refused" || fail "operator replace not refused: $res"
+curl -s --max-time 10 "$LBKEY" | grep -q '"targetPort":1[,}]' && pass "baseline rule untouched by the operator refusal" || fail "baseline rule changed"
+
+SESSION=$ADMIN_SESSION
+res=$(mcp_call "$ATOKEN" lb_create "$REPLACE")
+echo "$res" | grep -q '"action":"preview"' && echo "$res" | grep -q '"diff":{' && echo "$res" | grep -q '"rollback":{"tool":"lb_create"' \
+    && pass "admin lb_create on an existing key previews the replace with diff and rollback" || fail "admin replace preview: $res"
+curl -s --max-time 10 "$LBKEY" | grep -q '"targetPort":1[,}]' && pass "baseline rule untouched by the preview" || fail "preview replaced the rule"
+res=$(mcp_call "$ATOKEN" lb_create "${REPLACE%\}},\"confirm_token\":\"00000000000000000000000000000000\"}")
+echo "$res" | grep -q '"isError":true' && pass "admin replace with a never-issued token is refused" || fail "stale token accepted: $res"
+curl -s --max-time 10 "$LBKEY" | grep -q '"targetPort":1[,}]' && pass "baseline rule untouched by the stale token" || fail "stale token replaced the rule"
+
+# secrate_set: preview -> confirm -> read-back -> rollback (preview -> confirm -> read-back).
+res=$(mcp_call "$ATOKEN" secrate_set '{"rate_per_sec":777}')
+echo "$res" | grep -q '"action":"preview"' && echo "$res" | grep -q '"current":{' && echo "$res" | grep -q '"impact":"global"' \
+    && pass "secrate_set previews current, proposed and impact" || fail "secrate_set preview: $res"
+tok=$(echo "$res" | sed -n 's/.*"confirm_token":"\([^"]*\)".*/\1/p')
+prev=$(echo "$res" | sed -n 's/.*"rollback":{"tool":"secrate_set","args":{"rate_per_sec":\([0-9]*\)}.*/\1/p')
+[[ -n "$tok" && -n "$prev" ]] && pass "secrate_set preview carries a token and a rollback (rate_per_sec $prev)" || fail "no token/rollback in preview: $res"
+mcp_call "$ATOKEN" secrate_get | grep -q '"ratePerSec":777' && fail "preview changed the security rate config" || pass "preview changed nothing (secrate_get)"
+res=$(mcp_call "$ATOKEN" secrate_set "{\"rate_per_sec\":777,\"confirm_token\":\"$tok\"}")
+echo "$res" | grep -q '"action":"executed"' && echo "$res" | grep -q '"read_back":{[^}]*"ratePerSec":777' \
+    && pass "secrate_set applied with the token; read_back shows ratePerSec 777" || fail "secrate_set apply: $res"
+mcp_call "$ATOKEN" secrate_get | grep -q '"ratePerSec":777' && pass "secrate_get confirms the change" || fail "secrate_get does not show 777"
+res=$(mcp_call "$ATOKEN" secrate_set "{\"rate_per_sec\":$prev}")
+tok=$(echo "$res" | sed -n 's/.*"confirm_token":"\([^"]*\)".*/\1/p')
+res=$(mcp_call "$ATOKEN" secrate_set "{\"rate_per_sec\":$prev,\"confirm_token\":\"$tok\"}")
+echo "$res" | grep -q '"action":"executed"' && echo "$res" | grep -q "\"read_back\":{[^}]*\"ratePerSec\":$prev" \
+    && pass "rollback applied; read_back shows ratePerSec $prev" || fail "rollback: $res"
+grep -q '"tool":"secrate_set"' .mcp-audit/audit.jsonl && pass "audit.jsonl records secrate_set" || fail "secrate_set audit entry missing"
 
 # ---------- 4. AI ops ----------
 

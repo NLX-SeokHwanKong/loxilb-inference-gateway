@@ -14,7 +14,9 @@
 # Read-only mode (default) mutates NOTHING on the target. --mutate additionally
 # runs an isolated lb_create -> lb_list -> confirm-token lb_delete round-trip on
 # a TEST-NET-2 VIP (RFC 5737 198.51.100.0/24) that will not collide with real
-# services, and cleans it up (including on failure). The two-step confirm-token
+# services, and cleans it up (including on failure), plus a secrate_set
+# preview -> confirm -> read-back -> rollback round-trip that leaves the
+# security-rate config as it found it. The two-step confirm-token
 # flow is why the harness holds one session open: the token is in-memory,
 # single-use, per process.
 #
@@ -224,6 +226,33 @@ if MUTATE:
         e, v, _ = m.call("lb_list")
         gone = isinstance(v, dict) and not any(r.get("external_ip") == VIP for r in v.get("rules", []))
         (ok if gone else bad)("VIP gone after delete")
+
+        # secrate_set change gate: preview -> confirm -> read-back -> rollback.
+        # The SYN threshold is raised by one from the value the preview read,
+        # so the change is real but harmless, and put back from the rollback
+        # the preview returned.
+        e, v, _ = m.call("secrate_set", syn_threshold=1)
+        cur = v.get("current", {}) if isinstance(v, dict) else {}
+        base = cur.get("synThreshold")
+        (ok if isinstance(v, dict) and v.get("action") == "preview" and isinstance(base, int) else bad)(
+            f"secrate_set previews the current config (synThreshold {base})")
+        if isinstance(base, int):
+            e, v, _ = m.call("secrate_set", syn_threshold=base + 1)
+            tok = v.get("confirm_token") if isinstance(v, dict) else None
+            rb = v.get("rollback", {}) if isinstance(v, dict) else {}
+            (ok if tok and rb.get("tool") == "secrate_set" and rb.get("args", {}).get("syn_threshold") == base else bad)(
+                "secrate_set preview carries a token and a rollback to the current value")
+            e, v, _ = m.call("secrate_get")
+            attr = (v.get("securityrateAttr") or [{}])[0] if isinstance(v, dict) else {}
+            (ok if attr.get("synThreshold") == base else bad)("preview changed nothing (secrate_get)")
+            e, v, _ = m.call("secrate_set", syn_threshold=base + 1, confirm_token=tok)
+            applied = isinstance(v, dict) and v.get("action") == "executed" and v.get("read_back", {}).get("synThreshold") == base + 1
+            (ok if applied else bad)("secrate_set applied with the token; read_back shows the new threshold" if applied else f"secrate_set apply: {v}")
+            e, v, _ = m.call("secrate_set", **rb.get("args", {"syn_threshold": base}))
+            tok = v.get("confirm_token") if isinstance(v, dict) else None
+            e, v, _ = m.call("secrate_set", confirm_token=tok, **rb.get("args", {"syn_threshold": base}))
+            restored = isinstance(v, dict) and v.get("action") == "executed" and v.get("read_back", {}).get("synThreshold") == base
+            (ok if restored else bad)("rollback applied; read_back shows the original threshold" if restored else f"rollback: {v}")
 
         # api_key_auth=jwt arm: needs a JWT auth profile that already exists
         # on the target (the bridge gains the profile tool in PR-B3). Name it
