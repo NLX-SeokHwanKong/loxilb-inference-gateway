@@ -15,12 +15,14 @@
 # Budgets are ratchets: they may only go down. A raise is a warning in the CI summary.
 version: 1
 budget:
-  pending_max: 84
+  pending_max: 63
   tier_gap_max: 0
 operations:
 - op: GET /audit/policy
-  pending: P1a
-  note: read; PR-B1; owner-approved 2026-10-28
+  tools:
+  - audit_policy_get
+  impact: none
+  note: read; PR-B1 mapped; owner-approved 2026-10-28
 - op: POST /audit/policy
   excluded: the audited must not configure the auditor; D9
   note: owner-approved 2026-10-28
@@ -28,8 +30,10 @@ operations:
   excluded: the audited must not configure the auditor; D9
   note: owner-approved 2026-10-28
 - op: GET /audit/sink
-  pending: P1a
-  note: read; PR-B1; owner-approved 2026-10-28
+  tools:
+  - audit_sink_get
+  impact: none
+  note: read; PR-B1 mapped; owner-approved 2026-10-28
 - op: POST /audit/sink
   excluded: the audited must not configure the auditor; D9
   note: owner-approved 2026-10-28
@@ -37,14 +41,18 @@ operations:
   excluded: the audited must not configure the auditor; D9
   note: owner-approved 2026-10-28
 - op: GET /audit/sinks/{name}
-  pending: P1a
-  note: read; PR-B1; owner-approved 2026-10-28
+  tools:
+  - audit_sink_get
+  impact: none
+  note: read; PR-B1 mapped; owner-approved 2026-10-28
 - op: PUT /audit/sinks/{name}
   excluded: the audited must not configure the auditor; D9
   note: owner-approved 2026-10-28
 - op: GET /audit/status
-  pending: P1a
-  note: read; PR-B1; owner-approved 2026-10-28
+  tools:
+  - audit_status
+  impact: none
+  note: read; PR-B1 mapped; owner-approved 2026-10-28
 - op: POST /auth/login
   excluded: used only by the bridge's own login (client.login); not a tool; D2
   note: owner-approved 2026-10-28
@@ -93,8 +101,10 @@ operations:
   reversible: true
   tier: operator
 - op: GET /config/ai/jwtauthprofile
-  pending: P1a
-  note: read; PR-B1; owner-approved 2026-10-28
+  tools:
+  - ai_jwtprofile_list
+  impact: none
+  note: read; PR-B1 mapped; owner-approved 2026-10-28
 - op: POST /config/ai/jwtauthprofile
   pending: P1b
   impact: global
@@ -108,14 +118,20 @@ operations:
   - ai_kv_inventory_get
   impact: none
 - op: GET /config/ai/model-profiles
-  pending: P1a
-  note: read; PR-B1; owner-approved 2026-10-28
+  tools:
+  - ai_model_profile_list
+  impact: none
+  note: read; PR-B1 mapped; owner-approved 2026-10-28
 - op: GET /config/ai/model-profiles/{profile_id}
-  pending: P1a
-  note: read; PR-B1; owner-approved 2026-10-28
+  tools:
+  - ai_model_profile_get
+  impact: none
+  note: read; PR-B1 mapped; owner-approved 2026-10-28
 - op: GET /config/ai/netidentity
-  pending: P1a
-  note: read; PR-B1; owner-approved 2026-10-28
+  tools:
+  - ai_netidentity_list
+  impact: none
+  note: read; PR-B1 mapped; owner-approved 2026-10-28
 - op: POST /config/ai/netidentity
   pending: P1b
   impact: global
@@ -125,8 +141,10 @@ operations:
   impact: global
   note: 'D11: opens on a stated use-case; admin-confirm, never autopilot; owner-approved 2026-10-28'
 - op: GET /config/ai/objective
-  pending: P1a
-  note: read; PR-B1; owner-approved 2026-10-28
+  tools:
+  - ai_objective_list
+  impact: none
+  note: read; PR-B1 mapped; owner-approved 2026-10-28
 - op: POST /config/ai/objective
   pending: P1b
   impact: global
@@ -144,8 +162,10 @@ operations:
   impact: global
   note: 'D11: opens on a stated use-case; admin-confirm, never autopilot; owner-approved 2026-10-28'
 - op: GET /config/ai/ratelimit/defaults/{scope}
-  pending: P1a
-  note: read; PR-B1; owner-approved 2026-10-28
+  tools:
+  - ai_ratelimit_defaults_get
+  impact: none
+  note: read; PR-B1 mapped; owner-approved 2026-10-28
 - op: POST /config/ai/tenant/ratelimit
   tools:
   - ai_ratelimit_set
@@ -161,15 +181,19 @@ operations:
   impact: tenant
   note: PR-B2 ai_user_ratelimit_set; operator with preview; owner-approved 2026-10-28
 - op: GET /config/ai/user/ratelimit/{tenant_id}
-  pending: P1a
-  note: read; PR-B1; owner-approved 2026-10-28
+  tools:
+  - ai_user_ratelimit_list
+  impact: none
+  note: read; PR-B1 mapped; owner-approved 2026-10-28
 - op: DELETE /config/ai/user/ratelimit/{tenant_id}/{user_id}
   pending: P1b
   impact: tenant
   note: PR-B2 ai_user_ratelimit_delete; re-creatable from the preview, operator; owner-approved 2026-10-28
 - op: GET /config/ai/user/ratelimit/{tenant_id}/{user_id}
-  pending: P1a
-  note: read; PR-B1; owner-approved 2026-10-28
+  tools:
+  - ai_user_ratelimit_get
+  impact: none
+  note: read; PR-B1 mapped; owner-approved 2026-10-28
 - op: POST /config/bfd
   excluded: L2-4 write CRUD is excluded by policy; D1
   note: owner-approved 2026-10-28
@@ -351,8 +375,10 @@ operations:
   - diagnose_ai_latency
   impact: none
 - op: GET /config/halfclose
-  pending: P1a
-  note: read; PR-B1; owner-approved 2026-10-28
+  tools:
+  - halfclose_get
+  impact: none
+  note: read; PR-B1 mapped; owner-approved 2026-10-28
 - op: POST /config/halfclose
   pending: P1b
   impact: global
@@ -567,27 +593,32 @@ operations:
   tier: admin-confirm
 - op: GET /config/loadbalancer/externalipaddress/{ip_address}/port/{port}/protocol/{proto}
   tools:
-  - lb_create
+  - lb_get
   impact: none
-  tier: operator
-  note: "pre-read of lb_create's create/replace split (PR-A2, D13): decides whether the POST creates or replaces. A dedicated read tool (lb_get) is still PR-B1 and joins this list then; owner-approved 2026-10-28"
+  note: "lb_get (PR-B1) is the read tool of this key. It is also the pre-read of lb_create's create/replace split (PR-A2, D13), performed through client.LBRuleByKey and presence-checked by the scanner like the other change-gate reads: a mutation's pre-read cannot be credited to a tool of another tier, and one entry carries one tier; owner-approved 2026-10-28"
 - op: PATCH /config/loadbalancer/externalipaddress/{ip_address}/port/{port}/protocol/{proto}
   pending: P1b
   impact: service
   note: PR-B2 lb_update; phase-1 fields allowlist, admin-confirm; owner-approved 2026-10-28
 - op: GET /config/loadbalancer/externalipaddress/{ip_address}/port/{port}/protocol/{proto}/kvexactstatus
-  pending: P1a
-  note: read; PR-B1; owner-approved 2026-10-28
+  tools:
+  - lb_kvexact_status
+  impact: none
+  note: read; PR-B1 mapped; owner-approved 2026-10-28
 - op: POST /config/loadbalancer/externalipaddress/{ip_address}/port/{port}/protocol/{proto}/sockmapreset
   pending: P1b
   impact: service
   note: 'D11: opens on a stated use-case; admin-confirm, never autopilot; owner-approved 2026-10-28'
 - op: GET /config/loadbalancer/externalipaddress/{ip_address}/port/{port}/protocol/{proto}/stats
-  pending: P1a
-  note: read; PR-B1; owner-approved 2026-10-28
+  tools:
+  - lb_get
+  impact: none
+  note: read; PR-B1 mapped; owner-approved 2026-10-28
 - op: GET /config/loadbalancer/externalipaddress/{ip_address}/port/{port}/protocol/{proto}/status
-  pending: P1a
-  note: read; PR-B1; owner-approved 2026-10-28
+  tools:
+  - lb_get
+  impact: none
+  note: read; PR-B1 mapped; owner-approved 2026-10-28
 - op: DELETE /config/loadbalancer/hosturl/{hosturl}/externalipaddress/{ip_address}/port/{port}/portmax/{portmax}/protocol/{proto}
   pending: P1b
   impact: service
@@ -599,8 +630,10 @@ operations:
   reversible: true
   tier: admin-confirm
 - op: GET /config/loadbalancer/id/{id}
-  pending: P1a
-  note: read; PR-B1; owner-approved 2026-10-28
+  tools:
+  - lb_get
+  impact: none
+  note: read; PR-B1 mapped; owner-approved 2026-10-28
 - op: DELETE /config/loadbalancer/name/{lb_name}
   tools:
   - lb_delete
@@ -759,8 +792,10 @@ operations:
   excluded: L2-4 write CRUD is excluded by policy; D1
   note: owner-approved 2026-10-28
 - op: GET /config/snapshot
-  pending: P1a
-  note: read; PR-B1; owner-approved 2026-10-28
+  tools:
+  - config_snapshot_get
+  impact: none
+  note: read; PR-B1 mapped; owner-approved 2026-10-28
 - op: DELETE /config/trace/catalog/{catalog_id}/parser
   pending: P2
   impact: global
@@ -859,8 +894,10 @@ operations:
   - diagnose_endpoint
   impact: none
 - op: GET /maintenance
-  pending: P1a
-  note: read; PR-B1; owner-approved 2026-10-28
+  tools:
+  - maintenance_get
+  impact: none
+  note: read; PR-B1 mapped; owner-approved 2026-10-28
 - op: PUT /maintenance
   pending: P1b
   impact: instance
@@ -956,8 +993,10 @@ operations:
   impact: service
   note: sni_cert_set by certId; admin-confirm; PR-C; owner-approved 2026-10-28
 - op: GET /status/capabilities
-  pending: P1a
-  note: read; PR-B1; owner-approved 2026-10-28
+  tools:
+  - status_capabilities
+  impact: none
+  note: read; PR-B1 mapped; owner-approved 2026-10-28
 - op: GET /status/device
   tools:
   - status_get

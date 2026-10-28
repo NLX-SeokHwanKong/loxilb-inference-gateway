@@ -349,55 +349,14 @@ func (d *Deps) lbList(string) sdk.ToolHandlerFor[lbListIn, lbListOut] {
 			}
 			name, _ := svc["name"].(string)
 			extIP, _ := svc["externalIP"].(string)
-			proto, _ := svc["protocol"].(string)
 			if filter != "" &&
 				!strings.Contains(strings.ToLower(name), filter) &&
 				!strings.Contains(strings.ToLower(extIP), filter) {
 				continue
 			}
-			eps, _ := entry["endpoints"].([]any)
-			rule := lbRule{
-				Name:             clean(name),
-				ExternalIP:       clean(extIP),
-				Port:             svc["port"],
-				Protocol:         clean(proto),
-				Mode:             svc["mode"],
-				Host:             clean(stringValue(svc["host"])),
-				PathPrefix:       clean(stringValue(svc["path_prefix"])),
-				ModelName:        clean(stringValue(svc["model_name"])),
-				SSEMode:          boolValue(svc["sse_mode"]),
-				PDDisaggMode:     boolValue(svc["pd_disagg_mode"]),
-				PDCacheAwareMode: boolValue(svc["pd_cache_aware_mode"]),
-				APIKeyAuth:       clean(stringValue(svc["api_key_auth"])),
-				KVExactMode:      intValue(svc["kvExactMode"]),
-				KVEngineType:     clean(stringValue(svc["kvEngineType"])),
-				ID:               clean(stringValue(svc["id"])),
-				AdminStateUp:     boolPtrValue(svc["adminStateUp"]),
-				Security:         sanitizeAny(svc["security"], 0),
-				JWTAuthProfile:   clean(stringValue(svc["jwt_auth_profile"])),
-				EPPEndpoint:      clean(stringValue(svc["eppEndpoint"])),
-				KVExactAPIMode:   clean(stringValue(svc["kvExactApiMode"])),
-				KVModelProfile:   clean(stringValue(svc["kvModelProfile"])),
-				FCEffective:      sanitizeAny(svc["fc_effective"], 0),
-				BackendTLSEff:    sanitizeAny(svc["backend_tls_effective"], 0),
-				HalfCloseEff:     sanitizeAny(svc["half_close_effective"], 0),
-				EndpointCount:    len(eps),
-			}
-			for _, epRaw := range eps {
-				ep, _ := epRaw.(map[string]any)
-				if ep == nil {
-					continue
-				}
-				ip, _ := ep["endpointIP"].(string)
-				state, _ := ep["state"].(string)
-				rule.Endpoints = append(rule.Endpoints, map[string]any{
-					"ip":          clean(ip),
-					"target_port": ep["targetPort"],
-					"state":       clean(state),
-					"weight":      ep["weight"],
-					"ep_role":     ep["ep_role"],
-					"nixl_port":   ep["nixl_port"],
-				})
+			rule, ok := projectLBRule(entry)
+			if !ok {
+				continue
 			}
 			matched = append(matched, rule)
 		}
@@ -410,6 +369,63 @@ func (d *Deps) lbList(string) sdk.ToolHandlerFor[lbListIn, lbListOut] {
 		d.audit("lb_list", c.Name(), true, "")
 		return nil, out, nil
 	}
+}
+
+// projectLBRule is the read-back projection of one LoadbalanceEntry, shared
+// by lb_list and lb_get. ok is false when the entry has no serviceArguments.
+func projectLBRule(entry map[string]any) (lbRule, bool) {
+	svc, _ := entry["serviceArguments"].(map[string]any)
+	if svc == nil {
+		return lbRule{}, false
+	}
+	name, _ := svc["name"].(string)
+	extIP, _ := svc["externalIP"].(string)
+	proto, _ := svc["protocol"].(string)
+	eps, _ := entry["endpoints"].([]any)
+	rule := lbRule{
+		Name:             clean(name),
+		ExternalIP:       clean(extIP),
+		Port:             svc["port"],
+		Protocol:         clean(proto),
+		Mode:             svc["mode"],
+		Host:             clean(stringValue(svc["host"])),
+		PathPrefix:       clean(stringValue(svc["path_prefix"])),
+		ModelName:        clean(stringValue(svc["model_name"])),
+		SSEMode:          boolValue(svc["sse_mode"]),
+		PDDisaggMode:     boolValue(svc["pd_disagg_mode"]),
+		PDCacheAwareMode: boolValue(svc["pd_cache_aware_mode"]),
+		APIKeyAuth:       clean(stringValue(svc["api_key_auth"])),
+		KVExactMode:      intValue(svc["kvExactMode"]),
+		KVEngineType:     clean(stringValue(svc["kvEngineType"])),
+		ID:               clean(stringValue(svc["id"])),
+		AdminStateUp:     boolPtrValue(svc["adminStateUp"]),
+		Security:         sanitizeAny(svc["security"], 0),
+		JWTAuthProfile:   clean(stringValue(svc["jwt_auth_profile"])),
+		EPPEndpoint:      clean(stringValue(svc["eppEndpoint"])),
+		KVExactAPIMode:   clean(stringValue(svc["kvExactApiMode"])),
+		KVModelProfile:   clean(stringValue(svc["kvModelProfile"])),
+		FCEffective:      sanitizeAny(svc["fc_effective"], 0),
+		BackendTLSEff:    sanitizeAny(svc["backend_tls_effective"], 0),
+		HalfCloseEff:     sanitizeAny(svc["half_close_effective"], 0),
+		EndpointCount:    len(eps),
+	}
+	for _, epRaw := range eps {
+		ep, _ := epRaw.(map[string]any)
+		if ep == nil {
+			continue
+		}
+		ip, _ := ep["endpointIP"].(string)
+		state, _ := ep["state"].(string)
+		rule.Endpoints = append(rule.Endpoints, map[string]any{
+			"ip":          clean(ip),
+			"target_port": ep["targetPort"],
+			"state":       clean(state),
+			"weight":      ep["weight"],
+			"ep_role":     ep["ep_role"],
+			"nixl_port":   ep["nixl_port"],
+		})
+	}
+	return rule, true
 }
 
 // ---- ct_list ----
