@@ -45,7 +45,8 @@ Prometheus server is configured.
   TTFB/TTFT latency histograms, rate-limit drops, per-model/tenant labels.
 - loxilb_healthy_endpoints / loxilb_unhealthy_endpoints — endpoint probe
   results feeding the NoHealthyEndpoints/UnhealthyEndpoints alerts.
-- loxilb_active_conntracks and flow/traffic families — dataplane load.
+- loxilb_active_conntrack_entries / loxilb_conntrack_max_entries and the
+  flow/traffic families — dataplane load and conntrack headroom.
 
 ## Known caveats
 

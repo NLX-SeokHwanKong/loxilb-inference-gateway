@@ -362,7 +362,7 @@ type apikeyCreateIn struct {
 	Name          string   `json:"name,omitempty" jsonschema:"human-readable key label"`
 	AllowedModels []string `json:"allowed_models,omitempty" jsonschema:"model identifiers this key may access; empty allows all"`
 	RateLimitRPS  int      `json:"rate_limit_rps,omitempty" jsonschema:"max requests per second for this key"`
-	BurstSize     int      `json:"burst_size,omitempty" jsonschema:"burst capacity above the steady-state limit"`
+	BurstSize     int      `json:"burst_size,omitempty" jsonschema:"total request-bucket capacity, not additional capacity above rate_limit_rps; zero uses the per-key RPS; a nonpositive RPS skips this limiter"`
 	TokensPerMin  int      `json:"tokens_per_min,omitempty" jsonschema:"max LLM tokens per minute for this key"`
 	ExpiresAt     string   `json:"expires_at,omitempty" jsonschema:"optional expiry timestamp (RFC3339)"`
 	Reveal        bool     `json:"reveal,omitempty" jsonschema:"true to return the raw key inline instead of writing it to a file on the bridge host (discouraged: the key then enters model context)"`
@@ -644,6 +644,7 @@ type kvInventoryOut struct {
 	ServiceID int64  `json:"service_id"`
 	EpIdx     int    `json:"ep_idx"`
 	HashAlgo  string `json:"hash_algo,omitempty"`
+	Admission string `json:"admission,omitempty" jsonschema:"TRT-LLM server-info admission verdict for this endpoint; absent when no verdict exists (ZMQ engines, or a gate awaiting its first answer); not by itself proof of KV-exact readiness"`
 	Total     int    `json:"total"`
 	Returned  int    `json:"returned"`
 	Blocks    []any  `json:"blocks,omitempty"`
@@ -670,9 +671,10 @@ func (d *Deps) aiKvInventoryGet() sdk.ToolHandlerFor[kvInventoryIn, kvInventoryO
 			"ep_idx":     {strconv.Itoa(in.EpIdx)},
 		}
 		var env struct {
-			HashAlgo string `json:"hash_algo"`
-			Blocks   []any  `json:"blocks"`
-			Total    int    `json:"total"`
+			HashAlgo  string `json:"hash_algo"`
+			Admission string `json:"admission"`
+			Blocks    []any  `json:"blocks"`
+			Total     int    `json:"total"`
 		}
 		if err := c.GetQ(ctx, "/config/ai/kv/inventory", q, &env); err != nil {
 			d.audit("ai_kv_inventory_get", c.Name(), false, err.Error())
@@ -683,6 +685,7 @@ func (d *Deps) aiKvInventoryGet() sdk.ToolHandlerFor[kvInventoryIn, kvInventoryO
 			ServiceID: in.ServiceID,
 			EpIdx:     in.EpIdx,
 			HashAlgo:  clean(env.HashAlgo),
+			Admission: clean(env.Admission),
 			Total:     env.Total,
 		}
 		if out.Total == 0 {
