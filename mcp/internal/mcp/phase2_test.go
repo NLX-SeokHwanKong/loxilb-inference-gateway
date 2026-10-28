@@ -60,7 +60,8 @@ func newMockLoxilb(t *testing.T) *mockLoxilb {
 		case "/netlox/v1/config/loadbalancer/externalipaddress/1.2.3.4/port/80/protocol/tcp":
 			w.Write([]byte(mockRuleJSON)) // the composite-key pre-read of lb_create
 		case "/netlox/v1/config/securityrate/all":
-			w.Write([]byte(`{"securityrateAttr":[{"synEnabled":false,"synThreshold":1000,"cookieThreshold":2000,"connRateEnabled":false,"ratePerSec":500,"udpEnabled":false,"udpPktThreshold":3000,"udpBandwidthMB":10,"whitelistIps":null,"synBlocked":7,"connBlocked":3,"udpBlocked":0}]}`))
+			// Zero-valued fields (the enable flags, udpBlocked) are omitted, as the gateway does.
+			w.Write([]byte(`{"securityrateAttr":[{"synThreshold":1000,"cookieThreshold":2000,"ratePerSec":500,"udpPktThreshold":3000,"udpBandwidthMB":10,"whitelistIps":null,"synBlocked":7,"connBlocked":3}]}`))
 		case "/netlox/v1/config/gpu/status":
 			w.Write([]byte(`{"enabled":false,"routing_mode":"chwbl","worker_count":2,"ebpf_map_loaded":true}`))
 		case "/netlox/v1/config/llamafirewall/status":

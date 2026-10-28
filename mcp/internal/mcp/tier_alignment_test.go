@@ -226,6 +226,9 @@ func TestTierAlignmentPreviewShowsCurrentAndDiff(t *testing.T) {
 	if cur["ratePerSec"] != float64(500) || cur["synThreshold"] != float64(1000) {
 		t.Errorf("current not read from the gateway: %v", cur)
 	}
+	if cur["connRateEnabled"] != false || cur["synEnabled"] != false {
+		t.Errorf("fields the GET omits must read as their zero value: %v", cur)
+	}
 	prop, _ := out["proposed"].(map[string]any)
 	if prop["ratePerSec"] != float64(777) || prop["synThreshold"] != float64(1000) || prop["connRateEnabled"] != true {
 		t.Errorf("proposed is not current overlaid with the change: %v", prop)
@@ -254,6 +257,9 @@ func TestTierAlignmentPreviewShowsCurrentAndDiff(t *testing.T) {
 	}
 	if body["ratePerSec"] != float64(777) {
 		t.Errorf("ratePerSec not applied: %v", body)
+	}
+	if v, present := body["whitelistIps"]; present && v == nil {
+		t.Errorf("an absent list must not be sent as null: %v", body)
 	}
 
 	// pii_url_patterns_set add: the proposed list is the current one plus the new pattern.

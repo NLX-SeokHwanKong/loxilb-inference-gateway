@@ -1233,6 +1233,14 @@ var secrateConfigKeys = []string{
 	"aggregateSynThreshold", "aggregateConnRatePerSec", "aggregateUdpPktThreshold", "aggregateUdpBandwidthMB",
 }
 
+// secrateRequired are the keys POST /config/securityrate requires. The GET
+// omits a field whose value is zero (false, 0), so an absent key is read as
+// its zero value before the supplied fields are merged in.
+var secrateRequired = map[string]any{
+	"synEnabled": false, "synThreshold": 0, "cookieThreshold": 0, "connRateEnabled": false,
+	"ratePerSec": 0, "udpEnabled": false, "udpPktThreshold": 0, "udpBandwidthMB": 0,
+}
+
 // secrateCounterKeys are the counters PUT /config/securityrate/reset zeroes.
 var secrateCounterKeys = []string{
 	"synBlocked", "synPassed", "synCookies", "connBlocked", "connPassed", "udpBlocked", "udpPassed",
@@ -1288,8 +1296,13 @@ func (d *Deps) secrateSet() sdk.ToolHandlerFor[secrateSetIn, mutOut] {
 		if err != nil {
 			return nil, mutOut{}, fmt.Errorf("read of the current security rate config failed, nothing was sent: %w", err)
 		}
-		current := pick(mapValue(cur), secrateConfigKeys...)
+		current := overlay(secrateRequired, pick(mapValue(cur), secrateConfigKeys...))
 		proposed := overlay(current, patch)
+		for k, v := range proposed {
+			if v == nil {
+				delete(proposed, k) // an absent list (whitelistIps) is sent as absent, not null
+			}
+		}
 		args := in
 		args.ConfirmToken = ""
 		out, stop, err := d.gateChange("secrate_set", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
