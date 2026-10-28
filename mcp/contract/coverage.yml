@@ -12,7 +12,7 @@
 # Budgets are ratchets: they may only go down. A raise is a warning in the CI summary.
 version: 1
 budget:
-  pending_max: 86
+  pending_max: 84
   tier_gap_max: 16
 operations:
 - op: GET /audit/policy
@@ -846,8 +846,13 @@ operations:
   excluded: external worker-agent push protocol; D3
   note: owner-approved 2026-10-28
 - op: GET /diagnostics
-  pending: P1a
-  note: read; PR-A folds it into diagnose_*, PR-B1 adds diagnostics_get; owner-approved 2026-10-28
+  tools:
+  - diagnose_l4_errors
+  - diagnose_ai_latency
+  - diagnose_endpoint
+  - capacity_report
+  impact: none
+  note: folded into evidence.diagnostics of every diagnose tool (PR-A); PR-B1 adds the standalone diagnostics_get; owner-approved 2026-10-28
 - op: GET /log-archives
   tools:
   - log_archives_list
@@ -976,8 +981,11 @@ operations:
   - status_get
   impact: none
 - op: GET /status/ready
-  pending: P1a
-  note: read; PR-A folds it into health_overview/fleet_overview, PR-B1 adds the tool; owner-approved 2026-10-28
+  tools:
+  - health_overview
+  - fleet_overview
+  impact: none
+  note: folded into ready/ready_reasons of health_overview and fleet_overview (PR-A; 200 and 503 both carry the verdict); PR-B1 adds the standalone tool; owner-approved 2026-10-28
 - op: GET /version
   tools:
   - version_get

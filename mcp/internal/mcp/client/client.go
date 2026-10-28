@@ -197,6 +197,13 @@ func (c *Client) decorate(ctx context.Context, req *http.Request) {
 // do performs one JSON request against basePath+path, transparently
 // re-authenticating once on 401 when credentials are configured.
 func (c *Client) do(ctx context.Context, method, path string, in, out any) error {
+	return c.doAllow(ctx, method, path, in, out, nil)
+}
+
+// doAllow is do with a set of non-2xx statuses whose body is decoded into
+// out instead of being reported as an error (GET /status/ready answers 503
+// with the same ReadyStatus body it serves on 200).
+func (c *Client) doAllow(ctx context.Context, method, path string, in, out any, allow map[int]bool) error {
 	run := func() (*http.Response, error) {
 		var body io.Reader
 		if in != nil {
@@ -237,7 +244,7 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 	if err != nil {
 		return fmt.Errorf("target %s: %s %s: read body: %w", c.name, method, path, err)
 	}
-	if resp.StatusCode >= 300 {
+	if resp.StatusCode >= 300 && !allow[resp.StatusCode] {
 		return fmt.Errorf("target %s: %s %s: %s", c.name, method, path,
 			statusSnippet(resp.StatusCode, raw))
 	}
@@ -276,10 +283,41 @@ func (c *Client) GetQ(ctx context.Context, path string, q url.Values, out any) e
 	return c.do(ctx, http.MethodGet, path, nil, out)
 }
 
-// VersionInfo is the GET /version payload.
+// VersionInfo is the GET /version payload (VersionGetEntry). Product and
+// Features are absent on upstream loxilb and on gateway builds that predate
+// them; a caller treats their absence as "plain loxilb, no optional
+// capability claimed".
 type VersionInfo struct {
-	Version   string `json:"version"`
-	BuildInfo string `json:"buildInfo"`
+	Version   string   `json:"version"`
+	BuildInfo string   `json:"buildInfo"`
+	Product   string   `json:"product,omitempty"`
+	Features  []string `json:"features,omitempty"`
+}
+
+// ReadyStatus is the GET /status/ready verdict. The gateway answers 200 when
+// ready and 503 with the same body when not; Reasons is empty when ready.
+type ReadyStatus struct {
+	Ready   bool     `json:"ready"`
+	Reasons []string `json:"reasons"`
+}
+
+// Ready fetches GET /status/ready, decoding the 503 not-ready body as a
+// verdict rather than an error. Any other failure (no such endpoint on an
+// older build, auth, transport) is returned as an error.
+func (c *Client) Ready(ctx context.Context) (ReadyStatus, error) {
+	var rs ReadyStatus
+	err := c.doAllow(ctx, http.MethodGet, "/status/ready", nil, &rs,
+		map[int]bool{http.StatusServiceUnavailable: true})
+	return rs, err
+}
+
+// Diagnostics fetches GET /diagnostics (DiagnosticsStatus) loosely typed;
+// callers project and sanitize it, since nested reasons may carry
+// propagated error text.
+func (c *Client) Diagnostics(ctx context.Context) (map[string]any, error) {
+	var out map[string]any
+	err := c.do(ctx, http.MethodGet, "/diagnostics", nil, &out)
+	return out, err
 }
 
 // Version fetches GET /version.

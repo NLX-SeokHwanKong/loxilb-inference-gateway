@@ -76,6 +76,28 @@ const (
 
 func boolPtr(b bool) *bool { return &b }
 
+// boolPtrValue returns a pointer to v when it is a JSON boolean and nil
+// otherwise, so an absent read-back field stays absent in the projection.
+func boolPtrValue(v any) *bool {
+	b, ok := v.(bool)
+	if !ok {
+		return nil
+	}
+	return &b
+}
+
+// cleanStrings applies clean to every element; nil stays nil.
+func cleanStrings(in []string) []string {
+	if in == nil {
+		return nil
+	}
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		out = append(out, clean(s))
+	}
+	return out
+}
+
 // roAnnotations marks a tool read-only and closed-world per MCP spec hints.
 func roAnnotations(title string) *sdk.ToolAnnotations {
 	return &sdk.ToolAnnotations{
@@ -228,9 +250,11 @@ type versionIn struct {
 }
 
 type versionOut struct {
-	Target    string `json:"target"`
-	Version   string `json:"version"`
-	BuildInfo string `json:"build_info,omitempty"`
+	Target    string   `json:"target"`
+	Version   string   `json:"version"`
+	BuildInfo string   `json:"build_info,omitempty"`
+	Product   string   `json:"product,omitempty" jsonschema:"product identifier; loxilb-inference-gateway on this gateway, absent on upstream loxilb and on gateway builds that predate the field"`
+	Features  []string `json:"features,omitempty" jsonschema:"gateway-only capability tokens this build implements (epp, api_key_auth, jwt_auth_profile, ...); absent on builds that predate the field"`
 }
 
 func (d *Deps) versionGet(string) sdk.ToolHandlerFor[versionIn, versionOut] {
@@ -247,6 +271,8 @@ func (d *Deps) versionGet(string) sdk.ToolHandlerFor[versionIn, versionOut] {
 			Target:    c.Name(),
 			Version:   clean(v.Version),
 			BuildInfo: clean(v.BuildInfo),
+			Product:   clean(v.Product),
+			Features:  cleanStrings(v.Features),
 		}, nil
 	}
 }
@@ -274,6 +300,16 @@ type lbRule struct {
 	APIKeyAuth       string `json:"api_key_auth,omitempty"`
 	KVExactMode      int    `json:"kv_exact_mode,omitempty"`
 	KVEngineType     string `json:"kv_engine_type,omitempty"`
+	ID               string `json:"id,omitempty" jsonschema:"rule identifier assigned by the gateway"`
+	AdminStateUp     *bool  `json:"admin_state_up,omitempty" jsonschema:"administrative state; false pauses the rule without deleting it"`
+	Security         any    `json:"security,omitempty" jsonschema:"TLS security mode of the listener as returned by the gateway"`
+	JWTAuthProfile   string `json:"jwt_auth_profile,omitempty" jsonschema:"JWT auth profile the Bearer arm of api_key_auth validates against"`
+	EPPEndpoint      string `json:"epp_endpoint,omitempty" jsonschema:"Endpoint Picker (EPP) address consulted by the data plane"`
+	KVExactAPIMode   string `json:"kv_exact_api_mode,omitempty" jsonschema:"request API surfaces a KV-exact rule serves, as declared"`
+	KVModelProfile   string `json:"kv_model_profile,omitempty" jsonschema:"KV model profile bound to the rule"`
+	FCEffective      any    `json:"fc_effective,omitempty" jsonschema:"flow-control values in force, resolved by the data plane (read-back only)"`
+	BackendTLSEff    any    `json:"backend_tls_effective,omitempty" jsonschema:"backend TLS state in force, resolved by the data plane (read-back only)"`
+	HalfCloseEff     any    `json:"half_close_effective,omitempty" jsonschema:"half-close handling in force, resolved by the data plane (read-back only)"`
 	EndpointCount    int    `json:"endpoint_count"`
 	Endpoints        []any  `json:"endpoints,omitempty"`
 }
@@ -335,6 +371,16 @@ func (d *Deps) lbList(string) sdk.ToolHandlerFor[lbListIn, lbListOut] {
 				APIKeyAuth:       clean(stringValue(svc["api_key_auth"])),
 				KVExactMode:      intValue(svc["kvExactMode"]),
 				KVEngineType:     clean(stringValue(svc["kvEngineType"])),
+				ID:               clean(stringValue(svc["id"])),
+				AdminStateUp:     boolPtrValue(svc["adminStateUp"]),
+				Security:         sanitizeAny(svc["security"], 0),
+				JWTAuthProfile:   clean(stringValue(svc["jwt_auth_profile"])),
+				EPPEndpoint:      clean(stringValue(svc["eppEndpoint"])),
+				KVExactAPIMode:   clean(stringValue(svc["kvExactApiMode"])),
+				KVModelProfile:   clean(stringValue(svc["kvModelProfile"])),
+				FCEffective:      sanitizeAny(svc["fc_effective"], 0),
+				BackendTLSEff:    sanitizeAny(svc["backend_tls_effective"], 0),
+				HalfCloseEff:     sanitizeAny(svc["half_close_effective"], 0),
 				EndpointCount:    len(eps),
 			}
 			for _, epRaw := range eps {
@@ -500,6 +546,10 @@ type healthOut struct {
 	Target         string            `json:"target"`
 	Reachable      bool              `json:"reachable"`
 	Version        string            `json:"version,omitempty"`
+	Product        string            `json:"product,omitempty" jsonschema:"product identifier from GET /version; absent on upstream loxilb and on builds that predate the field"`
+	Features       []string          `json:"features,omitempty" jsonschema:"gateway-only capability tokens from GET /version; absent on builds that predate the field"`
+	Ready          *bool             `json:"ready,omitempty" jsonschema:"configuration-readiness verdict of GET /status/ready; absent when the endpoint is unavailable (see errors.ready)"`
+	ReadyReasons   []string          `json:"ready_reasons,omitempty" jsonschema:"why the gateway is not ready; empty when ready"`
 	LBRuleCount    int               `json:"lb_rule_count"`
 	ConntrackTotal int               `json:"conntrack_total"`
 	CtByState      map[string]int    `json:"ct_by_state,omitempty"`
@@ -543,7 +593,7 @@ func (d *Deps) healthProbe(ctx context.Context, c *client.Client) healthOut {
 			mu.Unlock()
 		}
 
-		wg.Add(4)
+		wg.Add(5)
 		go func() {
 			defer wg.Done()
 			if v, err := c.Version(ctx); err != nil {
@@ -551,7 +601,23 @@ func (d *Deps) healthProbe(ctx context.Context, c *client.Client) healthOut {
 			} else {
 				mu.Lock()
 				out.Version = clean(v.Version)
+				out.Product = clean(v.Product)
+				out.Features = cleanStrings(v.Features)
 				out.Reachable = true
+				mu.Unlock()
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			// GET /status/ready: 200 and 503 both carry the verdict; an
+			// older build without the endpoint degrades into errors.ready.
+			if rs, err := c.Ready(ctx); err != nil {
+				fail("ready", err)
+			} else {
+				ready := rs.Ready
+				mu.Lock()
+				out.Ready = &ready
+				out.ReadyReasons = cleanStrings(rs.Reasons)
 				mu.Unlock()
 			}
 		}()
