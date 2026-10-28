@@ -1322,7 +1322,7 @@
    "loxilb_restore_total": {
     "status": "verified-static",
     "writer_sources": [
-     { "symbol": "observeRestore", "kind": "func", "file": "pkg/snapshot/metrics.go", "def_line": 181, "writes": "restoreTotal", "note": "result label comes from restoreResultLabel, which folds a nil result to \"rejected\" and an error to \"error\"; the mode/result children are pre-created in init at :139 so the series exist at 0 from the first scrape" },
+     { "symbol": "observeRestore", "kind": "func", "file": "pkg/snapshot/metrics.go", "def_line": 195, "writes": "restoreTotal", "note": "result label comes from restoreResultLabel, which folds a nil result to \"rejected\" and an error to \"error\"; the mode/result children are pre-created in init at :139 so the series exist at 0 from the first scrape" },
      { "symbol": "Restore", "kind": "method", "receiver": "Engine", "file": "pkg/snapshot/restore.go", "def_line": 220, "call_line": 225, "calls": "observeRestore", "note": "deferred, so every Restore outcome is counted once" },
      { "symbol": "ConfigPostRestore", "kind": "func", "file": "api/restapi/handler/snapshot.go", "def_line": 286, "call_line": 335, "calls": "Restore", "entry_point": "http-handler", "note": "boot replay reaches the same writer through applySnapshotBoot (api/loxinlp/nlp.go:1821)" }
     ],
@@ -1331,7 +1331,7 @@
    "loxilb_restore_duration_seconds": {
     "status": "verified-static",
     "writer_sources": [
-     { "symbol": "observeRestore", "kind": "func", "file": "pkg/snapshot/metrics.go", "def_line": 181, "writes": "restoreDuration" },
+     { "symbol": "observeRestore", "kind": "func", "file": "pkg/snapshot/metrics.go", "def_line": 195, "writes": "restoreDuration" },
      { "symbol": "Restore", "kind": "method", "receiver": "Engine", "file": "pkg/snapshot/restore.go", "def_line": 220, "call_line": 225, "calls": "observeRestore" },
      { "symbol": "ConfigPostRestore", "kind": "func", "file": "api/restapi/handler/snapshot.go", "def_line": 286, "call_line": 335, "calls": "Restore", "entry_point": "http-handler" }
     ],
@@ -1340,7 +1340,7 @@
    "loxilb_last_restore_timestamp_seconds": {
     "status": "verified-static",
     "writer_sources": [
-     { "symbol": "observeRestore", "kind": "func", "file": "pkg/snapshot/metrics.go", "def_line": 181, "writes": "lastRestoreTimestamp", "note": "advanced only when committed is true, so dry-runs deliberately leave it unchanged" },
+     { "symbol": "observeRestore", "kind": "func", "file": "pkg/snapshot/metrics.go", "def_line": 195, "writes": "lastRestoreTimestamp", "note": "advanced only when committed is true, so dry-runs deliberately leave it unchanged" },
      { "symbol": "Restore", "kind": "method", "receiver": "Engine", "file": "pkg/snapshot/restore.go", "def_line": 220, "call_line": 225, "calls": "observeRestore" },
      { "symbol": "ConfigPostRestore", "kind": "func", "file": "api/restapi/handler/snapshot.go", "def_line": 286, "call_line": 335, "calls": "Restore", "entry_point": "http-handler" }
     ],
@@ -1357,8 +1357,8 @@
    "loxilb_config_dirty": {
     "status": "writer-mapped",
     "writer_sources": [
-     { "symbol": "MarkConfigMutated", "kind": "func", "file": "pkg/snapshot/metrics.go", "def_line": 99, "writes": "configDirty", "note": "cleared again by completePersistSeq at :127, and only when no mutation landed while the persist was running -- so the gauge over-reports for one debounce period rather than under-reporting" },
-     { "symbol": "AutoPersistMiddleware", "kind": "func", "file": "api/restapi/handler/snapshot.go", "def_line": 749, "call_line": 758, "calls": "MarkConfigMutated", "entry_point": "http-handler", "note": "called on every 2xx eligible mutation, including when auto-persist is off -- there the gauge staying at 1 is the operational signal" }
+     { "symbol": "MarkConfigMutated", "kind": "func", "file": "pkg/snapshot/metrics.go", "def_line": 102, "writes": "configDirty", "note": "cleared again by completePersistSeq at :127, and only when no mutation landed while the persist was running -- so the gauge over-reports for one debounce period rather than under-reporting" },
+     { "symbol": "AutoPersistMiddleware", "kind": "func", "file": "api/restapi/handler/snapshot.go", "def_line": 845, "call_line": 859, "calls": "MarkConfigMutated", "entry_point": "http-handler", "note": "called on every 2xx eligible mutation, including when auto-persist is off -- there the gauge staying at 1 is the operational signal" }
     ],
     "evidence": "pkg/snapshot/config_dirty_test.go: four tests (mutate-then-persist clears, mutation-during-persist stays dirty, out-of-order completions, concurrent mutations) assert the exact gauge value on both sides -- but they call MarkConfigMutated and completePersistSeq directly, which section B.7 tier V1 does not accept as acceptance evidence: nothing drives AutoPersistMiddleware. Scenario M15 owns the runtime proof."
    },
@@ -1387,7 +1387,7 @@
    "loxilb_boot_config_conflict_total": {
     "status": "writer-mapped",
     "writer_sources": [
-     { "symbol": "BootConfigConflictInc", "kind": "func", "file": "pkg/snapshot/metrics.go", "def_line": 192, "writes": "bootConfigConflict" },
+     { "symbol": "BootConfigConflictInc", "kind": "func", "file": "pkg/snapshot/metrics.go", "def_line": 206, "writes": "bootConfigConflict" },
      { "symbol": "LbSessionGet", "kind": "func", "file": "api/loxinlp/nlp.go", "def_line": 1969, "call_line": 1995, "calls": "BootConfigConflictInc", "note": "boot config replay; increments only when both snapshot.json and legacy *.txt artifacts exist and newest-wins arbitration ran" },
      { "tail": "loxinet-nlp-boot" }
     ],

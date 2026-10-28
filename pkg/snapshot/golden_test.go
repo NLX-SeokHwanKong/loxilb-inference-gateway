@@ -81,7 +81,46 @@ func goldenDocument() *Document {
 		Name: "ipsec-cert-1", CertificatePEM: "GOLDEN-CERT-PEM",
 		PrivateKeyPEM: goldenEncrypt("GOLDEN-KEY-PEM"), Description: "golden ipsec cert",
 	}}
+	// One full set of the rule's admission and priority-band knobs, so the
+	// cross-version path (decode, checksum, migrate, restore) carries the
+	// 1.10-1.12 rule fields. Set here rather than in sampleDocument, whose
+	// other users pin their own expectations of the rule.
+	setGoldenRuleKnobs(&doc.Domains.LoadBalancer[0].Serv)
 	return doc
+}
+
+func setGoldenRuleKnobs(s *cmn.LbServiceArg) {
+	s.FcWakePolicy = "weighted"
+	s.FcBandWeights = "8:3:1"
+	s.FcBandMinSharePct = "0:20:0"
+	s.FcCriticalReservePct = 10
+	s.FcBandWaitMs = "500:2000:1000"
+	s.FcBandQueuePct = "30:50:20"
+	s.FcShedQueue = "on"
+	s.FcTenantWake = "rr"
+	s.FcLlmdHeaders = "on"
+	s.AIDefaultReservation = "on"
+	s.AIDefaultMaxTokens = 2000
+	s.AIObjectiveStrict = true
+}
+
+// stripRuleKnobs clears the rule knobs a golden of the given schema does
+// not carry. The priority-band knobs are 1.12 fields and the strict
+// objective flag a 1.11 one. The default reservation pair is a 1.10 field,
+// but the 1.10 golden was written before the fixture declared it and stays
+// byte-identical; 1.11 is the first golden that carries it.
+func stripRuleKnobs(doc *Document, schemaVersion string) {
+	for i := range doc.Domains.LoadBalancer {
+		s := &doc.Domains.LoadBalancer[i].Serv
+		s.FcWakePolicy, s.FcBandWeights, s.FcBandMinSharePct = "", "", ""
+		s.FcCriticalReservePct = 0
+		s.FcBandWaitMs, s.FcBandQueuePct, s.FcShedQueue, s.FcTenantWake, s.FcLlmdHeaders = "", "", "", "", ""
+		if schemaVersion == "1.11" {
+			continue
+		}
+		s.AIObjectiveStrict = false
+		s.AIDefaultReservation, s.AIDefaultMaxTokens = "", 0
+	}
 }
 
 // legacyGoldenDocument reshapes the fixture into what a gateway of the
@@ -101,8 +140,16 @@ func withoutDomain(names []string, drop string) []string {
 func legacyGoldenDocument(schemaVersion string) *Document {
 	doc := goldenDocument()
 	doc.SchemaVersion = schemaVersion
+	stripRuleKnobs(doc, schemaVersion)
+	// bgppolicyassignment is a 1.12 domain -- every legacy schema predates
+	// it, in content and in declared coverage alike.
 	doc.Domains.BGPPolicyAssignment = nil
 	doc.IncludedDomains = withoutDomain(doc.IncludedDomains, DomainBGPPolicyAssignment)
+	if schemaVersion == "1.11" {
+		// 1.11 had everything else current: netidentity, the JWT
+		// priority class and the strict objective flag included.
+		return doc
+	}
 	// netidentity is a 1.11 domain -- every legacy schema predates it, in
 	// content and in declared coverage alike.
 	doc.Domains.NetIdentity = nil
@@ -241,10 +288,46 @@ func TestGoldenCurrentSchema(t *testing.T) {
 	writeOrCompareGolden(t, goldenDocument(), SchemaVersion)
 }
 
+// TestGoldenCurrentSchemaReplaysRuleKnobs: restoring the current golden
+// hands every admission and priority-band knob of its rule to the
+// load-balancer hook unchanged.
+func TestGoldenCurrentSchemaReplaysRuleKnobs(t *testing.T) {
+	raw, err := os.ReadFile(goldenPath(SchemaVersion))
+	if err != nil {
+		t.Fatalf("read golden: %v", err)
+	}
+	defer SetNodeSecretForTest(goldenNodeSecret)()
+	hooks := newMockHooks()
+	res, err := newTestEngine(hooks, t.TempDir()).Restore(raw, RestoreOptions{Mode: ModeCommit})
+	if err != nil || len(res.Errors) > 0 || res.Result != ResultOK {
+		t.Fatalf("golden %s no longer restores: %+v %v", SchemaVersion, res, err)
+	}
+	var want cmn.LbServiceArg
+	setGoldenRuleKnobs(&want)
+	var got *cmn.LbServiceArg
+	for i := range hooks.lbRules {
+		if hooks.lbRules[i].Serv.ServIP == goldenDocument().Domains.LoadBalancer[0].Serv.ServIP {
+			got = &hooks.lbRules[i].Serv
+		}
+	}
+	if got == nil {
+		t.Fatalf("the golden rule was not replayed: %+v", hooks.lbRules)
+	}
+	g := *got
+	if g.FcWakePolicy != want.FcWakePolicy || g.FcBandWeights != want.FcBandWeights ||
+		g.FcBandMinSharePct != want.FcBandMinSharePct || g.FcCriticalReservePct != want.FcCriticalReservePct ||
+		g.FcBandWaitMs != want.FcBandWaitMs || g.FcBandQueuePct != want.FcBandQueuePct ||
+		g.FcShedQueue != want.FcShedQueue || g.FcTenantWake != want.FcTenantWake ||
+		g.FcLlmdHeaders != want.FcLlmdHeaders || g.AIDefaultReservation != want.AIDefaultReservation ||
+		g.AIDefaultMaxTokens != want.AIDefaultMaxTokens || g.AIObjectiveStrict != want.AIObjectiveStrict {
+		t.Fatalf("replayed rule lost knobs:\n got %+v\nwant %+v", g, want)
+	}
+}
+
 // TestGoldenLegacySchemas: every older-schema golden still decodes,
 // verifies, migrates to the current schema, and passes a dry-run restore.
 func TestGoldenLegacySchemas(t *testing.T) {
-	legacy := []string{"1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9", "1.10"}
+	legacy := []string{"1.0", "1.1", "1.2", "1.3", "1.4", "1.5", "1.6", "1.7", "1.8", "1.9", "1.10", "1.11"}
 	for _, version := range legacy {
 		version := version
 		t.Run("v"+version, func(t *testing.T) {
@@ -279,19 +362,19 @@ func TestGoldenLegacySchemas(t *testing.T) {
 			if doc.Domains.JWTAuthProfile == nil {
 				t.Fatalf("migration left jwtauthprofile nil (want normalized empty)")
 			}
-			if len(doc.Domains.NetIdentity) != 0 {
+			if len(doc.Domains.NetIdentity) != 0 && version != "1.11" {
 				t.Fatalf("migration invented network-identity bindings: %+v", doc.Domains.NetIdentity)
 			}
-			if doc.Domains.HalfClose != nil && version != "1.7" && version != "1.8" && version != "1.9" && version != "1.10" {
+			if doc.Domains.HalfClose != nil && version != "1.7" && version != "1.8" && version != "1.9" && version != "1.10" && version != "1.11" {
 				t.Fatalf("migration invented halfclose settings: %+v", doc.Domains.HalfClose)
 			}
-			if hc := doc.Domains.HalfClose; hc != nil && hc.DefaultMode != "" && version != "1.9" && version != "1.10" {
+			if hc := doc.Domains.HalfClose; hc != nil && hc.DefaultMode != "" && version != "1.9" && version != "1.10" && version != "1.11" {
 				t.Fatalf("migration invented a half-close default mode: %+v", hc)
 			}
-			if len(doc.Domains.AuditSink) != 0 && version != "1.8" && version != "1.9" && version != "1.10" {
+			if len(doc.Domains.AuditSink) != 0 && version != "1.8" && version != "1.9" && version != "1.10" && version != "1.11" {
 				t.Fatalf("migration invented audit sinks: %+v", doc.Domains.AuditSink)
 			}
-			if version == "1.5" || version == "1.6" || version == "1.7" || version == "1.8" || version == "1.9" || version == "1.10" {
+			if version == "1.5" || version == "1.6" || version == "1.7" || version == "1.8" || version == "1.9" || version == "1.10" || version == "1.11" {
 				// 1.5+ documents carry a lineage generation; migration
 				// must preserve it.
 				if doc.Generation != 7 {
@@ -356,7 +439,7 @@ func TestGoldenLegacySchemas(t *testing.T) {
 				// These declared every domain but netidentity; migration
 				// must not sneak it in (an old document must not wipe live
 				// bindings). 1.8's halfclose simply carries no default
-				// mode, and neither 1.8 nor 1.9 has a default reservation
+				// mode, and none of these goldens carries admission knobs
 				// on its rules.
 				for _, name := range doc.IncludedDomains {
 					if name == DomainNetIdentity {
@@ -367,9 +450,32 @@ func TestGoldenLegacySchemas(t *testing.T) {
 					t.Fatalf("unexpected coverage width for %s: %v", version, doc.IncludedDomains)
 				}
 				for _, lb := range doc.Domains.LoadBalancer {
-					if version != "1.10" && (lb.Serv.AIDefaultReservation != "" || lb.Serv.AIDefaultMaxTokens != 0) {
-						t.Fatalf("migration invented a default reservation on a %s rule: %+v", version, lb.Serv)
+					if lb.Serv.AIDefaultReservation != "" || lb.Serv.AIDefaultMaxTokens != 0 || lb.Serv.AIObjectiveStrict {
+						t.Fatalf("migration invented admission knobs on a %s rule: %+v", version, lb.Serv)
 					}
+				}
+			case "1.11":
+				// 1.11 declared every domain but bgppolicyassignment;
+				// migration must not sneak it in (an old document must not
+				// remove live assignments), and the rule keeps its
+				// admission knobs without gaining band knobs.
+				for _, name := range doc.IncludedDomains {
+					if name == DomainBGPPolicyAssignment {
+						t.Fatalf("1.11 golden gained bgppolicyassignment coverage through migration: %v", doc.IncludedDomains)
+					}
+				}
+				if len(doc.IncludedDomains) != len(Registry)-1 {
+					t.Fatalf("unexpected coverage width for 1.11: %v", doc.IncludedDomains)
+				}
+				if len(doc.Domains.NetIdentity) == 0 {
+					t.Fatalf("migration lost the 1.11 network-identity bindings")
+				}
+				s := doc.Domains.LoadBalancer[0].Serv
+				if s.AIDefaultReservation != "on" || s.AIDefaultMaxTokens != 2000 || !s.AIObjectiveStrict {
+					t.Fatalf("migration lost the 1.11 admission knobs: %+v", s)
+				}
+				if s.FcWakePolicy != "" || s.FcBandWeights != "" || s.FcCriticalReservePct != 0 {
+					t.Fatalf("migration invented band knobs on a 1.11 rule: %+v", s)
 				}
 			default:
 				// Pre-1.2 documents never declared coverage; the 1.1->1.2
@@ -383,7 +489,7 @@ func TestGoldenLegacySchemas(t *testing.T) {
 
 			hooks := newMockHooks()
 			e := newTestEngine(hooks, t.TempDir())
-			if version == "1.5" || version == "1.6" || version == "1.7" || version == "1.8" || version == "1.9" || version == "1.10" {
+			if version == "1.5" || version == "1.6" || version == "1.7" || version == "1.8" || version == "1.9" || version == "1.10" || version == "1.11" {
 				// The 1.5+ fixtures carry enc:v1 IPsec secrets pinned to
 				// the golden node secret; the dry run has to decrypt them.
 				defer SetNodeSecretForTest(goldenNodeSecret)()

@@ -313,13 +313,14 @@ func TestLbSnapshotMCPNullDoesNotBecomeLegacy(t *testing.T) {
 	}
 }
 
-// A 1.12 document written before the priority band knobs existed applies
-// its load-balancer rule with every band field at its default: the
-// switches inherit, the triples and the reserve are none. The rule layer's
-// side, that such a rule resolves to the same declaration on every replay,
-// is pinned in pkg/loxinet (TestFcRuleBandAbsentIsDefault).
+// A 1.12 document written before the priority band knobs existed (the
+// frozen testdata/snapshot-v1.12-noband.json; the current golden declares
+// them) applies its load-balancer rule with every band field at its
+// default: the switches inherit, the triples and the reserve are none. The
+// rule layer's side, that such a rule resolves to the same declaration on
+// every replay, is pinned in pkg/loxinet (TestFcRuleBandAbsentIsDefault).
 func TestSchema112LbRuleWithoutBandKnobs(t *testing.T) {
-	raw, err := os.ReadFile("testdata/snapshot-v1.12.json")
+	raw, err := os.ReadFile("testdata/snapshot-v1.12-noband.json")
 	if err != nil {
 		t.Fatal(err)
 	}

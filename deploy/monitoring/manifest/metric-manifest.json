@@ -1,8 +1,8 @@
 {
  "schema_version": 1,
  "provenance": {
-  "generated_at": "2026-10-27T02:34:22+00:00",
-  "source_revision": "a6c7a0d33718204d7292d04c30eb34ceef39d3c0"
+  "generated_at": "2026-10-28T01:12:41+00:00",
+  "source_revision": "8f2fc8000208edaf9e6ade671601b62e6dd3439b"
  },
  "contract": {
   "total": 354,
@@ -6775,7 +6775,7 @@
      "symbol": "BootConfigConflictInc",
      "kind": "func",
      "file": "pkg/snapshot/metrics.go",
-     "def_line": 192,
+     "def_line": 206,
      "writes": "bootConfigConflict"
     },
     {
@@ -7073,7 +7073,7 @@
      "symbol": "MarkConfigMutated",
      "kind": "func",
      "file": "pkg/snapshot/metrics.go",
-     "def_line": 99,
+     "def_line": 102,
      "writes": "configDirty",
      "note": "cleared again by completePersistSeq at :127, and only when no mutation landed while the persist was running -- so the gauge over-reports for one debounce period rather than under-reporting"
     },
@@ -7081,8 +7081,8 @@
      "symbol": "AutoPersistMiddleware",
      "kind": "func",
      "file": "api/restapi/handler/snapshot.go",
-     "def_line": 749,
-     "call_line": 758,
+     "def_line": 845,
+     "call_line": 859,
      "calls": "MarkConfigMutated",
      "entry_point": "http-handler",
      "note": "called on every 2xx eligible mutation, including when auto-persist is off -- there the gauge staying at 1 is the operational signal"
@@ -8970,7 +8970,7 @@
      "symbol": "observeRestore",
      "kind": "func",
      "file": "pkg/snapshot/metrics.go",
-     "def_line": 181,
+     "def_line": 195,
      "writes": "lastRestoreTimestamp",
      "note": "advanced only when committed is true, so dry-runs deliberately leave it unchanged"
     },
@@ -15898,7 +15898,7 @@
      "symbol": "observeRestore",
      "kind": "func",
      "file": "pkg/snapshot/metrics.go",
-     "def_line": 181,
+     "def_line": 195,
      "writes": "restoreDuration"
     },
     {
@@ -15951,7 +15951,7 @@
      "symbol": "observeRestore",
      "kind": "func",
      "file": "pkg/snapshot/metrics.go",
-     "def_line": 181,
+     "def_line": 195,
      "writes": "restoreTotal",
      "note": "result label comes from restoreResultLabel, which folds a nil result to \"rejected\" and an error to \"error\"; the mode/result children are pre-created in init at :139 so the series exist at 0 from the first scrape"
     },

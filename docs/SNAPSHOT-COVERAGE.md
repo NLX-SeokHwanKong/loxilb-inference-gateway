@@ -3,7 +3,7 @@
 This document states exactly which configuration a loxilb-inference-gateway
 snapshot captures, which configuration it deliberately does not, and the
 rules that make snapshot documents verifiable and byte-stable. It describes
-snapshot schema **1.5**, the version current builds emit.
+snapshot schema **1.12**, the version current builds emit.
 
 The authoritative source for everything below is code, not prose:
 
@@ -45,7 +45,7 @@ Every document describes its own coverage:
 
 ## Captured domains
 
-Twenty-one domains, listed in apply order (dependencies first; teardown runs
+Twenty-two domains, listed in apply order (dependencies first; teardown runs
 in exact reverse). The `components` parameter and the `domains.*` JSON keys
 use these names verbatim.
 
@@ -67,11 +67,12 @@ use these names verbatim.
 | 14 | `securityrate` | Security rate-limit configuration (singleton) |
 | 15 | `bfd` | BFD sessions |
 | 16 | `bgp` | BGP global config, neighbors, defined sets, policy definitions and applies |
-| 17 | `ipsec` | IPsec config, tunnels, certificates and CA certificates |
-| 18 | `cors` | CORS origin allowlist and wildcard opt-in (singleton) |
-| 19 | `tracing` | OTLP trace-export product configuration (singleton) |
-| 20 | `cert` | Managed TLS certificates, as `{id, digest}` metadata |
-| 21 | `auditsink` | Audit sinks: receiver, certificate paths and, for a secondary sink, its selection |
+| 17 | `bgppolicyassignment` | Operator BGP import/export policy bindings on neighbors |
+| 18 | `ipsec` | IPsec config, tunnels, certificates and CA certificates |
+| 19 | `cors` | CORS origin allowlist and wildcard opt-in (singleton) |
+| 20 | `tracing` | OTLP trace-export product configuration (singleton) |
+| 21 | `cert` | Managed TLS certificates, as `{id, digest}` metadata |
+| 22 | `auditsink` | Audit sinks: receiver, certificate paths and, for a secondary sink, its selection |
 
 The document additionally carries `recovery_dependencies` — not a domain
 but a document-level manifest of the external stores the configuration
@@ -84,9 +85,9 @@ that default rather than to a synthetic value.
 
 ## What is deliberately not captured
 
-Every mutating route outside the seventeen domains falls into one of four
-classes. The classification is enforced by test — there is no unclassified
-mutating route.
+Every mutating route outside the domains in the table above falls into one
+of four classes. The classification is enforced by test — there is no
+unclassified mutating route.
 
 ### External stores (referenced, never embedded)
 
@@ -95,8 +96,14 @@ record the store's identity in `recovery_dependencies`, but never its
 content:
 
 - **User accounts** (`/auth/users*`) — management database.
-- **AI API keys and tenant rate limits** (`/config/ai/apikey*`,
-  `/config/ai/tenant/ratelimit`) — key-store database.
+- **AI API keys, rate limits and objectives** (`/config/ai/apikey*`,
+  `/config/ai/tenant/ratelimit`, `/config/ai/user/ratelimit*`,
+  `/config/ai/ratelimit/defaults*`, `/config/ai/objective*`) — key-store
+  database. `aigw-lkg.json`, under the configuration directory, is a
+  read-only last-known-good copy of the objectives, classes and limit rows,
+  served while the store does not answer. It is not a write path: with no
+  key store configured these routes answer 503 rather than hold a change
+  in memory.
 - **Legacy path-based SNI certificate registrations**
   (`/sni/certificates`) — these carry no certificate id, so the `cert`
   domain cannot capture them; `excluded_domains` keeps that honest.
@@ -122,6 +129,16 @@ operator:
   policy is changeable while running and held in memory, so a restart
   returns it to its startup values. The audit sinks are captured (the
   `auditsink` domain).
+
+#### Environment-inherited defaults
+
+Process-wide flow-control and admission defaults come from the
+environment, for example `LLB_FC_WAKE_POLICY`, `LLB_FC_ADAPTIVE`,
+`LLB_FC_MAX_QUEUE_DEPTH`, `LLB_FC_TENANT_MAX_SHARE_PCT`,
+`LLB_FC_TENANT_SLOTS` and `LLB_AI_QUOTA_WARMUP_MS`. A snapshot stores what
+a rule declares — `inherit` or an absent knob — never the value it resolves
+to. Restoring onto a node with a different environment therefore yields
+different effective settings; CI `ai-tenant` X12 pins this.
 
 ### Lifecycle operations
 
@@ -175,6 +192,7 @@ forward on read.
 | 1.9 | `halfclose` gains `defaultMode` |
 | 1.10 | a `loadbalancer` rule gains `ai_default_reservation` and `ai_default_max_tokens` |
 | 1.11 | `netidentity` domain; a `jwtauthprofile` gains `priority_class` and a `loadbalancer` rule `ai_objective_strict` (both absent when unset) |
+| 1.12 | `bgppolicyassignment` domain; a `loadbalancer` rule gains the priority-band knobs (`fc_wake_policy`, `fc_band_weights`, `fc_band_min_share_pct`, `fc_critical_reserve_pct`, `fc_band_wait_ms`, `fc_band_queue_pct`, `fc_shed_queue`, `fc_tenant_wake`, `fc_llmd_headers`), all absent when unset |
 
 The resulting compatibility matrix, enforced by the version-gate and
 golden-document test suites (a golden document of every prior schema must

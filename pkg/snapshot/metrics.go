@@ -75,20 +75,23 @@ var (
 
 	configDirty = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "loxilb_config_dirty",
-		Help: "1 when the running config carries mutations not yet persisted to snapshot.json; 0 once a write-through has covered every recorded mutation. Tracks the mutating config REST surface (same eligibility as auto-persist), so a sustained 1 means recent config changes would not survive a restart.",
+		Help: "1 when the running config carries mutations not yet persisted to snapshot.json; 0 once a write-through has covered every recorded mutation. Tracks the REST routes whose configuration the snapshot carries (same eligibility as auto-persist; key-store and runtime-only writes do not count), so a sustained 1 means recent config changes would not survive a restart.",
 	})
 )
 
 // Dirty tracking is a pair of sequence numbers, not a boolean: a mutation
 // that lands while a persist is already capturing must keep the config
 // dirty even though that persist completes successfully afterwards.
-// mutationSeq advances on every successful mutating config call;
+// mutationSeq advances on every successful snapshot-class mutating call;
 // persistedSeq advances to the mutationSeq observed BEFORE a successful
 // persist's capture started. dirty == (persistedSeq != mutationSeq).
+// configGeneration is the separate, wider watermark CountConfigMutation
+// advances.
 var (
-	dirtyMu      sync.Mutex
-	mutationSeq  uint64
-	persistedSeq uint64
+	dirtyMu          sync.Mutex
+	mutationSeq      uint64
+	persistedSeq     uint64
+	configGeneration uint64
 )
 
 // MarkConfigMutated records one successful mutating config API call whose
@@ -111,7 +114,18 @@ func MarkConfigMutated() {
 func ConfigGeneration() uint64 {
 	dirtyMu.Lock()
 	defer dirtyMu.Unlock()
-	return mutationSeq
+	return configGeneration
+}
+
+// CountConfigMutation advances the mutation watermark for one successful
+// mutating config call of any lifecycle class but the lifecycle operations.
+// It is wider than MarkConfigMutated: a key-store write moves the
+// watermark, so an orphaned intent can be placed against it, but leaves
+// the snapshot clean.
+func CountConfigMutation() {
+	dirtyMu.Lock()
+	defer dirtyMu.Unlock()
+	configGeneration++
 }
 
 // beginPersistSeq returns the mutation watermark a starting persist can

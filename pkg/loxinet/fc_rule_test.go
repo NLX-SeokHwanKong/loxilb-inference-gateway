@@ -649,14 +649,15 @@ func TestFcBandEffective(t *testing.T) {
 	}
 }
 
-// A rule from a 1.12 snapshot written before the band knobs existed has no
-// band field: it resolves to every default, and replaying it over itself
+// A rule from a 1.12 snapshot written before the band knobs existed (the
+// frozen snapshot-v1.12-noband.json; the current golden declares them) has
+// no band field: it resolves to every default, and replaying it over itself
 // (a restore, or a replace with nothing band-related present) resolves to
 // the same declaration, so a missing field is the default and not a change
 // the in-place comparison would act on.
 func TestFcRuleBandAbsentIsDefault(t *testing.T) {
 	t.Setenv("LLB_FC_MAX_QUEUE_DEPTH", "")
-	raw, err := os.ReadFile("../snapshot/testdata/snapshot-v1.12.json")
+	raw, err := os.ReadFile("../snapshot/testdata/snapshot-v1.12-noband.json")
 	if err != nil {
 		t.Fatal(err)
 	}
