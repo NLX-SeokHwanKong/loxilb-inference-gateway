@@ -273,25 +273,50 @@ res=$(mcp_call "$ATOKEN" lb_create "${REPLACE%\}},\"confirm_token\":\"0000000000
 echo "$res" | grep -q '"isError":true' && pass "admin replace with a never-issued token is refused" || fail "stale token accepted: $res"
 baseline_intact && pass "baseline rule untouched by the stale token" || fail "stale token replaced the rule"
 
-# secrate_set: preview -> confirm -> read-back -> rollback (preview -> confirm -> read-back).
+# secrate_set. The plain image has no security-rate config, and POST
+# /config/securityrate refuses a body that keeps every protection off (at
+# least one per-source protection or an aggregate budget is required), so the
+# gate must (1) refuse a change that leaves every protection off before it
+# issues a token, (2) preview a change that switches one on with a rollback
+# note instead of a secrate_set call into the refused state, and (3) on the
+# then-configured target preview -> confirm -> read-back -> rollback through
+# secrate_set. DELETE /config/securityrate (REST; no tool until PR-B2)
+# restores the unconfigured state at the end.
 res=$(mcp_call "$ATOKEN" secrate_set '{"rate_per_sec":777}')
-echo "$res" | grep -q '"action":"preview"' && echo "$res" | grep -q '"current":{' && echo "$res" | grep -q '"impact":"global"' \
-    && pass "secrate_set previews current, proposed and impact" || fail "secrate_set preview: $res"
+echo "$res" | grep -q '"isError":true' && echo "$res" | grep -q 'enables no per-source protection' \
+    && pass "secrate_set refuses a change that leaves every protection off, before any token" || fail "all-off change not refused: $res"
+mcp_call "$ATOKEN" secrate_get | grep -q '"ratePerSec":777' && fail "refused change reached the gateway" || pass "refused change changed nothing (secrate_get)"
+res=$(mcp_call "$ATOKEN" secrate_set '{"conn_rate_enabled":true,"rate_per_sec":777}')
+[[ "$(jfield "$res" 'r["action"]')" == "preview" && "$(jfield "$res" 'r["impact"]')" == "global" \
+   && "$(jfield "$res" 'r["current"]["ratePerSec"]')" == "0" && "$(jfield "$res" 'r["current"]["connRateEnabled"]')" == "False" \
+   && "$(jfield "$res" 'r["proposed"]["connRateEnabled"]')" == "True" ]] \
+    && pass "secrate_set previews current (zero defaults for the omitted keys), proposed and impact" || fail "secrate_set preview: $res"
+tok=$(jfield "$res" 'r["confirm_token"]')
+[[ -n "$tok" && -z "$(jfield "$res" 'r["rollback"].get("tool","")')" && "$(jfield "$res" 'r["rollback"]["note"]')" == *"DELETE /config/securityrate"* ]] \
+    && pass "preview on the unconfigured target carries a token and a rollback note naming the disable path" || fail "no token/rollback note in preview: $res"
+mcp_call "$ATOKEN" secrate_get | grep -q '"ratePerSec":777' && fail "preview changed the security rate config" || pass "preview changed nothing (secrate_get)"
+res=$(mcp_call "$ATOKEN" secrate_set "{\"conn_rate_enabled\":true,\"rate_per_sec\":777,\"confirm_token\":\"$tok\"}")
+[[ "$(jfield "$res" 'r["action"]')" == "executed" && "$(jfield "$res" 'r["read_back"]["ratePerSec"]')" == "777" && "$(jfield "$res" 'r["read_back"]["connRateEnabled"]')" == "True" ]] \
+    && pass "secrate_set applied with the token; read_back shows connRateEnabled and ratePerSec 777" || fail "secrate_set apply: $res"
+mcp_call "$ATOKEN" secrate_get | grep -q '"ratePerSec":777' && pass "secrate_get confirms the change" || fail "secrate_get does not show 777"
+# Configured target: a threshold change previews a secrate_set rollback and is put back through it.
+res=$(mcp_call "$ATOKEN" secrate_set '{"rate_per_sec":778}')
 tok=$(jfield "$res" 'r["confirm_token"]')
 prev=$(jfield "$res" 'r["rollback"]["args"]["rate_per_sec"]')
-[[ -n "$tok" && "$prev" =~ ^[0-9]+$ && "$(jfield "$res" 'r["rollback"]["tool"]')" == "secrate_set" ]] \
-    && pass "secrate_set preview carries a token and a rollback (rate_per_sec $prev)" || fail "no token/rollback in preview: $res"
-mcp_call "$ATOKEN" secrate_get | grep -q '"ratePerSec":777' && fail "preview changed the security rate config" || pass "preview changed nothing (secrate_get)"
-res=$(mcp_call "$ATOKEN" secrate_set "{\"rate_per_sec\":777,\"confirm_token\":\"$tok\"}")
-[[ "$(jfield "$res" 'r["action"]')" == "executed" && "$(jfield "$res" 'r["read_back"]["ratePerSec"]')" == "777" ]] \
-    && pass "secrate_set applied with the token; read_back shows ratePerSec 777" || fail "secrate_set apply: $res"
-mcp_call "$ATOKEN" secrate_get | grep -q '"ratePerSec":777' && pass "secrate_get confirms the change" || fail "secrate_get does not show 777"
+[[ -n "$tok" && "$prev" == "777" && "$(jfield "$res" 'r["rollback"]["tool"]')" == "secrate_set" ]] \
+    && pass "preview on the configured target carries a token and a secrate_set rollback (rate_per_sec $prev)" || fail "no token/rollback call in preview: $res"
+res=$(mcp_call "$ATOKEN" secrate_set "{\"rate_per_sec\":778,\"confirm_token\":\"$tok\"}")
+[[ "$(jfield "$res" 'r["action"]')" == "executed" && "$(jfield "$res" 'r["read_back"]["ratePerSec"]')" == "778" ]] \
+    && pass "secrate_set applied; read_back shows ratePerSec 778" || fail "secrate_set second apply: $res"
 res=$(mcp_call "$ATOKEN" secrate_set "{\"rate_per_sec\":$prev}")
 tok=$(jfield "$res" 'r["confirm_token"]')
 res=$(mcp_call "$ATOKEN" secrate_set "{\"rate_per_sec\":$prev,\"confirm_token\":\"$tok\"}")
 [[ "$(jfield "$res" 'r["action"]')" == "executed" && "$(jfield "$res" 'r["read_back"]["ratePerSec"]')" == "$prev" ]] \
     && pass "rollback applied; read_back shows ratePerSec $prev" || fail "rollback: $res"
 grep -q '"tool":"secrate_set"' .mcp-audit/audit.jsonl && pass "audit.jsonl records secrate_set" || fail "secrate_set audit entry missing"
+[[ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X DELETE "$REST/config/securityrate")" == 2* ]] \
+    && pass "DELETE /config/securityrate (REST, no tool yet) restores the unconfigured state" || fail "DELETE /config/securityrate failed"
+mcp_call "$ATOKEN" secrate_get | grep -q '"connRateEnabled":true' && fail "protection still on after the DELETE" || pass "secrate_get shows no protection enabled again"
 
 # ---------- 4. AI ops ----------
 

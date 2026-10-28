@@ -125,6 +125,15 @@ class Session:
         except Exception:
             self.p.kill()
 
+def rest_delete(path):
+    """DELETE on the target's REST API; the status code, or None."""
+    try:
+        req = urllib.request.Request(TARGET + "/netlox/v1" + path, method="DELETE")
+        with urllib.request.urlopen(req, timeout=8) as r:
+            return r.status
+    except Exception:
+        return None
+
 def rest_lb_count():
     try:
         with urllib.request.urlopen(TARGET + "/netlox/v1/config/loadbalancer/all", timeout=8) as r:
@@ -228,31 +237,51 @@ if MUTATE:
         (ok if gone else bad)("VIP gone after delete")
 
         # secrate_set change gate: preview -> confirm -> read-back -> rollback.
-        # The SYN threshold is raised by one from the value the preview read,
-        # so the change is real but harmless, and put back from the rollback
-        # the preview returned.
-        e, v, _ = m.call("secrate_set", syn_threshold=1)
+        # SYN protection is switched on with the threshold the preview read
+        # raised by one (above the cookie threshold), so the change is real
+        # but harmless. A target that had no protection enabled cannot be put
+        # back through secrate_set (POST /config/securityrate refuses an
+        # all-off body): the preview then carries a rollback note and the
+        # restore is DELETE /config/securityrate over REST. Either way the
+        # config is left as it was found.
+        e, v, _ = m.call("secrate_set", syn_enabled=True, syn_threshold=1)
         cur = v.get("current", {}) if isinstance(v, dict) else {}
         base = cur.get("synThreshold")
+        was_on = any(cur.get(k) is True for k in ("synEnabled", "connRateEnabled", "udpEnabled")) or \
+            any((cur.get(k) or 0) > 0 for k in ("aggregateSynThreshold", "aggregateConnRatePerSec",
+                                                "aggregateUdpPktThreshold", "aggregateUdpBandwidthMB"))
         (ok if isinstance(v, dict) and v.get("action") == "preview" and isinstance(base, int) else bad)(
-            f"secrate_set previews the current config (synThreshold {base})")
+            f"secrate_set previews the current config (synThreshold {base}, protection {'on' if was_on else 'off'})")
         if isinstance(base, int):
-            e, v, _ = m.call("secrate_set", syn_threshold=base + 1)
+            want = max(base, cur.get("cookieThreshold") or 0) + 1
+            change = {"syn_enabled": True, "syn_threshold": want}
+            e, v, _ = m.call("secrate_set", **change)
             tok = v.get("confirm_token") if isinstance(v, dict) else None
             rb = v.get("rollback", {}) if isinstance(v, dict) else {}
-            (ok if tok and rb.get("tool") == "secrate_set" and rb.get("args", {}).get("syn_threshold") == base else bad)(
-                "secrate_set preview carries a token and a rollback to the current value")
+            if was_on:
+                (ok if tok and rb.get("tool") == "secrate_set" and rb.get("args", {}).get("syn_threshold") == base else bad)(
+                    "secrate_set preview carries a token and a rollback to the current value")
+            else:
+                (ok if tok and not rb.get("tool") and "DELETE /config/securityrate" in rb.get("note", "") else bad)(
+                    "secrate_set preview carries a token and a rollback note naming the disable path (no protection was on)")
             e, v, _ = m.call("secrate_get")
             attr = (v.get("securityrateAttr") or [{}])[0] if isinstance(v, dict) else {}
-            (ok if attr.get("synThreshold") == base else bad)("preview changed nothing (secrate_get)")
-            e, v, _ = m.call("secrate_set", syn_threshold=base + 1, confirm_token=tok)
-            applied = isinstance(v, dict) and v.get("action") == "executed" and v.get("read_back", {}).get("synThreshold") == base + 1
+            (ok if (attr.get("synThreshold") or 0) == base else bad)("preview changed nothing (secrate_get)")
+            e, v, _ = m.call("secrate_set", confirm_token=tok, **change)
+            applied = isinstance(v, dict) and v.get("action") == "executed" and v.get("read_back", {}).get("synThreshold") == want
             (ok if applied else bad)("secrate_set applied with the token; read_back shows the new threshold" if applied else f"secrate_set apply: {v}")
-            e, v, _ = m.call("secrate_set", **rb.get("args", {"syn_threshold": base}))
-            tok = v.get("confirm_token") if isinstance(v, dict) else None
-            e, v, _ = m.call("secrate_set", confirm_token=tok, **rb.get("args", {"syn_threshold": base}))
-            restored = isinstance(v, dict) and v.get("action") == "executed" and v.get("read_back", {}).get("synThreshold") == base
-            (ok if restored else bad)("rollback applied; read_back shows the original threshold" if restored else f"rollback: {v}")
+            if was_on:
+                e, v, _ = m.call("secrate_set", **rb.get("args", {"syn_threshold": base}))
+                tok = v.get("confirm_token") if isinstance(v, dict) else None
+                e, v, _ = m.call("secrate_set", confirm_token=tok, **rb.get("args", {"syn_threshold": base}))
+                restored = isinstance(v, dict) and v.get("action") == "executed" and v.get("read_back", {}).get("synThreshold") == base
+                (ok if restored else bad)("rollback applied; read_back shows the original threshold" if restored else f"rollback: {v}")
+            else:
+                st = rest_delete("/config/securityrate")
+                e, v, _ = m.call("secrate_get")
+                attr = (v.get("securityrateAttr") or [{}])[0] if isinstance(v, dict) else {}
+                restored = st is not None and 200 <= st < 300 and attr.get("synEnabled") is not True
+                (ok if restored else bad)("DELETE /config/securityrate (REST, no tool yet) restored the unconfigured state" if restored else f"restore: status {st}, {attr}")
 
         # api_key_auth=jwt arm: needs a JWT auth profile that already exists
         # on the target (the bridge gains the profile tool in PR-B3). Name it
