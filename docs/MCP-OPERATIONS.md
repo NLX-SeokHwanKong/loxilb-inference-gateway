@@ -195,7 +195,7 @@ this fork), `status_get`, `logs_tail`, `log_archives_list`, `log_archive_get`,
 `promql_query` / `promql_range` (needs `prometheus_url`), `alerts_active`
 (needs `alertmanager_url`), `alerts_catalog` (needs `alert_rules_path`).
 
-**Management** — read: `lb_get` (one rule by composite key or opaque id, `include: [status, stats]`), `lb_kvexact_status` (the resolved KV-exact composition status of a key, the one read that says whether KV-aware routing is in force), `status_capabilities`, `maintenance_get`, `halfclose_get`, `audit_status`, `audit_policy_get`, `audit_sink_get` (primary sink, or a secondary by name), `config_snapshot_get` (size-capped, secret-shaped fields masked), `endpoint_list`, `fw_list`, `ipfilter_list`,
+**Management** — read: `lb_get` (one rule by composite key or opaque id, `include: [status, stats]`), `lb_kvexact_status` (the resolved KV-exact composition status of a key, the one read that says whether KV-aware routing is in force), `status_capabilities`, `maintenance_get`, `halfclose_get`, `audit_status`, `audit_policy_get`, `audit_sink_get` (primary sink, or a secondary by name), `config_snapshot_get` (size-capped, secret-shaped fields masked; the gateway's 409 while its auto-persist holds the snapshot gate, about 3 s after a config write, comes back as the retryable error `{error: snapshot_gate_busy, retry_after_sec: 3, detail}` and is not retried by the tool), `endpoint_list`, `fw_list`, `ipfilter_list`,
 `secrate_get`, `net_route_list`, `net_vlan_list`, `net_vxlan_list`,
 `net_neighbor_list`, `net_ip_list`, `net_port_list`, `bgp_neigh_list`,
 `bgp_policy_list`, `session_list`, `session_ulcl_list`, `config_params_get`,
@@ -361,6 +361,8 @@ single-use, and per process. Exit code 0 means every check passed.
 #### mcp/v0.2.0 (unreleased)
 
 **Added** — 17 control-plane reads, all viewer tier: `lb_get` (composite key or opaque id; `include: [status, stats]`), `lb_kvexact_status`, `ai_objective_list`, `ai_netidentity_list`, `ai_jwtprofile_list`, `ai_user_ratelimit_list`, `ai_user_ratelimit_get`, `ai_ratelimit_defaults_get`, `ai_model_profile_list`, `ai_model_profile_get`, `status_capabilities`, `maintenance_get`, `halfclose_get`, `audit_status`, `audit_policy_get`, `audit_sink_get`, `config_snapshot_get` (size-capped). Tool counts: viewer 51 → 68, operator 60 → 77, admin 78 → 95 (96 with `--allow-import`).
+
+**Changed** — `config_snapshot_get` returns the gateway's 409 (its auto-persist holds the snapshot gate for about 3 s after a successful config write) as the structured tool error `{error: snapshot_gate_busy, retry_after_sec: 3, detail}`, text and structured content alike, and does not retry on the caller's behalf: wait `retry_after_sec` and call again.
 
 **Changed** — operator sessions no longer see the 14 global- and
 instance-scope tools (`secrate_set`, `secrate_reset`, `bgp_neigh_set`,

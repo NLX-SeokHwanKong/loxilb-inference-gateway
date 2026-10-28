@@ -220,7 +220,7 @@ func RegisterManagement(s *sdk.Server, role guard.Role, pol *guard.Policy, deps 
 	reg(ro("config_snapshot_get"), func() {
 		sdk.AddTool(s, &sdk.Tool{
 			Name:        "config_snapshot_get",
-			Description: "The versioned, checksummed instance snapshot (GET /config/snapshot), size-capped: a document over max_bytes is described by section sizes instead of returned. Secret-shaped fields are masked.",
+			Description: "The versioned, checksummed instance snapshot (GET /config/snapshot), size-capped: a document over max_bytes is described by section sizes instead of returned. Secret-shaped fields are masked. While the gateway's auto-persist holds the snapshot gate (about 3 s after a config write) the gateway answers 409; the tool returns that as the error {error: snapshot_gate_busy, retry_after_sec: 3, detail} and does not retry: call again after retry_after_sec.",
 			Annotations: roAnnotations("Instance snapshot"),
 		}, deps.configSnapshotGet())
 	})
