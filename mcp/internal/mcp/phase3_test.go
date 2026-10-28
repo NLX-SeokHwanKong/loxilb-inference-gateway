@@ -98,6 +98,10 @@ func newAIMock(t *testing.T) *mockLoxilb {
 				return
 			}
 			w.Write([]byte(`{"key_id":"key-123","tenant_id":"t1","enabled":true}`))
+		case r.URL.Path == "/netlox/v1/diagnostics":
+			w.Write([]byte(`{"version":"v0.9.9-ci","product":"loxilb-inference-gateway","api_version":"v1","uptime_seconds":12,"ready":false,"ready_reasons":["boot replay pending"],"maintenance_state":"active","ebpf_attachments":[{"name":"eth0","mode":"xdp","attached":true}],"boot":{"token":"not-projected"}}`))
+		case r.URL.Path == "/netlox/v1/config/ai/kv/inventory":
+			w.Write([]byte(`{"service_id":1,"ep_idx":0,"hash_algo":"sha256_cbor","admission":"admitted","blocks":[{"block_idx":0,"hash_uint64":7}],"total":1}`))
 		case r.URL.Path == "/netlox/v1/config/endpoint/all":
 			w.Write([]byte(`{"Attr":[{"hostName":"10.0.0.1","currState":"ok","probeType":"tcp"},` +
 				`{"hostName":"10.0.0.2","currState":"nok","probeType":"tcp"}]}`))

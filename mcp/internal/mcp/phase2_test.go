@@ -52,7 +52,13 @@ func newMockLoxilb(t *testing.T) *mockLoxilb {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/netlox/v1/config/loadbalancer/all":
-			w.Write([]byte(`{"lbAttr":[{"serviceArguments":{"externalIP":"1.2.3.4","port":80,"protocol":"tcp","name":"web","mode":4,"host":"models.example","path_prefix":"/v1","model_name":"llama3","sse_mode":true,"pd_disagg_mode":true,"pd_cache_aware_mode":true,"api_key_auth":"required","kvExactMode":1,"kvEngineType":"vllm"},"endpoints":[{"endpointIP":"10.0.0.1","targetPort":8000,"weight":1,"state":"active","ep_role":1,"nixl_port":9001}]}]}`))
+			w.Write([]byte(`{"lbAttr":[{"serviceArguments":{"externalIP":"1.2.3.4","port":80,"protocol":"tcp","name":"web","mode":4,"host":"models.example","path_prefix":"/v1","model_name":"llama3","sse_mode":true,"pd_disagg_mode":true,"pd_cache_aware_mode":true,"api_key_auth":"required","kvExactMode":1,"kvEngineType":"vllm","id":"rule-7","adminStateUp":false,"security":1,"jwt_auth_profile":"corp-oidc","eppEndpoint":"10.0.0.9:9002","kvExactApiMode":"chat","kvModelProfile":"qwen3-8b","fc_effective":{"mode":"enforce","max_outstanding":64},"backend_tls_effective":{"enabled":false},"half_close_effective":"relay"},"endpoints":[{"endpointIP":"10.0.0.1","targetPort":8000,"weight":1,"state":"active","ep_role":1,"nixl_port":9001}]}]}`))
+		case "/netlox/v1/version":
+			w.Write([]byte(`{"version":"v0.9.9-ci","buildInfo":"ci","product":"loxilb-inference-gateway","features":["epp","api_key_auth","jwt_auth_profile"]}`))
+		case "/netlox/v1/status/ready":
+			// The not-ready verdict travels as a 503 with the same body.
+			w.WriteHeader(http.StatusServiceUnavailable)
+			w.Write([]byte(`{"ready":false,"reasons":["boot replay pending"]}`))
 		case "/netlox/v1/config/export":
 			w.Write([]byte(`{"loadbalancers":[{"name":"web"}],"auth":{"password":"hunter2","apiKey":"sk-secret-123"}}`))
 		default:
