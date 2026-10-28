@@ -121,7 +121,13 @@ Where the REST contract has no read of the object (`bgp_global_set`,
 rollback note says so; where the change is not reversible (`secrate_reset`,
 `gpu_conversations_cleanup`) the note says that. `secrate_set` merges the
 supplied fields into the configuration it read and sends the full result,
-because the REST body requires every threshold.
+because the REST body requires every threshold; a key the GET omits is
+read as its zero value. A proposed configuration that enables no
+per-source protection and sets no aggregate budget is refused before any
+token is issued, because `POST /config/securityrate` refuses such a body;
+on a target that had no protection enabled the preview's rollback is a
+note naming `DELETE /config/securityrate` (no tool until PR-B2) instead of
+a `secrate_set` call into that refused state.
 
 `lb_create` pre-reads `GET /config/loadbalancer/externalipaddress/{ip}/port/{port}/protocol/{proto}`
 (and, on a shared VIP:port, the full list for the host/path/model key)
@@ -365,7 +371,10 @@ existing rule key is a replace and follows the same flow (admin-confirm); on
 a new key it is unchanged. `llamafw_health_check` previews unless called
 with `apply: true`. `secrate_set` sends the full merged configuration (the
 REST body requires every threshold); its integer arguments accept an
-explicit 0. Executed changes carry `read_back`. Tool counts: operator 74 → 60.
+explicit 0, a change that would leave every protection off is refused
+before a token is issued, and on a target that had none on the rollback is
+a note (`DELETE /config/securityrate`, no tool yet). Executed changes carry
+`read_back`. Tool counts: operator 74 → 60.
 
 ### Contract gate
 
