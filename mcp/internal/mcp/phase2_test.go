@@ -33,7 +33,16 @@ type mockLoxilb struct {
 	// aiMetricsText -- the default fixture, which carries no outcome label and
 	// therefore stands in for a gateway older than it.
 	metricsText string
+	// securityRateJSON overrides the one-element securityrateAttr entry GET
+	// /config/securityrate/all serves. Empty means the default fixture: SYN
+	// protection on, the other two off (their flags omitted, as the gateway
+	// omits every zero-valued field).
+	securityRateJSON string
 }
+
+// mockRuleJSON is the one rule the mock gateway holds (1.2.3.4:80/tcp, a
+// typed AI rule), served by GET /all and by the composite-key GET.
+const mockRuleJSON = `{"serviceArguments":{"externalIP":"1.2.3.4","port":80,"protocol":"tcp","name":"web","mode":4,"host":"models.example","path_prefix":"/v1","model_name":"llama3","sse_mode":true,"pd_disagg_mode":true,"pd_cache_aware_mode":true,"api_key_auth":"required","kvExactMode":1,"kvEngineType":"vllm","id":"rule-7","adminStateUp":false,"security":1,"jwt_auth_profile":"corp-oidc","eppEndpoint":"10.0.0.9:9002","kvExactApiMode":"chat","kvModelProfile":"qwen3-8b","fc_effective":{"mode":"enforce","max_outstanding":64},"backend_tls_effective":{"enabled":false},"half_close_effective":"relay"},"endpoints":[{"endpointIP":"10.0.0.1","targetPort":8000,"weight":1,"state":"active","ep_role":1,"nixl_port":9001}]}`
 
 func newMockLoxilb(t *testing.T) *mockLoxilb {
 	t.Helper()
@@ -52,7 +61,26 @@ func newMockLoxilb(t *testing.T) *mockLoxilb {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/netlox/v1/config/loadbalancer/all":
-			w.Write([]byte(`{"lbAttr":[{"serviceArguments":{"externalIP":"1.2.3.4","port":80,"protocol":"tcp","name":"web","mode":4,"host":"models.example","path_prefix":"/v1","model_name":"llama3","sse_mode":true,"pd_disagg_mode":true,"pd_cache_aware_mode":true,"api_key_auth":"required","kvExactMode":1,"kvEngineType":"vllm","id":"rule-7","adminStateUp":false,"security":1,"jwt_auth_profile":"corp-oidc","eppEndpoint":"10.0.0.9:9002","kvExactApiMode":"chat","kvModelProfile":"qwen3-8b","fc_effective":{"mode":"enforce","max_outstanding":64},"backend_tls_effective":{"enabled":false},"half_close_effective":"relay"},"endpoints":[{"endpointIP":"10.0.0.1","targetPort":8000,"weight":1,"state":"active","ep_role":1,"nixl_port":9001}]}]}`))
+			w.Write([]byte(`{"lbAttr":[` + mockRuleJSON + `]}`))
+		case "/netlox/v1/config/loadbalancer/externalipaddress/1.2.3.4/port/80/protocol/tcp":
+			w.Write([]byte(mockRuleJSON)) // the composite-key pre-read of lb_create
+		case "/netlox/v1/config/securityrate/all":
+			// Zero-valued fields (connRateEnabled, udpEnabled, udpBlocked) are omitted, as the gateway does.
+			entry := m.securityRateJSON
+			if entry == "" {
+				entry = `{"synEnabled":true,"synThreshold":1000,"cookieThreshold":500,"ratePerSec":500,"udpPktThreshold":3000,"udpBandwidthMB":10,"whitelistIps":null,"synBlocked":7,"connBlocked":3}`
+			}
+			w.Write([]byte(`{"securityrateAttr":[` + entry + `]}`))
+		case "/netlox/v1/config/gpu/status":
+			w.Write([]byte(`{"enabled":false,"routing_mode":"chwbl","worker_count":2,"ebpf_map_loaded":true}`))
+		case "/netlox/v1/config/llamafirewall/status":
+			w.Write([]byte(`{"enabled":false,"server_url":"localhost:50052","connected":false,"fail_closed":true,"block_threshold":0.8,"scanners":{"prompt_guard":true,"code_shield":false,"regex":true,"hidden_ascii":false,"agent_alignment":false,"pii_detection":false},"cache_enabled":true,"cache_ttl_sec":60,"scan_patterns":["/v1/*"],"skip_patterns":[],"last_health_check":"never"}`))
+		case "/netlox/v1/config/pii/status":
+			w.Write([]byte(`{"enabled":false,"mode":"detect","direction":"both","fail_mode":"open","scan_mode":"full","analyzer_url":"localhost:3000","anonymizer_url":"localhost:3001","score_threshold":0.5,"timeout_ms":1000,"url_patterns":[{"pattern":"/v1/chat*","is_exclude":false}],"url_pattern_count":1}`))
+		case "/netlox/v1/config/params":
+			w.Write([]byte(`{"logLevel":"info"}`))
+		case "/netlox/v1/config/bgp/neigh/all":
+			w.Write([]byte(`{"bgpNeiAttr":[{"ipAddress":"10.0.0.2","remoteAs":65001,"state":"established","remotePort":179,"multiHop":false}]}`))
 		case "/netlox/v1/version":
 			w.Write([]byte(`{"version":"v0.9.9-ci","buildInfo":"ci","product":"loxilb-inference-gateway","features":["epp","api_key_auth","jwt_auth_profile"]}`))
 		case "/netlox/v1/status/ready":
@@ -62,6 +90,11 @@ func newMockLoxilb(t *testing.T) *mockLoxilb {
 		case "/netlox/v1/config/export":
 			w.Write([]byte(`{"loadbalancers":[{"name":"web"}],"auth":{"password":"hunter2","apiKey":"sk-secret-123"}}`))
 		default:
+			if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/netlox/v1/config/loadbalancer/externalipaddress/") {
+				w.WriteHeader(http.StatusNotFound)
+				w.Write([]byte(`{"code":404,"message":"no such rule"}`))
+				return
+			}
 			w.Write([]byte(`{"result":"Success"}`))
 		}
 	})
@@ -146,21 +179,26 @@ func TestPhase2RoleVisibility(t *testing.T) {
 	}
 
 	operator, _ := listNames(t, b, guard.RoleOperator)
-	for _, want := range []string{"lb_create", "fw_create", "ipfilter_set", "secrate_set",
-		"secrate_reset", "net_route_create", "bgp_neigh_set", "bgp_global_set",
-		"bgp_policy_apply", "endpoint_host_state_set", "config_params_set"} {
+	for _, want := range []string{"lb_create", "fw_create", "ipfilter_set",
+		"net_route_create", "endpoint_host_state_set"} {
 		if !operator[want] {
 			t.Errorf("operator: mutating tool %s missing", want)
 		}
 	}
-	for _, absent := range []string{"lb_delete", "fw_delete", "net_route_delete", "config_import"} {
+	// Global/instance-scope changes are admin-confirm since PR-A2 (D13):
+	// operator sessions do not list them.
+	for _, absent := range []string{"lb_delete", "fw_delete", "net_route_delete", "config_import",
+		"secrate_set", "secrate_reset", "bgp_neigh_set", "bgp_global_set", "bgp_policy_apply",
+		"config_params_set"} {
 		if operator[absent] {
-			t.Errorf("operator: destructive tool %s visible", absent)
+			t.Errorf("operator: admin-confirm tool %s visible", absent)
 		}
 	}
 
 	admin, _ := listNames(t, b, guard.RoleAdmin)
-	for _, want := range []string{"lb_delete", "fw_delete", "net_route_delete"} {
+	for _, want := range []string{"lb_delete", "fw_delete", "net_route_delete",
+		"secrate_set", "secrate_reset", "bgp_neigh_set", "bgp_global_set", "bgp_policy_apply",
+		"config_params_set"} {
 		if !admin[want] {
 			t.Errorf("admin: destructive tool %s missing", want)
 		}

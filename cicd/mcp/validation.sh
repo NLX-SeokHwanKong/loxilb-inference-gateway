@@ -10,6 +10,9 @@
 #                    round-trip + audit.jsonl entries
 #   3 guardrails     viewer role sees no mutating tools; delete without
 #                    confirm_token stays a preview
+#   3b change gate   operator lists no admin-confirm tool; lb_create on an
+#                    existing key is refused (operator) / previewed (admin);
+#                    secrate_set preview -> confirm -> read-back -> rollback
 #   4 ai ops         ai_apikey create(file)/list/update/delete confirm flow,
 #                    ai_ratelimit_set/get
 #   5 rca            diagnose_l4_errors / capacity_report evidence bundles,
@@ -106,6 +109,12 @@ mcp_rpc() {
         -H "Accept: application/json, text/event-stream" \
         -d "{\"jsonrpc\":\"2.0\",\"id\":$RPCID,\"method\":\"$2\",\"params\":$params}" |
         sed -n 's/^data: //p'
+}
+
+# jfield <result-line> <python-expr>: a field of the tool's structured result
+# (bound to r); the text form sorts keys, so greps on object literals do not work.
+jfield() {
+    python3 -c 'import json,sys; r=json.loads(json.loads(sys.stdin.read())["result"]["content"][0]["text"]); print(eval(sys.argv[1]))' "$2" <<< "$1" 2>/dev/null
 }
 
 # mcp_call <token> <tool> [args-json]: tools/call, prints the result line.
@@ -230,6 +239,84 @@ res=$(mcp_rpc "$VTOKEN" tools/list)
 echo "$res" | grep -q '"name":"lb_create"' && fail "viewer sees lb_create" || pass "viewer sees no lb_create"
 echo "$res" | grep -q '"name":"ai_apikey_delete"' && fail "viewer sees ai_apikey_delete" || pass "viewer sees no ai_apikey_delete"
 echo "$res" | grep -q '"name":"diagnose_l4_errors"' && pass "viewer sees diagnose tools" || fail "viewer missing diagnose tools"
+
+# ---------- 3b. tier alignment: the change gate (D13) ----------
+# Global/instance-scope changes are admin-confirm: an operator session does
+# not list them, an admin session previews (current, proposed, diff,
+# rollback) and applies only with the token. lb_create splits create
+# (operator, direct) from replace (admin-confirm) by a pre-read of the key.
+echo "### change gate"
+mcp_session "$OTOKEN" && pass "operator session established" || fail "no operator session"
+OPERATOR_SESSION=$SESSION
+res=$(mcp_rpc "$OTOKEN" tools/list)
+echo "$res" | grep -q '"name":"secrate_set"' && fail "operator sees secrate_set" || pass "operator sees no secrate_set (admin-confirm)"
+echo "$res" | grep -q '"name":"gpu_mode_set"' && fail "operator sees gpu_mode_set" || pass "operator sees no gpu_mode_set (admin-confirm)"
+echo "$res" | grep -q '"name":"lb_create"' && pass "operator still sees lb_create" || fail "operator missing lb_create"
+
+# 20.20.20.1:2020/tcp is the baseline rule config.sh created (endpoint
+# 31.31.31.1:8080, weight 1); a POST on that key with another endpoint port
+# would replace it.
+REPLACE='{"external_ip":"20.20.20.1","port":2020,"protocol":"tcp","endpoints":[{"ip":"31.31.31.1","port":9090}]}'
+LBKEY="$REST/config/loadbalancer/externalipaddress/20.20.20.1/port/2020/protocol/tcp"
+baseline_intact() { curl -s --max-time 10 "$LBKEY" | grep -q '"targetPort":8080' && ! curl -s --max-time 10 "$LBKEY" | grep -q '"targetPort":9090'; }
+res=$(mcp_call "$OTOKEN" lb_create "$REPLACE")
+echo "$res" | grep -q '"isError":true' && echo "$res" | grep -q 'admin-confirm' \
+    && pass "operator lb_create on an existing key is refused" || fail "operator replace not refused: $res"
+baseline_intact && pass "baseline rule untouched by the operator refusal" || fail "baseline rule changed"
+
+SESSION=$ADMIN_SESSION
+res=$(mcp_call "$ATOKEN" lb_create "$REPLACE")
+[[ "$(jfield "$res" 'r["action"]')" == "preview" && "$(jfield "$res" 'r["rollback"]["tool"]')" == "lb_create" && -n "$(jfield "$res" 'r["diff"]["endpoints"]["to"]')" ]] \
+    && pass "admin lb_create on an existing key previews the replace with diff and rollback" || fail "admin replace preview: $res"
+baseline_intact && pass "baseline rule untouched by the preview" || fail "preview replaced the rule"
+res=$(mcp_call "$ATOKEN" lb_create "${REPLACE%\}},\"confirm_token\":\"00000000000000000000000000000000\"}")
+echo "$res" | grep -q '"isError":true' && pass "admin replace with a never-issued token is refused" || fail "stale token accepted: $res"
+baseline_intact && pass "baseline rule untouched by the stale token" || fail "stale token replaced the rule"
+
+# secrate_set. The plain image has no security-rate config, and POST
+# /config/securityrate refuses a body that keeps every protection off (at
+# least one per-source protection or an aggregate budget is required), so the
+# gate must (1) refuse a change that leaves every protection off before it
+# issues a token, (2) preview a change that switches one on with a rollback
+# note instead of a secrate_set call into the refused state, and (3) on the
+# then-configured target preview -> confirm -> read-back -> rollback through
+# secrate_set. DELETE /config/securityrate (REST; no tool until PR-B2)
+# restores the unconfigured state at the end.
+res=$(mcp_call "$ATOKEN" secrate_set '{"rate_per_sec":777}')
+echo "$res" | grep -q '"isError":true' && echo "$res" | grep -q 'enables no per-source protection' \
+    && pass "secrate_set refuses a change that leaves every protection off, before any token" || fail "all-off change not refused: $res"
+mcp_call "$ATOKEN" secrate_get | grep -q '"ratePerSec":777' && fail "refused change reached the gateway" || pass "refused change changed nothing (secrate_get)"
+res=$(mcp_call "$ATOKEN" secrate_set '{"conn_rate_enabled":true,"rate_per_sec":777}')
+[[ "$(jfield "$res" 'r["action"]')" == "preview" && "$(jfield "$res" 'r["impact"]')" == "global" \
+   && "$(jfield "$res" 'r["current"]["ratePerSec"]')" == "0" && "$(jfield "$res" 'r["current"]["connRateEnabled"]')" == "False" \
+   && "$(jfield "$res" 'r["proposed"]["connRateEnabled"]')" == "True" ]] \
+    && pass "secrate_set previews current (zero defaults for the omitted keys), proposed and impact" || fail "secrate_set preview: $res"
+tok=$(jfield "$res" 'r["confirm_token"]')
+[[ -n "$tok" && -z "$(jfield "$res" 'r["rollback"].get("tool","")')" && "$(jfield "$res" 'r["rollback"]["note"]')" == *"DELETE /config/securityrate"* ]] \
+    && pass "preview on the unconfigured target carries a token and a rollback note naming the disable path" || fail "no token/rollback note in preview: $res"
+mcp_call "$ATOKEN" secrate_get | grep -q '"ratePerSec":777' && fail "preview changed the security rate config" || pass "preview changed nothing (secrate_get)"
+res=$(mcp_call "$ATOKEN" secrate_set "{\"conn_rate_enabled\":true,\"rate_per_sec\":777,\"confirm_token\":\"$tok\"}")
+[[ "$(jfield "$res" 'r["action"]')" == "executed" && "$(jfield "$res" 'r["read_back"]["ratePerSec"]')" == "777" && "$(jfield "$res" 'r["read_back"]["connRateEnabled"]')" == "True" ]] \
+    && pass "secrate_set applied with the token; read_back shows connRateEnabled and ratePerSec 777" || fail "secrate_set apply: $res"
+mcp_call "$ATOKEN" secrate_get | grep -q '"ratePerSec":777' && pass "secrate_get confirms the change" || fail "secrate_get does not show 777"
+# Configured target: a threshold change previews a secrate_set rollback and is put back through it.
+res=$(mcp_call "$ATOKEN" secrate_set '{"rate_per_sec":778}')
+tok=$(jfield "$res" 'r["confirm_token"]')
+prev=$(jfield "$res" 'r["rollback"]["args"]["rate_per_sec"]')
+[[ -n "$tok" && "$prev" == "777" && "$(jfield "$res" 'r["rollback"]["tool"]')" == "secrate_set" ]] \
+    && pass "preview on the configured target carries a token and a secrate_set rollback (rate_per_sec $prev)" || fail "no token/rollback call in preview: $res"
+res=$(mcp_call "$ATOKEN" secrate_set "{\"rate_per_sec\":778,\"confirm_token\":\"$tok\"}")
+[[ "$(jfield "$res" 'r["action"]')" == "executed" && "$(jfield "$res" 'r["read_back"]["ratePerSec"]')" == "778" ]] \
+    && pass "secrate_set applied; read_back shows ratePerSec 778" || fail "secrate_set second apply: $res"
+res=$(mcp_call "$ATOKEN" secrate_set "{\"rate_per_sec\":$prev}")
+tok=$(jfield "$res" 'r["confirm_token"]')
+res=$(mcp_call "$ATOKEN" secrate_set "{\"rate_per_sec\":$prev,\"confirm_token\":\"$tok\"}")
+[[ "$(jfield "$res" 'r["action"]')" == "executed" && "$(jfield "$res" 'r["read_back"]["ratePerSec"]')" == "$prev" ]] \
+    && pass "rollback applied; read_back shows ratePerSec $prev" || fail "rollback: $res"
+grep -q '"tool":"secrate_set"' .mcp-audit/audit.jsonl && pass "audit.jsonl records secrate_set" || fail "secrate_set audit entry missing"
+[[ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X DELETE "$REST/config/securityrate")" == 2* ]] \
+    && pass "DELETE /config/securityrate (REST, no tool yet) restores the unconfigured state" || fail "DELETE /config/securityrate failed"
+mcp_call "$ATOKEN" secrate_get | grep -q '"connRateEnabled":true' && fail "protection still on after the DELETE" || pass "secrate_get shows no protection enabled again"
 
 # ---------- 4. AI ops ----------
 

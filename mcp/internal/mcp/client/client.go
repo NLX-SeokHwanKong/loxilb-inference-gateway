@@ -251,6 +251,9 @@ func (c *Client) doAllow(ctx context.Context, method, path string, in, out any, 
 	// 204-style success responses carry no body (e.g. DELETE /config/ai/apikey).
 	if out != nil && len(raw) > 0 {
 		if err := json.Unmarshal(raw, out); err != nil {
+			if allow[resp.StatusCode] {
+				return nil // an allowed non-2xx answer (a 404) need not carry JSON
+			}
 			return fmt.Errorf("target %s: %s %s: decode: %w", c.name, method, path, err)
 		}
 	}

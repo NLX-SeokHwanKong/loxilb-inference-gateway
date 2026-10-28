@@ -104,10 +104,17 @@ type Entry struct {
 	Reversible *bool    `yaml:"reversible,omitempty"`
 	Tier       Tier     `yaml:"tier,omitempty"`
 	TierGap    string   `yaml:"tier_gap,omitempty"`
-	Fields     []string `yaml:"fields,omitempty"`
-	Pending    string   `yaml:"pending,omitempty"`
-	Excluded   string   `yaml:"excluded,omitempty"`
-	Note       string   `yaml:"note,omitempty"`
+	// ToolTier is the tier the tool is *listed* at when it is lower than
+	// the operation's tier because the tool splits the operation by state:
+	// lb_create is listed for operators (a POST that creates a rule), and
+	// enforces admin-confirm itself on the path that would replace one.
+	// Only "operator" under an admin-confirm tier is allowed, and the note
+	// must say which path is which.
+	ToolTier Tier     `yaml:"tool_tier,omitempty"`
+	Fields   []string `yaml:"fields,omitempty"`
+	Pending  string   `yaml:"pending,omitempty"`
+	Excluded string   `yaml:"excluded,omitempty"`
+	Note     string   `yaml:"note,omitempty"`
 }
 
 // State classifies an entry.
@@ -222,11 +229,19 @@ func (e Entry) check() error {
 		} else if e.Reversible != nil {
 			return fmt.Errorf("reversible: is meaningless on a read")
 		}
+		if e.ToolTier != "" {
+			if e.ToolTier != TierOperator || e.Tier != TierAdminConfirm {
+				return fmt.Errorf("tool_tier: only operator under tier admin-confirm (a tool that gates the stronger path itself)")
+			}
+			if e.Note == "" {
+				return fmt.Errorf("tool_tier: the note must say which path the tool gates")
+			}
+		}
 	case "pending":
 		if !Phases[e.Pending] {
 			return fmt.Errorf("pending %q is not one of P0|P1a|P1b|P2|P3|P4", e.Pending)
 		}
-		if e.Tier != "" || e.TierGap != "" || len(e.Fields) > 0 {
+		if e.Tier != "" || e.TierGap != "" || e.ToolTier != "" || len(e.Fields) > 0 {
 			return fmt.Errorf("a pending operation carries no tier:, tier_gap: or fields:")
 		}
 	case "excluded":

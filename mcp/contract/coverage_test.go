@@ -182,8 +182,12 @@ func TestManifestToolsAreRegisteredAtTheirTier(t *testing.T) {
 				t.Errorf("tool %s is in the manifest but not registered", name)
 				continue
 			}
-			if got != e.EffectiveTier() {
-				t.Errorf("%s: manifest tier %s but the code registers %s as %s", e.Op, e.EffectiveTier(), name, got)
+			want := e.EffectiveTier()
+			if e.ToolTier != "" {
+				want = e.ToolTier // the tool gates the stronger path itself (see Entry.ToolTier)
+			}
+			if got != want {
+				t.Errorf("%s: manifest tier %s but the code registers %s as %s", e.Op, want, name, got)
 			}
 		}
 	}

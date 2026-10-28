@@ -57,8 +57,16 @@ only accepted `target` values in tool calls — URLs are rejected (anti-SSRF).
 | Role | May call | Tool count (base) |
 |---|---|---|
 | viewer | read-only tools only | 51 |
-| operator | + non-destructive mutations | 74 |
-| admin | + destructive tools (confirm-token gated) | 78 (79 with `--allow-import`) |
+| operator | + object- and tenant-scope mutations | 60 |
+| admin | + admin-confirm tools (every delete and every global- or instance-scope change, confirm-token gated) | 78 (79 with `--allow-import`) |
+
+The tier of a tool is derived from the impact of its REST operation
+(`mcp/contract/coverage.yml`, checked in CI): a read is viewer; a reversible
+change to one object or one tenant is operator; a change to a service's
+traffic, to every tenant/service (global) or to the instance, and every
+delete, is admin-confirm. `lb_create` is listed for operators because a POST
+on a new key creates a rule (operator); a POST on an existing key would
+replace it, and that path is admin-confirm inside the tool (below).
 
 "Base" is with all four domains on and no external monitoring backends
 configured. A configured `prometheus_url` (`promql_query`, `promql_range`),
@@ -82,18 +90,55 @@ table, as authoritative for a given configuration.
 Additional gates, all composable: `--read-only`, `--allow-tools` /
 `--deny-tools` globs (deny wins), `--enable-domains mgmt,analysis,monitoring,ai`.
 
-## Destructive changes: the confirm-token flow
+## Admin-confirm changes: the change gate
 
-Destructive tools (`lb_delete`, `fw_delete`, `net_route_delete`,
-`ai_apikey_delete`, `config_import`) are two-step:
+Every admin-confirm tool is two-step:
 
-1. Call without `confirm_token` → nothing changes; the result is
-   `action:"preview"` with the affected object(s) and a `confirm_token`.
+1. Call without `confirm_token` → nothing changes. The tool reads the object
+   it would change and answers `action:"preview"` with `current` (as read
+   from the API), `proposed` (the state the call would produce), `diff`
+   (the keys that change, each as `{from, to}`), `rollback` (`{tool, args}`
+   that restores `current`, or a `note` saying why no single call can),
+   `impact` (the manifest's blast-radius class) and a `confirm_token`.
 2. Repeat the call with **identical arguments** plus the token within 120 s.
+   The executed result carries `read_back`: the object re-read from the API
+   after the change, so the effect is visible before the next step.
 
 Tokens are single-use and SHA-256-bound to (tool, target, arguments); any
 argument change or replay burns them. `--no-confirm` (CI only) skips the
 flow. `config_import` additionally requires `--allow-import`.
+
+The deletes (`lb_delete`, `fw_delete`, `net_route_delete`,
+`ai_apikey_delete`, `config_import`) preview the object(s) they would
+remove under `preview`. The global- and instance-scope changes raised to
+this tier in PR-A2 — `secrate_set`, `secrate_reset`, `bgp_neigh_set`,
+`bgp_global_set`, `bgp_policy_apply`, `config_params_set`, `gpu_mode_set`,
+`gpu_conversations_cleanup`, `llamafw_enable_set`, `llamafw_configure`,
+`llamafw_scanners_set`, `pii_enable_set`, `pii_configure`,
+`pii_url_patterns_set` — preview `current`/`proposed`/`diff`/`rollback`.
+Where the REST contract has no read of the object (`bgp_global_set`,
+`bgp_policy_apply`) the preview shows the proposed values only and the
+rollback note says so; where the change is not reversible (`secrate_reset`,
+`gpu_conversations_cleanup`) the note says that. `secrate_set` merges the
+supplied fields into the configuration it read and sends the full result,
+because the REST body requires every threshold; a key the GET omits is
+read as its zero value. A proposed configuration that enables no
+per-source protection and sets no aggregate budget is refused before any
+token is issued, because `POST /config/securityrate` refuses such a body;
+on a target that had no protection enabled the preview's rollback is a
+note naming `DELETE /config/securityrate` (no tool until PR-B2) instead of
+a `secrate_set` call into that refused state.
+
+`lb_create` pre-reads `GET /config/loadbalancer/externalipaddress/{ip}/port/{port}/protocol/{proto}`
+(and, on a shared VIP:port, the full list for the host/path/model key)
+before it sends anything. No rule at the key: the POST creates one and
+executes directly at operator tier. A rule at the key: the POST would
+replace it, so the call previews the current rule against the proposed
+body with a rollback that re-creates the current rule, and applies only
+with the token; an operator session is refused on that path with a message
+naming `lb_delete` and the admin-confirm tier, before any request is built.
+`llamafw_health_check` (a trigger, operator tier) previews the status it
+probes and accepts `apply: true` to run without the token.
 
 ### Autopilot (default off)
 
@@ -154,11 +199,11 @@ this fork), `status_get`, `logs_tail`, `log_archives_list`, `log_archive_get`,
 `secrate_get`, `net_route_list`, `net_vlan_list`, `net_vxlan_list`,
 `net_neighbor_list`, `net_ip_list`, `net_port_list`, `bgp_neigh_list`,
 `bgp_policy_list`, `session_list`, `session_ulcl_list`, `config_params_get`,
-`config_export`. Operator+: `lb_create`, `endpoint_host_state_set`,
-`fw_create`, `ipfilter_set`, `secrate_set`, `secrate_reset`,
-`net_route_create`, `bgp_neigh_set`, `bgp_global_set`, `bgp_policy_apply`,
-`config_params_set`. Admin+confirm: `lb_delete`, `fw_delete`,
-`net_route_delete`, `config_import`.
+`config_export`. Operator+: `lb_create` (create path; the replace path is
+admin-confirm), `endpoint_host_state_set`, `fw_create`, `ipfilter_set`,
+`net_route_create`. Admin+confirm: `lb_delete`, `fw_delete`,
+`net_route_delete`, `config_import`, `secrate_set`, `secrate_reset`,
+`bgp_neigh_set`, `bgp_global_set`, `bgp_policy_apply`, `config_params_set`.
 
 `lb_create` exposes typed AI routing arguments instead of requiring callers to
 guess Gateway JSON casing: `host`, `path_prefix`, `model_name`, `sse_mode`,
@@ -192,10 +237,10 @@ property `mcp/contract/fields.yml` marks `excluded-field`.
 `gpu_worker_metrics_get`, `llamafw_status`, `llamafw_stats`, `pii_status`,
 `pii_stats`, `ai_traffic_report`. Operator+: `ai_apikey_create`,
 `ai_apikey_update`, `ai_ratelimit_set` (no delete endpoint — set quotas 0 to
-lift), `gpu_mode_set`, `gpu_conversations_cleanup`, `llamafw_enable_set`,
-`llamafw_configure`, `llamafw_scanners_set`, `llamafw_health_check`,
-`pii_enable_set`, `pii_configure`, `pii_url_patterns_set`. Admin+confirm:
-`ai_apikey_delete`.
+lift), `llamafw_health_check`. Admin+confirm: `ai_apikey_delete`,
+`gpu_mode_set`, `gpu_conversations_cleanup`, `llamafw_enable_set`,
+`llamafw_configure`, `llamafw_scanners_set`, `pii_enable_set`,
+`pii_configure`, `pii_url_patterns_set`.
 
 > **Prerequisite:** the API-key and tenant-rate-limit REST endpoints are only
 > wired when the target loxilb runs with `--userservice` (plus a reachable
@@ -310,6 +355,26 @@ trail, and cleans up — including a `--no-confirm` safety-net delete if any ste
 fails, so a run never leaves state on the target. The two-step confirm-token
 flow is why the harness holds one session open: the token is in-memory,
 single-use, and per process. Exit code 0 means every check passed.
+
+### Release notes
+
+#### mcp/v0.2.0 (unreleased)
+
+**Changed** — operator sessions no longer see the 14 global- and
+instance-scope tools (`secrate_set`, `secrate_reset`, `bgp_neigh_set`,
+`bgp_global_set`, `bgp_policy_apply`, `config_params_set`, `gpu_mode_set`,
+`gpu_conversations_cleanup`, `llamafw_enable_set`, `llamafw_configure`,
+`llamafw_scanners_set`, `pii_enable_set`, `pii_configure`,
+`pii_url_patterns_set`); an admin session with a confirm token does, after a
+preview with `current`, `proposed`, `diff` and `rollback`. `lb_create` on an
+existing rule key is a replace and follows the same flow (admin-confirm); on
+a new key it is unchanged. `llamafw_health_check` previews unless called
+with `apply: true`. `secrate_set` sends the full merged configuration (the
+REST body requires every threshold); its integer arguments accept an
+explicit 0, a change that would leave every protection off is refused
+before a token is issued, and on a target that had none on the rollback is
+a note (`DELETE /config/securityrate`, no tool yet). Executed changes carry
+`read_back`. Tool counts: operator 74 → 60.
 
 ### Contract gate
 
