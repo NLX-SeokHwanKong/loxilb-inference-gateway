@@ -377,16 +377,20 @@ done
 # the endpoint; the contract gate holds the bridge to the swagger of the
 # tree, not of the image); FAILED otherwise.
 # A read that lands while the gateway's debounced auto-persist holds the
-# snapshot gate (it fires a quiet period after the change-gate writes) is
-# answered HTTP 409; the leg retries a bounded number of times and says so.
+# snapshot gate (it fires a quiet period after the change-gate writes) gets
+# the bridge's retryable verdict {error: snapshot_gate_busy, retry_after_sec}
+# (D21: the tool retries nothing itself). The leg does what an agent does:
+# waits retry_after_sec and calls again, a bounded number of times, and
+# says so.
 read_leg() {
-    local res try
+    local res try wait
     for try in 1 2 3; do
         res=$(mcp_call "$VTOKEN" "$1" "$2")
-        echo "$res" | grep -q 'HTTP 409' || break
-        sleep 1
+        echo "$res" | grep -q 'snapshot_gate_busy' || break
+        wait=$(echo "$res" | grep -oE 'retry_after_sec\\?":[0-9]+' | grep -oE '[0-9]+$' | head -1)
+        sleep "${wait:-3}"
     done
-    [[ $try -gt 1 ]] && echo "  [NOTE] $1 answered HTTP 409 $((try-1))x before this verdict (auto-persist held the snapshot gate)"
+    [[ $try -gt 1 ]] && echo "  [NOTE] $1 answered snapshot_gate_busy $((try-1))x; retried after retry_after_sec (auto-persist held the snapshot gate)"
     if echo "$res" | grep -q '"isError":true'; then
         if echo "$res" | grep -qE 'HTTP 50[13]'; then echo "  [SKIP] $4 (gateway: $(echo "$res" | grep -oE 'HTTP 50[13][^"]{0,60}' | head -1))"; return; fi
         if echo "$res" | grep -qE 'HTTP 404: .*path [^ ]* was not found'; then echo "  [SKIP] $4 (this gateway build predates the endpoint: $(echo "$res" | grep -oE 'path [^ ]* was not found' | head -1))"; return; fi
