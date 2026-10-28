@@ -20,14 +20,17 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"net"
 	"net/http"
 	"os"
 	"os/user"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -76,7 +79,7 @@ func NewBridge(cfg *Config, pol *guard.Policy, aud *guard.Auditor) (*Bridge, err
 		pol:     pol,
 		aud:     aud,
 		clients: make(map[string]*client.Client, len(cfg.Targets)),
-		limiter: newRateLimiter(10, 20),
+		limiter: newRateLimiter(defaultClientRPS, defaultClientBurst),
 		confirm: guard.NewConfirmer(0),
 	}
 	for name, t := range cfg.Targets {
@@ -107,6 +110,11 @@ func NewBridge(cfg *Config, pol *guard.Policy, aud *guard.Auditor) (*Bridge, err
 		return nil, err
 	}
 	b.tokens = toks
+	for _, cl := range cfg.Clients {
+		if cl.RPS > 0 || cl.Burst > 0 {
+			b.limiter.setClient(cl.Name, cl.RPS, cl.Burst)
+		}
+	}
 
 	if cfg.PrometheusURL != "" {
 		if b.prom, err = client.NewPromClient(cfg.PrometheusURL, 0); err != nil {
@@ -274,10 +282,10 @@ func (b *Bridge) HTTPHandler() (http.Handler, error) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		if !b.limiter.allow(cl.Name) {
+		if ok, wait := b.limiter.allow(cl.Name); !ok {
 			b.aud.Log(guard.Event{Kind: guard.EventRateLimit, Client: cl.Name,
 				Remote: r.RemoteAddr})
-			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+			writeRateLimited(w, cl.Name, b.limiter.limitOf(cl.Name), wait)
 			return
 		}
 		// The session is created from this context, so the client and
@@ -390,12 +398,26 @@ func listenIsLoopback(listen string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// The bridge-wide request budget per client (T8): a token bucket of
+// defaultClientBurst requests refilled at defaultClientRPS per second. A
+// client's own rps/burst in the config file replace either figure for that
+// client; nothing turns the budget off.
+const (
+	defaultClientRPS   = 10.0
+	defaultClientBurst = 20.0
+)
+
 // rateLimiter is a simple per-client token bucket (T8).
 type rateLimiter struct {
 	mu      sync.Mutex
 	buckets map[string]*bucket
-	rps     float64
-	burst   float64
+	limits  map[string]rateLimit // per-client overrides, by name
+	def     rateLimit
+}
+
+type rateLimit struct {
+	rps   float64
+	burst float64
 }
 
 type bucket struct {
@@ -404,26 +426,79 @@ type bucket struct {
 }
 
 func newRateLimiter(rps, burst float64) *rateLimiter {
-	return &rateLimiter{buckets: map[string]*bucket{}, rps: rps, burst: burst}
+	return &rateLimiter{buckets: map[string]*bucket{}, limits: map[string]rateLimit{},
+		def: rateLimit{rps: rps, burst: burst}}
 }
 
-func (rl *rateLimiter) allow(name string) bool {
+// setClient gives one client its own budget; a zero field keeps the default.
+func (rl *rateLimiter) setClient(name string, rps, burst float64) {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
+	l := rl.def
+	if rps > 0 {
+		l.rps = rps
+	}
+	if burst > 0 {
+		l.burst = burst
+	}
+	rl.limits[name] = l
+}
+
+// limitOf is the budget that applies to a client.
+func (rl *rateLimiter) limitOf(name string) rateLimit {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	if l, ok := rl.limits[name]; ok {
+		return l
+	}
+	return rl.def
+}
+
+// allow takes one request from the client's bucket. When the bucket is
+// empty it reports how long until one token is back, so the refusal can
+// say when to call again.
+func (rl *rateLimiter) allow(name string) (bool, time.Duration) {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	l := rl.def
+	if o, ok := rl.limits[name]; ok {
+		l = o
+	}
 	now := time.Now()
 	bk, ok := rl.buckets[name]
 	if !ok {
-		bk = &bucket{tokens: rl.burst, last: now}
+		bk = &bucket{tokens: l.burst, last: now}
 		rl.buckets[name] = bk
 	}
-	bk.tokens += now.Sub(bk.last).Seconds() * rl.rps
-	if bk.tokens > rl.burst {
-		bk.tokens = rl.burst
+	bk.tokens += now.Sub(bk.last).Seconds() * l.rps
+	if bk.tokens > l.burst {
+		bk.tokens = l.burst
 	}
 	bk.last = now
 	if bk.tokens < 1 {
-		return false
+		return false, time.Duration((1 - bk.tokens) / l.rps * float64(time.Second))
 	}
 	bk.tokens--
-	return true
+	return true, 0
+}
+
+// writeRateLimited answers a request past the client's budget: HTTP 429
+// with Retry-After (whole seconds, at least 1) and a JSON body that names
+// the client, its budget and the same wait, so an MCP client has what it
+// needs to back off instead of a line of text.
+func writeRateLimited(w http.ResponseWriter, client string, l rateLimit, wait time.Duration) {
+	secs := int(math.Ceil(wait.Seconds()))
+	if secs < 1 {
+		secs = 1
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", strconv.Itoa(secs))
+	w.WriteHeader(http.StatusTooManyRequests)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"error":           "rate_limited",
+		"client":          client,
+		"retry_after_sec": secs,
+		"limit":           map[string]any{"rps": l.rps, "burst": l.burst},
+		"detail":          fmt.Sprintf("client %s is past its request budget of %g burst refilled at %g/s; retry after %d s", client, l.burst, l.rps, secs),
+	})
 }

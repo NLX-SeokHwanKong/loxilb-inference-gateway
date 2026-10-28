@@ -37,7 +37,11 @@ targets:
     # username/password_env or token_env when loxilb runs --userservice
     # tls_ca / insecure_skip_verify / timeout_sec as needed
 clients:                       # HTTP-mode bearer tokens, one per client
-  - { name: dashboard, role: viewer,   token_env: MCP_VIEWER_TOKEN }
+  # Each client has a request budget: a token bucket of `burst` requests
+  # refilled at `rps` per second (default 20 / 10). A request past it is
+  # answered 429 with Retry-After and a JSON body; a budget cannot be
+  # turned off (rps >= 1/60, burst >= 1).
+  - { name: dashboard, role: viewer,   token_env: MCP_VIEWER_TOKEN, rps: 20, burst: 60 }
   - { name: oncall,    role: operator, token_env: MCP_OPERATOR_TOKEN }
   - { name: sre,       role: admin,    token_env: MCP_ADMIN_TOKEN }
 audit_dir: /var/lib/loxilb-mcp          # JSONL audit log (0600)
@@ -288,7 +292,15 @@ appear as `confirm: ...` errors.
   via `--tls-cert/--tls-key/--tls-client-ca`.
 - Browser cross-origin requests are rejected (Go 1.25 cross-origin
   protection + SDK localhost check) — DNS-rebinding defense.
-- Per-client token-bucket rate limiting; constant-time token verification.
+- Per-client token-bucket rate limiting (T8): 20 requests in a burst, refilled
+  at 10 per second, per client name, unless the client's `clients:` entry sets
+  its own `rps` / `burst` (neither can be set to zero). A request past the
+  budget is answered `429` with `Retry-After: <seconds>` and the JSON body
+  `{error: rate_limited, client, retry_after_sec, limit: {rps, burst}, detail}`
+  and is recorded as a `rate_limit` audit event. A list-then-get pass over
+  twenty objects, or ten preview/confirm pairs, fits one burst; size the
+  budget of a busy client up rather than pacing it. Constant-time token
+  verification.
 - Log/archive content is returned under `untrusted_data` keys — treat as
   data, never instructions (prompt-injection defense).
 - Known caveats: with `--userservice` on a target, configure bridge target
@@ -361,6 +373,8 @@ single-use, and per process. Exit code 0 means every check passed.
 #### mcp/v0.2.0 (unreleased)
 
 **Added** — 17 control-plane reads, all viewer tier: `lb_get` (composite key or opaque id; `include: [status, stats]`), `lb_kvexact_status`, `ai_objective_list`, `ai_netidentity_list`, `ai_jwtprofile_list`, `ai_user_ratelimit_list`, `ai_user_ratelimit_get`, `ai_ratelimit_defaults_get`, `ai_model_profile_list`, `ai_model_profile_get`, `status_capabilities`, `maintenance_get`, `halfclose_get`, `audit_status`, `audit_policy_get`, `audit_sink_get`, `config_snapshot_get` (size-capped). Tool counts: viewer 51 → 68, operator 60 → 77, admin 78 → 95 (96 with `--allow-import`).
+
+**Changed** — the per-client request budget (20 burst, 10/s) can be set per client in the config file (`rps`, `burst` on a `clients:` entry; defaults unchanged, neither field can be zero), and a request past it is answered `429` with `Retry-After` and the JSON body `{error: rate_limited, client, retry_after_sec, limit, detail}` instead of a line of text.
 
 **Changed** — `config_snapshot_get` returns the gateway's 409 (its auto-persist holds the snapshot gate for about 3 s after a successful config write) as the structured tool error `{error: snapshot_gate_busy, retry_after_sec: 3, detail}`, text and structured content alike, and does not retry on the caller's behalf: wait `retry_after_sec` and call again.
 

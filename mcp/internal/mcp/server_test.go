@@ -158,16 +158,129 @@ func TestResolveRejectsUnknownAndURLTargets(t *testing.T) {
 func TestRateLimiter(t *testing.T) {
 	rl := newRateLimiter(1, 3)
 	allowed := 0
+	var wait time.Duration
 	for range 10 {
-		if rl.allow("c") {
+		ok, w := rl.allow("c")
+		if ok {
 			allowed++
+		} else {
+			wait = w
 		}
 	}
 	if allowed != 3 {
 		t.Errorf("burst: allowed %d, want 3", allowed)
 	}
-	if rl.allow("other") != true {
+	if wait <= 0 || wait > time.Second {
+		t.Errorf("an empty bucket at 1 rps must say to wait within a second, got %v", wait)
+	}
+	if ok, _ := rl.allow("other"); !ok {
 		t.Error("independent client must have its own bucket")
+	}
+}
+
+// D20: a client's own rps/burst replace the defaults for that client only,
+// and a zero field keeps the default.
+func TestRateLimiterPerClientBudget(t *testing.T) {
+	rl := newRateLimiter(10, 20)
+	rl.setClient("tight", 1, 2)
+	rl.setClient("wide", 0, 50)
+	if l := rl.limitOf("tight"); l.rps != 1 || l.burst != 2 {
+		t.Fatalf("tight: %+v", l)
+	}
+	if l := rl.limitOf("wide"); l.rps != 10 || l.burst != 50 {
+		t.Fatalf("wide keeps the default rps: %+v", l)
+	}
+	if l := rl.limitOf("plain"); l.rps != 10 || l.burst != 20 {
+		t.Fatalf("plain: %+v", l)
+	}
+	allowed := 0
+	for range 5 {
+		if ok, _ := rl.allow("tight"); ok {
+			allowed++
+		}
+	}
+	if allowed != 2 {
+		t.Errorf("tight burst: allowed %d, want 2", allowed)
+	}
+	allowed = 0
+	for range 30 {
+		if ok, _ := rl.allow("wide"); ok {
+			allowed++
+		}
+	}
+	if allowed != 30 {
+		t.Errorf("wide burst 50: allowed %d of 30", allowed)
+	}
+}
+
+// D20: the refusal carries Retry-After and a JSON body the client can act
+// on, and the budget comes from the client's config entry.
+func TestHTTPRateLimitedAnswer(t *testing.T) {
+	cfg := testConfig("http://127.0.0.1:11111")
+	tight := strings.Repeat("b", 32)
+	cfg.Clients = append(cfg.Clients, ClientToken{Name: "burst", Role: "viewer", Token: tight, RPS: 1, Burst: 2})
+	b := newTestBridge(t, cfg)
+	h, err := b.HTTPHandler()
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	auth := func(r *http.Request) { r.Header.Set("Authorization", "Bearer "+tight) }
+	for i := range 2 {
+		if resp := doInitialize(t, srv.URL, auth); resp.StatusCode == http.StatusTooManyRequests {
+			t.Fatalf("request %d inside the burst refused", i+1)
+		}
+	}
+	resp := doInitialize(t, srv.URL, auth)
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("third request within the second: got %d, want 429", resp.StatusCode)
+	}
+	ra, err := strconv.Atoi(resp.Header.Get("Retry-After"))
+	if err != nil || ra < 1 {
+		t.Fatalf("Retry-After must be whole seconds >= 1, got %q", resp.Header.Get("Retry-After"))
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Fatalf("content type %q", ct)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("body is not JSON: %v", err)
+	}
+	if body["error"] != "rate_limited" || body["client"] != "burst" || body["retry_after_sec"] != float64(ra) {
+		t.Fatalf("body: %v", body)
+	}
+	lim, _ := body["limit"].(map[string]any)
+	if lim["rps"] != float64(1) || lim["burst"] != float64(2) {
+		t.Fatalf("limit must name the client's budget: %v", body)
+	}
+	// The admin client of the config keeps the default budget: 20 in a burst.
+	admin := func(r *http.Request) { r.Header.Set("Authorization", "Bearer "+testToken) }
+	for i := range 20 {
+		if resp := doInitialize(t, srv.URL, admin); resp.StatusCode == http.StatusTooManyRequests {
+			t.Fatalf("default client refused at request %d of its burst of 20", i+1)
+		}
+	}
+}
+
+// D20: the config refuses a budget that would turn the limiter off.
+func TestClientBudgetValidation(t *testing.T) {
+	for _, bad := range []ClientToken{
+		{Name: "a", Role: "viewer", Token: testToken, RPS: -1},
+		{Name: "a", Role: "viewer", Token: testToken, RPS: 0.001},
+		{Name: "a", Role: "viewer", Token: testToken, Burst: 0.5},
+		{Name: "a", Role: "viewer", Token: testToken, Burst: -2},
+	} {
+		cfg := testConfig("http://127.0.0.1:11111")
+		cfg.Clients = []ClientToken{bad}
+		if err := cfg.validate(); err == nil {
+			t.Errorf("accepted %+v", bad)
+		}
+	}
+	cfg := testConfig("http://127.0.0.1:11111")
+	cfg.Clients = []ClientToken{{Name: "a", Role: "viewer", Token: testToken, RPS: 0.5, Burst: 1}}
+	if err := cfg.validate(); err != nil {
+		t.Errorf("a slow but positive budget must be accepted: %v", err)
 	}
 }
 
