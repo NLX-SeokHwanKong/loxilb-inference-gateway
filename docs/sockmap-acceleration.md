@@ -36,6 +36,44 @@ kernel it keeps the seven guarantees below. Each is checked by a suite in
 | 6 | **Opt-in, refused out loud.** Both a daemon flag and a per-service mode are required. A combination that would break guarantee 3 is rejected when it is configured, never silently ignored or downgraded | [Enabling it](#enabling-it), [Eligibility](#eligibility) |
 | 7 | **Protocol scope.** Only plaintext HTTP/1.1 over TCP and IPv4, in FullProxy mode, is accelerated. HTTP/2, h2c and TLS connections work in every mode and fall back to the userspace relay | [When a connection is accelerated](#when-a-connection-is-accelerated) |
 
+## Requirements
+
+The sockmap bootstrap attaches its sockops program to a cgroup2 hierarchy that
+loxilb mounts itself at `/opt/loxilb/cgroup` on every boot. That needs:
+
+- **`--privileged`, or at least `CAP_SYS_ADMIN`.** The mount is made from
+  inside the container.
+- **A cgroup v2 host.** A cgroup v1-only host cannot provide the hierarchy.
+- **Kernel 5.7 or later.** The hierarchy is mounted with
+  `memory_recursiveprot`, which older kernels reject. The acceleration itself
+  has a stricter requirement, described under
+  [Kernel requirement](#kernel-requirement).
+
+Restarting the **same** container (`docker restart`, or stop and start) is
+supported: the hierarchy is mounted by its mount state, not by whether the
+directory from the previous boot is still there, so a container that keeps
+its writable layer but gets a fresh mount namespace comes back the same way a
+new one does. The same bootstrap serves `--localsockpolicy`.
+
+When the hierarchy is not there after the mount attempt, the daemon stops
+before the data path starts, with exit code 1 and one line in the log:
+
+```
+sockmap/localsockpolicy needs cgroup2 mounted at /opt/loxilb/cgroup; mount failed or was skipped (container restarted without a fresh rootfs, no CAP_SYS_ADMIN, kernel < 5.7, or cgroup v1 host): <what the check saw>; <what the mount command returned>. See docs/sockmap-acceleration.md
+```
+
+The causes it names, and what to do about each:
+
+| cause | what you see | remedy |
+|---|---|---|
+| container restarted without a fresh rootfs | a build older than this check: the restart aborts in the data path with `Opening Cgroup Procs: /opt/loxilb/cgroup/cgroup.procs` | upgrade; on an old build, recreate the container instead of restarting it |
+| no `CAP_SYS_ADMIN` | the mount command fails with `permission denied` | run the container `--privileged` or add `--cap-add SYS_ADMIN` |
+| kernel older than 5.7 | the mount command fails with `invalid argument` | use a host kernel of 5.7 or later |
+| cgroup v1 host | the mount command fails with `no such device`, or `/sys/fs/cgroup` is not `cgroup2fs` | boot the host with the unified cgroup hierarchy (`systemd.unified_cgroup_hierarchy=1`) |
+
+`cicd/sockmap-restart/validation.sh` drives a restart of the same container
+twice and runs in CI.
+
 ## Enabling it
 
 Acceleration is opt-in at two levels. Both must be set.

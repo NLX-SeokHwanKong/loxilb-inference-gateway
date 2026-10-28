@@ -13,7 +13,10 @@ volume where the kernel defect below shows; and `validation_hold.sh`
 suite is run by hand**: the acceleration suites need a patched kernel the hosted runners do
 not have. Unlike the other `cicd/` scenarios, this directory holds many
 `validation_*.sh` scripts over one shared testbed rather than a single
-`validation.sh`.
+`validation.sh`. The restart of a `--sockmapsupport` container is checked
+separately, in [`cicd/sockmap-restart/`](../sockmap-restart/README.md), because
+it needs the daemon as the container's PID 1, which this testbed's
+`--entrypoint /bin/bash` start does not give.
 
 ## Before you run anything
 

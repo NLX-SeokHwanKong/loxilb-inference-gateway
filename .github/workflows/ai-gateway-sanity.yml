@@ -53,6 +53,7 @@ on:
       - 'cicd/lbreplace/**'
       - 'cicd/common/**'
       - 'cicd/sockmap-fullproxy/**'
+      - 'cicd/sockmap-restart/**'
       - 'pkg/**'
       - 'api/**'
       - '.github/workflows/ai-gateway-sanity.yml'
@@ -73,6 +74,7 @@ on:
       - 'cicd/lbreplace/**'
       - 'cicd/common/**'
       - 'cicd/sockmap-fullproxy/**'
+      - 'cicd/sockmap-restart/**'
       - 'pkg/**'
       - 'api/**'
       - '.github/workflows/ai-gateway-sanity.yml'
@@ -587,3 +589,30 @@ jobs:
           ./validation_hold.sh
           ./rmconfig.sh
           cd -
+
+  # A gateway started with --sockmapsupport must come back after a restart of
+  # the SAME container: the writable layer survives (the cgroup directory from
+  # the previous boot) but the mount namespace does not (the cgroup2 mount), so
+  # the hierarchy has to be mounted again on every boot. The daemon runs as the
+  # container's PID 1 here; the shared testbed starts it under
+  # --entrypoint /bin/bash, which does not reproduce an operator's restart.
+  sockmap-restart-sanity:
+    name: sockmap-restart-sanity
+    runs-on: ubuntu-22.04
+    if: github.actor != 'dependabot[bot]'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.CI_SUBMODULE_TOKEN || github.token }}
+      - name: Build the image the restart check starts (Dockerfile defaults)
+        run: docker build -t ghcr.io/loxilb-io/loxilb-inference-gateway:latest .
+      - name: The same container comes back from two restarts with its rule
+        run: cicd/sockmap-restart/validation.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sockmap-restart-evidence
+          path: cicd/sockmap-restart/artifacts/
+          if-no-files-found: ignore
+          retention-days: 14
