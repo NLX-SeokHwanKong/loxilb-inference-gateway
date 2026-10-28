@@ -17,52 +17,52 @@ budget:
 operations:
 - op: GET /audit/policy
   pending: P1a
-  note: read; PR-B1; default, awaiting owner
+  note: read; PR-B1; owner-approved 2026-10-28
 - op: POST /audit/policy
   excluded: the audited must not configure the auditor; D9
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: POST /audit/rotate
   excluded: the audited must not configure the auditor; D9
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: GET /audit/sink
   pending: P1a
-  note: read; PR-B1; default, awaiting owner
+  note: read; PR-B1; owner-approved 2026-10-28
 - op: POST /audit/sink
   excluded: the audited must not configure the auditor; D9
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: DELETE /audit/sinks/{name}
   excluded: the audited must not configure the auditor; D9
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: GET /audit/sinks/{name}
   pending: P1a
-  note: read; PR-B1; default, awaiting owner
+  note: read; PR-B1; owner-approved 2026-10-28
 - op: PUT /audit/sinks/{name}
   excluded: the audited must not configure the auditor; D9
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: GET /audit/status
   pending: P1a
-  note: read; PR-B1; default, awaiting owner
+  note: read; PR-B1; owner-approved 2026-10-28
 - op: POST /auth/login
   excluded: used only by the bridge's own login (client.login); not a tool; D2
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: POST /auth/logout
   excluded: management auth / user administration is not an agent task; D2
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: POST /auth/token/upgrade
   excluded: management auth / user administration is not an agent task; D2
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: GET /auth/users
   excluded: management auth / user administration is not an agent task; D2
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: POST /auth/users
   excluded: management auth / user administration is not an agent task; D2
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: DELETE /auth/users/{id}
   excluded: management auth / user administration is not an agent task; D2
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: PUT /auth/users/{id}
   excluded: management auth / user administration is not an agent task; D2
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: GET /config/ai/apikey
   tools:
   - ai_apikey_list
@@ -91,58 +91,58 @@ operations:
   tier: operator
 - op: GET /config/ai/jwtauthprofile
   pending: P1a
-  note: read; PR-B1; default, awaiting owner
+  note: read; PR-B1; owner-approved 2026-10-28
 - op: POST /config/ai/jwtauthprofile
   pending: P1b
   impact: global
-  note: 'D11: opens on a stated use-case; admin-confirm, never autopilot; default, awaiting owner'
+  note: 'D11: opens on a stated use-case; admin-confirm, never autopilot; owner-approved 2026-10-28'
 - op: DELETE /config/ai/jwtauthprofile/{name}
   pending: P1b
   impact: global
-  note: 'D11: opens on a stated use-case; admin-confirm, never autopilot; default, awaiting owner'
+  note: 'D11: opens on a stated use-case; admin-confirm, never autopilot; owner-approved 2026-10-28'
 - op: GET /config/ai/kv/inventory
   tools:
   - ai_kv_inventory_get
   impact: none
 - op: GET /config/ai/model-profiles
   pending: P1a
-  note: read; PR-B1; default, awaiting owner
+  note: read; PR-B1; owner-approved 2026-10-28
 - op: GET /config/ai/model-profiles/{profile_id}
   pending: P1a
-  note: read; PR-B1; default, awaiting owner
+  note: read; PR-B1; owner-approved 2026-10-28
 - op: GET /config/ai/netidentity
   pending: P1a
-  note: read; PR-B1; default, awaiting owner
+  note: read; PR-B1; owner-approved 2026-10-28
 - op: POST /config/ai/netidentity
   pending: P1b
   impact: global
-  note: 'D11: opens on a stated use-case; admin-confirm, never autopilot; default, awaiting owner'
+  note: 'D11: opens on a stated use-case; admin-confirm, never autopilot; owner-approved 2026-10-28'
 - op: DELETE /config/ai/netidentity/{name}
   pending: P1b
   impact: global
-  note: 'D11: opens on a stated use-case; admin-confirm, never autopilot; default, awaiting owner'
+  note: 'D11: opens on a stated use-case; admin-confirm, never autopilot; owner-approved 2026-10-28'
 - op: GET /config/ai/objective
   pending: P1a
-  note: read; PR-B1; default, awaiting owner
+  note: read; PR-B1; owner-approved 2026-10-28
 - op: POST /config/ai/objective
   pending: P1b
   impact: global
-  note: 'D11: opens on a stated use-case; admin-confirm, never autopilot; default, awaiting owner'
+  note: 'D11: opens on a stated use-case; admin-confirm, never autopilot; owner-approved 2026-10-28'
 - op: DELETE /config/ai/objective/{name}
   pending: P1b
   impact: global
-  note: 'D11: opens on a stated use-case; admin-confirm, never autopilot; default, awaiting owner'
+  note: 'D11: opens on a stated use-case; admin-confirm, never autopilot; owner-approved 2026-10-28'
 - op: POST /config/ai/ratelimit/defaults
   pending: P1b
   impact: global
-  note: 'D11: opens on a stated use-case; admin-confirm, never autopilot; default, awaiting owner'
+  note: 'D11: opens on a stated use-case; admin-confirm, never autopilot; owner-approved 2026-10-28'
 - op: DELETE /config/ai/ratelimit/defaults/{scope}
   pending: P1b
   impact: global
-  note: 'D11: opens on a stated use-case; admin-confirm, never autopilot; default, awaiting owner'
+  note: 'D11: opens on a stated use-case; admin-confirm, never autopilot; owner-approved 2026-10-28'
 - op: GET /config/ai/ratelimit/defaults/{scope}
   pending: P1a
-  note: read; PR-B1; default, awaiting owner
+  note: read; PR-B1; owner-approved 2026-10-28
 - op: POST /config/ai/tenant/ratelimit
   tools:
   - ai_ratelimit_set
@@ -156,26 +156,26 @@ operations:
 - op: POST /config/ai/user/ratelimit
   pending: P1b
   impact: tenant
-  note: PR-B2 ai_user_ratelimit_set; operator with preview; default, awaiting owner
+  note: PR-B2 ai_user_ratelimit_set; operator with preview; owner-approved 2026-10-28
 - op: GET /config/ai/user/ratelimit/{tenant_id}
   pending: P1a
-  note: read; PR-B1; default, awaiting owner
+  note: read; PR-B1; owner-approved 2026-10-28
 - op: DELETE /config/ai/user/ratelimit/{tenant_id}/{user_id}
   pending: P1b
   impact: tenant
-  note: PR-B2 ai_user_ratelimit_delete; re-creatable from the preview, operator; default, awaiting owner
+  note: PR-B2 ai_user_ratelimit_delete; re-creatable from the preview, operator; owner-approved 2026-10-28
 - op: GET /config/ai/user/ratelimit/{tenant_id}/{user_id}
   pending: P1a
-  note: read; PR-B1; default, awaiting owner
+  note: read; PR-B1; owner-approved 2026-10-28
 - op: POST /config/bfd
   excluded: L2-4 write CRUD is excluded by policy; D1
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: GET /config/bfd/all
   pending: P4
-  note: L2-4 read; no owner use-case yet; default, awaiting owner
+  note: L2-4 read; no owner use-case yet; owner-approved 2026-10-28
 - op: DELETE /config/bfd/remoteIP/{remote_ip}
   excluded: L2-4 write CRUD is excluded by policy; D1
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: POST /config/bgp/global
   tools:
   - bgp_global_set
@@ -197,10 +197,10 @@ operations:
 - op: DELETE /config/bgp/neigh/{ip_address}
   pending: P4
   impact: global
-  note: D1 keep-list; impact global, admin-confirm if ever opened; default, awaiting owner
+  note: D1 keep-list; impact global, admin-confirm if ever opened; owner-approved 2026-10-28
 - op: DELETE /config/bgp/policy/apply
   excluded: not in the D1 keep-list (inverse of bgp_policy_apply); L2-4 write CRUD is excluded by policy; D1
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: POST /config/bgp/policy/apply
   tools:
   - bgp_policy_apply
@@ -211,18 +211,18 @@ operations:
 - op: POST /config/bgp/policy/definedsets/{defineset_type}
   pending: P4
   impact: global
-  note: D1 keep-list; impact global, admin-confirm if ever opened; default, awaiting owner
+  note: D1 keep-list; impact global, admin-confirm if ever opened; owner-approved 2026-10-28
 - op: DELETE /config/bgp/policy/definedsets/{defineset_type}/{type_name}
   pending: P4
   impact: global
-  note: D1 keep-list; impact global, admin-confirm if ever opened; default, awaiting owner
+  note: D1 keep-list; impact global, admin-confirm if ever opened; owner-approved 2026-10-28
 - op: GET /config/bgp/policy/definedsets/{defineset_type}/{type_name}
   pending: P4
-  note: read; opens with the network-ai-synergy track; default, awaiting owner
+  note: read; opens with the network-ai-synergy track; owner-approved 2026-10-28
 - op: POST /config/bgp/policy/definitions
   pending: P4
   impact: global
-  note: D1 keep-list; impact global, admin-confirm if ever opened; default, awaiting owner
+  note: D1 keep-list; impact global, admin-confirm if ever opened; owner-approved 2026-10-28
 - op: GET /config/bgp/policy/definitions/all
   tools:
   - bgp_policy_list
@@ -230,25 +230,25 @@ operations:
 - op: DELETE /config/bgp/policy/definitions/{policy_name}
   pending: P4
   impact: global
-  note: D1 keep-list; impact global, admin-confirm if ever opened; default, awaiting owner
+  note: D1 keep-list; impact global, admin-confirm if ever opened; owner-approved 2026-10-28
 - op: POST /config/cert
   pending: P2
   impact: service
-  note: cert_create by cert_file/key_file under SecretsDir; admin-confirm; PR-C; default, awaiting owner
+  note: cert_create by cert_file/key_file under SecretsDir; admin-confirm; PR-C; owner-approved 2026-10-28
 - op: DELETE /config/cert/{certId}
   pending: P2
   impact: service
-  note: cert_delete; admin-confirm; PR-C; default, awaiting owner
+  note: cert_delete; admin-confirm; PR-C; owner-approved 2026-10-28
 - op: GET /config/cert/{certId}
   pending: P2
-  note: read; PR-C; default, awaiting owner
+  note: read; PR-C; owner-approved 2026-10-28
 - op: PUT /config/cert/{certId}
   pending: P2
   impact: service
-  note: cert_rotate by file reference; admin-confirm; PR-C; default, awaiting owner
+  note: cert_rotate by file reference; admin-confirm; PR-C; owner-approved 2026-10-28
 - op: POST /config/cistate
   excluded: HA-internal cluster-state report; D3
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: GET /config/cistate/all
   tools:
   - cluster_state_get
@@ -262,27 +262,27 @@ operations:
   impact: none
 - op: POST /config/cors
   excluded: K8s metadata machine protocol; D3
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: GET /config/cors/all
   excluded: K8s metadata machine protocol; D3
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: DELETE /config/cors/{cors_url}
   excluded: K8s metadata machine protocol; D3
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: GET /config/dpu/debug
   pending: P2
-  note: read; PR-C; default, awaiting owner
+  note: read; PR-C; owner-approved 2026-10-28
 - op: POST /config/dpu/debug
   pending: P2
   impact: instance
-  note: write not in the PR-C list; needs an owner use-case (§7.15); PR-C; default, awaiting owner
+  note: write not in the PR-C list; needs an owner use-case (§7.15); PR-C; owner-approved 2026-10-28
 - op: GET /config/dpu/hwcounters
   pending: P2
-  note: read; PR-C; default, awaiting owner
+  note: read; PR-C; owner-approved 2026-10-28
 - op: POST /config/endpoint
   pending: P4
   impact: object
-  note: endpoint-monitor add; not named by D1 or any §5 row, owner to place; default, awaiting owner
+  note: endpoint-monitor add; not named by D1 or any §5 row, owner to place; owner-approved 2026-10-28
 - op: GET /config/endpoint/all
   tools:
   - endpoint_list
@@ -291,7 +291,7 @@ operations:
 - op: DELETE /config/endpoint/epipaddress/{ip_address}
   pending: P4
   impact: object
-  note: endpoint-monitor delete; not named by D1 or any §5 row, owner to place; default, awaiting owner
+  note: endpoint-monitor delete; not named by D1 or any §5 row, owner to place; owner-approved 2026-10-28
 - op: POST /config/endpointhoststate
   tools:
   - endpoint_host_state_set
@@ -304,13 +304,13 @@ operations:
   impact: none
 - op: POST /config/fdb
   excluded: L2-4 write CRUD is excluded by policy; D1
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: GET /config/fdb/all
   pending: P4
-  note: L2-4 read; no owner use-case yet; default, awaiting owner
+  note: L2-4 read; no owner use-case yet; owner-approved 2026-10-28
 - op: DELETE /config/fdb/{mac_address}/dev/{if_name}
   excluded: L2-4 write CRUD is excluded by policy; D1
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: DELETE /config/firewall
   tools:
   - fw_delete
@@ -355,15 +355,15 @@ operations:
   impact: none
 - op: GET /config/halfclose
   pending: P1a
-  note: read; PR-B1; default, awaiting owner
+  note: read; PR-B1; owner-approved 2026-10-28
 - op: POST /config/halfclose
   pending: P1b
   impact: global
-  note: 'D11: opens on a stated use-case; admin-confirm, never autopilot; default, awaiting owner'
+  note: 'D11: opens on a stated use-case; admin-confirm, never autopilot; owner-approved 2026-10-28'
 - op: POST /config/halfclose/release
   pending: P1b
   impact: global
-  note: 'D11: opens on a stated use-case; admin-confirm, never autopilot; default, awaiting owner'
+  note: 'D11: opens on a stated use-case; admin-confirm, never autopilot; owner-approved 2026-10-28'
 - op: POST /config/import
   tools:
   - config_import
@@ -388,124 +388,124 @@ operations:
   impact: none
 - op: GET /config/ipsec
   pending: P2
-  note: read; PR-C; default, awaiting owner
+  note: read; PR-C; owner-approved 2026-10-28
 - op: POST /config/ipsec
   excluded: IPsec write; L2-4 write CRUD is excluded by policy; D1
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: POST /config/ipsec/ca-certificates
   excluded: IPsec write; L2-4 write CRUD is excluded by policy; D1
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: GET /config/ipsec/ca-certificates/all
   pending: P2
-  note: read; PR-C; default, awaiting owner
+  note: read; PR-C; owner-approved 2026-10-28
 - op: DELETE /config/ipsec/ca-certificates/{name}
   excluded: IPsec write; L2-4 write CRUD is excluded by policy; D1
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: GET /config/ipsec/ca-certificates/{name}
   pending: P2
-  note: read; PR-C; default, awaiting owner
+  note: read; PR-C; owner-approved 2026-10-28
 - op: POST /config/ipsec/certificates
   excluded: IPsec write; L2-4 write CRUD is excluded by policy; D1
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: GET /config/ipsec/certificates/all
   pending: P2
-  note: read; PR-C; default, awaiting owner
+  note: read; PR-C; owner-approved 2026-10-28
 - op: POST /config/ipsec/certificates/validate
   excluded: takes certificate material inline, which §7.14 forbids as a tool argument; IPsec write; D1
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: DELETE /config/ipsec/certificates/{name}
   excluded: IPsec write; L2-4 write CRUD is excluded by policy; D1
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: GET /config/ipsec/certificates/{name}
   pending: P2
-  note: read; PR-C; default, awaiting owner
+  note: read; PR-C; owner-approved 2026-10-28
 - op: GET /config/ipsec/sas/all
   tools:
   - ipsec_status_get
   impact: none
 - op: DELETE /config/ipsec/stats
   excluded: IPsec write; L2-4 write CRUD is excluded by policy; D1
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: GET /config/ipsec/stats
   tools:
   - ipsec_status_get
   impact: none
 - op: POST /config/ipsec/tunnels
   excluded: IPsec write; L2-4 write CRUD is excluded by policy; D1
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: GET /config/ipsec/tunnels/all
   tools:
   - ipsec_status_get
   impact: none
 - op: DELETE /config/ipsec/tunnels/{name}
   excluded: IPsec write; L2-4 write CRUD is excluded by policy; D1
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: GET /config/ipsec/tunnels/{name}
   pending: P2
-  note: read; PR-C; default, awaiting owner
+  note: read; PR-C; owner-approved 2026-10-28
 - op: PUT /config/ipsec/tunnels/{name}
   excluded: IPsec write; L2-4 write CRUD is excluded by policy; D1
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: POST /config/ipsec/tunnels/{name}/action
   excluded: IPsec write; L2-4 write CRUD is excluded by policy; D1
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: GET /config/ipsec/tunnels/{name}/peerconfig
   pending: P2
-  note: read; PR-C; default, awaiting owner
+  note: read; PR-C; owner-approved 2026-10-28
 - op: POST /config/ipv4address
   excluded: L2-4 write CRUD is excluded by policy; D1
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: GET /config/ipv4address/all
   tools:
   - net_ip_list
   impact: none
 - op: DELETE /config/ipv4address/{ip_address}/{mask}/dev/{if_name}
   excluded: L2-4 write CRUD is excluded by policy; D1
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: POST /config/ipv6address
   excluded: L2-4 write CRUD is excluded by policy; D1
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: GET /config/ipv6address/all
   tools:
   - net_ip_list
   impact: none
 - op: DELETE /config/ipv6address/{ip_address}/{mask}/dev/{if_name}
   excluded: L2-4 write CRUD is excluded by policy; D1
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: POST /config/l4trace/disable
   pending: P2
   impact: global
-  note: l4trace_enable_set; operator with preview; PR-C; default, awaiting owner
+  note: l4trace_enable_set; operator with preview; PR-C; owner-approved 2026-10-28
 - op: POST /config/l4trace/enable
   pending: P2
   impact: global
-  note: l4trace_enable_set; operator with preview; PR-C; default, awaiting owner
+  note: l4trace_enable_set; operator with preview; PR-C; owner-approved 2026-10-28
 - op: PUT /config/l4trace/sampling
   pending: P2
   impact: global
-  note: l4trace_sampling_set; upper bound from config; PR-C; default, awaiting owner
+  note: l4trace_sampling_set; upper bound from config; PR-C; owner-approved 2026-10-28
 - op: POST /config/l4trace/stats/reset
   pending: P2
   impact: global
-  note: l4trace_stats_reset; PR-C; default, awaiting owner
+  note: l4trace_stats_reset; PR-C; owner-approved 2026-10-28
 - op: GET /config/l4trace/status
   tools:
   - l4trace_status_get
   impact: none
 - op: GET /config/l7policy
   pending: P2
-  note: read; PR-C; default, awaiting owner
+  note: read; PR-C; owner-approved 2026-10-28
 - op: POST /config/l7policy
   pending: P2
   impact: service
-  note: l7policy_create; admin-confirm; PR-C; default, awaiting owner
+  note: l7policy_create; admin-confirm; PR-C; owner-approved 2026-10-28
 - op: DELETE /config/l7policy/id/{id}
   pending: P2
   impact: service
-  note: l7policy_delete; admin-confirm; PR-C; default, awaiting owner
+  note: l7policy_delete; admin-confirm; PR-C; owner-approved 2026-10-28
 - op: GET /config/l7policy/id/{id}
   pending: P2
-  note: read; PR-C; default, awaiting owner
+  note: read; PR-C; owner-approved 2026-10-28
 - op: POST /config/llamafirewall/configure
   tools:
   - llamafw_configure
@@ -550,7 +550,7 @@ operations:
   tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; owner decision pending (PR-0 report)'
 - op: DELETE /config/loadbalancer/all
   excluded: delete-all is instance-scope and never agent-driven; D3
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: GET /config/loadbalancer/all
   tools:
   - lb_list
@@ -572,28 +572,28 @@ operations:
   tier: admin-confirm
 - op: GET /config/loadbalancer/externalipaddress/{ip_address}/port/{port}/protocol/{proto}
   pending: P1a
-  note: read; PR-B1; default, awaiting owner
+  note: read; PR-B1; owner-approved 2026-10-28
 - op: PATCH /config/loadbalancer/externalipaddress/{ip_address}/port/{port}/protocol/{proto}
   pending: P1b
   impact: service
-  note: PR-B2 lb_update; phase-1 fields allowlist, admin-confirm; default, awaiting owner
+  note: PR-B2 lb_update; phase-1 fields allowlist, admin-confirm; owner-approved 2026-10-28
 - op: GET /config/loadbalancer/externalipaddress/{ip_address}/port/{port}/protocol/{proto}/kvexactstatus
   pending: P1a
-  note: read; PR-B1; default, awaiting owner
+  note: read; PR-B1; owner-approved 2026-10-28
 - op: POST /config/loadbalancer/externalipaddress/{ip_address}/port/{port}/protocol/{proto}/sockmapreset
   pending: P1b
   impact: service
-  note: 'D11: opens on a stated use-case; admin-confirm, never autopilot; default, awaiting owner'
+  note: 'D11: opens on a stated use-case; admin-confirm, never autopilot; owner-approved 2026-10-28'
 - op: GET /config/loadbalancer/externalipaddress/{ip_address}/port/{port}/protocol/{proto}/stats
   pending: P1a
-  note: read; PR-B1; default, awaiting owner
+  note: read; PR-B1; owner-approved 2026-10-28
 - op: GET /config/loadbalancer/externalipaddress/{ip_address}/port/{port}/protocol/{proto}/status
   pending: P1a
-  note: read; PR-B1; default, awaiting owner
+  note: read; PR-B1; owner-approved 2026-10-28
 - op: DELETE /config/loadbalancer/hosturl/{hosturl}/externalipaddress/{ip_address}/port/{port}/portmax/{portmax}/protocol/{proto}
   pending: P1b
   impact: service
-  note: 'PR-B2: lb_delete gains the hosturl+portmax variant; default, awaiting owner'
+  note: 'PR-B2: lb_delete gains the hosturl+portmax variant; owner-approved 2026-10-28'
 - op: DELETE /config/loadbalancer/hosturl/{hosturl}/externalipaddress/{ip_address}/port/{port}/protocol/{proto}
   tools:
   - lb_delete
@@ -602,7 +602,7 @@ operations:
   tier: admin-confirm
 - op: GET /config/loadbalancer/id/{id}
   pending: P1a
-  note: read; PR-B1; default, awaiting owner
+  note: read; PR-B1; owner-approved 2026-10-28
 - op: DELETE /config/loadbalancer/name/{lb_name}
   tools:
   - lb_delete
@@ -611,42 +611,42 @@ operations:
   tier: admin-confirm
 - op: DELETE /config/metrics
   excluded: instance-scope metrics on/off; removed from the plan by Rev 1.1 (§0 table, §5)
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: GET /config/metrics
   tools:
   - metrics_config_get
   impact: none
 - op: POST /config/metrics
   excluded: instance-scope metrics on/off; removed from the plan by Rev 1.1 (§0 table, §5)
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: POST /config/mirror
   excluded: L2-4 write CRUD is excluded by policy; D1
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: GET /config/mirror/all
   pending: P4
-  note: L2-4 read; no owner use-case yet; default, awaiting owner
+  note: L2-4 read; no owner use-case yet; owner-approved 2026-10-28
 - op: DELETE /config/mirror/ident/{ident}
   excluded: L2-4 write CRUD is excluded by policy; D1
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: POST /config/neighbor
   excluded: L2-4 write CRUD is excluded by policy; D1
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: GET /config/neighbor/all
   tools:
   - net_neighbor_list
   impact: none
 - op: DELETE /config/neighbor/{ip_address}/dev/{if_name}
   excluded: L2-4 write CRUD is excluded by policy; D1
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: DELETE /config/opa/watcher
   excluded: points the gateway at an agent-chosen URL; excluded until the bridge config gains a destination allowlist; D10
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: GET /config/opa/watcher
   pending: P2
-  note: read; PR-C; default, awaiting owner
+  note: read; PR-C; owner-approved 2026-10-28
 - op: POST /config/opa/watcher
   excluded: points the gateway at an agent-chosen URL; excluded until the bridge config gains a destination allowlist; D10
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: GET /config/params
   tools:
   - config_params_get
@@ -661,7 +661,7 @@ operations:
 - op: POST /config/persist
   pending: P1b
   impact: instance
-  note: PR-B2 config_persist; operator; default, awaiting owner
+  note: PR-B2 config_persist; operator; owner-approved 2026-10-28
 - op: POST /config/pii/configure
   tools:
   - pii_configure
@@ -693,20 +693,20 @@ operations:
   tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; owner decision pending (PR-0 report)'
 - op: POST /config/policy
   excluded: L2-4 write CRUD is excluded by policy; D1
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: GET /config/policy/all
   pending: P4
-  note: L2-4 read; no owner use-case yet; default, awaiting owner
+  note: L2-4 read; no owner use-case yet; owner-approved 2026-10-28
 - op: DELETE /config/policy/ident/{ident}
   excluded: L2-4 write CRUD is excluded by policy; D1
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: GET /config/port/all
   tools:
   - net_port_list
   impact: none
 - op: POST /config/restore
   excluded: instance-scope, irreversible from the agent's point of view; a human restores; D4
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: POST /config/route
   tools:
   - net_route_create
@@ -726,7 +726,7 @@ operations:
 - op: DELETE /config/securityrate
   pending: P1b
   impact: global
-  note: 'PR-B2: fold into secrate_set(enabled=false) per GAP §3.2; default, awaiting owner'
+  note: 'PR-B2: fold into secrate_set(enabled=false) per GAP §3.2; owner-approved 2026-10-28'
 - op: POST /config/securityrate
   tools:
   - secrate_set
@@ -748,38 +748,38 @@ operations:
   tier_gap: 'pre-campaign tool: the code enforces operator, the rule derives admin-confirm; owner decision pending (PR-0 report)'
 - op: POST /config/session
   excluded: L2-4 write CRUD is excluded by policy; D1
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: GET /config/session/all
   tools:
   - session_list
   impact: none
 - op: DELETE /config/session/ident/{ident}
   excluded: L2-4 write CRUD is excluded by policy; D1
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: POST /config/sessionulcl
   excluded: L2-4 write CRUD is excluded by policy; D1
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: GET /config/sessionulcl/all
   tools:
   - session_ulcl_list
   impact: none
 - op: DELETE /config/sessionulcl/ident/{ident}/ulclAddress/{ip_address}
   excluded: L2-4 write CRUD is excluded by policy; D1
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: GET /config/snapshot
   pending: P1a
-  note: read; PR-B1; default, awaiting owner
+  note: read; PR-B1; owner-approved 2026-10-28
 - op: DELETE /config/trace/catalog/{catalog_id}/parser
   pending: P2
   impact: global
-  note: trace_catalog_parser_delete; PR-C; default, awaiting owner
+  note: trace_catalog_parser_delete; PR-C; owner-approved 2026-10-28
 - op: GET /config/trace/catalog/{catalog_id}/parser
   pending: P2
-  note: read; PR-C; default, awaiting owner
+  note: read; PR-C; owner-approved 2026-10-28
 - op: PUT /config/trace/catalog/{catalog_id}/parser
   pending: P2
   impact: global
-  note: trace_catalog_parser_set; PR-C; default, awaiting owner
+  note: trace_catalog_parser_set; PR-C; owner-approved 2026-10-28
 - op: GET /config/trace/catalogs
   tools:
   - trace_catalog_list
@@ -787,66 +787,66 @@ operations:
 - op: POST /config/trace/disable
   pending: P2
   impact: global
-  note: trace_enable_set; operator with preview; PR-C; default, awaiting owner
+  note: trace_enable_set; operator with preview; PR-C; owner-approved 2026-10-28
 - op: POST /config/trace/enable
   pending: P2
   impact: global
-  note: trace_enable_set; operator with preview; PR-C; default, awaiting owner
+  note: trace_enable_set; operator with preview; PR-C; owner-approved 2026-10-28
 - op: GET /config/trace/otlp
   pending: P2
-  note: read; PR-C; default, awaiting owner
+  note: read; PR-C; owner-approved 2026-10-28
 - op: POST /config/trace/otlp
   excluded: points the gateway at an agent-chosen URL; excluded until the bridge config gains a destination allowlist; D10
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: GET /config/trace/parsers
   pending: P2
-  note: read; PR-C; default, awaiting owner
+  note: read; PR-C; owner-approved 2026-10-28
 - op: GET /config/trace/status
   tools:
   - trace_status_get
   impact: none
 - op: POST /config/tunnel/vxlan
   excluded: L2-4 write CRUD is excluded by policy; D1
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: GET /config/tunnel/vxlan/all
   tools:
   - net_vxlan_list
   impact: none
 - op: DELETE /config/tunnel/vxlan/{vxlanID}
   excluded: L2-4 write CRUD is excluded by policy; D1
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: POST /config/tunnel/vxlan/{vxlanID}/peer
   excluded: L2-4 write CRUD is excluded by policy; D1
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: DELETE /config/tunnel/vxlan/{vxlanID}/peer/{PeerIP}
   excluded: L2-4 write CRUD is excluded by policy; D1
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: POST /config/vlan
   excluded: L2-4 write CRUD is excluded by policy; D1
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: GET /config/vlan/all
   tools:
   - net_vlan_list
   impact: none
 - op: DELETE /config/vlan/{vlan_id}
   excluded: L2-4 write CRUD is excluded by policy; D1
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: POST /config/vlan/{vlan_id}/member
   excluded: L2-4 write CRUD is excluded by policy; D1
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: DELETE /config/vlan/{vlan_id}/member/{if_name}/tagged/{tagged}
   excluded: L2-4 write CRUD is excluded by policy; D1
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: GET /config/worker/metrics
   tools:
   - gpu_worker_metrics_get
   impact: none
 - op: POST /config/worker/metrics
   excluded: external worker-agent push protocol; D3
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: GET /diagnostics
   pending: P1a
-  note: read; PR-A folds it into diagnose_*, PR-B1 adds diagnostics_get; default, awaiting owner
+  note: read; PR-A folds it into diagnose_*, PR-B1 adds diagnostics_get; owner-approved 2026-10-28
 - op: GET /log-archives
   tools:
   - log_archives_list
@@ -863,11 +863,11 @@ operations:
   impact: none
 - op: GET /maintenance
   pending: P1a
-  note: read; PR-B1; default, awaiting owner
+  note: read; PR-B1; owner-approved 2026-10-28
 - op: PUT /maintenance
   pending: P1b
   impact: instance
-  note: 'PR-B3 maintenance_set; D5: admin-confirm for enter and leave, never autopilot; default, awaiting owner'
+  note: 'PR-B3 maintenance_set; D5: admin-confirm for enter and leave, never autopilot; owner-approved 2026-10-28'
 - op: GET /meta
   tools:
   - meta_get
@@ -940,27 +940,27 @@ operations:
   impact: none
 - op: GET /oauth/{provider}
   excluded: management auth / user administration is not an agent task; D2
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: GET /oauth/{provider}/callback
   excluded: management auth / user administration is not an agent task; D2
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: GET /oauth/{provider}/token
   excluded: management auth / user administration is not an agent task; D2
-  note: default, awaiting owner
+  note: owner-approved 2026-10-28
 - op: DELETE /sni/certificates
   pending: P2
   impact: service
-  note: sni_cert_delete; admin-confirm; PR-C; default, awaiting owner
+  note: sni_cert_delete; admin-confirm; PR-C; owner-approved 2026-10-28
 - op: GET /sni/certificates
   pending: P2
-  note: read; PR-C; default, awaiting owner
+  note: read; PR-C; owner-approved 2026-10-28
 - op: POST /sni/certificates
   pending: P2
   impact: service
-  note: sni_cert_set by certId; admin-confirm; PR-C; default, awaiting owner
+  note: sni_cert_set by certId; admin-confirm; PR-C; owner-approved 2026-10-28
 - op: GET /status/capabilities
   pending: P1a
-  note: read; PR-B1; default, awaiting owner
+  note: read; PR-B1; owner-approved 2026-10-28
 - op: GET /status/device
   tools:
   - status_get
@@ -976,7 +976,7 @@ operations:
   impact: none
 - op: GET /status/ready
   pending: P1a
-  note: read; PR-A folds it into health_overview/fleet_overview, PR-B1 adds the tool; default, awaiting owner
+  note: read; PR-A folds it into health_overview/fleet_overview, PR-B1 adds the tool; owner-approved 2026-10-28
 - op: GET /version
   tools:
   - version_get
