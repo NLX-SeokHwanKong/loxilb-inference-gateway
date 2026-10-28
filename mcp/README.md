@@ -189,5 +189,6 @@ real tag instead.
 reachable), the `loxilb-io/homebrew-tap` repository exists, and the
 `HOMEBREW_TAP_TOKEN` secret (a PAT with `contents:write` on the tap) is set.
 GHCR uses the built-in `GITHUB_TOKEN`. Every PR touching `mcp/**` is gated by
-[`mcp-ci.yml`](../.github/workflows/mcp-ci.yml) (vet, race tests, the full
-cross-compile matrix, and a GoReleaser snapshot).
+[`mcp-ci.yml`](../.github/workflows/mcp-ci.yml) (vet, race tests, the contract
+gate, the Stage-1 docker scenario in `cicd/mcp`, the full cross-compile matrix,
+and a GoReleaser snapshot).

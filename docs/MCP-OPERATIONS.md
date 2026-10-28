@@ -268,7 +268,12 @@ bridge, drives it with curl JSON-RPC over streamable HTTP against a docker
 testbed — observe checks, an MCP-only L4 create→traffic→confirm-delete
 round-trip, a typed-AI create→observe→full-key-delete round-trip with audit
 verification, viewer-role guardrails, the API-key
-lifecycle with secrets-to-file, and the diagnose/report tools. Run:
+lifecycle with secrets-to-file, and the diagnose/report tools. The `stage1`
+job of `.github/workflows/mcp-ci.yml` runs it on every PR that touches
+`mcp/**`, the swagger files, the metric manifest or `cicd/mcp/**`, against the
+published gateway image on an ubuntu-22.04 runner; the scenario log is the
+`mcp-stage1-log` artifact and the per-check verdicts are in the job summary.
+Run it locally with:
 
 ```sh
 cd cicd/mcp && ./config.sh && ./validation.sh; ./rmconfig.sh
