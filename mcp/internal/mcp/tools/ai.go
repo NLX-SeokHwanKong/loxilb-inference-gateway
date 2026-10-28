@@ -152,6 +152,62 @@ func RegisterAI(s *sdk.Server, role guard.Role, pol *guard.Policy, deps *Deps) {
 			Annotations: roAnnotations("Get PII detection stats"),
 		}, deps.passthrough("pii_stats", "/config/pii/stats"))
 	})
+	reg(ro("ai_objective_list"), func() {
+		sdk.AddTool(s, &sdk.Tool{
+			Name:        "ai_objective_list",
+			Description: "List objectives with the source the gateway applies them from: the AI key store, its last read in this process, or the last-known-good file (GET /config/ai/objective).",
+			Annotations: roAnnotations("List objectives"),
+		}, deps.aiObjectiveList())
+	})
+	reg(ro("ai_netidentity_list"), func() {
+		sdk.AddTool(s, &sdk.Tool{
+			Name:        "ai_netidentity_list",
+			Description: "List network-identity bindings as stored: match (cidr, ingress_if, vlan, vni or ipsec_tunnel), services, tenant, allowed models, enforcement (GET /config/ai/netidentity).",
+			Annotations: roAnnotations("List network identities"),
+		}, deps.aiNetidentityList())
+	})
+	reg(ro("ai_jwtprofile_list"), func() {
+		sdk.AddTool(s, &sdk.Tool{
+			Name:        "ai_jwtprofile_list",
+			Description: "List JWT auth profiles: issuer, JWKS URL, audiences, algorithms, claim mapping (GET /config/ai/jwtauthprofile). Desired configuration only, no secrets and no keyset health.",
+			Annotations: roAnnotations("List JWT auth profiles"),
+		}, deps.aiJwtprofileList())
+	})
+	reg(ro("ai_user_ratelimit_list"), func() {
+		sdk.AddTool(s, &sdk.Tool{
+			Name:        "ai_user_ratelimit_list",
+			Description: "List a tenant's explicit per-user rate-limit rows, without model limits (GET /config/ai/user/ratelimit/{tenant_id}).",
+			Annotations: roAnnotations("List user rate limits"),
+		}, deps.aiUserRatelimitList())
+	})
+	reg(ro("ai_user_ratelimit_get"), func() {
+		sdk.AddTool(s, &sdk.Tool{
+			Name:        "ai_user_ratelimit_get",
+			Description: "One user's explicit rate-limit row including model limits (GET /config/ai/user/ratelimit/{tenant_id}/{user_id}).",
+			Annotations: roAnnotations("Get a user rate limit"),
+		}, deps.aiUserRatelimitGet())
+	})
+	reg(ro("ai_ratelimit_defaults_get"), func() {
+		sdk.AddTool(s, &sdk.Tool{
+			Name:        "ai_ratelimit_defaults_get",
+			Description: "The rate-limit defaults row of a scope: global, or rule with rule_ident naming the service (GET /config/ai/ratelimit/defaults/{scope}).",
+			Annotations: roAnnotations("Get rate-limit defaults"),
+		}, deps.aiRatelimitDefaultsGet())
+	})
+	reg(ro("ai_model_profile_list"), func() {
+		sdk.AddTool(s, &sdk.Tool{
+			Name:        "ai_model_profile_list",
+			Description: "List the published model-prompt profiles of the current registry generation (GET /config/ai/model-profiles); a cache of the publication, not an authority.",
+			Annotations: roAnnotations("List model profiles"),
+		}, deps.aiModelProfileList())
+	})
+	reg(ro("ai_model_profile_get"), func() {
+		sdk.AddTool(s, &sdk.Tool{
+			Name:        "ai_model_profile_get",
+			Description: "One published model-prompt profile by id (GET /config/ai/model-profiles/{profile_id}).",
+			Annotations: roAnnotations("Get a model profile"),
+		}, deps.aiModelProfileGet())
+	})
 	reg(ro("ai_traffic_report"), func() {
 		sdk.AddTool(s, &sdk.Tool{
 			Name: "ai_traffic_report",

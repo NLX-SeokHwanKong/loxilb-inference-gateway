@@ -71,6 +71,49 @@ func newMockLoxilb(t *testing.T) *mockLoxilb {
 				entry = `{"synEnabled":true,"synThreshold":1000,"cookieThreshold":500,"ratePerSec":500,"udpPktThreshold":3000,"udpBandwidthMB":10,"whitelistIps":null,"synBlocked":7,"connBlocked":3}`
 			}
 			w.Write([]byte(`{"securityrateAttr":[` + entry + `]}`))
+		case "/netlox/v1/config/loadbalancer/id/rule-7":
+			w.Write([]byte(mockRuleJSON)) // the opaque-id read of lb_get
+		case "/netlox/v1/config/loadbalancer/externalipaddress/1.2.3.4/port/80/protocol/tcp/status":
+			w.Write([]byte(`{"adminStateUp":true,"operatingStatus":"ONLINE","lastUpdated":"2026-10-28T10:00:00Z"}`))
+		case "/netlox/v1/config/loadbalancer/externalipaddress/1.2.3.4/port/80/protocol/tcp/stats":
+			w.Write([]byte(`{"activeConnections":3,"bytesIn":1024,"bytesOut":4096,"totalConnections":42}`))
+		case "/netlox/v1/config/loadbalancer/externalipaddress/1.2.3.4/port/80/protocol/tcp/kvexactstatus":
+			w.Write([]byte(`{"kvExactStatusAttr":[{"ruleIdentity":"1.2.3.4:80/tcp#llama3","modelName":"llama3","engineFamily":"vllm","apiMode":"chat","modelProfileId":"qwen3-8b","modelProfileGen":4,"bindingGen":7,"bindingDigest":"sha256:abc","hashContractId":"hc-1","desiredState":"enforced","enforcedState":"enforced","reasonCodes":[],"enforcement":{"desired":"enforced","enforced":"enforced","lastAckAt":"2026-10-28T10:00:00Z","fault":"","goFenced":false}}]}`))
+		case "/netlox/v1/config/ai/objective":
+			w.Write([]byte(`{"objectiveAttr":[{"name":"latency","services":["1.2.3.4:80/tcp"],"priority":10,"updated_at":"2026-10-28T09:00:00Z"}],"source":"store","source_timestamp":"2026-10-28T09:30:00Z","store_reachable":true,"store_last_read":"2026-10-28T09:30:00Z"}`))
+		case "/netlox/v1/config/ai/netidentity":
+			w.Write([]byte(`{"netIdentityAttr":[{"name":"lab","match":{"cidr":"10.0.0.0/24"},"services":["1.2.3.4:80/tcp"],"tenant":"lab","allowed_models":["llama3"],"enforce":"tenant","credential":"none","forward_identity":false,"priority_class":"standard","fail_mode":"closed"}]}`))
+		case "/netlox/v1/config/ai/jwtauthprofile":
+			w.Write([]byte(`{"jwtAuthProfileAttr":[{"name":"corp-oidc","issuer":"https://issuer.example","jwks_url":"https://issuer.example/jwks.json","audiences":["gw"],"algs":["RS256"],"leeway_sec":30,"refresh_sec":300,"tenant_claim":"tid","user_claim":"sub","token":"should-not-matter"}]}`))
+		case "/netlox/v1/config/ai/user/ratelimit/lab":
+			w.Write([]byte(`[{"tenant_id":"lab","user_id":"alice","rps":5,"burst_size":10,"tokens_per_min":1000,"updated_at":"2026-10-28T09:00:00Z"}]`))
+		case "/netlox/v1/config/ai/user/ratelimit/lab/alice":
+			w.Write([]byte(`{"tenant_id":"lab","user_id":"alice","rps":5,"burst_size":10,"tokens_per_min":1000,"model_limits":[{"model":"llama3","tokens_per_min":500}],"updated_at":"2026-10-28T09:00:00Z"}`))
+		case "/netlox/v1/config/ai/ratelimit/defaults/global":
+			w.Write([]byte(`{"scope":"global","default_user_rps":2,"default_user_tpm":500,"default_tenant_rps":20,"default_tenant_tpm":5000,"vip_shared_rps":0,"vip_shared_tpm":0,"updated_at":"2026-10-28T09:00:00Z"}`))
+		case "/netlox/v1/config/ai/ratelimit/defaults/rule":
+			w.Write([]byte(`{"scope":"rule","rule_ident":"` + r.URL.Query().Get("rule_ident") + `","default_user_rps":1,"updated_at":"2026-10-28T09:00:00Z"}`))
+		case "/netlox/v1/config/ai/model-profiles":
+			w.Write([]byte(`{"registryGeneration":4,"setDigest":"sha256:set","profiles":[{"profileId":"qwen3-8b","gen":4,"baseModel":"Qwen/Qwen3-8B","aliasPolicy":"exact","allowedAliases":[],"supportedApis":["chat"],"supportedFeatures":["tools"],"excludedFeatures":[],"tokenizerRevision":"main","tokenizerSha256":"sha256:tok","templateSha256":"sha256:tpl","templateContentFormat":"jinja","rendererEngine":"loxilb","rendererVersion":"1","oracleEngine":"vllm","oracleVersion":"0.31.0"}]}`))
+		case "/netlox/v1/config/ai/model-profiles/qwen3-8b":
+			w.Write([]byte(`{"profileId":"qwen3-8b","gen":4,"baseModel":"Qwen/Qwen3-8B","supportedApis":["chat"]}`))
+		case "/netlox/v1/status/capabilities":
+			w.Write([]byte(`{"capabilities":[{"name":"kv_exact","ready":true,"reason_code":"","reason":""},{"name":"pii","ready":false,"reason_code":"analyzer_unreachable","reason":"analyzer not configured","limit":0,"in_use":0}]}`))
+		case "/netlox/v1/maintenance":
+			w.Write([]byte(`{"state":"idle","operation_id":"","refusing_new_config":false,"refusing_new_inference":false,"in_flight_streams":0,"in_flight_requests":0,"cancellable":false}`))
+		case "/netlox/v1/config/halfclose":
+			w.Write([]byte(`{"allow":true,"capSeconds":240,"defaultMode":"relay"}`))
+		case "/netlox/v1/audit/status":
+			w.Write([]byte(`{"available":true,"running":true,"boot_id":"b-1","seq_high":120,"last_write":"2026-10-28T10:00:00Z","write_failures":0,"sealed_bytes":4096,"orphaned_intents":0,"compliance_sink":false,"sinks":[]}`))
+		case "/netlox/v1/audit/policy":
+			w.Write([]byte(`{"max_segment_bytes":1048576,"max_segment_age_seconds":3600,"retention_max_age_seconds":2592000,"retention_max_bytes":104857600,"retention_reserve_bytes":1048576,"retention_max_prune_per_pass":8}`))
+		case "/netlox/v1/audit/sink":
+			w.Write([]byte(`{"enabled":true,"address":"siem.example:6514","ca_bundle_path":"/etc/loxilb/ca.pem","server_name":"siem.example","client_cert_path":"/etc/loxilb/c.pem","client_key_path":"/etc/loxilb/k.pem","max_frame_bytes":8192,"facility":13,"connected":true,"submitted":100,"truncated":0,"write_errors":0,"last_error":""}`))
+		case "/netlox/v1/audit/sinks/second":
+			w.Write([]byte(`{"name":"second","address":"siem2.example:6514","state":"connected","submitted":7,"filtered":1,"last_error":""}`))
+		case "/netlox/v1/config/snapshot":
+			w.Header().Set("X-Snapshot-Checksum", "sha256:snap")
+			w.Write([]byte(`{"schema":"1.12","checksum":"sha256:snap","loadbalancers":[{"name":"web"}],"auth":{"password":"hunter2","apiKey":"sk-secret-123"},"components":"` + r.URL.Query().Get("components") + `"}`))
 		case "/netlox/v1/config/gpu/status":
 			w.Write([]byte(`{"enabled":false,"routing_mode":"chwbl","worker_count":2,"ebpf_map_loaded":true}`))
 		case "/netlox/v1/config/llamafirewall/status":

@@ -80,9 +80,19 @@ MCP=http://127.0.0.1:8891
 
 # ---------- minimal MCP-over-HTTP client ----------
 
+# The bridge meters every HTTP request per client with a token bucket of
+# burst 20 refilled at 10/s (T8); a request past the budget is answered
+# with a plain-text HTTP 429, not an SSE frame. Each request here waits
+# MCP_PACE first so the scenario stays under the refill rate whatever the
+# runner's speed; a burst of 23 viewer reads inside 0.3 s hit the bucket
+# on the hosted runner once.
+MCP_PACE=${MCP_PACE:-0.11}
+pace() { sleep "$MCP_PACE"; }
+
 # mcp_session <token>: initialize a session, cache its id in $SESSION.
 mcp_session() {
     local hdrs; hdrs=$(mktemp)
+    pace
     curl -s -o /dev/null -D "$hdrs" "$MCP" \
         -H "Authorization: Bearer $1" -H "Content-Type: application/json" \
         -H "Accept: application/json, text/event-stream" \
@@ -90,6 +100,7 @@ mcp_session() {
     SESSION=$(awk 'tolower($1)=="mcp-session-id:"{print $2}' "$hdrs" | tr -d '\r')
     rm -f "$hdrs"
     [[ -z "$SESSION" ]] && return 1
+    pace
     curl -s -o /dev/null "$MCP" \
         -H "Authorization: Bearer $1" -H "Mcp-Session-Id: $SESSION" \
         -H "Content-Type: application/json" \
@@ -98,17 +109,21 @@ mcp_session() {
 }
 
 RPCID=1
-# mcp_rpc <token> <method> [params-json]: raw JSON-RPC, prints the result line.
+# mcp_rpc <token> <method> [params-json]: raw JSON-RPC, prints the result
+# line; an answer that is not an SSE frame (HTTP 401/429 text) is printed
+# as is, so a refusal reads as what it was.
 mcp_rpc() {
     RPCID=$((RPCID+1))
-    local params="$3"
+    local params="$3" body line
     [[ -z "$params" ]] && params='{}'
-    curl -s "$MCP" \
+    pace
+    body=$(curl -s "$MCP" \
         -H "Authorization: Bearer $1" -H "Mcp-Session-Id: $SESSION" \
         -H "Content-Type: application/json" \
         -H "Accept: application/json, text/event-stream" \
-        -d "{\"jsonrpc\":\"2.0\",\"id\":$RPCID,\"method\":\"$2\",\"params\":$params}" |
-        sed -n 's/^data: //p'
+        -d "{\"jsonrpc\":\"2.0\",\"id\":$RPCID,\"method\":\"$2\",\"params\":$params}")
+    line=$(sed -n 's/^data: //p' <<< "$body")
+    if [[ -n "$line" ]]; then echo "$line"; else echo "$body"; fi
 }
 
 # jfield <result-line> <python-expr>: a field of the tool's structured result
@@ -287,8 +302,11 @@ echo "$res" | grep -q '"isError":true' && echo "$res" | grep -q 'enables no per-
     && pass "secrate_set refuses a change that leaves every protection off, before any token" || fail "all-off change not refused: $res"
 mcp_call "$ATOKEN" secrate_get | grep -q '"ratePerSec":777' && fail "refused change reached the gateway" || pass "refused change changed nothing (secrate_get)"
 res=$(mcp_call "$ATOKEN" secrate_set '{"conn_rate_enabled":true,"rate_per_sec":777}')
+# current.ratePerSec is 0 on a freshly booted image and 50 after a DELETE
+# (the gateway keeps its built-in thresholds, disabled), so the check is on
+# the flag the GET omits, not on the threshold value.
 [[ "$(jfield "$res" 'r["action"]')" == "preview" && "$(jfield "$res" 'r["impact"]')" == "global" \
-   && "$(jfield "$res" 'r["current"]["ratePerSec"]')" == "0" && "$(jfield "$res" 'r["current"]["connRateEnabled"]')" == "False" \
+   && "$(jfield "$res" 'isinstance(r["current"]["ratePerSec"],int)')" == "True" && "$(jfield "$res" 'r["current"]["connRateEnabled"]')" == "False" \
    && "$(jfield "$res" 'r["proposed"]["connRateEnabled"]')" == "True" ]] \
     && pass "secrate_set previews current (zero defaults for the omitted keys), proposed and impact" || fail "secrate_set preview: $res"
 tok=$(jfield "$res" 'r["confirm_token"]')
@@ -319,6 +337,71 @@ grep -q '"tool":"secrate_set"' .mcp-audit/audit.jsonl && pass "audit.jsonl recor
 mcp_call "$ATOKEN" secrate_get | grep -q '"connRateEnabled":true' && fail "protection still on after the DELETE" || pass "secrate_get shows no protection enabled again"
 
 # ---------- 4. AI ops ----------
+
+# ---------- 3c. control-plane reads (PR-B1) ----------
+# Every read is a viewer tool. A store-backed read the plain image cannot
+# answer (HTTP 503 / 501) is reported as a skip, as the ai-ops legs are.
+
+echo "### control-plane reads"
+mcp_session "$VTOKEN" && pass "viewer session for the control-plane reads" || fail "no viewer session"
+res=$(mcp_rpc "$VTOKEN" tools/list)
+missing=""
+for t in lb_get lb_kvexact_status ai_objective_list ai_netidentity_list ai_jwtprofile_list ai_user_ratelimit_list ai_user_ratelimit_get ai_ratelimit_defaults_get ai_model_profile_list ai_model_profile_get status_capabilities maintenance_get halfclose_get audit_status audit_policy_get audit_sink_get config_snapshot_get; do
+    echo "$res" | grep -q "\"name\":\"$t\"" || missing="$missing $t"
+done
+[[ -z "$missing" ]] && pass "viewer lists the 17 control-plane reads" || fail "viewer misses:$missing"
+
+# read_leg <tool> <args> <python-expr on r> <label>: OK when the expression
+# is true; SKIP when the gateway answered 503/501 (no store behind the
+# endpoint) or 404 "path ... was not found" (the published image predates
+# the endpoint; the contract gate holds the bridge to the swagger of the
+# tree, not of the image); FAILED otherwise.
+read_leg() {
+    local res; res=$(mcp_call "$VTOKEN" "$1" "$2")
+    if echo "$res" | grep -q '"isError":true'; then
+        if echo "$res" | grep -qE 'HTTP 50[13]'; then echo "  [SKIP] $4 (gateway: $(echo "$res" | grep -oE 'HTTP 50[13][^"]{0,60}' | head -1))"; return; fi
+        if echo "$res" | grep -qE 'HTTP 404: .*path [^ ]* was not found'; then echo "  [SKIP] $4 (this gateway build predates the endpoint: $(echo "$res" | grep -oE 'path [^ ]* was not found' | head -1))"; return; fi
+        fail "$4: $res"; return
+    fi
+    [[ "$(jfield "$res" "$3")" == "True" ]] && pass "$4" || fail "$4: $res"
+}
+
+read_leg lb_get '{"external_ip":"20.20.20.1","port":2020,"protocol":"tcp","include":["status","stats"]}' \
+    'r["rule"]["external_ip"]=="20.20.20.1" and "operatingStatus" in r["status"] and "totalConnections" in r["stats"]' \
+    "lb_get by composite key attaches status and stats"
+rid=$(jfield "$(mcp_call "$VTOKEN" lb_list)" 'r["rules"][0].get("id","")')
+if [[ -n "$rid" ]]; then
+    read_leg lb_get "{\"id\":\"$rid\"}" 'r["rule"]["external_ip"]=="20.20.20.1"' "lb_get by opaque id ($rid)"
+else
+    echo "  [SKIP] lb_get by opaque id (this build assigns no rule id)"
+fi
+res=$(mcp_call "$VTOKEN" lb_get '{"external_ip":"20.20.20.9","port":2020,"protocol":"tcp"}')
+echo "$res" | grep -q '"isError":true' && echo "$res" | grep -q 'no rule at 20.20.20.9:2020/tcp' \
+    && pass "lb_get on a missing key says so" || fail "lb_get missing key: $res"
+res=$(mcp_call "$VTOKEN" lb_kvexact_status '{"external_ip":"20.20.20.1","port":2020,"protocol":"tcp"}')
+if echo "$res" | grep -q '"isError":true'; then
+    echo "$res" | grep -qE 'HTTP 4(04|22)' && pass "lb_kvexact_status passes the gateway's verdict on a non-KV-exact key ($(echo "$res" | grep -oE 'HTTP 4[0-9]{2}' | head -1))" || fail "lb_kvexact_status: $res"
+else
+    [[ "$(jfield "$res" 'r["count"]')" == "0" ]] && pass "lb_kvexact_status reports no KV-exact rule on the baseline key" || fail "lb_kvexact_status on a plain rule: $res"
+fi
+read_leg status_capabilities '{}' 'r["count"]>=1 and "not_ready" in r' "status_capabilities lists the capability verdicts"
+read_leg maintenance_get '{}' 'len(r.get("state",""))>0' "maintenance_get reports the state"
+read_leg halfclose_get '{}' '"allow" in r and r["capSeconds"]>=1' "halfclose_get reports allow and capSeconds"
+read_leg audit_status '{}' '"available" in r' "audit_status reports the trail state"
+read_leg audit_policy_get '{}' '"max_segment_bytes" in r' "audit_policy_get reports the segment limits"
+read_leg audit_sink_get '{}' '"sink" in r and r["named"]==False and (r["sink"]=={} or "address" in r["sink"])' "audit_sink_get reports the primary sink (an empty object when none is configured)"
+read_leg config_snapshot_get '{}' 'r["truncated"]==False and r["size_bytes"]>0 and "snapshot" in r' "config_snapshot_get returns the whole snapshot with size and sha256"
+read_leg config_snapshot_get '{"max_bytes":64}' 'r["truncated"]==True and "sections" in r and "snapshot" not in r' "config_snapshot_get over max_bytes describes the sections instead"
+read_leg ai_objective_list '{}' '"objectives" in r and "source" in r' "ai_objective_list reports objectives and their source"
+read_leg ai_netidentity_list '{}' '"bindings" in r' "ai_netidentity_list reports bindings"
+read_leg ai_jwtprofile_list '{}' 'isinstance(r["count"],int)' "ai_jwtprofile_list reports profiles"
+read_leg ai_user_ratelimit_list '{"tenant_id":"cicd"}' '"users" in r' "ai_user_ratelimit_list reports a tenant's rows"
+read_leg ai_ratelimit_defaults_get '{"scope":"global"}' '"defaults" in r' "ai_ratelimit_defaults_get reports the global row"
+read_leg ai_model_profile_list '{}' '"profiles" in r' "ai_model_profile_list reports the published registry"
+res=$(mcp_call "$VTOKEN" ai_ratelimit_defaults_get '{"scope":"tenant"}')
+echo "$res" | grep -q '"isError":true' && echo "$res" | grep -q 'not global or rule' \
+    && pass "ai_ratelimit_defaults_get refuses an unknown scope before any request" || fail "scope refusal: $res"
+SESSION=$ADMIN_SESSION
 
 echo "### ai ops"
 SESSION=$ADMIN_SESSION
