@@ -185,6 +185,43 @@ e, v, _ = s.call("ai_traffic_report")
 has_caveat = isinstance(v, dict) and any("accounting caveat" in c for c in v.get("caveats", []))
 (ok if has_caveat else bad)("ai_traffic_report surfaces the accounting caveat")
 
+# ---------------- control-plane reads (PR-B1) ----------------
+e, v, _ = s.call("lb_list")
+first = (v.get("rules") or [{}])[0] if isinstance(v, dict) else {}
+if first.get("external_ip"):
+    e, v, _ = s.call("lb_get", external_ip=first["external_ip"], port=first["port"], protocol=first["protocol"], include=["status", "stats"])
+    (ok if isinstance(v, dict) and v.get("rule", {}).get("external_ip") == first["external_ip"] and "operatingStatus" in v.get("status", {}) and "totalConnections" in v.get("stats", {}) else bad)(
+        f"lb_get {first['external_ip']}:{first['port']}/{first['protocol']} with status and stats")
+else:
+    print("  [SKIP] lb_get (the target holds no rule)")
+e, v, _ = s.call("status_capabilities")
+(ok if isinstance(v, dict) and v.get("count", 0) >= 1 else bad)(f"status_capabilities -> {v.get('count') if isinstance(v, dict) else v} capabilities, not ready: {v.get('not_ready') if isinstance(v, dict) else '?'}")
+e, v, _ = s.call("maintenance_get")
+(ok if isinstance(v, dict) and v.get("state") else bad)(f"maintenance_get -> {v.get('state') if isinstance(v, dict) else v}")
+e, v, _ = s.call("halfclose_get")
+(ok if isinstance(v, dict) and "allow" in v else bad)(f"halfclose_get -> allow={v.get('allow') if isinstance(v, dict) else v} capSeconds={v.get('capSeconds') if isinstance(v, dict) else '?'}")
+e, v, _ = s.call("config_snapshot_get")
+(ok if isinstance(v, dict) and v.get("truncated") is False and v.get("size_bytes", 0) > 0 else bad)(f"config_snapshot_get -> {v.get('size_bytes') if isinstance(v, dict) else v} bytes, sha256 {str(v.get('sha256', ''))[:12] if isinstance(v, dict) else ''}")
+
+# Stage-2 arm (read-only): KV_RULE=<vip>:<port>[/<proto>] names a KV-exact
+# rule on the target (the GPU fleet); KV_MODEL narrows it to one model.
+kv_rule = os.environ.get("KV_RULE", "")
+if kv_rule:
+    hp, _, proto = kv_rule.partition("/")
+    ip, _, port = hp.rpartition(":")
+    args = {"external_ip": ip, "port": int(port), "protocol": proto or "tcp"}
+    if os.environ.get("KV_MODEL"):
+        args["model_name"] = os.environ["KV_MODEL"]
+    e, v, _ = s.call("lb_kvexact_status", **args)
+    ent = (v.get("entries") or [{}])[0] if isinstance(v, dict) else {}
+    (ok if isinstance(v, dict) and v.get("count", 0) >= 1 and ent.get("enforcedState") else bad)(
+        f"lb_kvexact_status {kv_rule} -> {v.get('count') if isinstance(v, dict) else v} entries; desired={ent.get('desiredState')} enforced={ent.get('enforcedState')} reasons={ent.get('reasonCodes')}")
+    e, v, _ = s.call("lb_get", external_ip=ip, port=int(port), protocol=proto or "tcp", include=["status"])
+    st = v.get("status", {}) if isinstance(v, dict) else {}
+    (ok if st.get("operatingStatus") else bad)(f"lb_get {kv_rule} include=status -> adminStateUp={st.get('adminStateUp')} operatingStatus={st.get('operatingStatus')}")
+else:
+    print("  [SKIP] KV-exact status arm (set KV_RULE=<vip>:<port> to a KV-exact rule on the target)")
+
 # ---------------- security guardrails ----------------
 print("### security guardrails")
 e, v, _ = s.call("lb_list", target=TARGET)      # URL as target name
