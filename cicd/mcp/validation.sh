@@ -111,6 +111,12 @@ mcp_rpc() {
         sed -n 's/^data: //p'
 }
 
+# jfield <result-line> <python-expr>: a field of the tool's structured result
+# (bound to r); the text form sorts keys, so greps on object literals do not work.
+jfield() {
+    python3 -c 'import json,sys; r=json.loads(json.loads(sys.stdin.read())["result"]["content"][0]["text"]); print(eval(sys.argv[1]))' "$2" <<< "$1" 2>/dev/null
+}
+
 # mcp_call <token> <tool> [args-json]: tools/call, prints the result line.
 mcp_call() {
     local args="$3"
@@ -247,40 +253,43 @@ echo "$res" | grep -q '"name":"secrate_set"' && fail "operator sees secrate_set"
 echo "$res" | grep -q '"name":"gpu_mode_set"' && fail "operator sees gpu_mode_set" || pass "operator sees no gpu_mode_set (admin-confirm)"
 echo "$res" | grep -q '"name":"lb_create"' && pass "operator still sees lb_create" || fail "operator missing lb_create"
 
-# 20.20.20.1:2020/tcp is the baseline rule config.sh created (endpoint port 1);
-# a POST on that key would replace it.
-REPLACE='{"external_ip":"20.20.20.1","port":2020,"protocol":"tcp","endpoints":[{"ip":"31.31.31.1","port":8080}]}'
+# 20.20.20.1:2020/tcp is the baseline rule config.sh created (endpoint
+# 31.31.31.1:8080, weight 1); a POST on that key with another endpoint port
+# would replace it.
+REPLACE='{"external_ip":"20.20.20.1","port":2020,"protocol":"tcp","endpoints":[{"ip":"31.31.31.1","port":9090}]}'
 LBKEY="$REST/config/loadbalancer/externalipaddress/20.20.20.1/port/2020/protocol/tcp"
+baseline_intact() { curl -s --max-time 10 "$LBKEY" | grep -q '"targetPort":8080' && ! curl -s --max-time 10 "$LBKEY" | grep -q '"targetPort":9090'; }
 res=$(mcp_call "$OTOKEN" lb_create "$REPLACE")
 echo "$res" | grep -q '"isError":true' && echo "$res" | grep -q 'admin-confirm' \
     && pass "operator lb_create on an existing key is refused" || fail "operator replace not refused: $res"
-curl -s --max-time 10 "$LBKEY" | grep -q '"targetPort":1[,}]' && pass "baseline rule untouched by the operator refusal" || fail "baseline rule changed"
+baseline_intact && pass "baseline rule untouched by the operator refusal" || fail "baseline rule changed"
 
 SESSION=$ADMIN_SESSION
 res=$(mcp_call "$ATOKEN" lb_create "$REPLACE")
-echo "$res" | grep -q '"action":"preview"' && echo "$res" | grep -q '"diff":{' && echo "$res" | grep -q '"rollback":{"tool":"lb_create"' \
+[[ "$(jfield "$res" 'r["action"]')" == "preview" && "$(jfield "$res" 'r["rollback"]["tool"]')" == "lb_create" && -n "$(jfield "$res" 'r["diff"]["endpoints"]["to"]')" ]] \
     && pass "admin lb_create on an existing key previews the replace with diff and rollback" || fail "admin replace preview: $res"
-curl -s --max-time 10 "$LBKEY" | grep -q '"targetPort":1[,}]' && pass "baseline rule untouched by the preview" || fail "preview replaced the rule"
+baseline_intact && pass "baseline rule untouched by the preview" || fail "preview replaced the rule"
 res=$(mcp_call "$ATOKEN" lb_create "${REPLACE%\}},\"confirm_token\":\"00000000000000000000000000000000\"}")
 echo "$res" | grep -q '"isError":true' && pass "admin replace with a never-issued token is refused" || fail "stale token accepted: $res"
-curl -s --max-time 10 "$LBKEY" | grep -q '"targetPort":1[,}]' && pass "baseline rule untouched by the stale token" || fail "stale token replaced the rule"
+baseline_intact && pass "baseline rule untouched by the stale token" || fail "stale token replaced the rule"
 
 # secrate_set: preview -> confirm -> read-back -> rollback (preview -> confirm -> read-back).
 res=$(mcp_call "$ATOKEN" secrate_set '{"rate_per_sec":777}')
 echo "$res" | grep -q '"action":"preview"' && echo "$res" | grep -q '"current":{' && echo "$res" | grep -q '"impact":"global"' \
     && pass "secrate_set previews current, proposed and impact" || fail "secrate_set preview: $res"
-tok=$(echo "$res" | sed -n 's/.*"confirm_token":"\([^"]*\)".*/\1/p')
-prev=$(echo "$res" | sed -n 's/.*"rollback":{"tool":"secrate_set","args":{"rate_per_sec":\([0-9]*\)}.*/\1/p')
-[[ -n "$tok" && -n "$prev" ]] && pass "secrate_set preview carries a token and a rollback (rate_per_sec $prev)" || fail "no token/rollback in preview: $res"
+tok=$(jfield "$res" 'r["confirm_token"]')
+prev=$(jfield "$res" 'r["rollback"]["args"]["rate_per_sec"]')
+[[ -n "$tok" && "$prev" =~ ^[0-9]+$ && "$(jfield "$res" 'r["rollback"]["tool"]')" == "secrate_set" ]] \
+    && pass "secrate_set preview carries a token and a rollback (rate_per_sec $prev)" || fail "no token/rollback in preview: $res"
 mcp_call "$ATOKEN" secrate_get | grep -q '"ratePerSec":777' && fail "preview changed the security rate config" || pass "preview changed nothing (secrate_get)"
 res=$(mcp_call "$ATOKEN" secrate_set "{\"rate_per_sec\":777,\"confirm_token\":\"$tok\"}")
-echo "$res" | grep -q '"action":"executed"' && echo "$res" | grep -q '"read_back":{[^}]*"ratePerSec":777' \
+[[ "$(jfield "$res" 'r["action"]')" == "executed" && "$(jfield "$res" 'r["read_back"]["ratePerSec"]')" == "777" ]] \
     && pass "secrate_set applied with the token; read_back shows ratePerSec 777" || fail "secrate_set apply: $res"
 mcp_call "$ATOKEN" secrate_get | grep -q '"ratePerSec":777' && pass "secrate_get confirms the change" || fail "secrate_get does not show 777"
 res=$(mcp_call "$ATOKEN" secrate_set "{\"rate_per_sec\":$prev}")
-tok=$(echo "$res" | sed -n 's/.*"confirm_token":"\([^"]*\)".*/\1/p')
+tok=$(jfield "$res" 'r["confirm_token"]')
 res=$(mcp_call "$ATOKEN" secrate_set "{\"rate_per_sec\":$prev,\"confirm_token\":\"$tok\"}")
-echo "$res" | grep -q '"action":"executed"' && echo "$res" | grep -q "\"read_back\":{[^}]*\"ratePerSec\":$prev" \
+[[ "$(jfield "$res" 'r["action"]')" == "executed" && "$(jfield "$res" 'r["read_back"]["ratePerSec"]')" == "$prev" ]] \
     && pass "rollback applied; read_back shows ratePerSec $prev" || fail "rollback: $res"
 grep -q '"tool":"secrate_set"' .mcp-audit/audit.jsonl && pass "audit.jsonl records secrate_set" || fail "secrate_set audit entry missing"
 
