@@ -56,9 +56,9 @@ only accepted `target` values in tool calls — URLs are rejected (anti-SSRF).
 
 | Role | May call | Tool count (base) |
 |---|---|---|
-| viewer | read-only tools only | 51 |
-| operator | + object- and tenant-scope mutations | 60 |
-| admin | + admin-confirm tools (every delete and every global- or instance-scope change, confirm-token gated) | 78 (79 with `--allow-import`) |
+| viewer | read-only tools only | 68 |
+| operator | + object- and tenant-scope mutations | 77 |
+| admin | + admin-confirm tools (every delete and every global- or instance-scope change, confirm-token gated) | 95 (96 with `--allow-import`) |
 
 The tier of a tool is derived from the impact of its REST operation
 (`mcp/contract/coverage.yml`, checked in CI): a read is viewer; a reversible
@@ -195,7 +195,7 @@ this fork), `status_get`, `logs_tail`, `log_archives_list`, `log_archive_get`,
 `promql_query` / `promql_range` (needs `prometheus_url`), `alerts_active`
 (needs `alertmanager_url`), `alerts_catalog` (needs `alert_rules_path`).
 
-**Management** — read: `endpoint_list`, `fw_list`, `ipfilter_list`,
+**Management** — read: `lb_get` (one rule by composite key or opaque id, `include: [status, stats]`), `lb_kvexact_status` (the resolved KV-exact composition status of a key, the one read that says whether KV-aware routing is in force), `status_capabilities`, `maintenance_get`, `halfclose_get`, `audit_status`, `audit_policy_get`, `audit_sink_get` (primary sink, or a secondary by name), `config_snapshot_get` (size-capped, secret-shaped fields masked), `endpoint_list`, `fw_list`, `ipfilter_list`,
 `secrate_get`, `net_route_list`, `net_vlan_list`, `net_vxlan_list`,
 `net_neighbor_list`, `net_ip_list`, `net_port_list`, `bgp_neigh_list`,
 `bgp_policy_list`, `session_list`, `session_ulcl_list`, `config_params_get`,
@@ -233,7 +233,7 @@ Its keys are validated before any request is built: each must be a
 property `mcp/contract/fields.yml` marks `excluded-field`.
 
 **AI-gateway ops** — read: `ai_apikey_list`, `ai_apikey_get`,
-`ai_ratelimit_get`, `ai_kv_inventory_get`, `gpu_status`,
+`ai_ratelimit_get`, `ai_objective_list` (with the source the gateway applies them from), `ai_netidentity_list`, `ai_jwtprofile_list` (issuer, JWKS URL, claims; no secrets), `ai_user_ratelimit_list`, `ai_user_ratelimit_get`, `ai_ratelimit_defaults_get`, `ai_model_profile_list`, `ai_model_profile_get`, `ai_kv_inventory_get`, `gpu_status`,
 `gpu_worker_metrics_get`, `llamafw_status`, `llamafw_stats`, `pii_status`,
 `pii_stats`, `ai_traffic_report`. Operator+: `ai_apikey_create`,
 `ai_apikey_update`, `ai_ratelimit_set` (no delete endpoint — set quotas 0 to
@@ -359,6 +359,8 @@ single-use, and per process. Exit code 0 means every check passed.
 ### Release notes
 
 #### mcp/v0.2.0 (unreleased)
+
+**Added** — 17 control-plane reads, all viewer tier: `lb_get` (composite key or opaque id; `include: [status, stats]`), `lb_kvexact_status`, `ai_objective_list`, `ai_netidentity_list`, `ai_jwtprofile_list`, `ai_user_ratelimit_list`, `ai_user_ratelimit_get`, `ai_ratelimit_defaults_get`, `ai_model_profile_list`, `ai_model_profile_get`, `status_capabilities`, `maintenance_get`, `halfclose_get`, `audit_status`, `audit_policy_get`, `audit_sink_get`, `config_snapshot_get` (size-capped). Tool counts: viewer 51 → 68, operator 60 → 77, admin 78 → 95 (96 with `--allow-import`).
 
 **Changed** — operator sessions no longer see the 14 global- and
 instance-scope tools (`secrate_set`, `secrate_reset`, `bgp_neigh_set`,
