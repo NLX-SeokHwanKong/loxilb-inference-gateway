@@ -221,6 +221,299 @@ func TestLBUpdatePassesTheGatewayRefusalWithAHint(t *testing.T) {
 	}
 }
 
+// ---- operator writes: preview by default, apply: true as the shortcut ----
+
+func TestApikeyCreatePreviewsUnlessApplied(t *testing.T) {
+	mock := newAIMock(t)
+	b := aiTestBridge(t, mock)
+	cs := session(t, b, guard.RoleOperator)
+	ctx := context.Background()
+	args := map[string]any{"tenant_id": "t1", "name": "ci", "priority_class": "sheddable", "client_op_id": "op-1",
+		"enabled": false, "default_objective": "latency", "allowed_objectives": []string{"latency", "tier:fast"}}
+
+	res, err := cs.CallTool(ctx, &sdk.CallToolParams{Name: "ai_apikey_create", Arguments: args})
+	if err != nil || res.IsError {
+		t.Fatalf("preview: %v %v", err, resultText(res))
+	}
+	out := callOut(t, res)
+	if out["action"] != "preview" || out["impact"] != "tenant" {
+		t.Fatalf("want a tenant-impact preview, got %v", out)
+	}
+	if mock.sawMutation("POST ") {
+		t.Fatal("preview sent the POST")
+	}
+	prop, _ := out["proposed"].(map[string]any)
+	if prop["priority_class"] != "sheddable" || prop["client_op_id"] != "op-1" || prop["enabled"] != false || prop["default_objective"] != "latency" {
+		t.Errorf("proposed must carry the typed fields: %v", prop)
+	}
+	rb, _ := out["rollback"].(map[string]any)
+	if note, _ := rb["note"].(string); !strings.Contains(note, "ai_apikey_delete") {
+		t.Errorf("rollback note must name ai_apikey_delete: %v", rb)
+	}
+	token, _ := out["confirm_token"].(string)
+	res, err = cs.CallTool(ctx, &sdk.CallToolParams{Name: "ai_apikey_create", Arguments: withToken(args, token)})
+	if err != nil || res.IsError {
+		t.Fatalf("apply: %v %v", err, resultText(res))
+	}
+	out = callOut(t, res)
+	result, _ := out["result"].(map[string]any)
+	if out["action"] != "executed" || result["key_id"] != "key-123" || result["key_file"] == "" {
+		t.Fatalf("executed result must carry key_id and key_file: %v", out)
+	}
+	if _, leaked := result["raw_key"]; leaked {
+		t.Error("raw_key in the default create result")
+	}
+	body := mock.lastBody()
+	objs, _ := body["allowed_objectives"].([]any)
+	if body["priority_class"] != "sheddable" || body["client_op_id"] != "op-1" || body["enabled"] != false || len(objs) != 2 {
+		t.Errorf("POST body: %v", body)
+	}
+	if _, has := body["api_key"]; has {
+		t.Error("the bridge never imports a key")
+	}
+	if rbk, _ := out["read_back"].(map[string]any); rbk["key_id"] != "key-123" {
+		t.Errorf("read_back must re-read the key: %v", out["read_back"])
+	}
+	// The generated enum refuses an unknown class before any request.
+	res, err = cs.CallTool(ctx, &sdk.CallToolParams{Name: "ai_apikey_create", Arguments: map[string]any{"tenant_id": "t1", "priority_class": "urgent", "apply": true}})
+	if err != nil || !res.IsError || !strings.Contains(resultText(res), "priority_class") {
+		t.Fatalf("unknown priority_class must be refused: %v %v", err, resultText(res))
+	}
+	if n := mock.countRequests("POST /netlox/v1/config/ai/apikey"); n != 1 {
+		t.Errorf("want exactly one POST, got %d", n)
+	}
+}
+
+func TestApikeyUpdateFullSurfaceWithPreviewAndApply(t *testing.T) {
+	mock := newMockLoxilb(t)
+	b := newTestBridge(t, testConfig(mock.srv.URL))
+	cs := session(t, b, guard.RoleOperator)
+	ctx := context.Background()
+	args := map[string]any{"key_id": "key-1", "enabled": false, "tokens_per_min": 500, "priority_class": "",
+		"allowed_objectives": []string{}, "allowed_models": []string{"llama3", "qwen3"}}
+
+	res, err := cs.CallTool(ctx, &sdk.CallToolParams{Name: "ai_apikey_update", Arguments: args})
+	if err != nil || res.IsError {
+		t.Fatalf("preview: %v %v", err, resultText(res))
+	}
+	out := callOut(t, res)
+	if out["action"] != "preview" || out["impact"] != "object" || mock.sawMutation("PATCH ") {
+		t.Fatalf("want an object-impact preview without a PATCH, got %v", out)
+	}
+	cur, _ := out["current"].(map[string]any)
+	if cur["enabled"] != true || cur["rate_limit_rps"] != float64(5) {
+		t.Errorf("current must be the key as read: %v", cur)
+	}
+	diff, _ := out["diff"].(map[string]any)
+	if d, _ := diff["enabled"].(map[string]any); d == nil || d["to"] != false {
+		t.Errorf("diff must show enabled -> false: %v", diff)
+	}
+	rb, _ := out["rollback"].(map[string]any)
+	rbArgs, _ := rb["args"].(map[string]any)
+	if rb["tool"] != "ai_apikey_update" || rbArgs["key_id"] != "key-1" || rbArgs["enabled"] != true || rbArgs["priority_class"] != "standard" || rbArgs["tokens_per_min"] != float64(0) {
+		t.Errorf("rollback must restore the current values (absent quota = 0): %v", rb)
+	}
+	if objs, _ := rbArgs["allowed_objectives"].([]any); objs == nil || len(objs) != 0 {
+		t.Errorf("an absent list rolls back to an empty list: %v", rbArgs["allowed_objectives"])
+	}
+	token, _ := out["confirm_token"].(string)
+	res, err = cs.CallTool(ctx, &sdk.CallToolParams{Name: "ai_apikey_update", Arguments: withToken(args, token)})
+	if err != nil || res.IsError {
+		t.Fatalf("apply: %v %v", err, resultText(res))
+	}
+	if !mock.sawMutation("PATCH /netlox/v1/config/ai/apikey/key-1") {
+		t.Fatal("apply did not PATCH")
+	}
+	body := mock.lastBody()
+	objs, has := body["allowed_objectives"].([]any)
+	if body["enabled"] != false || body["tokens_per_min"] != float64(500) || body["priority_class"] != "" || !has || len(objs) != 0 {
+		t.Errorf("PATCH body must carry the named fields, empty values included: %v", body)
+	}
+	for _, k := range []string{"rate_limit_rps", "burst_size", "default_objective"} {
+		if _, sent := body[k]; sent {
+			t.Errorf("PATCH body carries %s, which was not named: %v", k, body)
+		}
+	}
+	if rbk, _ := callOut(t, res)["read_back"].(map[string]any); rbk["key_id"] != "key-1" {
+		t.Errorf("read_back must re-read the key: %v", rbk)
+	}
+	// apply: true at operator tier skips the preview; an empty change is refused.
+	res, err = cs.CallTool(ctx, &sdk.CallToolParams{Name: "ai_apikey_update", Arguments: map[string]any{"key_id": "key-1", "rate_limit_rps": 7, "apply": true}})
+	if err != nil || res.IsError || callOut(t, res)["action"] != "executed" {
+		t.Fatalf("apply=true: %v %v", err, resultText(res))
+	}
+	res, err = cs.CallTool(ctx, &sdk.CallToolParams{Name: "ai_apikey_update", Arguments: map[string]any{"key_id": "key-1", "apply": true}})
+	if err != nil || !res.IsError || !strings.Contains(resultText(res), "no fields to update") {
+		t.Fatalf("an empty patch must be refused: %v %v", err, resultText(res))
+	}
+	if n := mock.countRequests("PATCH "); n != 2 {
+		t.Errorf("want 2 PATCHes, got %d", n)
+	}
+}
+
+func TestRatelimitSetPreviewsTheRowAndRollsBackModelQuotas(t *testing.T) {
+	mock := newMockLoxilb(t)
+	b := newTestBridge(t, testConfig(mock.srv.URL))
+	cs := session(t, b, guard.RoleOperator)
+	ctx := context.Background()
+	args := map[string]any{"tenant_id": "lab", "rps": 10, "tokens_per_min": 2000, "default_objective": "fast",
+		"model_limits": []map[string]any{{"model": "qwen3", "tokens_per_min": 300}}}
+
+	res, err := cs.CallTool(ctx, &sdk.CallToolParams{Name: "ai_ratelimit_set", Arguments: args})
+	if err != nil || res.IsError {
+		t.Fatalf("preview: %v %v", err, resultText(res))
+	}
+	out := callOut(t, res)
+	if out["action"] != "preview" || out["impact"] != "tenant" || mock.sawMutation("POST ") {
+		t.Fatalf("want a tenant-impact preview without a POST, got %v", out)
+	}
+	cur, _ := out["current"].(map[string]any)
+	if cur["rps"] != float64(20) {
+		t.Errorf("current must be the row as read: %v", cur)
+	}
+	rb, _ := out["rollback"].(map[string]any)
+	rbArgs, _ := rb["args"].(map[string]any)
+	if rb["tool"] != "ai_ratelimit_set" || rbArgs["rps"] != float64(20) || rbArgs["tokens_per_min"] != float64(5000) || rbArgs["default_objective"] != "" {
+		t.Errorf("rollback must restore the row (absent objective = cleared): %v", rb)
+	}
+	mls, _ := rbArgs["model_limits"].([]any)
+	if len(mls) != 2 || mapValue(mls[0])["model"] != "llama3" || mapValue(mls[0])["tokens_per_min"] != float64(1000) || mapValue(mls[1])["model"] != "qwen3" || mapValue(mls[1])["tokens_per_min"] != float64(0) {
+		t.Errorf("rollback model_limits must keep llama3 and zero the new qwen3 quota: %v", mls)
+	}
+	if _, named := rbArgs["priority_class"]; named {
+		t.Errorf("a field the call does not change is not in the rollback: %v", rbArgs)
+	}
+	token, _ := out["confirm_token"].(string)
+	res, err = cs.CallTool(ctx, &sdk.CallToolParams{Name: "ai_ratelimit_set", Arguments: withToken(args, token)})
+	if err != nil || res.IsError {
+		t.Fatalf("apply: %v %v", err, resultText(res))
+	}
+	body := mock.lastBody()
+	bm, _ := body["model_limits"].([]any)
+	if body["tenant_id"] != "lab" || body["rps"] != float64(10) || body["burst_pct"] != float64(0) || body["default_objective"] != "fast" || len(bm) != 1 {
+		t.Errorf("POST body: %v", body)
+	}
+	if _, sent := body["priority_class"]; sent {
+		t.Errorf("priority_class was not named and must not be sent: %v", body)
+	}
+	if rbk, _ := callOut(t, res)["read_back"].(map[string]any); rbk["tenant_id"] != "lab" {
+		t.Errorf("read_back must re-read the row: %v", rbk)
+	}
+
+	// No row yet: the rollback is a zero-quota set with a note.
+	res, err = cs.CallTool(ctx, &sdk.CallToolParams{Name: "ai_ratelimit_set", Arguments: map[string]any{"tenant_id": "nope", "rps": 1, "tokens_per_min": 0}})
+	if err != nil || res.IsError {
+		t.Fatalf("preview on a missing row: %v %v", err, resultText(res))
+	}
+	out = callOut(t, res)
+	if _, has := out["current"]; has {
+		t.Errorf("no current state when no row exists: %v", out["current"])
+	}
+	rb, _ = out["rollback"].(map[string]any)
+	rbArgs, _ = rb["args"].(map[string]any)
+	if rb["tool"] != "ai_ratelimit_set" || rbArgs["rps"] != float64(0) || !strings.Contains(rb["note"].(string), "no delete") {
+		t.Errorf("rollback on a missing row: %v", rb)
+	}
+}
+
+func TestUserRatelimitSetAndDelete(t *testing.T) {
+	mock := newMockLoxilb(t)
+	b := newTestBridge(t, testConfig(mock.srv.URL))
+	cs := session(t, b, guard.RoleOperator)
+	ctx := context.Background()
+
+	// All-zero is refused before any request.
+	res, err := cs.CallTool(ctx, &sdk.CallToolParams{Name: "ai_user_ratelimit_set", Arguments: map[string]any{"tenant_id": "lab", "user_id": "bob", "burst_size": 4, "apply": true}})
+	if err != nil || !res.IsError || !strings.Contains(resultText(res), "all zero") {
+		t.Fatalf("all-zero entry must be refused: %v %v", err, resultText(res))
+	}
+	// A new user: rollback is the delete.
+	args := map[string]any{"tenant_id": "lab", "user_id": "bob", "rps": 2, "model_limits": []map[string]any{{"model": "llama3", "tokens_per_min": 100}}}
+	res, err = cs.CallTool(ctx, &sdk.CallToolParams{Name: "ai_user_ratelimit_set", Arguments: args})
+	if err != nil || res.IsError {
+		t.Fatalf("preview: %v %v", err, resultText(res))
+	}
+	out := callOut(t, res)
+	rb, _ := out["rollback"].(map[string]any)
+	rbArgs, _ := rb["args"].(map[string]any)
+	if out["action"] != "preview" || out["impact"] != "tenant" || rb["tool"] != "ai_user_ratelimit_delete" || rbArgs["user_id"] != "bob" {
+		t.Fatalf("preview of a new row must roll back through the delete: %v", out)
+	}
+	if mock.sawMutation("POST ") {
+		t.Fatal("preview sent the POST")
+	}
+	token, _ := out["confirm_token"].(string)
+	res, err = cs.CallTool(ctx, &sdk.CallToolParams{Name: "ai_user_ratelimit_set", Arguments: withToken(args, token)})
+	if err != nil || res.IsError {
+		t.Fatalf("apply: %v %v", err, resultText(res))
+	}
+	body := mock.lastBody()
+	bm, _ := body["model_limits"].([]any)
+	if body["tenant_id"] != "lab" || body["user_id"] != "bob" || body["rps"] != float64(2) || body["burst_size"] != float64(0) || body["tokens_per_min"] != float64(0) || len(bm) != 1 {
+		t.Errorf("POST body must be the whole entry: %v", body)
+	}
+	// An existing user: rollback is a set with the row and its model limits.
+	res, err = cs.CallTool(ctx, &sdk.CallToolParams{Name: "ai_user_ratelimit_set", Arguments: map[string]any{"tenant_id": "lab", "user_id": "alice", "rps": 9}})
+	if err != nil || res.IsError {
+		t.Fatalf("preview on an existing row: %v %v", err, resultText(res))
+	}
+	out = callOut(t, res)
+	rb, _ = out["rollback"].(map[string]any)
+	rbArgs, _ = rb["args"].(map[string]any)
+	mls, _ := rbArgs["model_limits"].([]any)
+	if rb["tool"] != "ai_user_ratelimit_set" || rbArgs["rps"] != float64(5) || rbArgs["burst_size"] != float64(10) || len(mls) != 1 {
+		t.Errorf("rollback must carry the row with its model limits: %v", rb)
+	}
+	prop, _ := out["proposed"].(map[string]any)
+	if pm, _ := prop["model_limits"].([]any); len(pm) != 0 {
+		t.Errorf("a set without model_limits proposes an empty set (they are replaced): %v", prop)
+	}
+
+	// Delete: operator lists it, the preview carries the row as the rollback, no apply shortcut.
+	operator, _ := listNames(t, b, guard.RoleOperator)
+	if !operator["ai_user_ratelimit_delete"] {
+		t.Fatal("operator must list ai_user_ratelimit_delete (re-creatable)")
+	}
+	del := map[string]any{"tenant_id": "lab", "user_id": "alice"}
+	res, err = cs.CallTool(ctx, &sdk.CallToolParams{Name: "ai_user_ratelimit_delete", Arguments: withArgs(del, map[string]any{"apply": true})})
+	if err != nil || !res.IsError {
+		t.Fatalf("the delete has no apply shortcut; the schema must refuse it: %v %v", err, resultText(res))
+	}
+	res, err = cs.CallTool(ctx, &sdk.CallToolParams{Name: "ai_user_ratelimit_delete", Arguments: del})
+	if err != nil || res.IsError {
+		t.Fatalf("delete preview: %v %v", err, resultText(res))
+	}
+	out = callOut(t, res)
+	rb, _ = out["rollback"].(map[string]any)
+	rbArgs, _ = rb["args"].(map[string]any)
+	mls, _ = rbArgs["model_limits"].([]any)
+	if out["action"] != "preview" || rb["tool"] != "ai_user_ratelimit_set" || rbArgs["tokens_per_min"] != float64(1000) || len(mls) != 1 {
+		t.Fatalf("delete preview must carry the row as the set rollback: %v", out)
+	}
+	if mock.sawMutation("DELETE ") {
+		t.Fatal("preview sent the DELETE")
+	}
+	token, _ = out["confirm_token"].(string)
+	res, err = cs.CallTool(ctx, &sdk.CallToolParams{Name: "ai_user_ratelimit_delete", Arguments: withToken(del, token)})
+	if err != nil || res.IsError {
+		t.Fatalf("delete apply: %v %v", err, resultText(res))
+	}
+	if !mock.sawMutation("DELETE /netlox/v1/config/ai/user/ratelimit/lab/alice") {
+		t.Fatal("apply did not DELETE")
+	}
+	if rbk, _ := callOut(t, res)["read_back"].(map[string]any); rbk["exists"] != true {
+		t.Errorf("read_back re-reads the row (the mock still serves it): %v", rbk)
+	}
+	// A missing row is refused before any request.
+	res, err = cs.CallTool(ctx, &sdk.CallToolParams{Name: "ai_user_ratelimit_delete", Arguments: map[string]any{"tenant_id": "lab", "user_id": "bob"}})
+	if err != nil || !res.IsError || !strings.Contains(resultText(res), "nothing to delete") {
+		t.Fatalf("missing row: %v %v", err, resultText(res))
+	}
+	if n := mock.countRequests("DELETE "); n != 1 {
+		t.Errorf("want one DELETE, got %d", n)
+	}
+}
+
 // mapValue returns v as an object, or an empty one (test-side copy of the
 // tools helper).
 func mapValue(v any) map[string]any {

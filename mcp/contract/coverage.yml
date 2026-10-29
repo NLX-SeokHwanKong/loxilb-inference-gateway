@@ -15,7 +15,7 @@
 # Budgets are ratchets: they may only go down. A raise is a warning in the CI summary.
 version: 1
 budget:
-  pending_max: 62
+  pending_max: 60
   tier_gap_max: 0
 operations:
 - op: GET /audit/policy
@@ -177,18 +177,24 @@ operations:
   - ai_ratelimit_get
   impact: none
 - op: POST /config/ai/user/ratelimit
-  pending: P1b
+  tools:
+  - ai_user_ratelimit_set
   impact: tenant
-  note: PR-B2 ai_user_ratelimit_set; operator with preview; owner-approved 2026-10-28
+  reversible: true
+  tier: operator
+  note: "PR-B2 ai_user_ratelimit_set: operator with preview (apply: true skips it); the pre-read is client.UserRateLimit (credited to ai_user_ratelimit_get); an all-zero entry is refused before any request, the model rows are replaced as a set; owner-approved 2026-10-28"
 - op: GET /config/ai/user/ratelimit/{tenant_id}
   tools:
   - ai_user_ratelimit_list
   impact: none
   note: read; PR-B1 mapped; owner-approved 2026-10-28
 - op: DELETE /config/ai/user/ratelimit/{tenant_id}/{user_id}
-  pending: P1b
+  tools:
+  - ai_user_ratelimit_delete
   impact: tenant
-  note: PR-B2 ai_user_ratelimit_delete; re-creatable from the preview, operator; owner-approved 2026-10-28
+  reversible: true
+  tier: operator
+  note: "PR-B2 ai_user_ratelimit_delete: re-creatable, so operator; the preview carries the row (with its model limits) as the arguments of an ai_user_ratelimit_set rollback and the delete applies only with the token (no apply shortcut on a removal); owner-approved 2026-10-28"
 - op: GET /config/ai/user/ratelimit/{tenant_id}/{user_id}
   tools:
   - ai_user_ratelimit_get

@@ -99,6 +99,13 @@ func newMockLoxilb(t *testing.T) *mockLoxilb {
 			w.Write([]byte(`{"jwtAuthProfileAttr":[{"name":"corp-oidc","issuer":"https://issuer.example","jwks_url":"https://issuer.example/jwks.json","audiences":["gw"],"algs":["RS256"],"leeway_sec":30,"refresh_sec":300,"tenant_claim":"tid","user_claim":"sub","token":"should-not-matter"}]}`))
 		case "/netlox/v1/config/ai/user/ratelimit/lab":
 			w.Write([]byte(`[{"tenant_id":"lab","user_id":"alice","rps":5,"burst_size":10,"tokens_per_min":1000,"updated_at":"2026-10-28T09:00:00Z"}]`))
+		case "/netlox/v1/config/ai/user/ratelimit/lab/bob", "/netlox/v1/config/ai/tenant/ratelimit/nope":
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(`{"code":404,"message":"Not Found","result":"rate-limit row not found"}`))
+		case "/netlox/v1/config/ai/tenant/ratelimit/lab":
+			w.Write([]byte(`{"tenant_id":"lab","rps":20,"tokens_per_min":5000,"burst_pct":0,"model_limits":[{"model":"llama3","tokens_per_min":1000}],"priority_class":"standard","updated_at":"2026-10-28T09:00:00Z"}`))
+		case "/netlox/v1/config/ai/apikey/key-1":
+			w.Write([]byte(`{"key_id":"key-1","tenant_id":"lab","name":"k","enabled":true,"allowed_models":["llama3"],"rate_limit_rps":5,"priority_class":"standard"}`))
 		case "/netlox/v1/config/ai/user/ratelimit/lab/alice":
 			w.Write([]byte(`{"tenant_id":"lab","user_id":"alice","rps":5,"burst_size":10,"tokens_per_min":1000,"model_limits":[{"model":"llama3","tokens_per_min":500}],"updated_at":"2026-10-28T09:00:00Z"}`))
 		case "/netlox/v1/config/ai/ratelimit/defaults/global":

@@ -472,24 +472,24 @@ models:
         arg: expires_at
         desc_sha256: 5765ec6ccbb5dce4371631e39bf6a9d3eff19079ce92ea3fa62109f89fe40dd0
       enabled:
-        label: pending
-        phase: P1b
+        label: typed
+        arg: enabled
         desc_sha256: 600029c1fa7ec03f92a971075ec74a6b981d862e8ea9c19925fcc27b94c02680
       client_op_id:
-        label: pending
-        phase: P1b
+        label: typed
+        arg: client_op_id
         desc_sha256: 6ab50dc7d6fdbdc9e9c092d2a72c0808d625110154dd57e99d90f72fbeb7f119
       priority_class:
-        label: pending
-        phase: P1b
+        label: typed
+        arg: priority_class
         desc_sha256: c6660f2fc3272b4a9774499ba6696f9733d4a91c1bbd744bb598eedab27a0500
       default_objective:
-        label: pending
-        phase: P1b
+        label: typed
+        arg: default_objective
         desc_sha256: 6d038efab02ee403a0f8749cb931eba2c4394b2e744ceb541e40aaa457e9c96b
       allowed_objectives:
-        label: pending
-        phase: P1b
+        label: typed
+        arg: allowed_objectives
         desc_sha256: 1a630e3cee0b703e46ca7fffe0656e72ecce53ec118f2e89c2e127533bbbec5c
   TenantRateLimitMod:
     source: definitions.TenantRateLimitMod.properties
@@ -511,18 +511,45 @@ models:
         arg: burst_pct
         desc_sha256: 674bc72bba366d2f1685fd112a5e9ffc9bdbcab8492008940977c3d86951183c
       model_limits:
-        label: pending
-        phase: P1b
+        label: typed
+        arg: model_limits
         desc_sha256: 7cbfe8c6e6ad8ba623a531d36eea88b77341254df9b586ec39fc9d94bd1210f0
       priority_class:
-        label: pending
-        phase: P1b
+        label: typed
+        arg: priority_class
         desc_sha256: e3ac7f6d649b6a749ee93fee475e958fb938b8b476753f7db817224c7bac75bf
       default_objective:
-        label: pending
-        phase: P1b
+        label: typed
+        arg: default_objective
         desc_sha256: 60f18bc85278a37f18c572ec6b2b0ef1f71456cee6083514d2f0fbd0d376bb77
       allowed_objectives:
-        label: pending
-        phase: P1b
+        label: typed
+        arg: allowed_objectives
         desc_sha256: 896c4e2a217e64819eb4b256c5775afcf0b07c987661deb607c9e80bfa2d2415
+  UserRateLimitMod:
+    source: definitions.UserRateLimitMod.properties
+    fields:
+      tenant_id:
+        label: typed
+        arg: tenant_id
+        desc_sha256: 02a444998ba6ac80b819c41a816aa5d4c78f47455943463dfc2d3f6c9ef78648
+      user_id:
+        label: typed
+        arg: user_id
+        desc_sha256: 0dc1719e7c28fb014542e057370bc2fb87b7955013ae8770674fa202e9a11f46
+      rps:
+        label: typed
+        arg: rps
+        desc_sha256: f01ef903c32f780fe76b42a8de2565374fc290d14070fa840928e01ba61ecbbc
+      burst_size:
+        label: typed
+        arg: burst_size
+        desc_sha256: 8e3b5a628cb302879e83fa901bb62362ba5e47ad3b8b357a5d2569508b08970c
+      tokens_per_min:
+        label: typed
+        arg: tokens_per_min
+        desc_sha256: 9c99cd63790ae6b64abf16f0ea062f0d6870bbaaca979c2f1e04e7099ab5e1d3
+      model_limits:
+        label: typed
+        arg: model_limits
+        desc_sha256: 217c892140d951748dba9a52ff41308450d21d8b25adc548c33151165cd81cf7
