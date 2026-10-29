@@ -567,6 +567,12 @@ job of `mcp-ci.yml` runs on every change to `mcp/**`, `api/swagger.yml`,
   the swagger property lists, enum values and enum descriptions the tools
   package compiles in are generated, never copied.
 
+`internal/mcp/zz_metrics_reference_gen.go` (the family table of
+`loxilb://docs/metrics`) is regenerated in the same job but only warns: a
+gateway change that adds a family is outside this workflow's paths, so the
+table can go stale without an mcp change. The warning puts the regenerate
+command (`go generate ./internal/mcp/` in `mcp/`) in the step summary.
+
 The job's step summary lists the pending operations by phase, the mapped
 mutations by impact and tier, the recorded tier gaps, and the gateway metric
 families the bridge never references. The tests skip when `api/` is not
