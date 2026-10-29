@@ -16,6 +16,12 @@
 #   4 ai ops         ai_apikey create(file)/list/update/delete confirm flow,
 #                    ai_ratelimit_set/get, against the PostgreSQL store the
 #                    topology runs (config.sh, --userservice)
+#   4b writes        PR-B2: lb_update (admin_state_up down -> traffic stops ->
+#                    rollback -> resumes; weight swap; fullproxy refusal passed
+#                    on), operator previews with apply (API key, tenant and
+#                    user rate limits), secrate_disable, config_persist, and
+#                    the mutation budget (client ci-tight: 4/min, stop after
+#                    3 failures lifted by a read)
 #   5 rca            diagnose_l4_errors / capacity_report evidence bundles,
 #                    ai_traffic_report accounting caveat
 # The AI 429-under-traffic drill and the 12h soak need an SSE backend and
@@ -70,6 +76,7 @@ echo "$JWT" | $dexec llb1 loxicmd set login --provider manual >/dev/null 2>&1
 export LLB1_ADMIN_PASSWORD="$ADMIN_PW"
 
 BTOKEN="ci-burst-token-0123456789abcdef0"
+TTOKEN="ci-tight-token-0123456789abcdef0"
 VTOKEN="ci-viewer-token-0123456789abcdef"
 OTOKEN="ci-operator-token-0123456789abcd"
 ATOKEN="ci-admin-token-0123456789abcdef0"
@@ -83,9 +90,13 @@ targets:
     password_env: LLB1_ADMIN_PASSWORD
 clients:
   - { name: ci-viewer,   role: viewer,   token: $VTOKEN }
-  - { name: ci-operator, role: operator, token: $OTOKEN }
-  - { name: ci-admin,    role: admin,    token: $ATOKEN }
+  # The scenario is one client doing a session's worth of changes in a few
+  # minutes: the two mutating clients get a mutation budget sized for it
+  # (default 6/min); ci-tight keeps a small one so the brakes are exercised.
+  - { name: ci-operator, role: operator, token: $OTOKEN, mutations_per_minute: 120 }
+  - { name: ci-admin,    role: admin,    token: $ATOKEN, mutations_per_minute: 120 }
   - { name: ci-burst,    role: viewer,   token: $BTOKEN, rps: 1, burst: 2 }
+  - { name: ci-tight,    role: operator, token: $TTOKEN, mutations_per_minute: 4 }
 audit_dir: ./.mcp-audit
 secrets_dir: ./.mcp-audit/secrets
 EOF
@@ -314,11 +325,11 @@ baseline_intact && pass "baseline rule untouched by the stale token" || fail "st
 # /config/securityrate refuses a body that keeps every protection off (at
 # least one per-source protection or an aggregate budget is required), so the
 # gate must (1) refuse a change that leaves every protection off before it
-# issues a token, (2) preview a change that switches one on with a rollback
-# note instead of a secrate_set call into the refused state, and (3) on the
-# then-configured target preview -> confirm -> read-back -> rollback through
-# secrate_set. DELETE /config/securityrate (REST; no tool until PR-B2)
-# restores the unconfigured state at the end.
+# issues a token, (2) preview a change that switches one on with a
+# secrate_disable rollback instead of a secrate_set call into the refused
+# state, and (3) on the then-configured target preview -> confirm ->
+# read-back -> rollback through secrate_set. secrate_disable (D18, the
+# DELETE behind the change gate) restores the unconfigured state at the end.
 res=$(mcp_call "$ATOKEN" secrate_set '{"rate_per_sec":777}')
 echo "$res" | grep -q '"isError":true' && echo "$res" | grep -q 'enables no per-source protection' \
     && pass "secrate_set refuses a change that leaves every protection off, before any token" || fail "all-off change not refused: $res"
@@ -332,8 +343,8 @@ res=$(mcp_call "$ATOKEN" secrate_set '{"conn_rate_enabled":true,"rate_per_sec":7
    && "$(jfield "$res" 'r["proposed"]["connRateEnabled"]')" == "True" ]] \
     && pass "secrate_set previews current (zero defaults for the omitted keys), proposed and impact" || fail "secrate_set preview: $res"
 tok=$(jfield "$res" 'r["confirm_token"]')
-[[ -n "$tok" && -z "$(jfield "$res" 'r["rollback"].get("tool","")')" && "$(jfield "$res" 'r["rollback"]["note"]')" == *"DELETE /config/securityrate"* ]] \
-    && pass "preview on the unconfigured target carries a token and a rollback note naming the disable path" || fail "no token/rollback note in preview: $res"
+[[ -n "$tok" && "$(jfield "$res" 'r["rollback"].get("tool","")')" == "secrate_disable" && "$(jfield "$res" 'r["rollback"]["note"]')" == *"DELETE /config/securityrate"* ]] \
+    && pass "preview on the unconfigured target carries a token and a secrate_disable rollback" || fail "no token/secrate_disable rollback in preview: $res"
 mcp_call "$ATOKEN" secrate_get | grep -q '"ratePerSec":777' && fail "preview changed the security rate config" || pass "preview changed nothing (secrate_get)"
 res=$(mcp_call "$ATOKEN" secrate_set "{\"conn_rate_enabled\":true,\"rate_per_sec\":777,\"confirm_token\":\"$tok\"}")
 [[ "$(jfield "$res" 'r["action"]')" == "executed" && "$(jfield "$res" 'r["read_back"]["ratePerSec"]')" == "777" && "$(jfield "$res" 'r["read_back"]["connRateEnabled"]')" == "True" ]] \
@@ -354,9 +365,20 @@ res=$(mcp_call "$ATOKEN" secrate_set "{\"rate_per_sec\":$prev,\"confirm_token\":
 [[ "$(jfield "$res" 'r["action"]')" == "executed" && "$(jfield "$res" 'r["read_back"]["ratePerSec"]')" == "$prev" ]] \
     && pass "rollback applied; read_back shows ratePerSec $prev" || fail "rollback: $res"
 grep -q '"tool":"secrate_set"' .mcp-audit/audit.jsonl && pass "audit.jsonl records secrate_set" || fail "secrate_set audit entry missing"
-[[ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "${AUTH[@]}" -X DELETE "$REST/config/securityrate")" == 2* ]] \
-    && pass "DELETE /config/securityrate (REST, no tool yet) restores the unconfigured state" || fail "DELETE /config/securityrate failed"
-mcp_call "$ATOKEN" secrate_get | grep -q '"connRateEnabled":true' && fail "protection still on after the DELETE" || pass "secrate_get shows no protection enabled again"
+# secrate_disable: the DELETE behind the change gate; its preview carries
+# the configuration it removes as a secrate_set rollback.
+res=$(mcp_call "$ATOKEN" secrate_disable '{}')
+[[ "$(jfield "$res" 'r["action"]')" == "preview" && "$(jfield "$res" 'r["impact"]')" == "global" && "$(jfield "$res" 'r["current"]["connRateEnabled"]')" == "True" \
+   && "$(jfield "$res" 'r["proposed"]["connRateEnabled"]')" == "False" && "$(jfield "$res" 'r["rollback"]["tool"]')" == "secrate_set" \
+   && "$(jfield "$res" 'r["rollback"]["args"]["conn_rate_enabled"]')" == "True" && "$(jfield "$res" 'r["rollback"]["args"]["rate_per_sec"]')" == "$prev" ]] \
+    && pass "secrate_disable previews current, the all-off proposal and a secrate_set rollback (rate_per_sec $prev)" || fail "secrate_disable preview: $res"
+tok=$(jfield "$res" 'r["confirm_token"]')
+mcp_call "$ATOKEN" secrate_get | grep -q '"connRateEnabled":true' && pass "preview changed nothing (protection still on)" || fail "secrate_disable preview changed the config"
+res=$(mcp_call "$ATOKEN" secrate_disable "{\"confirm_token\":\"$tok\"}")
+[[ "$(jfield "$res" 'r["action"]')" == "executed" && "$(jfield "$res" 'r["read_back"]["connRateEnabled"]')" == "False" ]] \
+    && pass "secrate_disable applied with the token; read_back shows every protection off" || fail "secrate_disable apply: $res"
+mcp_call "$ATOKEN" secrate_get | grep -q '"connRateEnabled":true' && fail "protection still on after secrate_disable" || pass "secrate_get shows no protection enabled again"
+grep -q '"tool":"secrate_disable"' .mcp-audit/audit.jsonl && pass "audit.jsonl records secrate_disable" || fail "secrate_disable audit entry missing"
 
 # ---------- 3d. the request budget (D20) ----------
 # ci-burst has a budget of 2 requests refilled at 1/s: the session's
@@ -476,19 +498,22 @@ SESSION=$ADMIN_SESSION
 # config.sh seeded tenant cicd-seed with one key; the store answers for real.
 mcp_call "$ATOKEN" ai_apikey_list '{"tenant_id":"cicd-seed"}' | grep -q '"name":"seed-key"' \
     && pass "ai_apikey_list shows the seeded key of tenant cicd-seed" || fail "seeded key not listed"
-res=$(mcp_call "$ATOKEN" ai_apikey_create '{"tenant_id":"cicd","name":"mcp-ci","rate_limit_rps":5}')
+# apply: true is the operator shortcut past the preview (the preview flows
+# are in "### writes").
+res=$(mcp_call "$ATOKEN" ai_apikey_create '{"tenant_id":"cicd","name":"mcp-ci","rate_limit_rps":5,"apply":true}')
 if echo "$res" | grep -q '"key_file"'; then
-    pass "ai_apikey_create wrote key to file"
+    pass "ai_apikey_create (apply) wrote key to file"
     echo "$res" | grep -q '"raw_key"' && fail "raw key leaked in default create response" || pass "no key material in response"
-    kf=$(echo "$res" | sed -n 's/.*"key_file":"\([^"]*\)".*/\1/p')
+    kf=$(jfield "$res" 'r["result"]["key_file"]')
     [[ -f "$kf" ]] && pass "key file exists on bridge host" || fail "key file $kf missing"
-    kid=$(echo "$res" | sed -n 's/.*"key_id":"\([^"]*\)".*/\1/p')
+    kid=$(jfield "$res" 'r["result"]["key_id"]')
+    [[ "$(jfield "$res" 'r["read_back"]["key_id"]')" == "$kid" ]] && pass "executed create re-reads the key ($kid)" || fail "create read_back: $res"
 
     mcp_call "$ATOKEN" ai_apikey_list '{"tenant_id":"cicd"}' | grep -q "$kid" \
         && pass "ai_apikey_list shows the key" || fail "created key not listed"
 
-    res=$(mcp_call "$ATOKEN" ai_apikey_update "{\"key_id\":\"$kid\",\"enabled\":false}")
-    echo "$res" | grep -q '"action":"executed"' && pass "ai_apikey_update disabled key" || fail "ai_apikey_update: $res"
+    res=$(mcp_call "$ATOKEN" ai_apikey_update "{\"key_id\":\"$kid\",\"enabled\":false,\"apply\":true}")
+    [[ "$(jfield "$res" 'r["action"]')" == "executed" && "$(jfield "$res" 'r["read_back"]["enabled"]')" == "False" ]] && pass "ai_apikey_update (apply) disabled the key; read_back shows enabled false" || fail "ai_apikey_update: $res"
 
     res=$(mcp_call "$ATOKEN" ai_apikey_delete "{\"key_id\":\"$kid\"}")
     tok=$(echo "$res" | sed -n 's/.*"confirm_token":"\([^"]*\)".*/\1/p')
@@ -499,14 +524,249 @@ else
     fail "ai_apikey_create against the topology's store: $(echo "$res" | head -c 200)"
 fi
 
-res=$(mcp_call "$ATOKEN" ai_ratelimit_set '{"tenant_id":"cicd","rps":5,"tokens_per_min":1000}')
+res=$(mcp_call "$ATOKEN" ai_ratelimit_set '{"tenant_id":"cicd","rps":5,"tokens_per_min":1000,"apply":true}')
 if echo "$res" | grep -q '"action":"executed"'; then
-    pass "ai_ratelimit_set executed"
+    pass "ai_ratelimit_set (apply) executed"
     mcp_call "$ATOKEN" ai_ratelimit_get '{"tenant_id":"cicd"}' | grep -q '"rps":5' \
         && pass "ai_ratelimit_get reads back rps=5" || fail "ai_ratelimit_get readback"
 else
     fail "ai_ratelimit_set against the topology's store: $(echo "$res" | head -c 200)"
 fi
+
+# ---------- 4b. PR-B2 writes ----------
+# Every write previews (current, proposed, diff, rollback, impact) and
+# applies only with the preview's token; an operator write on one object
+# or tenant may also be applied directly with apply: true. Executed
+# results carry read_back.
+
+echo "### writes"
+SESSION=$OPERATOR_SESSION
+res=$(mcp_rpc "$OTOKEN" tools/list)
+for t in lb_update secrate_disable config_persist; do
+    echo "$res" | grep -q "\"name\":\"$t\"" && fail "operator sees $t" || pass "operator sees no $t (admin-confirm)"
+done
+for t in ai_user_ratelimit_set ai_user_ratelimit_delete; do
+    echo "$res" | grep -q "\"name\":\"$t\"" && pass "operator sees $t" || fail "operator misses $t"
+done
+
+# lb_update on the baseline rule 20.20.20.1:2020/tcp (l3ep1 serves
+# server1): admin_state_up false -> traffic stops -> the preview's rollback
+# -> traffic resumes; then a weight swap round-trip.
+SESSION=$ADMIN_SESSION
+KEY='"external_ip":"20.20.20.1","port":2020,"protocol":"tcp"'
+serves() { [[ "$($hexec l3h1 curl --max-time 3 -s 20.20.20.1:2020)" == "server1" ]]; }
+serves && pass "baseline VIP serves before lb_update" || fail "baseline VIP not serving before lb_update"
+# D24: the gateway serialises adminStateUp with omitempty; an enabled rule
+# carries an explicit true, a paused one no flag. lb_get/lb_list report the
+# flag as read (true | false | "absent").
+res=$(mcp_call "$ATOKEN" lb_get "{$KEY}")
+[[ "$(jfield "$res" 'r["rule"]["admin_state_up"]')" == "True" ]] \
+    && pass "lb_get reports the enabled rule's explicit admin_state_up true" || fail "lb_get enabled admin_state_up: $res"
+res=$(mcp_call "$ATOKEN" lb_update "{$KEY,\"admin_state_up\":false}")
+[[ "$(jfield "$res" 'r["action"]')" == "preview" && "$(jfield "$res" 'r["impact"]')" == "service" \
+   && "$(jfield "$res" 'r["diff"]["adminStateUp"]["to"]')" == "False" && "$(jfield "$res" 'r["rollback"]["tool"]')" == "lb_update" \
+   && "$(jfield "$res" 'r["rollback"]["args"]["admin_state_up"]')" == "True" ]] \
+    && pass "lb_update admin_state_up=false previews current, diff and an lb_update rollback (admin_state_up true)" || fail "lb_update preview: $res"
+tok=$(jfield "$res" 'r["confirm_token"]')
+serves && pass "preview changed nothing (VIP still serves)" || fail "the preview took the VIP down"
+# The gateway omits a false adminStateUp from the rule it returns
+# (omitempty); the read-back after sending false is the one place the
+# bridge resolves the absent flag to false, and it says so in a note.
+res=$(mcp_call "$ATOKEN" lb_update "{$KEY,\"admin_state_up\":false,\"confirm_token\":\"$tok\"}")
+[[ "$(jfield "$res" 'r["action"]')" == "executed" && "$(jfield "$res" 'r["read_back"]["admin_state_up"]')" == "False" \
+   && "$(jfield "$res" '"adminStateUp" in r["read_back"]["rule"]["serviceArguments"]')" == "False" \
+   && "$(jfield "$res" '"omitempty" in r["read_back"]["admin_state_up_note"]')" == "True" \
+   && "$(jfield "$res" 'r["read_back"]["status"]["operatingStatus"]')" == "OFFLINE" ]] \
+    && pass "lb_update applied; the rule GET has no adminStateUp, read_back resolves it to false with the note, status OFFLINE" || fail "lb_update apply: $res"
+sleep 2
+serves && fail "VIP still serves with adminStateUp false" || pass "traffic stops with adminStateUp false"
+res=$(mcp_call "$ATOKEN" lb_get "{$KEY,\"include\":[\"status\"]}")
+[[ "$(jfield "$res" 'r["rule"]["admin_state_up"]')" == "absent" && "$(jfield "$res" '"adminStateUp" in r["status"]')" == "False" \
+   && "$(jfield "$res" 'r["status"]["operatingStatus"]')" == "OFFLINE" ]] \
+    && pass "lb_get reports the paused rule's admin_state_up as absent (status: no flag, OFFLINE)" || fail "lb_get paused admin_state_up: $res"
+res=$(mcp_call "$ATOKEN" lb_list '{"filter":"20.20.20.1"}')
+[[ "$(jfield "$res" '[x["admin_state_up"] for x in r["rules"] if x["port"]==2020 and x["protocol"]=="tcp"][0]')" == "absent" ]] \
+    && pass "lb_list reports the paused rule's admin_state_up as absent" || fail "lb_list paused admin_state_up: $res"
+res=$(mcp_call "$ATOKEN" lb_update "{$KEY,\"admin_state_up\":true}")
+[[ "$(jfield "$res" 'r["current"]["adminStateUp"]')" == "absent" && "$(jfield "$res" '"admin_state_up" in r["rollback"]["args"]')" == "False" \
+   && "$(jfield "$res" '"absent" in r["rollback"]["note"]')" == "True" ]] \
+    && pass "resume preview reports adminStateUp absent and its rollback states no value, with the note" || fail "resume preview: $res"
+tok=$(jfield "$res" 'r["confirm_token"]')
+res=$(mcp_call "$ATOKEN" lb_update "{$KEY,\"admin_state_up\":true,\"confirm_token\":\"$tok\"}")
+# The baseline rule has no health monitor: an enabled rule reads NO_MONITOR
+# (deriveOperatingStatus), ONLINE needs probing.
+[[ "$(jfield "$res" 'r["action"]')" == "executed" && "$(jfield "$res" 'r["read_back"]["admin_state_up"]')" == "True" \
+   && "$(jfield "$res" '"admin_state_up_note" in r["read_back"]')" == "False" \
+   && "$(jfield "$res" 'r["read_back"]["status"]["operatingStatus"]')" == "NO_MONITOR" ]] \
+    && pass "rollback applied; read_back shows admin_state_up true and status NO_MONITOR (no health monitor)" || fail "lb_update rollback: $res"
+sleep 2
+serves && pass "traffic resumes after the rollback" || fail "VIP not serving after the rollback"
+# weight swap: the bridge sends the full endpoint list with the weight changed.
+res=$(mcp_call "$ATOKEN" lb_update "{$KEY,\"endpoint_weights\":[{\"ip\":\"31.31.31.1\",\"port\":8080,\"weight\":2}]}")
+[[ "$(jfield "$res" 'r["action"]')" == "preview" && -n "$(jfield "$res" 'r["diff"]["endpoints"]')" \
+   && "$(jfield "$res" 'r["rollback"]["args"]["endpoint_weights"][0]["weight"]')" == "1" ]] \
+    && pass "lb_update weight 1->2 previews the endpoint diff and a rollback to weight 1" || fail "weight preview: $res"
+tok=$(jfield "$res" 'r["confirm_token"]')
+res=$(mcp_call "$ATOKEN" lb_update "{$KEY,\"endpoint_weights\":[{\"ip\":\"31.31.31.1\",\"port\":8080,\"weight\":2}],\"confirm_token\":\"$tok\"}")
+[[ "$(jfield "$res" 'r["action"]')" == "executed" && "$(jfield "$res" 'r["read_back"]["rule"]["endpoints"][0]["weight"]')" == "2" ]] \
+    && pass "weight applied; read_back shows weight 2" || fail "weight apply: $res"
+res=$(mcp_call "$ATOKEN" lb_update "{$KEY,\"endpoint_weights\":[{\"ip\":\"31.31.31.1\",\"port\":8080,\"weight\":1}]}")
+tok=$(jfield "$res" 'r["confirm_token"]')
+res=$(mcp_call "$ATOKEN" lb_update "{$KEY,\"endpoint_weights\":[{\"ip\":\"31.31.31.1\",\"port\":8080,\"weight\":1}],\"confirm_token\":\"$tok\"}")
+[[ "$(jfield "$res" 'r["action"]')" == "executed" && "$(jfield "$res" 'r["read_back"]["rule"]["endpoints"][0]["weight"]')" == "1" ]] \
+    && pass "weight rolled back to 1" || fail "weight rollback: $res"
+sleep 2
+serves && pass "VIP serves after the weight round-trip" || fail "VIP not serving after the weight round-trip"
+res=$(mcp_call "$ATOKEN" lb_update "{$KEY,\"name\":\"renamed\"}")
+echo "$res" | grep -q '"isError":true' && pass "lb_update refuses a field outside the phase-1 allowlist (schema)" || fail "unknown field accepted: $res"
+res=$(mcp_call "$ATOKEN" lb_update "{$KEY,\"endpoint_weights\":[{\"ip\":\"31.31.31.9\",\"port\":8080,\"weight\":2}]}")
+echo "$res" | grep -q 'not an endpoint of the rule' && pass "lb_update refuses a weight for an endpoint the rule does not have, before any request" || fail "foreign endpoint accepted: $res"
+# D8: a fullproxy (mode 4) rule cannot be patched; the gateway's answer is
+# passed on with the hint naming the replace path.
+res=$(mcp_call "$ATOKEN" lb_create '{"external_ip":"20.20.20.3","port":2020,"protocol":"tcp","mode":4,"host":"patch.ci","endpoints":[{"ip":"31.31.31.1","port":8080}]}')
+echo "$res" | grep -q '"action":"executed"' && pass "fullproxy rule created for the PATCH refusal leg" || fail "fullproxy lb_create: $res"
+res=$(mcp_call "$ATOKEN" lb_update '{"external_ip":"20.20.20.3","port":2020,"protocol":"tcp","admin_state_up":false}')
+tok=$(jfield "$res" 'r["confirm_token"]')
+[[ -n "$tok" ]] && pass "lb_update on a fullproxy rule previews (the gateway, not the bridge, refuses it)" || fail "fullproxy preview: $res"
+res=$(mcp_call "$ATOKEN" lb_update "{\"external_ip\":\"20.20.20.3\",\"port\":2020,\"protocol\":\"tcp\",\"admin_state_up\":false,\"confirm_token\":\"$tok\"}")
+echo "$res" | grep -q '"isError":true' && echo "$res" | grep -q 'fullproxy' && echo "$res" | grep -q 'lb_create on the same key' \
+    && pass "the gateway's fullproxy refusal is passed on verbatim with the replace hint" || fail "fullproxy apply: $res"
+res=$(mcp_call "$ATOKEN" lb_delete '{"external_ip":"20.20.20.3","port":2020,"protocol":"tcp","host_url":"patch.ci"}')
+tok=$(jfield "$res" 'r["confirm_token"]')
+res=$(mcp_call "$ATOKEN" lb_delete "{\"external_ip\":\"20.20.20.3\",\"port\":2020,\"protocol\":\"tcp\",\"host_url\":\"patch.ci\",\"confirm_token\":\"$tok\"}")
+echo "$res" | grep -q '"action":"executed"' && pass "fullproxy rule removed" || fail "fullproxy lb_delete: $res"
+
+# Operator writes with preview: API key, tenant rate limit, user rate limit.
+SESSION=$OPERATOR_SESSION
+res=$(mcp_call "$OTOKEN" ai_apikey_create '{"tenant_id":"cicd","name":"mcp-b2","priority_class":"sheddable"}')
+[[ "$(jfield "$res" 'r["action"]')" == "preview" && "$(jfield "$res" 'r["impact"]')" == "tenant" && "$(jfield "$res" 'r["proposed"]["priority_class"]')" == "sheddable" \
+   && "$(jfield "$res" 'r["rollback"]["note"]')" == *"ai_apikey_delete"* ]] \
+    && pass "ai_apikey_create previews the key with its priority class and a rollback note naming ai_apikey_delete" || fail "apikey create preview: $res"
+tok=$(jfield "$res" 'r["confirm_token"]')
+res=$(mcp_call "$OTOKEN" ai_apikey_create "{\"tenant_id\":\"cicd\",\"name\":\"mcp-b2\",\"priority_class\":\"sheddable\",\"confirm_token\":\"$tok\"}")
+kid2=$(jfield "$res" 'r["result"]["key_id"]')
+[[ "$(jfield "$res" 'r["action"]')" == "executed" && -n "$kid2" && -f "$(jfield "$res" 'r["result"]["key_file"]')" && "$(jfield "$res" 'r["read_back"]["priority_class"]')" == "sheddable" ]] \
+    && pass "ai_apikey_create applied with the token; key file written, read_back shows the priority class" || fail "apikey create apply: $res"
+res=$(mcp_call "$OTOKEN" ai_apikey_create '{"tenant_id":"cicd","priority_class":"urgent"}')
+echo "$res" | grep -q '"isError":true' && echo "$res" | grep -q 'priority_class' && pass "ai_apikey_create refuses a priority class outside the contract" || fail "unknown priority_class: $res"
+res=$(mcp_call "$OTOKEN" ai_apikey_update "{\"key_id\":\"$kid2\",\"enabled\":false,\"tokens_per_min\":1234}")
+[[ "$(jfield "$res" 'r["action"]')" == "preview" && "$(jfield "$res" 'r["impact"]')" == "object" && "$(jfield "$res" 'r["current"]["enabled"]')" == "True" \
+   && "$(jfield "$res" 'r["diff"]["enabled"]["to"]')" == "False" && "$(jfield "$res" 'r["rollback"]["tool"]')" == "ai_apikey_update" && "$(jfield "$res" 'r["rollback"]["args"]["enabled"]')" == "True" ]] \
+    && pass "ai_apikey_update previews current, diff and an ai_apikey_update rollback" || fail "apikey update preview: $res"
+tok=$(jfield "$res" 'r["confirm_token"]')
+res=$(mcp_call "$OTOKEN" ai_apikey_update "{\"key_id\":\"$kid2\",\"enabled\":false,\"tokens_per_min\":1234,\"confirm_token\":\"$tok\"}")
+[[ "$(jfield "$res" 'r["action"]')" == "executed" && "$(jfield "$res" 'r["read_back"]["enabled"]')" == "False" ]] \
+    && pass "ai_apikey_update applied; read_back shows enabled false" || fail "apikey update apply: $res"
+res=$(mcp_call "$OTOKEN" ai_apikey_update "{\"key_id\":\"$kid2\",\"enabled\":true}")
+tok=$(jfield "$res" 'r["confirm_token"]')
+res=$(mcp_call "$OTOKEN" ai_apikey_update "{\"key_id\":\"$kid2\",\"enabled\":true,\"confirm_token\":\"$tok\"}")
+[[ "$(jfield "$res" 'r["action"]')" == "executed" && "$(jfield "$res" 'r["read_back"]["enabled"]')" == "True" ]] \
+    && pass "rollback applied; read_back shows enabled true" || fail "apikey update rollback: $res"
+SESSION=$ADMIN_SESSION
+res=$(mcp_call "$ATOKEN" ai_apikey_delete "{\"key_id\":\"$kid2\"}")
+tok=$(jfield "$res" 'r["confirm_token"]')
+res=$(mcp_call "$ATOKEN" ai_apikey_delete "{\"key_id\":\"$kid2\",\"confirm_token\":\"$tok\"}")
+echo "$res" | grep -q '"action":"executed"' && pass "the preview-created key is deleted" || fail "apikey delete: $res"
+
+SESSION=$OPERATOR_SESSION
+# tenant rate limit: the ai-ops section left cicd at rps 5 / 1000 tpm.
+res=$(mcp_call "$OTOKEN" ai_ratelimit_set '{"tenant_id":"cicd","rps":7,"tokens_per_min":3000,"model_limits":[{"model":"llama3","tokens_per_min":500}]}')
+[[ "$(jfield "$res" 'r["action"]')" == "preview" && "$(jfield "$res" 'r["impact"]')" == "tenant" && "$(jfield "$res" 'r["current"]["rps"]')" == "5" \
+   && "$(jfield "$res" 'r["rollback"]["args"]["rps"]')" == "5" && "$(jfield "$res" 'r["rollback"]["args"]["model_limits"][0]["tokens_per_min"]')" == "0" ]] \
+    && pass "ai_ratelimit_set previews the current row and a rollback that zeroes the new model quota" || fail "ratelimit preview: $res"
+tok=$(jfield "$res" 'r["confirm_token"]')
+res=$(mcp_call "$OTOKEN" ai_ratelimit_set "{\"tenant_id\":\"cicd\",\"rps\":7,\"tokens_per_min\":3000,\"model_limits\":[{\"model\":\"llama3\",\"tokens_per_min\":500}],\"confirm_token\":\"$tok\"}")
+[[ "$(jfield "$res" 'r["action"]')" == "executed" && "$(jfield "$res" 'r["read_back"]["rps"]')" == "7" && "$(jfield "$res" 'r["read_back"]["model_limits"][0]["tokens_per_min"]')" == "500" ]] \
+    && pass "ai_ratelimit_set applied; read_back shows rps 7 and the llama3 quota" || fail "ratelimit apply: $res"
+RB='{"tenant_id":"cicd","rps":5,"tokens_per_min":1000,"burst_pct":0,"model_limits":[{"model":"llama3","tokens_per_min":0}]'
+res=$(mcp_call "$OTOKEN" ai_ratelimit_set "$RB}")
+tok=$(jfield "$res" 'r["confirm_token"]')
+res=$(mcp_call "$OTOKEN" ai_ratelimit_set "$RB,\"confirm_token\":\"$tok\"}")
+[[ "$(jfield "$res" 'r["action"]')" == "executed" && "$(jfield "$res" 'r["read_back"]["rps"]')" == "5" && "$(jfield "$res" 'len(r["read_back"].get("model_limits") or [])')" == "0" ]] \
+    && pass "rollback applied; read_back shows rps 5 and no model quota" || fail "ratelimit rollback: $res"
+
+# user rate limit: set (no row -> rollback is the delete), get, delete
+# (rollback is the set with the row), get 404, set back, delete again.
+UKEY='"tenant_id":"cicd","user_id":"alice"'
+res=$(mcp_call "$OTOKEN" ai_user_ratelimit_set "{$UKEY,\"burst_size\":4}")
+echo "$res" | grep -q '"isError":true' && echo "$res" | grep -q 'all zero' && pass "ai_user_ratelimit_set refuses an all-zero entry before any request" || fail "all-zero entry: $res"
+USET="{$UKEY,\"rps\":3,\"model_limits\":[{\"model\":\"llama3\",\"tokens_per_min\":200}]"
+res=$(mcp_call "$OTOKEN" ai_user_ratelimit_set "$USET}")
+[[ "$(jfield "$res" 'r["action"]')" == "preview" && "$(jfield "$res" 'r["rollback"]["tool"]')" == "ai_user_ratelimit_delete" ]] \
+    && pass "ai_user_ratelimit_set on a new user previews with an ai_user_ratelimit_delete rollback" || fail "user set preview: $res"
+tok=$(jfield "$res" 'r["confirm_token"]')
+res=$(mcp_call "$OTOKEN" ai_user_ratelimit_set "$USET,\"confirm_token\":\"$tok\"}")
+[[ "$(jfield "$res" 'r["action"]')" == "executed" && "$(jfield "$res" 'r["read_back"]["rps"]')" == "3" && "$(jfield "$res" 'r["read_back"]["model_limits"][0]["tokens_per_min"]')" == "200" ]] \
+    && pass "ai_user_ratelimit_set applied; read_back shows rps 3 and the model quota" || fail "user set apply: $res"
+res=$(mcp_call "$OTOKEN" ai_user_ratelimit_get "{$UKEY}")
+[[ "$(jfield "$res" 'r["user_ratelimit"]["rps"]')" == "3" ]] && pass "ai_user_ratelimit_get reads the row back" || fail "user get: $res"
+res=$(mcp_call "$OTOKEN" ai_user_ratelimit_delete "{$UKEY}")
+[[ "$(jfield "$res" 'r["action"]')" == "preview" && "$(jfield "$res" 'r["rollback"]["tool"]')" == "ai_user_ratelimit_set" && "$(jfield "$res" 'r["rollback"]["args"]["rps"]')" == "3" \
+   && "$(jfield "$res" 'r["rollback"]["args"]["model_limits"][0]["tokens_per_min"]')" == "200" ]] \
+    && pass "ai_user_ratelimit_delete previews the row as an ai_user_ratelimit_set rollback" || fail "user delete preview: $res"
+tok=$(jfield "$res" 'r["confirm_token"]')
+res=$(mcp_call "$OTOKEN" ai_user_ratelimit_delete "{$UKEY,\"confirm_token\":\"$tok\"}")
+[[ "$(jfield "$res" 'r["action"]')" == "executed" && "$(jfield "$res" 'r["read_back"]["exists"]')" == "False" ]] \
+    && pass "ai_user_ratelimit_delete applied; read_back shows the row gone" || fail "user delete apply: $res"
+res=$(mcp_call "$OTOKEN" ai_user_ratelimit_get "{$UKEY}")
+echo "$res" | grep -q '"isError":true' && echo "$res" | grep -q 'HTTP 404' && pass "ai_user_ratelimit_get passes the 404 on the removed row" || fail "user get after delete: $res"
+res=$(mcp_call "$OTOKEN" ai_user_ratelimit_set "$USET}")
+tok=$(jfield "$res" 'r["confirm_token"]')
+res=$(mcp_call "$OTOKEN" ai_user_ratelimit_set "$USET,\"confirm_token\":\"$tok\"}")
+[[ "$(jfield "$res" 'r["action"]')" == "executed" && "$(jfield "$res" 'r["read_back"]["rps"]')" == "3" ]] && pass "the delete's rollback re-creates the row" || fail "user set rollback: $res"
+res=$(mcp_call "$OTOKEN" ai_user_ratelimit_delete "{$UKEY}")
+tok=$(jfield "$res" 'r["confirm_token"]')
+res=$(mcp_call "$OTOKEN" ai_user_ratelimit_delete "{$UKEY,\"confirm_token\":\"$tok\"}")
+echo "$res" | grep -q '"action":"executed"' && pass "user row removed again (cleanup)" || fail "user delete cleanup: $res"
+
+# The mutation budget (change-gate requirement 4, D12): ci-tight has 4
+# mutations per minute and the default stop after 3 consecutive failures.
+# Three PATCHes on a missing key are sent and refused by the gateway (404);
+# the fourth mutation is refused by the bridge before any request; a
+# successful read lifts the stop; the next mutation is sent (the fourth of
+# the minute); the one after is refused as exceeded.
+echo "### mutation budget"
+mcp_session "$TTOKEN" && pass "ci-tight session established (4 mutations/min)" || fail "no ci-tight session"
+MISSING='{"key_id":"no-such-key","enabled":false,"apply":true}'
+for i in 1 2 3; do
+    res=$(mcp_call "$TTOKEN" ai_apikey_update "$MISSING")
+    echo "$res" | grep -q 'HTTP 404' && pass "failed mutation $i reached the gateway (404)" || fail "mutation $i: $res"
+done
+res=$(mcp_call "$TTOKEN" ai_apikey_update "$MISSING")
+echo "$res" | grep -q 'stopped after 3 consecutive failed mutations' && pass "fourth mutation refused by the bridge: stopped after 3 failures" || fail "no stop after 3 failures: $res"
+res=$(mcp_call "$TTOKEN" ai_apikey_list '{"tenant_id":"cicd"}')
+echo "$res" | grep -q '"keys"' && pass "a read-only call succeeds while stopped" || fail "read while stopped: $res"
+res=$(mcp_call "$TTOKEN" ai_ratelimit_set '{"tenant_id":"cicd","rps":5,"tokens_per_min":1000,"apply":true}')
+echo "$res" | grep -q '"action":"executed"' && pass "the read lifted the stop; the next mutation is sent" || fail "mutation after the read: $res"
+res=$(mcp_call "$TTOKEN" ai_apikey_update "$MISSING")
+echo "$res" | grep -q '4 of 4 mutations per minute' && pass "fifth mutation of the minute refused: budget exceeded" || fail "no window refusal: $res"
+grep -q 'mutation budget' .mcp-audit/audit.jsonl && pass "audit.jsonl records the budget refusals" || fail "no budget refusal in audit.jsonl"
+SESSION=$ADMIN_SESSION
+
+# config_persist, last: the running configuration to disk. The gateway's
+# auto-persist holds the snapshot gate about 3 s after a config write; the
+# tool answers snapshot_gate_busy and retries nothing, so the leg waits
+# and calls again, as an agent would.
+echo "### config persist"
+persist_call() {
+    local res try
+    for try in 1 2 3 4; do
+        res=$(mcp_call "$ATOKEN" config_persist "$1")
+        echo "$res" | grep -q 'snapshot_gate_busy' || break
+        sleep 3
+    done
+    [[ $try -gt 1 ]] && echo "  [NOTE] config_persist answered snapshot_gate_busy $((try-1))x; retried after retry_after_sec" >&2
+    echo "$res"
+}
+res=$(persist_call '{}')
+[[ "$(jfield "$res" 'r["action"]')" == "preview" && "$(jfield "$res" 'r["impact"]')" == "instance" && -n "$(jfield "$res" 'r["current"]["checksum"]')" \
+   && "$(jfield "$res" 'r["rollback"]["note"]')" == *"not reversible"* ]] \
+    && pass "config_persist previews the running snapshot's identity, instance impact, not reversible" || fail "persist preview: $res"
+tok=$(jfield "$res" 'r["confirm_token"]')
+res=$(persist_call "{\"confirm_token\":\"$tok\"}")
+[[ "$(jfield "$res" 'r["action"]')" == "executed" && "$(jfield "$res" 'r["result"]["path"]')" == *snapshot.json && -n "$(jfield "$res" 'r["result"]["checksum"]')" && -n "$(jfield "$res" 'r["read_back"]["checksum"]')" ]] \
+    && pass "config_persist applied; result names the file and its checksum, read_back re-reads the identity" || fail "persist apply: $res"
+grep -q '"tool":"config_persist"' .mcp-audit/audit.jsonl && pass "audit.jsonl records config_persist" || fail "config_persist audit entry missing"
 
 # ---------- 5. RCA / diagnostics ----------
 

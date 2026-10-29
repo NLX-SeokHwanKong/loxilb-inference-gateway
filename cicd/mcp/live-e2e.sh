@@ -10,15 +10,19 @@
 #     ./live-e2e.sh                                 # default target, read-only
 #     TARGET=http://1.2.3.4:11111 ./live-e2e.sh     # any live target
 #     ./live-e2e.sh --mutate                        # + control-plane round-trip
+#     TARGET_USER=admin TARGET_PASSWORD=... ./live-e2e.sh   # --userservice target
 #
 # Read-only mode (default) mutates NOTHING on the target. --mutate additionally
-# runs an isolated lb_create -> lb_list -> confirm-token lb_delete round-trip on
-# a TEST-NET-2 VIP (RFC 5737 198.51.100.0/24) that will not collide with real
-# services, and cleans it up (including on failure), plus a secrate_set
+# runs an isolated lb_create -> lb_list -> lb_update (admin_state_up down and
+# back, through the preview's rollback) -> confirm-token lb_delete round-trip
+# on a TEST-NET-2 VIP (RFC 5737 198.51.100.0/24) that will not collide with
+# real services, and cleans it up (including on failure), plus a secrate_set
 # preview -> confirm -> read-back -> rollback round-trip that leaves the
-# security-rate config as it found it. The two-step confirm-token
-# flow is why the harness holds one session open: the token is in-memory,
-# single-use, per process.
+# security-rate config as it found it (secrate_disable when it found none).
+# The two-step confirm-token flow is why the harness holds one session open:
+# the token is in-memory, single-use, per process. The bridge runs from a
+# config file written here, with a mutation budget sized for the round-trip
+# (the default of 6 per minute is for an agent, not a harness).
 #
 # Exit code 0 = all checks passed.
 set -u
@@ -59,12 +63,32 @@ if ! (cd "$root/mcp" && go build -o "$BIN" ./cmd/loxilb-mcp); then
     echo "=== live E2E [FAILED] (build) ==="; exit 1
 fi
 
+# The bridge's config: one target (with the --userservice credentials when
+# TARGET_USER is set; the password travels through the environment, never
+# the file) and a mutation budget sized for the round-trip.
+export CFG="$WORK/live-e2e.yaml"
+{
+    echo "default_target: live"
+    echo "targets:"
+    echo "  live:"
+    echo "    url: $TARGET"
+    if [[ -n "${TARGET_USER:-}" ]]; then
+        echo "    username: $TARGET_USER"
+        echo "    password_env: TARGET_PASSWORD"
+    fi
+    echo "audit_dir: $AUDIT"
+    echo "change_budget: { mutations_per_minute: 60 }"
+} > "$CFG"
+chmod 0600 "$CFG"
+export TARGET_USER="${TARGET_USER:-}" TARGET_PASSWORD="${TARGET_PASSWORD:-}"
+
 exec python3 - <<'PY'
 import itertools, json, os, subprocess, sys, urllib.request
 
 TARGET = os.environ["TARGET"]
 BIN    = os.environ["BIN"]
 AUDIT  = os.environ["AUDIT"]
+CFG    = os.environ["CFG"]
 MUTATE = os.environ.get("MUTATE") == "1"
 VIP, VPORT, VEP = os.environ["VIP"], int(os.environ["VPORT"]), os.environ["VEP"]
 
@@ -77,7 +101,7 @@ class Session:
     """One persistent stdio JSON-RPC session against the bridge."""
     def __init__(self, role):
         self.p = subprocess.Popen(
-            [BIN, "--target-url", TARGET, "--role", role, "--audit-dir", AUDIT],
+            [BIN, "--config", CFG, "--role", role, "--audit-dir", AUDIT],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, text=True, bufsize=1)
         self.ids = itertools.count(1)
@@ -125,18 +149,24 @@ class Session:
         except Exception:
             self.p.kill()
 
-def rest_delete(path):
-    """DELETE on the target's REST API; the status code, or None."""
+def rest_headers():
+    """The bearer for a --userservice target (TARGET_USER set), else none."""
+    user, pw = os.environ.get("TARGET_USER", ""), os.environ.get("TARGET_PASSWORD", "")
+    if not user:
+        return {}
     try:
-        req = urllib.request.Request(TARGET + "/netlox/v1" + path, method="DELETE")
+        req = urllib.request.Request(TARGET + "/netlox/v1/auth/login", method="POST",
+                                     data=json.dumps({"username": user, "password": pw}).encode(),
+                                     headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=8) as r:
-            return r.status
+            return {"Authorization": "Bearer " + json.load(r).get("token", "")}
     except Exception:
-        return None
+        return {}
 
 def rest_lb_count():
     try:
-        with urllib.request.urlopen(TARGET + "/netlox/v1/config/loadbalancer/all", timeout=8) as r:
+        req = urllib.request.Request(TARGET + "/netlox/v1/config/loadbalancer/all", headers=rest_headers())
+        with urllib.request.urlopen(req, timeout=8) as r:
             return len(json.load(r).get("lbAttr", []))
     except Exception:
         return None
@@ -254,6 +284,32 @@ if MUTATE:
         present = isinstance(v, dict) and any(r.get("external_ip") == VIP for r in v.get("rules", []))
         (ok if present else bad)("new VIP present in lb_list")
 
+        # lb_update round-trip (PR-B2): admin_state_up false previews with
+        # an lb_update rollback, applies with the token and reads the rule
+        # and its status back; the rollback puts it up again.
+        if created:
+            key = {"external_ip": VIP, "port": VPORT, "protocol": "tcp"}
+            e, v, _ = m.call("lb_update", admin_state_up=False, **key)
+            tok = v.get("confirm_token") if isinstance(v, dict) else None
+            rb = v.get("rollback", {}) if isinstance(v, dict) else {}
+            (ok if tok and v.get("impact") == "service" and rb.get("tool") == "lb_update" and rb.get("args", {}).get("admin_state_up") is True else bad)(
+                "lb_update admin_state_up=false previews with an lb_update rollback" if tok else f"lb_update preview: {v}")
+            e, v, _ = m.call("lb_update", admin_state_up=False, confirm_token=tok, **key)
+            rbk = v.get("read_back", {}) if isinstance(v, dict) else {}
+            down = isinstance(v, dict) and v.get("action") == "executed" and \
+                rbk.get("admin_state_up") is False and "operatingStatus" in rbk.get("status", {})
+            (ok if down else bad)(f"lb_update applied; read_back shows admin_state_up false, status {rbk.get('status', {}).get('operatingStatus')}" if down else f"lb_update apply: {v}")
+            # D24: on the paused rule, lb_get reports the flag as read; the
+            # gateway's GET carries no adminStateUp (omitempty).
+            e, v, _ = m.call("lb_get", **key)
+            got = (v.get("rule", {}) if isinstance(v, dict) else {}).get("admin_state_up")
+            (ok if got == "absent" else bad)(f"lb_get on the paused rule reports admin_state_up {got!r}")
+            e, v, _ = m.call("lb_update", **rb.get("args", dict(admin_state_up=True, **key)))
+            tok = v.get("confirm_token") if isinstance(v, dict) else None
+            e, v, _ = m.call("lb_update", confirm_token=tok, **rb.get("args", dict(admin_state_up=True, **key)))
+            up = isinstance(v, dict) and v.get("action") == "executed" and v.get("read_back", {}).get("admin_state_up") is True
+            (ok if up else bad)("rollback applied; read_back shows admin_state_up true" if up else f"lb_update rollback: {v}")
+
         e, v, _ = m.call("lb_delete", external_ip=VIP, port=VPORT, protocol="tcp")
         tok = v.get("confirm_token") if isinstance(v, dict) else None
         (ok if isinstance(v, dict) and v.get("action") == "preview" and tok else bad)(
@@ -278,9 +334,9 @@ if MUTATE:
         # raised by one (above the cookie threshold), so the change is real
         # but harmless. A target that had no protection enabled cannot be put
         # back through secrate_set (POST /config/securityrate refuses an
-        # all-off body): the preview then carries a rollback note and the
-        # restore is DELETE /config/securityrate over REST. Either way the
-        # config is left as it was found.
+        # all-off body): the preview then carries a secrate_disable rollback
+        # and the restore goes through that tool. Either way the config is
+        # left as it was found.
         e, v, _ = m.call("secrate_set", syn_enabled=True, syn_threshold=1)
         cur = v.get("current", {}) if isinstance(v, dict) else {}
         base = cur.get("synThreshold")
@@ -299,8 +355,8 @@ if MUTATE:
                 (ok if tok and rb.get("tool") == "secrate_set" and rb.get("args", {}).get("syn_threshold") == base else bad)(
                     "secrate_set preview carries a token and a rollback to the current value")
             else:
-                (ok if tok and not rb.get("tool") and "DELETE /config/securityrate" in rb.get("note", "") else bad)(
-                    "secrate_set preview carries a token and a rollback note naming the disable path (no protection was on)")
+                (ok if tok and rb.get("tool") == "secrate_disable" and "DELETE /config/securityrate" in rb.get("note", "") else bad)(
+                    "secrate_set preview carries a token and a secrate_disable rollback (no protection was on)")
             e, v, _ = m.call("secrate_get")
             attr = (v.get("securityrateAttr") or [{}])[0] if isinstance(v, dict) else {}
             (ok if (attr.get("synThreshold") or 0) == base else bad)("preview changed nothing (secrate_get)")
@@ -314,11 +370,16 @@ if MUTATE:
                 restored = isinstance(v, dict) and v.get("action") == "executed" and v.get("read_back", {}).get("synThreshold") == base
                 (ok if restored else bad)("rollback applied; read_back shows the original threshold" if restored else f"rollback: {v}")
             else:
-                st = rest_delete("/config/securityrate")
-                e, v, _ = m.call("secrate_get")
-                attr = (v.get("securityrateAttr") or [{}])[0] if isinstance(v, dict) else {}
-                restored = st is not None and 200 <= st < 300 and attr.get("synEnabled") is not True
-                (ok if restored else bad)("DELETE /config/securityrate (REST, no tool yet) restored the unconfigured state" if restored else f"restore: status {st}, {attr}")
+                e, v, _ = m.call("secrate_disable")
+                tok = v.get("confirm_token") if isinstance(v, dict) else None
+                drb = v.get("rollback", {}) if isinstance(v, dict) else {}
+                (ok if tok and v.get("impact") == "global" and drb.get("tool") == "secrate_set" and drb.get("args", {}).get("syn_threshold") == want else bad)(
+                    "secrate_disable previews the all-off state with a secrate_set rollback carrying the configuration" if tok else f"secrate_disable preview: {v}")
+                e, v, _ = m.call("secrate_disable", confirm_token=tok)
+                e2, g, _ = m.call("secrate_get")
+                attr = (g.get("securityrateAttr") or [{}])[0] if isinstance(g, dict) else {}
+                restored = isinstance(v, dict) and v.get("action") == "executed" and v.get("read_back", {}).get("synEnabled") is False and attr.get("synEnabled") is not True
+                (ok if restored else bad)("secrate_disable applied with the token; the unconfigured state is back" if restored else f"secrate_disable apply: {v}, {attr}")
 
         # api_key_auth=jwt arm: needs a JWT auth profile that already exists
         # on the target (the bridge gains the profile tool in PR-B3). Name it
@@ -361,7 +422,7 @@ if MUTATE:
     finally:
         if created:
             print("  [cleanup] removing leftover VIP via --no-confirm")
-            subprocess.run([BIN, "--target-url", TARGET, "--role", "admin",
+            subprocess.run([BIN, "--config", CFG, "--role", "admin",
                             "--no-confirm", "--audit-dir", AUDIT],
                            input=('{"jsonrpc":"2.0","id":1,"method":"initialize","params":'
                                   '{"protocolVersion":"2025-06-18","capabilities":{},'
