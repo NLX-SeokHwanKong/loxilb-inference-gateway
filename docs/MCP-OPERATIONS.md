@@ -43,7 +43,13 @@ clients:                       # HTTP-mode bearer tokens, one per client
   # turned off (rps >= 1/60, burst >= 1).
   - { name: dashboard, role: viewer,   token_env: MCP_VIEWER_TOKEN, rps: 20, burst: 60 }
   - { name: oncall,    role: operator, token_env: MCP_OPERATOR_TOKEN }
-  - { name: sre,       role: admin,    token_env: MCP_ADMIN_TOKEN }
+  # mutations_per_minute gives one client its own mutation budget (below).
+  - { name: sre,       role: admin,    token_env: MCP_ADMIN_TOKEN, mutations_per_minute: 12 }
+# The mutation budget (§ the change gate): at most mutations_per_minute
+# mutations sent per sliding minute per caller, and a stop after
+# max_consecutive_failures refused mutations in a row until a read-only
+# tool call succeeds. Defaults 6 and 3; neither can go below 1.
+change_budget: { mutations_per_minute: 6, max_consecutive_failures: 3 }
 audit_dir: /var/lib/loxilb-mcp          # JSONL audit log (0600)
 secrets_dir: /var/lib/loxilb-mcp/secrets # ai_apikey_create key files (0600)
 prometheus_url: http://127.0.0.1:9090    # enables promql_query/promql_range
@@ -61,8 +67,8 @@ only accepted `target` values in tool calls — URLs are rejected (anti-SSRF).
 | Role | May call | Tool count (base) |
 |---|---|---|
 | viewer | read-only tools only | 68 |
-| operator | + object- and tenant-scope mutations | 77 |
-| admin | + admin-confirm tools (every delete and every global- or instance-scope change, confirm-token gated) | 95 (96 with `--allow-import`) |
+| operator | + object- and tenant-scope mutations (preview by default, `apply: true` as the shortcut) | 79 |
+| admin | + admin-confirm tools (every delete and every global-, service- or instance-scope change, confirm-token gated) | 100 (101 with `--allow-import`) |
 
 The tier of a tool is derived from the impact of its REST operation
 (`mcp/contract/coverage.yml`, checked in CI): a read is viewer; a reversible
@@ -76,7 +82,7 @@ replace it, and that path is admin-confirm inside the tool (below).
 configured. A configured `prometheus_url` (`promql_query`, `promql_range`),
 `alertmanager_url` (`alerts_active`), and `alert_rules_path` (`alerts_catalog`)
 each register additional read-only tools that are visible to every role — up to
-four more, so a fully-wired admin sees 82 (83 with `--allow-import`). `--read-only`,
+four more, so a fully-wired admin sees 104 (105 with `--allow-import`). `--read-only`,
 `--enable-domains`, and `--allow-tools`/`--deny-tools` reduce the set further.
 
 Stdio sessions take the role from `--role` (default admin — stdio inherits
@@ -94,7 +100,7 @@ table, as authoritative for a given configuration.
 Additional gates, all composable: `--read-only`, `--allow-tools` /
 `--deny-tools` globs (deny wins), `--enable-domains mgmt,analysis,monitoring,ai`.
 
-## Admin-confirm changes: the change gate
+## The change gate: preview, confirm, read-back, budget
 
 Every admin-confirm tool is two-step:
 
@@ -111,6 +117,71 @@ Every admin-confirm tool is two-step:
 Tokens are single-use and SHA-256-bound to (tool, target, arguments); any
 argument change or replay burns them. `--no-confirm` (CI only) skips the
 flow. `config_import` additionally requires `--allow-import`.
+
+**Operator writes preview too.** The object- and tenant-scope writes
+(`ai_apikey_create`, `ai_apikey_update`, `ai_ratelimit_set`,
+`ai_user_ratelimit_set`, `llamafw_health_check`) answer the same preview
+when called without a token, and apply with it; at operator tier they
+also accept `apply: true` to skip the preview (§3.6 item 1 of the
+campaign guide). `ai_user_ratelimit_delete` is operator too (the row is
+re-creatable and the preview carries it as the arguments of an
+`ai_user_ratelimit_set` rollback) but has no `apply` shortcut: a removal
+always previews.
+
+**The mutation budget** (change-gate requirement 4, D12) stops a runaway
+agent before the gateway does. Per caller — the authenticated HTTP client,
+or the stdio session — the bridge sends at most `mutations_per_minute`
+mutations (default 6) in any sliding minute; the next one is refused with
+the time until a slot frees. After `max_consecutive_failures` (default 3)
+mutations in a row were refused by the gateway, no further mutation is
+sent until a read-only tool call succeeds (the agent has to look at the
+state the failures left before it changes it again). A refusal is an
+error the agent can read (`mutation budget: 4 of 4 mutations per minute
+already sent for mcp:oncall; nothing was sent. Retry in 37 s, ...`);
+nothing queues, and a confirm token whose apply was refused by the budget
+stays usable until it expires. Previews and reads are never counted. The
+knobs are `change_budget:` in the config file and `mutations_per_minute`
+on a `clients:` entry; zero keeps the default and nothing goes below 1
+per minute, so the budget is a brake, never a switch. A harness that
+replays a session's worth of changes in a minute sizes its client up
+(`cicd/mcp/validation.sh` gives its CI clients 120) rather than pacing.
+
+**`lb_update`** (admin-confirm, impact service) changes a rule in place
+through `PATCH /config/loadbalancer/externalipaddress/{ip}/port/{port}/protocol/{proto}`.
+Phase 1 accepts only `admin_state_up`, the weight of existing endpoints
+(`endpoint_weights`; the gateway replaces the endpoint list when the key
+is present, so the bridge sends the full current list with the weights
+swapped) and `fc_mode`, `fc_max_outstanding`, `fc_max_queue_depth`,
+`fc_max_queue_wait_ms`; the schema refuses any other argument and the
+description names `lb_create` (replace) and `lb_delete`. The call
+pre-reads the rule (a missing key is refused naming `lb_create`), previews
+`current`, `proposed`, `diff` and an `lb_update` rollback with the current
+values (a note names fields the rule had not declared, which the PATCH
+cannot un-declare), and the executed result re-reads the rule and its
+`GET .../status`. The gateway serialises `adminStateUp` with omitempty: an
+enabled rule's GET carries an explicit `true`, a paused rule's GET (and its
+status) carries no flag. `lb_update` reports the flag as read — `true`,
+`false` or `"absent"` — in `current`; for an absent flag the rollback states
+no `admin_state_up` and its note says why. Only the read-back after the call
+sent `admin_state_up: false` resolves an absent flag to `false`, with
+`admin_state_up_note` saying so. A PATCH the gateway refuses — a fullproxy (`mode 4`)
+rule, an immutable field — is passed on as is with one hint naming the
+replace path (D8).
+
+**`secrate_disable`** (admin-confirm, global, never autopilot; D18) is
+`DELETE /config/securityrate`: the only way back to the unconfigured
+state, because `POST /config/securityrate` refuses a body that keeps every
+protection off. Its preview carries the current configuration as the
+arguments of a `secrate_set` rollback, and `secrate_set`'s own rollback on
+a target that had no protection on names it.
+
+**`config_persist`** (admin-confirm, instance, never autopilot; D22) is
+`POST /config/persist`. The preview's `current` is the running snapshot's
+identity (schema, checksum, generation); the write overwrites
+`<config-path>/snapshot.json`, which cannot be read back, so the rollback
+is a note. While the gateway's auto-persist holds the snapshot gate (about
+3 s after a config write) the read or the write answers 409; the tool
+returns `snapshot_gate_busy` with `retry_after_sec: 3` and does not retry.
 
 The deletes (`lb_delete`, `fw_delete`, `net_route_delete`,
 `ai_apikey_delete`, `config_import`) preview the object(s) they would
@@ -129,9 +200,8 @@ because the REST body requires every threshold; a key the GET omits is
 read as its zero value. A proposed configuration that enables no
 per-source protection and sets no aggregate budget is refused before any
 token is issued, because `POST /config/securityrate` refuses such a body;
-on a target that had no protection enabled the preview's rollback is a
-note naming `DELETE /config/securityrate` (no tool until PR-B2) instead of
-a `secrate_set` call into that refused state.
+on a target that had no protection enabled the preview's rollback is
+`secrate_disable` instead of a `secrate_set` call into that refused state.
 
 `lb_create` pre-reads `GET /config/loadbalancer/externalipaddress/{ip}/port/{port}/protocol/{proto}`
 (and, on a shared VIP:port, the full list for the host/path/model key)
@@ -156,8 +226,9 @@ empty until the team trusts the audit trail for the specific action.
 
 Some tools can never be put on autopilot, whatever the configuration says:
 `guard.NeverAutopilot` holds every tool whose change is global (every tenant
-or service: BGP, security rate, GPU mode, LlamaFirewall, PII) or
-instance-wide (`config_import`, `config_params_set`, and the planned
+or service: BGP, security rate including `secrate_disable`, GPU mode,
+LlamaFirewall, PII) or instance-wide (`config_import`, `config_params_set`,
+`config_persist`, and the planned
 `maintenance_set`, objective / network-identity / JWT-profile / rate-limit
 defaults writers, half-close release, sockmap reset, OTLP and OPA
 destinations). Listing one of them in `autopilot_tools` is ignored and logged.
@@ -168,8 +239,9 @@ whose impact is `global` or `instance`.
 
 `ai_apikey_create` never returns raw key material by default: the key is
 written to `secrets_dir` as `apikey-<key_id>.key` (file 0600, dir 0700) and
-only the path is returned. `reveal:true` returns it inline instead — the key
-then enters model/client context; use only when the caller is the end user.
+only the path is returned (`result.key_file` of the executed call).
+`reveal:true` returns it inline instead (`result.raw_key`) — the key then
+enters model/client context; use only when the caller is the end user.
 `config_export` masks secret-shaped fields. Audit lines redact secret-shaped
 arguments.
 
@@ -205,17 +277,26 @@ this fork), `status_get`, `logs_tail`, `log_archives_list`, `log_archive_get`,
 `bgp_policy_list`, `session_list`, `session_ulcl_list`, `config_params_get`,
 `config_export`. Operator+: `lb_create` (create path; the replace path is
 admin-confirm), `endpoint_host_state_set`, `fw_create`, `ipfilter_set`,
-`net_route_create`. Admin+confirm: `lb_delete`, `fw_delete`,
-`net_route_delete`, `config_import`, `secrate_set`, `secrate_reset`,
-`bgp_neigh_set`, `bgp_global_set`, `bgp_policy_apply`, `config_params_set`.
+`net_route_create`. Admin+confirm: `lb_update` (phase-1 in-place change:
+`admin_state_up`, endpoint weights, the four `fc_*` fields), `lb_delete`,
+`fw_delete`, `net_route_delete`, `config_import`, `config_persist`,
+`secrate_set`, `secrate_disable`, `secrate_reset`, `bgp_neigh_set`,
+`bgp_global_set`, `bgp_policy_apply`, `config_params_set`.
 
 `lb_create` exposes typed AI routing arguments instead of requiring callers to
 guess Gateway JSON casing: `host`, `path_prefix`, `model_name`, `sse_mode`,
 `pd_disagg_mode`, `pd_cache_aware_mode`, `api_key_auth`, `jwt_auth_profile`,
-`kv_exact_mode`, `kv_engine_type`, `kv_zmq_port`, `kv_block_size`, plus
+`kv_exact_mode`, `kv_engine_type`, `kv_zmq_port`, `kv_block_size`, the
+flow-control fields `fc_mode`, `fc_max_outstanding`, `fc_max_queue_depth`,
+`fc_max_queue_wait_ms`, `fc_ep_max_inflight`, `fc_prefill_max_inflight`,
+`fc_decode_max_inflight`, `fc_tenant_max_share_pct`, the endpoint-picker
+fields `epp_endpoint`, `epp_failure_mode`, `epp_timeout_ms`, `epp_plaintext`,
+the admission fields `ai_default_reservation`, `ai_default_max_tokens`,
+`ai_objective_strict`, and `security`, `admin_state_up`, `id`, plus
 endpoint `ep_role` and `nixl_port`. The bridge maps those names to the REST
-contract. The permitted values and descriptions of `sel`, `mode` and
-`api_key_auth` are generated from swagger (`zz_swagger_enums_gen.go`) and
+contract. The permitted values and descriptions of `sel`, `mode`,
+`api_key_auth`, `fc_mode`, `epp_failure_mode`, `ai_default_reservation` and
+`security` are generated from swagger (`zz_swagger_enums_gen.go`) and
 validated before any request is built, so the schema names every selector
 (CHWBL, GPU-aware, WRR-hash, ...) and every credential policy the API knows.
 Omit `api_key_auth` to preserve a backend-owned `X-Api-Key`; `disabled` and
@@ -228,7 +309,10 @@ roles, plus `id`, `admin_state_up`, `security`, `jwt_auth_profile`,
 `epp_endpoint`, `kv_exact_api_mode`, `kv_model_profile` and the three
 data-plane read-back values `fc_effective`, `backend_tls_effective`,
 `half_close_effective`, so an agent sees what was configured and what is in
-force. `service_extra` remains for
+force. `admin_state_up` is tri-state in `lb_list` and `lb_get`: `true`,
+`false`, or `"absent"` when the rule's GET carries no `adminStateUp` — on this
+gateway the form a paused rule reads as (omitempty), while an enabled rule
+always carries `true`. `service_extra` remains for
 untyped advanced fields and rejects collisions with supplied typed arguments.
 Its keys are validated before any request is built: each must be a
 `serviceArguments` property of the REST contract (the list is generated from
@@ -239,9 +323,14 @@ property `mcp/contract/fields.yml` marks `excluded-field`.
 **AI-gateway ops** — read: `ai_apikey_list`, `ai_apikey_get`,
 `ai_ratelimit_get`, `ai_objective_list` (with the source the gateway applies them from), `ai_netidentity_list`, `ai_jwtprofile_list` (issuer, JWKS URL, claims; no secrets), `ai_user_ratelimit_list`, `ai_user_ratelimit_get`, `ai_ratelimit_defaults_get`, `ai_model_profile_list`, `ai_model_profile_get`, `ai_kv_inventory_get`, `gpu_status`,
 `gpu_worker_metrics_get`, `llamafw_status`, `llamafw_stats`, `pii_status`,
-`pii_stats`, `ai_traffic_report`. Operator+: `ai_apikey_create`,
-`ai_apikey_update`, `ai_ratelimit_set` (no delete endpoint — set quotas 0 to
-lift), `llamafw_health_check`. Admin+confirm: `ai_apikey_delete`,
+`pii_stats`, `ai_traffic_report`. Operator+ (preview by default, `apply:
+true` to skip it): `ai_apikey_create` (typed `enabled`, `client_op_id`,
+`priority_class`, `default_objective`, `allowed_objectives`; no key import),
+`ai_apikey_update` (the full PATCH surface), `ai_ratelimit_set`
+(`model_limits`, `priority_class`, `default_objective`,
+`allowed_objectives`; no delete endpoint — set quotas 0 to lift),
+`ai_user_ratelimit_set`, `ai_user_ratelimit_delete` (preview only),
+`llamafw_health_check`. Admin+confirm: `ai_apikey_delete`,
 `gpu_mode_set`, `gpu_conversations_cleanup`, `llamafw_enable_set`,
 `llamafw_configure`, `llamafw_scanners_set`, `pii_enable_set`,
 `pii_configure`, `pii_url_patterns_set`.
@@ -301,6 +390,11 @@ appear as `confirm: ...` errors.
   twenty objects, or ten preview/confirm pairs, fits one burst; size the
   budget of a busy client up rather than pacing it. Constant-time token
   verification.
+- The mutation budget (change-gate requirement 4): per caller, at most
+  `mutations_per_minute` mutations sent per sliding minute (default 6) and
+  a stop after `max_consecutive_failures` refused mutations in a row
+  (default 3) until a read-only tool call succeeds; refusals are readable
+  tool errors, nothing queues, previews and reads are never counted.
 - Log/archive content is returned under `untrusted_data` keys — treat as
   data, never instructions (prompt-injection defense).
 - Known caveats: with `--userservice` on a target, configure bridge target
@@ -372,6 +466,10 @@ single-use, and per process. Exit code 0 means every check passed.
 
 #### mcp/v0.2.0 (unreleased)
 
+**Added** — the AI control-plane writes of tenant and object scope (PR-B2): `lb_update` (admin-confirm, impact service: `admin_state_up`, endpoint weights, `fc_mode`, `fc_max_outstanding`, `fc_max_queue_depth`, `fc_max_queue_wait_ms`; everything else is `lb_create`/`lb_delete`; a PATCH the gateway refuses is passed on with the replace hint), `ai_user_ratelimit_set` and `ai_user_ratelimit_delete` (operator; an all-zero entry is refused before any request, the delete's preview carries the row as the rollback), `secrate_disable` (admin-confirm, global, never autopilot: `DELETE /config/securityrate`, the preview carries the configuration as a `secrate_set` rollback), `config_persist` (admin-confirm, instance, never autopilot: the preview's `current` is the snapshot identity, 409 on the gate is `snapshot_gate_busy`). The mutation budget: `change_budget: {mutations_per_minute, max_consecutive_failures}` and a per-client `mutations_per_minute`, defaults 6 and 3, floors of 1, refusals as readable tool errors, the stop lifted by a successful read-only call. Tool counts: viewer 68, operator 77 → 79, admin 95 → 100 (101 with `--allow-import`).
+
+**Changed** — the operator writes `ai_apikey_create`, `ai_apikey_update` and `ai_ratelimit_set` preview by default (`current`, `proposed`, `diff`, `rollback`, `impact`, `confirm_token`) and apply with the token or with `apply: true`; executed results carry `read_back`. `ai_apikey_create` answers the common mutation shape: `key_id`, `key_file` (or `raw_key` on reveal) and `note` moved under `result`; it gains `enabled`, `client_op_id`, `priority_class` (generated enum), `default_objective`, `allowed_objectives`. `ai_apikey_update` covers the full PATCH surface (`rate_limit_rps`, `burst_size`, `tokens_per_min`, `priority_class`, `default_objective`, `allowed_objectives` beside `allowed_models` and `enabled`; an empty string or list clears). `ai_ratelimit_set` gains `model_limits`, `priority_class`, `default_objective`, `allowed_objectives`. `lb_create` types `fc_mode`, `fc_max_outstanding`, `fc_max_queue_depth`, `fc_max_queue_wait_ms`, `fc_ep_max_inflight`, `fc_prefill_max_inflight`, `fc_decode_max_inflight`, `fc_tenant_max_share_pct`, `epp_endpoint`, `epp_failure_mode`, `epp_timeout_ms`, `epp_plaintext`, `ai_default_reservation`, `ai_default_max_tokens`, `ai_objective_strict`, `security`, `admin_state_up`, `id` (the enumerated ones validated against the generated swagger tables); the replace preview's rollback carries them. `pii_url_patterns_set` sends `is_exclude`, the key swagger spells (the bridge sent `exclude`, which the gateway ignored), and its argument is renamed the same way. `secrate_set`'s rollback on a target with no protection on is `secrate_disable`. `lb_list` and `lb_get` report `admin_state_up` as `true`, `false` or `"absent"` (it was a boolean omitted when the GET carried no flag); `lb_update`'s preview reports an absent flag as `"absent"` and only its read-back after sending `false` resolves absent to `false`, with `admin_state_up_note`.
+
 **Added** — 17 control-plane reads, all viewer tier: `lb_get` (composite key or opaque id; `include: [status, stats]`), `lb_kvexact_status`, `ai_objective_list`, `ai_netidentity_list`, `ai_jwtprofile_list`, `ai_user_ratelimit_list`, `ai_user_ratelimit_get`, `ai_ratelimit_defaults_get`, `ai_model_profile_list`, `ai_model_profile_get`, `status_capabilities`, `maintenance_get`, `halfclose_get`, `audit_status`, `audit_policy_get`, `audit_sink_get`, `config_snapshot_get` (size-capped). Tool counts: viewer 51 → 68, operator 60 → 77, admin 78 → 95 (96 with `--allow-import`).
 
 **Changed** — the per-client request budget (20 burst, 10/s) can be set per client in the config file (`rps`, `burst` on a `clients:` entry; defaults unchanged, neither field can be zero), and a request past it is answered `429` with `Retry-After` and the JSON body `{error: rate_limited, client, retry_after_sec, limit, detail}` instead of a line of text.
@@ -391,7 +489,7 @@ with `apply: true`. `secrate_set` sends the full merged configuration (the
 REST body requires every threshold); its integer arguments accept an
 explicit 0, a change that would leave every protection off is refused
 before a token is issued, and on a target that had none on the rollback is
-a note (`DELETE /config/securityrate`, no tool yet). Executed changes carry
+a note (`DELETE /config/securityrate`; `secrate_disable` since PR-B2). Executed changes carry
 `read_back`. Tool counts: operator 74 → 60.
 
 ### Contract gate
