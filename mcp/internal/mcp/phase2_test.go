@@ -46,6 +46,10 @@ type mockLoxilb struct {
 	failPrefix string
 	// ruleJSON overrides the rule the composite-key GET serves (mockRuleJSON).
 	ruleJSON string
+	// routes serve a fixed body for an exact path ahead of the defaults;
+	// routesAfterPatch take over once any PATCH was received (the gateway's
+	// state after the change).
+	routes, routesAfterPatch map[string]string
 }
 
 // mockRuleJSON is the one rule the mock gateway holds (1.2.3.4:80/tcp, a
@@ -66,11 +70,24 @@ func newMockLoxilb(t *testing.T) *mockLoxilb {
 			}
 		}
 		failing := m.failPrefix != "" && strings.HasPrefix(r.Method+" "+r.URL.Path, m.failPrefix)
+		route, routed := m.routes[r.URL.Path]
+		for _, req := range m.requests {
+			if strings.HasPrefix(req, "PATCH ") {
+				if after, ok := m.routesAfterPatch[r.URL.Path]; ok {
+					route, routed = after, true
+				}
+				break
+			}
+		}
 		m.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		if failing {
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(`{"code":500,"message":"Internal service error","result":"injected failure"}`))
+			return
+		}
+		if routed && r.Method == http.MethodGet {
+			w.Write([]byte(route))
 			return
 		}
 		switch r.URL.Path {

@@ -113,14 +113,19 @@ const (
 
 func boolPtr(b bool) *bool { return &b }
 
-// boolPtrValue returns a pointer to v when it is a JSON boolean and nil
-// otherwise, so an absent read-back field stays absent in the projection.
-func boolPtrValue(v any) *bool {
-	b, ok := v.(bool)
-	if !ok {
-		return nil
+// adminStateAbsent is what a read reports for a rule whose GET carries no
+// adminStateUp key.
+const adminStateAbsent = "absent"
+
+// adminStateView reports adminStateUp as the GET carries it: the boolean
+// when the key holds one, adminStateAbsent otherwise. The gateway marshals
+// the flag with omitempty, so a paused rule reads absent; only lb_update's
+// read-back after it sent false may resolve that to false.
+func adminStateView(v any) any {
+	if b, ok := v.(bool); ok {
+		return b
 	}
-	return &b
+	return adminStateAbsent
 }
 
 // cleanStrings applies clean to every element; nil stays nil.
@@ -231,7 +236,9 @@ func RegisterSeed(s *sdk.Server, role guard.Role, pol *guard.Policy, deps *Deps)
 		sdk.AddTool(s, &sdk.Tool{
 			Name: "lb_list",
 			Description: "List load-balancer rules (service VIP:port/protocol, mode, endpoint count " +
-				"and states). Supports substring filtering and limiting; reports total_count when truncated.",
+				"and states). Supports substring filtering and limiting; reports total_count when truncated. " +
+				"admin_state_up is true, false or absent: this gateway serialises adminStateUp with omitempty, so a " +
+				"paused rule's GET carries no flag and reads absent, while an enabled rule always carries an explicit true.",
 			Annotations: roAnnotations("List load-balancer rules"),
 		}, deps.lbList(tdesc))
 	}
@@ -338,7 +345,7 @@ type lbRule struct {
 	KVExactMode      int    `json:"kv_exact_mode,omitempty"`
 	KVEngineType     string `json:"kv_engine_type,omitempty"`
 	ID               string `json:"id,omitempty" jsonschema:"rule identifier assigned by the gateway"`
-	AdminStateUp     *bool  `json:"admin_state_up,omitempty" jsonschema:"administrative state; false pauses the rule without deleting it"`
+	AdminStateUp     any    `json:"admin_state_up" jsonschema:"administrative state as the GET carries it: true, false or the string absent. This gateway serialises adminStateUp with omitempty, so a paused rule's GET has no adminStateUp at all and reads absent here, while an enabled rule always carries an explicit true; false appears only from a gateway that writes it"`
 	Security         any    `json:"security,omitempty" jsonschema:"TLS security mode of the listener as returned by the gateway"`
 	JWTAuthProfile   string `json:"jwt_auth_profile,omitempty" jsonschema:"JWT auth profile the Bearer arm of api_key_auth validates against"`
 	EPPEndpoint      string `json:"epp_endpoint,omitempty" jsonschema:"Endpoint Picker (EPP) address consulted by the data plane"`
@@ -435,7 +442,7 @@ func projectLBRule(entry map[string]any) (lbRule, bool) {
 		KVExactMode:      intValue(svc["kvExactMode"]),
 		KVEngineType:     clean(stringValue(svc["kvEngineType"])),
 		ID:               clean(stringValue(svc["id"])),
-		AdminStateUp:     boolPtrValue(svc["adminStateUp"]),
+		AdminStateUp:     adminStateView(svc["adminStateUp"]),
 		Security:         sanitizeAny(svc["security"], 0),
 		JWTAuthProfile:   clean(stringValue(svc["jwt_auth_profile"])),
 		EPPEndpoint:      clean(stringValue(svc["eppEndpoint"])),

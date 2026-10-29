@@ -164,7 +164,10 @@ func RegisterManagement(s *sdk.Server, role guard.Role, pol *guard.Policy, deps 
 			Description: "Get one load balancer rule by its composite key external_ip + port + protocol or by its opaque id " +
 				"(GET /config/loadbalancer/externalipaddress/{ip}/port/{port}/protocol/{proto}, GET /config/loadbalancer/id/{id}), " +
 				"projected like lb_list; include: [status, stats] attaches the lifecycle status (adminStateUp, operatingStatus, lastUpdated) " +
-				"and the traffic statistics (activeConnections, bytesIn, bytesOut, totalConnections) of the rule.",
+				"and the traffic statistics (activeConnections, bytesIn, bytesOut, totalConnections) of the rule. " +
+				"admin_state_up is true, false or absent: this gateway serialises adminStateUp with omitempty, so a " +
+				"paused rule's GET (and its status) carries no flag and reads absent, while an enabled rule always " +
+				"carries an explicit true; the status operatingStatus OFFLINE also marks a paused rule.",
 			Annotations: roAnnotations("Get one LB rule"),
 		}, deps.lbGet())
 	})
@@ -386,8 +389,10 @@ func RegisterManagement(s *sdk.Server, role guard.Role, pol *guard.Policy, deps 
 				"is with a hint. Service impact: the change applies to the traffic of the rule. Two-step: the first " +
 				"call pre-reads the rule and previews current, proposed, diff and rollback with a confirm_token; " +
 				"repeat with identical arguments plus the token to apply. The executed result re-reads the rule and " +
-				"its status; admin_state_up beside them is the effective flag (the gateway omits a false adminStateUp " +
-				"from the rule it returns).",
+				"its status. admin_state_up is reported as read: true, false or absent; this gateway serialises " +
+				"adminStateUp with omitempty, so a paused rule reads absent. Only the read-back after this call sent " +
+				"admin_state_up false resolves absent to false, and admin_state_up_note says so; a preview of an " +
+				"absent flag carries no admin_state_up in its rollback.",
 			Annotations: destAnnotations("Update LB rule"),
 			InputSchema: lbUpdateInputSchema(),
 		}, deps.lbUpdate())
@@ -1195,12 +1200,11 @@ func (d *Deps) lbUpdate() sdk.ToolHandlerFor[lbUpdateIn, mutOut] {
 			body["endpoints"] = eps
 		}
 		current := pick(svc, lbUpdateSvcKeys...)
-		// The gateway marshals adminStateUp with omitempty: a paused rule's
-		// GET carries no adminStateUp at all, an enabled one carries true
-		// (the create path resolves an absent flag to true before it
-		// stores the rule). Absent on a GET is therefore false, and the
-		// preview, the rollback and the read-back say so explicitly.
-		current["adminStateUp"] = boolValue(svc["adminStateUp"])
+		// The gateway marshals adminStateUp with omitempty, so a paused
+		// rule's GET carries no adminStateUp. The preview shows the flag as
+		// read (true, false or absent); the rollback states no value for an
+		// absent flag.
+		current["adminStateUp"] = adminStateView(svc["adminStateUp"])
 		current["endpoints"] = curView
 		proposed := overlay(current, svcPatch)
 		proposed["endpoints"] = propView
@@ -1210,8 +1214,13 @@ func (d *Deps) lbUpdate() sdk.ToolHandlerFor[lbUpdateIn, mutOut] {
 		out, stop, err := d.gateChange(ctx, "lb_update", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
 			rb := map[string]any{"external_ip": in.ExternalIP, "port": in.Port, "protocol": proto}
 			var undeclared []string
+			var notes []string
 			for _, f := range lbUpdateFields {
 				if _, changed := svcPatch[f[1]]; !changed {
+					continue
+				}
+				if f[1] == "adminStateUp" && current[f[1]] == adminStateAbsent {
+					notes = append(notes, "the rule's GET carried no adminStateUp (absent; on this gateway the form a paused rule reads as, since the flag is serialised with omitempty), so the rollback states no admin_state_up: read lb_get after the change and pass the value to restore explicitly")
 					continue
 				}
 				if v, ok := current[f[1]]; ok {
@@ -1225,8 +1234,9 @@ func (d *Deps) lbUpdate() sdk.ToolHandlerFor[lbUpdateIn, mutOut] {
 			}
 			rollback := &rollbackSpec{Tool: "lb_update", Args: rb}
 			if len(undeclared) > 0 {
-				rollback.Note = fmt.Sprintf("the rule did not declare %s before; the PATCH overlays and cannot un-declare a field, so the rollback leaves it declared (lb_create on the same key re-creates the rule without it)", strings.Join(undeclared, ", "))
+				notes = append(notes, fmt.Sprintf("the rule did not declare %s before; the PATCH overlays and cannot un-declare a field, so the rollback leaves it declared (lb_create on the same key re-creates the rule without it)", strings.Join(undeclared, ", ")))
 			}
+			rollback.Note = strings.Join(notes, "; ")
 			return changePlan{Current: current, Proposed: proposed, Rollback: rollback, Impact: "service"}, nil
 		})
 		if err != nil || stop {
@@ -1246,7 +1256,15 @@ func (d *Deps) lbUpdate() sdk.ToolHandlerFor[lbUpdateIn, mutOut] {
 		readBack := map[string]any{}
 		if rule, found, err := c.LBRuleByKey(ctx, in.ExternalIP, in.Port, proto); err == nil && found {
 			readBack["rule"] = rule
-			readBack["admin_state_up"] = boolValue(mapValue(rule["serviceArguments"])["adminStateUp"])
+			state := adminStateView(mapValue(rule["serviceArguments"])["adminStateUp"])
+			if state == adminStateAbsent && in.AdminStateUp != nil && !*in.AdminStateUp {
+				// The one place absent resolves to false: this call just
+				// sent false, the gateway drops a false flag from the GET
+				// (omitempty), and an enabled rule always reads true.
+				state = false
+				readBack["admin_state_up_note"] = "the GET after sending admin_state_up false carries no adminStateUp; this gateway omits a false flag (omitempty) and an enabled rule always reads an explicit true, so absent here is read as false"
+			}
+			readBack["admin_state_up"] = state
 		}
 		if st, err := c.LBRuleStatus(ctx, in.ExternalIP, in.Port, proto); err == nil {
 			readBack["status"] = st
