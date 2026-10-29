@@ -365,9 +365,14 @@ inventory fresh, the last event's age against the bridge's clock; a
 `problem` of `disconnected` or `inventory_not_fresh`) and `quota_denied`
 per tenant (the token-quota refusals, split into `exhausted` and
 `would_exceed` by the reason on `loxilb_ai_rate_limit_hits_total`). A
-section the gateway emits nothing for is left out. It suggests `lb_get`
-for a pool at its ceiling, `lb_kvexact_status` for a cold or disconnected
-subscriber and `ai_ratelimit_get` for a tenant refused by a token quota.
+section the gateway emits nothing for is left out. The KV series' `service`
+label is the gateway's numeric service id on current builds (the id
+`ai_kv_inventory_get` takes; no REST read maps it to a rule), and a
+connected subscriber with no last-event series reads `no_event_accepted`.
+It suggests `lb_get` for a pool at its ceiling, `ai_kv_inventory_get` (or
+`lb_kvexact_status` where the label is a VIP:port) for a cold or
+disconnected subscriber, and `ai_ratelimit_get` for a tenant refused by a
+token quota.
 `ai_traffic_report` adds `tokens_consumed` (model, tenant, kind) with
 prompt and completion totals, `quota_denied` per tenant and the non-zero
 `fc_band` rows (service, band, outcome; `queued` counts parks). The tool gathers, the
@@ -494,7 +499,7 @@ single-use, and per process. Exit code 0 means every check passed.
 
 **Added** — the AI control-plane writes of tenant and object scope (PR-B2): `lb_update` (admin-confirm, impact service: `admin_state_up`, endpoint weights, `fc_mode`, `fc_max_outstanding`, `fc_max_queue_depth`, `fc_max_queue_wait_ms`; everything else is `lb_create`/`lb_delete`; a PATCH the gateway refuses is passed on with the replace hint), `ai_user_ratelimit_set` and `ai_user_ratelimit_delete` (operator; an all-zero entry is refused before any request, the delete's preview carries the row as the rollback), `secrate_disable` (admin-confirm, global, never autopilot: `DELETE /config/securityrate`, the preview carries the configuration as a `secrate_set` rollback), `config_persist` (admin-confirm, instance, never autopilot: the preview's `current` is the snapshot identity, 409 on the gate is `snapshot_gate_busy`). The mutation budget: `change_budget: {mutations_per_minute, max_consecutive_failures}` and a per-client `mutations_per_minute`, defaults 6 and 3, floors of 1, refusals as readable tool errors, the stop lifted by a successful read-only call. Tool counts: viewer 68, operator 77 → 79, admin 95 → 100 (101 with `--allow-import`).
 
-**Added** — diagnostics modernisation (PR-D, read-only): `diagnose_ai_latency` sections `admission`, `pd_admission_sheds`, `epp`, `kv_freshness`, `quota_denied` with read-only suggestions (`lb_get`, `lb_kvexact_status`, `ai_ratelimit_get`); `ai_traffic_report` fields `tokens_consumed`, `tokens_consumed_prompt`, `tokens_consumed_completion`, `quota_denied`, `quota_denied_total`, `fc_band`; the generated family table of `loxilb://docs/metrics`; `triage-alert` mappings for `LoxilbAIAdmission*`, `LoxilbHalfCloseHold*`, `KvExact*`.
+**Added** — diagnostics modernisation (PR-D, read-only): `diagnose_ai_latency` sections `admission`, `pd_admission_sheds`, `epp`, `kv_freshness`, `quota_denied` with read-only suggestions (`lb_get`, `ai_kv_inventory_get` or `lb_kvexact_status`, `ai_ratelimit_get`); `ai_traffic_report` fields `tokens_consumed`, `tokens_consumed_prompt`, `tokens_consumed_completion`, `quota_denied`, `quota_denied_total`, `fc_band`; the generated family table of `loxilb://docs/metrics`; `triage-alert` mappings for `LoxilbAIAdmission*`, `LoxilbHalfCloseHold*`, `KvExact*`.
 
 **Changed** — `lb_update` refuses `fc_*` on a fullproxy rule before any request and names the `lb_create` replace; on any other mode the preview and the read-back (`fc_note`) say that no capacity gate runs there (PR-D, D26).
 

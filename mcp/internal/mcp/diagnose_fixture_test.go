@@ -201,3 +201,53 @@ func TestAITrafficReportTokensAndBandsFromTheBedFixture(t *testing.T) {
 		t.Error("fixture: the capture admitted standard-band requests")
 	}
 }
+
+const fleetKVExposition = "testdata/exposition-latest-u24-fleet-kv.txt"
+
+// The fleet's KV-exact rule: four subscribers connected, none with a fresh
+// inventory and none with an accepted event batch (no last-event series).
+// The series' service label is the numeric service id, so the follow-up is
+// ai_kv_inventory_get on that id, once per service.
+func TestDiagnoseAILatencyKVFreshnessFromTheFleetFixture(t *testing.T) {
+	text := loadExposition(t, fleetKVExposition)
+	out := fixtureBridgeOut(t, fleetKVExposition, "diagnose_ai_latency")
+	ev, _ := out["evidence"].(map[string]any)
+	rows, _ := ev["kv_freshness"].([]any)
+	if len(rows) == 0 {
+		t.Fatalf("no kv_freshness rows: %v", ev)
+	}
+	for _, raw := range rows {
+		r, _ := raw.(map[string]any)
+		svc, ep := r["service"].(string), r["ep"].(string)
+		sel := []string{`service="` + svc + `"`, `ep="` + ep + `"`}
+		if want := fixtureSum(t, text, "loxilb_kv_subscriber_connected", sel...); r["connected"] != want {
+			t.Errorf("%s/%s connected = %v, fixture %v", svc, ep, r["connected"], want)
+		}
+		if want := fixtureSum(t, text, "loxilb_kv_inventory_fresh", sel...); r["inventory_fresh"] != want {
+			t.Errorf("%s/%s inventory_fresh = %v, fixture %v", svc, ep, r["inventory_fresh"], want)
+		}
+		if r["connected"] == 1.0 && r["inventory_fresh"] == 0.0 && r["problem"] != "inventory_not_fresh" {
+			t.Errorf("%s/%s: connected with a cold inventory must read inventory_not_fresh: %v", svc, ep, r)
+		}
+		if strings.Contains(text, "loxilb_kv_subscriber_last_event_timestamp_seconds{") {
+			t.Fatal("fixture premise: the capture carries no last-event series")
+		}
+		if r["no_event_accepted"] != true || r["last_event_age_seconds"] != nil {
+			t.Errorf("%s/%s: no last-event series must read no_event_accepted: %v", svc, ep, r)
+		}
+	}
+	var kvActs []map[string]any
+	for _, raw := range out["suggested_actions"].([]any) {
+		if a, _ := raw.(map[string]any); a["tool"] == "ai_kv_inventory_get" {
+			kvActs = append(kvActs, a)
+		}
+	}
+	if len(kvActs) != 1 {
+		t.Fatalf("want one ai_kv_inventory_get per service, got %v", kvActs)
+	}
+	args, _ := kvActs[0]["args"].(map[string]any)
+	first, _ := rows[0].(map[string]any)
+	if args["service_id"] != 2.0 || args["ep_idx"] != 0.0 || first["service"] != "2" || first["ep"] != "0" {
+		t.Errorf("suggestion must name the first cold endpoint by id: %v (first row %v)", args, first)
+	}
+}

@@ -471,7 +471,7 @@ func (d *Deps) diagnoseAILatency() sdk.ToolHandlerFor[targetIn, diagnoseOut] {
 			trafficReportCaveat,
 			admissionCaveat,
 			tokenQuotaCaveat,
-			"kv_freshness.last_event_age_seconds is measured against the bridge's clock; an idle engine publishes no KV events, so a large age alone is not a fault",
+			"kv_freshness: service is the label the gateway exports, on current builds the numeric service id that ai_kv_inventory_get takes (no REST read maps it to a rule); last_event_age_seconds is measured against the bridge's clock and an idle engine publishes no KV events, so a large age alone is not a fault; no_event_accepted means a connected subscriber has accepted no event batch since it started",
 		}
 		d.finishDiagnose(&out)
 		d.audit("diagnose_ai_latency", c.Name(), true, "")

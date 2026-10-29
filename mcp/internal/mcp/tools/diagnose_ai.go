@@ -81,7 +81,10 @@ type kvFreshnessRow struct {
 	Connected      *float64 `json:"connected,omitempty"`
 	InventoryFresh *float64 `json:"inventory_fresh,omitempty"`
 	LastEventAgeS  *float64 `json:"last_event_age_seconds,omitempty"`
-	Problem        string   `json:"problem,omitempty"`
+	// NoEventAccepted marks a connected subscriber with no last-event
+	// series: it has accepted no event batch since it started.
+	NoEventAccepted bool   `json:"no_event_accepted,omitempty"`
+	Problem         string `json:"problem,omitempty"`
 }
 
 type tokenQuotaRow struct {
@@ -213,6 +216,7 @@ func kvFreshnessSection(byName map[string]client.Family, now time.Time) []kvFres
 	}
 	out := make([]kvFreshnessRow, 0, len(rows))
 	for _, r := range rows {
+		r.NoEventAccepted = r.Connected != nil && *r.Connected == 1 && r.LastEventAgeS == nil
 		switch {
 		case r.Connected != nil && *r.Connected == 0:
 			r.Problem = "disconnected"
@@ -310,18 +314,29 @@ func aiSectionActions(target string, pools []admissionPool, kv []kvFreshnessRow,
 		if r.Problem == "" || seen[r.Service] {
 			continue
 		}
-		ip, port, ok := serviceKey(r.Service)
-		if !ok {
-			continue
-		}
 		seen[r.Service] = true
-		acts = append(acts, suggestedAction{
-			Tool: "lb_kvexact_status",
-			Args: map[string]any{"external_ip": ip, "port": port, "protocol": "tcp", "target": target},
-			Rationale: fmt.Sprintf("KV subscriber for endpoint %s of %s is %s - KV-aware routing for it runs without a current inventory",
-				r.Endpoint, r.Service, r.Problem),
-			Risk: "none",
-		})
+		rationale := fmt.Sprintf("KV subscriber for endpoint %s of service %s is %s - KV-aware routing for it runs without a current inventory",
+			r.Endpoint, r.Service, r.Problem)
+		// The label is the gateway's numeric service id on current builds
+		// (no REST read maps it to a rule); a VIP:port label names the rule.
+		if ip, port, ok := serviceKey(r.Service); ok {
+			acts = append(acts, suggestedAction{
+				Tool:      "lb_kvexact_status",
+				Args:      map[string]any{"external_ip": ip, "port": port, "protocol": "tcp", "target": target},
+				Rationale: rationale, Risk: "none",
+			})
+		} else if id, err := strconv.ParseInt(r.Service, 10, 64); err == nil {
+			ep, err := strconv.Atoi(r.Endpoint)
+			if err != nil {
+				continue
+			}
+			acts = append(acts, suggestedAction{
+				Tool:      "ai_kv_inventory_get",
+				Args:      map[string]any{"service_id": id, "ep_idx": ep, "target": target},
+				Rationale: rationale + "; read that endpoint's block inventory (the series' service label is the numeric service id)",
+				Risk:      "none",
+			})
+		}
 	}
 	for _, q := range quota {
 		acts = append(acts, suggestedAction{
