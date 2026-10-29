@@ -95,6 +95,10 @@ Prometheus server is configured.
   refusal modes: the tenant over budget (reason token_quota_exceeded on
   loxilb_ai_rate_limit_hits_total) and one request that did not fit the
   headroom (token_quota_would_exceed). Only the hits counter tells them apart.
+- loxilb_ai_tokens_consumed_total is fed from the token-quota charge path, so
+  it counts only requests charged to a credential. A rule without a
+  credential (no api_key_auth) never charges a quota: its completions leave
+  the series at 0. Count that traffic with loxilb_ai_requests_total.
 - loxilb_ai_admission_queue_wait_seconds has one sample per park, taken when
   the park ends; a request drained from the queue is not sampled.
   loxilb_ai_fc_band_total outcome="queued" counts parks, not requests.

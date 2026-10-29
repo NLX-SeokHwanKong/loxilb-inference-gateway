@@ -19,6 +19,7 @@ func TestMetricsReferenceKeepsTheCuratedCaveatsAndTheGeneratedTable(t *testing.T
 		"--userservice, the metrics endpoint requires a bearer",
 		"loxilb_ai_requests_total carries an outcome label",
 		"loxilb_ai_token_quota_denied_total is the union of both token-quota",
+		"loxilb_ai_tokens_consumed_total is fed from the token-quota charge path",
 		"loxilb_kv_inventory_fresh 0 with loxilb_kv_subscriber_connected 1",
 	} {
 		if !strings.Contains(metricsReferenceDoc, curated) {

@@ -375,7 +375,10 @@ disconnected subscriber, and `ai_ratelimit_get` for a tenant refused by a
 token quota.
 `ai_traffic_report` adds `tokens_consumed` (model, tenant, kind) with
 prompt and completion totals, `quota_denied` per tenant and the non-zero
-`fc_band` rows (service, band, outcome; `queued` counts parks). The tool gathers, the
+`fc_band` rows (service, band, outcome; `queued` counts parks).
+`tokens_consumed` comes from the token-quota charge path, so it counts only
+requests charged to a credential: a rule without `api_key_auth` never charges
+a quota and its traffic leaves it at 0. The tool gathers, the
 model concludes, a human approves mutations — the confirm-token flow is the
 approval gate; nothing in `suggested_actions` auto-executes.
 
