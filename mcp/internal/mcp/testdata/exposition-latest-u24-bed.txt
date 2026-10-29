@@ -1,0 +1,529 @@
+# Captured 2026-10-29 from the live gateway image ghcr.io/loxilb-io/loxilb-inference-gateway:latest-u24
+# (sha256:0e0abffa98dd74136370736b2d0eb7dd9410a4097ae2e34d82c62b05927e9e56) on the cicd/mcp topology, llbigw-1.
+# GET /netlox/v1/metrics, filtered to loxilb_ai_*, loxilb_pd_admission_*, loxilb_kv_*, loxilb_proxy_http_ttfb_seconds; lines verbatim.
+# Light load: AI rule 20.20.20.3:2099 (fullproxy, sse_mode, api_key_auth required, fc_mode enforce, fc_max_outstanding 2,
+# fc_max_queue_depth 4, fc_max_queue_wait_ms 3000) -> cicd/ai-admission/mock_backend.py; tenant fixture-t, tokens_per_min 120;
+# 6 concurrent 800 ms requests, then 14 sequential at ~2/s (every other streamed): 9 answered 200, 11 refused by the token quota.
+# HELP loxilb_ai_active_streams Current number of active AI streaming (SSE) sessions per model.
+# TYPE loxilb_ai_active_streams gauge
+loxilb_ai_active_streams{model="m1"} 0
+# HELP loxilb_ai_admission_adapt_moves_total Steps of the adaptive ceiling: direction="down" to four fifths on fresh backpressure, direction="up" by one on a fresh clear second.
+# TYPE loxilb_ai_admission_adapt_moves_total counter
+loxilb_ai_admission_adapt_moves_total{direction="down",pool="20.20.20.3_2099",service="20.20.20.3:2099"} 0
+loxilb_ai_admission_adapt_moves_total{direction="up",pool="20.20.20.3_2099",service="20.20.20.3:2099"} 0
+# HELP loxilb_ai_admission_adapt_reason Why the adaptive ceiling last moved or holds, 1 for the current reason: queued (an endpoint reported waiting requests), ttft (an endpoint's time to first token is over the target), clear (fresh signals without backpressure: widened), stale (no fresh signal: held), none.
+# TYPE loxilb_ai_admission_adapt_reason gauge
+loxilb_ai_admission_adapt_reason{pool="20.20.20.3_2099",reason="clear",service="20.20.20.3:2099"} 0
+loxilb_ai_admission_adapt_reason{pool="20.20.20.3_2099",reason="none",service="20.20.20.3:2099"} 1
+loxilb_ai_admission_adapt_reason{pool="20.20.20.3_2099",reason="queued",service="20.20.20.3:2099"} 0
+loxilb_ai_admission_adapt_reason{pool="20.20.20.3_2099",reason="stale",service="20.20.20.3:2099"} 0
+loxilb_ai_admission_adapt_reason{pool="20.20.20.3_2099",reason="ttft",service="20.20.20.3:2099"} 0
+# HELP loxilb_ai_admission_adapt_state Where the adaptive ceiling stands, 1 for the current state and 0 for the others: off (not adaptive, or no ceiling), open (at the configured ceiling), tightened (below it, following fresh backpressure signals), frozen (below it with no fresh signal: held, never widened on stale telemetry).
+# TYPE loxilb_ai_admission_adapt_state gauge
+loxilb_ai_admission_adapt_state{pool="20.20.20.3_2099",service="20.20.20.3:2099",state="frozen"} 0
+loxilb_ai_admission_adapt_state{pool="20.20.20.3_2099",service="20.20.20.3:2099",state="off"} 1
+loxilb_ai_admission_adapt_state{pool="20.20.20.3_2099",service="20.20.20.3:2099",state="open"} 0
+loxilb_ai_admission_adapt_state{pool="20.20.20.3_2099",service="20.20.20.3:2099",state="tightened"} 0
+# HELP loxilb_ai_admission_anomalies_total Accounting anomalies in the capacity gate, process-wide: underflow (a release found its counter at zero), unknown_permit (an executing permit with no pool), tenant_table_full (a request whose tenant found the pool's tenant table full and shared the last slot with the other tenants past it) and h2_deny_headers (an HTTP/2 refusal had more headers than its frame holds; the stream was reset instead). underflow, unknown_permit and h2_deny_headers are defects; tenant_table_full means more tenants than the table holds are active on one pool.
+# TYPE loxilb_ai_admission_anomalies_total counter
+loxilb_ai_admission_anomalies_total{kind="h2_deny_headers"} 0
+loxilb_ai_admission_anomalies_total{kind="tenant_table_full"} 0
+loxilb_ai_admission_anomalies_total{kind="underflow"} 0
+loxilb_ai_admission_anomalies_total{kind="unknown_permit"} 0
+# HELP loxilb_ai_admission_decisions_total Gate decisions per pool and reason: admitted, capacity_shed (429), no_healthy_capacity (503), observe_would_shed (admitted in observe mode where enforce would have refused, counted at each ceiling that would have refused it), bypass_non_inference (not an inference request, no unit taken), queued (parked to wait for a unit, once per park: a woken request that goes back to its place is the same park), queue_full (429, the queue at its depth), queue_timeout (504, waited the whole window), cancelled (the client left while waiting), drained (the pool or the process stopped taking work while it waited), observe_would_queue (admitted in observe mode where enforce would have parked it), draining (503, the process is draining for maintenance), tenant_share (429, the tenant holds its share of the ceiling or of the queue), shed (429 admission_shed, a sheddable request refused at a ceiling or evicted from the queue by band policy).
+# TYPE loxilb_ai_admission_decisions_total counter
+loxilb_ai_admission_decisions_total{pool="20.20.20.3_2099",reason="admitted",service="20.20.20.3:2099"} 8
+loxilb_ai_admission_decisions_total{pool="20.20.20.3_2099",reason="bypass_non_inference",service="20.20.20.3:2099"} 0
+loxilb_ai_admission_decisions_total{pool="20.20.20.3_2099",reason="cancelled",service="20.20.20.3:2099"} 0
+loxilb_ai_admission_decisions_total{pool="20.20.20.3_2099",reason="capacity_shed",service="20.20.20.3:2099"} 0
+loxilb_ai_admission_decisions_total{pool="20.20.20.3_2099",reason="drained",service="20.20.20.3:2099"} 0
+loxilb_ai_admission_decisions_total{pool="20.20.20.3_2099",reason="draining",service="20.20.20.3:2099"} 0
+loxilb_ai_admission_decisions_total{pool="20.20.20.3_2099",reason="no_healthy_capacity",service="20.20.20.3:2099"} 0
+loxilb_ai_admission_decisions_total{pool="20.20.20.3_2099",reason="observe_would_queue",service="20.20.20.3:2099"} 0
+loxilb_ai_admission_decisions_total{pool="20.20.20.3_2099",reason="observe_would_shed",service="20.20.20.3:2099"} 0
+loxilb_ai_admission_decisions_total{pool="20.20.20.3_2099",reason="queue_full",service="20.20.20.3:2099"} 0
+loxilb_ai_admission_decisions_total{pool="20.20.20.3_2099",reason="queue_timeout",service="20.20.20.3:2099"} 0
+loxilb_ai_admission_decisions_total{pool="20.20.20.3_2099",reason="queued",service="20.20.20.3:2099"} 4
+loxilb_ai_admission_decisions_total{pool="20.20.20.3_2099",reason="shed",service="20.20.20.3:2099"} 0
+loxilb_ai_admission_decisions_total{pool="20.20.20.3_2099",reason="tenant_share",service="20.20.20.3:2099"} 0
+# HELP loxilb_ai_admission_effective_limit The pool-wide ceiling in force right now: the adaptive one while the pool adapts (at most the configured loxilb_ai_admission_limit{role="service"}), else the configured one. 0 means unlimited.
+# TYPE loxilb_ai_admission_effective_limit gauge
+loxilb_ai_admission_effective_limit{pool="20.20.20.3_2099",service="20.20.20.3:2099"} 2
+# HELP loxilb_ai_admission_inflight Capacity units held right now. role="service" is the pool-wide count, one per executing inference request; the other roles sum the endpoint units held across the pool's endpoints for that role. Zero with the gate off.
+# TYPE loxilb_ai_admission_inflight gauge
+loxilb_ai_admission_inflight{pool="20.20.20.3_2099",role="decode",service="20.20.20.3:2099"} 0
+loxilb_ai_admission_inflight{pool="20.20.20.3_2099",role="normal",service="20.20.20.3:2099"} 0
+loxilb_ai_admission_inflight{pool="20.20.20.3_2099",role="prefill",service="20.20.20.3:2099"} 0
+loxilb_ai_admission_inflight{pool="20.20.20.3_2099",role="service",service="20.20.20.3:2099"} 0
+# HELP loxilb_ai_admission_limit Ceiling in force for the role: role="service" is the pool-wide bound on executing requests, role="queue" is the bound on requests waiting for a unit (0: over a ceiling is refused at once), the other roles are the per-endpoint bound for that role. 0 means unlimited at that level.
+# TYPE loxilb_ai_admission_limit gauge
+loxilb_ai_admission_limit{pool="20.20.20.3_2099",role="decode",service="20.20.20.3:2099"} 0
+loxilb_ai_admission_limit{pool="20.20.20.3_2099",role="normal",service="20.20.20.3:2099"} 0
+loxilb_ai_admission_limit{pool="20.20.20.3_2099",role="prefill",service="20.20.20.3:2099"} 0
+loxilb_ai_admission_limit{pool="20.20.20.3_2099",role="queue",service="20.20.20.3:2099"} 4
+loxilb_ai_admission_limit{pool="20.20.20.3_2099",role="service",service="20.20.20.3:2099"} 2
+# HELP loxilb_ai_admission_mode Capacity gate mode on the pool: 0 off (dispatch path unchanged), 1 observe (decisions counted, everything admitted), 2 enforce (over a ceiling is refused). Present for every model pool of an AI-gateway service.
+# TYPE loxilb_ai_admission_mode gauge
+loxilb_ai_admission_mode{pool="20.20.20.3_2099",service="20.20.20.3:2099"} 2
+# HELP loxilb_ai_admission_queue_wait_seconds Time a request waited in the pool's queue: one sample per park, taken when the park ends (admitted, expired, shed by eviction or cancelled) and measured from its first park, so a woken request that goes back to its place is one wait, not two. A request drained from the queue is not sampled.
+# TYPE loxilb_ai_admission_queue_wait_seconds histogram
+loxilb_ai_admission_queue_wait_seconds_bucket{pool="20.20.20.3_2099",service="20.20.20.3:2099",le="0.01"} 0
+loxilb_ai_admission_queue_wait_seconds_bucket{pool="20.20.20.3_2099",service="20.20.20.3:2099",le="0.05"} 0
+loxilb_ai_admission_queue_wait_seconds_bucket{pool="20.20.20.3_2099",service="20.20.20.3:2099",le="0.1"} 0
+loxilb_ai_admission_queue_wait_seconds_bucket{pool="20.20.20.3_2099",service="20.20.20.3:2099",le="0.25"} 0
+loxilb_ai_admission_queue_wait_seconds_bucket{pool="20.20.20.3_2099",service="20.20.20.3:2099",le="0.5"} 0
+loxilb_ai_admission_queue_wait_seconds_bucket{pool="20.20.20.3_2099",service="20.20.20.3:2099",le="1"} 2
+loxilb_ai_admission_queue_wait_seconds_bucket{pool="20.20.20.3_2099",service="20.20.20.3:2099",le="2.5"} 4
+loxilb_ai_admission_queue_wait_seconds_bucket{pool="20.20.20.3_2099",service="20.20.20.3:2099",le="5"} 4
+loxilb_ai_admission_queue_wait_seconds_bucket{pool="20.20.20.3_2099",service="20.20.20.3:2099",le="+Inf"} 4
+loxilb_ai_admission_queue_wait_seconds_sum{pool="20.20.20.3_2099",service="20.20.20.3:2099"} 4.786
+loxilb_ai_admission_queue_wait_seconds_count{pool="20.20.20.3_2099",service="20.20.20.3:2099"} 4
+# HELP loxilb_ai_admission_queued Inference requests parked on the pool right now, waiting for a capacity unit. Zero with no queue depth configured.
+# TYPE loxilb_ai_admission_queued gauge
+loxilb_ai_admission_queued{pool="20.20.20.3_2099",service="20.20.20.3:2099"} 0
+# HELP loxilb_ai_admission_tenants_active Tenants holding a capacity unit or waiting on the pool right now, counted while the pool holds tenants to a share (fc_tenant_max_share_pct); zero otherwise. Requests without a tenant count as one.
+# TYPE loxilb_ai_admission_tenants_active gauge
+loxilb_ai_admission_tenants_active{pool="20.20.20.3_2099",service="20.20.20.3:2099"} 0
+# HELP loxilb_ai_admission_warming_endpoints Endpoints of the pool inside their warm-up window, their ceilings ramping from a quarter to all of it after a return to service.
+# TYPE loxilb_ai_admission_warming_endpoints gauge
+loxilb_ai_admission_warming_endpoints{pool="20.20.20.3_2099",service="20.20.20.3:2099"} 0
+# HELP loxilb_ai_class_config_lkg_intervals_total Refresh intervals (LLB_AI_OBJECTIVE_REFRESH_SEC, default 10 s) in which this gateway served objectives and tenant and key classes from its last-known-good file because the AI key store has not answered since the gateway started. It moves only while fc_effective.config_source reads lkg; any increase is a warning: classes are as the store had them at the file's source_timestamp, and class and objective writes are refused with 503. Zero on a gateway whose store answered, and on one with no key store.
+# TYPE loxilb_ai_class_config_lkg_intervals_total counter
+loxilb_ai_class_config_lkg_intervals_total 0
+# HELP loxilb_ai_epp_duration_seconds Endpoint Picker request-phase duration in seconds, submit to decision.
+# TYPE loxilb_ai_epp_duration_seconds histogram
+loxilb_ai_epp_duration_seconds_bucket{le="0.001"} 0
+loxilb_ai_epp_duration_seconds_bucket{le="0.0025"} 0
+loxilb_ai_epp_duration_seconds_bucket{le="0.005"} 0
+loxilb_ai_epp_duration_seconds_bucket{le="0.01"} 0
+loxilb_ai_epp_duration_seconds_bucket{le="0.025"} 0
+loxilb_ai_epp_duration_seconds_bucket{le="0.05"} 0
+loxilb_ai_epp_duration_seconds_bucket{le="0.1"} 0
+loxilb_ai_epp_duration_seconds_bucket{le="0.25"} 0
+loxilb_ai_epp_duration_seconds_bucket{le="0.5"} 0
+loxilb_ai_epp_duration_seconds_bucket{le="1"} 0
+loxilb_ai_epp_duration_seconds_bucket{le="2.5"} 0
+loxilb_ai_epp_duration_seconds_bucket{le="5"} 0
+loxilb_ai_epp_duration_seconds_bucket{le="10"} 0
+loxilb_ai_epp_duration_seconds_bucket{le="+Inf"} 0
+loxilb_ai_epp_duration_seconds_sum 0
+loxilb_ai_epp_duration_seconds_count 0
+# HELP loxilb_ai_epp_inflight Requests currently handed to an Endpoint Picker and not yet reported finished (the EPP's in-flight view).
+# TYPE loxilb_ai_epp_inflight gauge
+loxilb_ai_epp_inflight 0
+# HELP loxilb_ai_epp_pending Endpoint Picker decisions the data plane side table still holds (parked or being applied).
+# TYPE loxilb_ai_epp_pending gauge
+loxilb_ai_epp_pending 0
+# HELP loxilb_ai_fc_band_total Inference requests of the capacity gate per service, by priority band (the request's class: critical, standard, sheddable) and outcome. Four outcomes are terminal, one per request: admitted (took a capacity unit), shed (429 admission_shed: a sheddable request refused at a ceiling, or evicted from the queue for a higher band, by band policy), expired (504 admission_queue_timeout: its wait window ended), cancelled (its client left while it waited). queued is not an end: it counts parks, once per park (a woken request that goes back to its place is the same park). A request refused for another reason (queue full, tenant share, no healthy capacity, a drain) is counted in loxilb_ai_admission_decisions_total only. Fifteen series for every service with an AI-gateway pool, zero included.
+# TYPE loxilb_ai_fc_band_total counter
+loxilb_ai_fc_band_total{band="critical",outcome="admitted",service="20.20.20.3:2099"} 0
+loxilb_ai_fc_band_total{band="critical",outcome="cancelled",service="20.20.20.3:2099"} 0
+loxilb_ai_fc_band_total{band="critical",outcome="expired",service="20.20.20.3:2099"} 0
+loxilb_ai_fc_band_total{band="critical",outcome="queued",service="20.20.20.3:2099"} 0
+loxilb_ai_fc_band_total{band="critical",outcome="shed",service="20.20.20.3:2099"} 0
+loxilb_ai_fc_band_total{band="sheddable",outcome="admitted",service="20.20.20.3:2099"} 0
+loxilb_ai_fc_band_total{band="sheddable",outcome="cancelled",service="20.20.20.3:2099"} 0
+loxilb_ai_fc_band_total{band="sheddable",outcome="expired",service="20.20.20.3:2099"} 0
+loxilb_ai_fc_band_total{band="sheddable",outcome="queued",service="20.20.20.3:2099"} 0
+loxilb_ai_fc_band_total{band="sheddable",outcome="shed",service="20.20.20.3:2099"} 0
+loxilb_ai_fc_band_total{band="standard",outcome="admitted",service="20.20.20.3:2099"} 8
+loxilb_ai_fc_band_total{band="standard",outcome="cancelled",service="20.20.20.3:2099"} 0
+loxilb_ai_fc_band_total{band="standard",outcome="expired",service="20.20.20.3:2099"} 0
+loxilb_ai_fc_band_total{band="standard",outcome="queued",service="20.20.20.3:2099"} 4
+loxilb_ai_fc_band_total{band="standard",outcome="shed",service="20.20.20.3:2099"} 0
+# HELP loxilb_ai_fc_tenant_slots The tenant table of the capacity gate, per service: kind="max" is how many tenants a model pool tracks by name at once (LLB_FC_TENANT_SLOTS, fixed when the pool is created), kind="used" is how many hold a unit or wait right now on the service's fullest pool. used above max means tenants past the table are sharing one budget. used is zero while no pool of the service holds tenants to a share.
+# TYPE loxilb_ai_fc_tenant_slots gauge
+loxilb_ai_fc_tenant_slots{kind="max",service="20.20.20.3:2099"} 256
+loxilb_ai_fc_tenant_slots{kind="used",service="20.20.20.3:2099"} 0
+# HELP loxilb_ai_key_store_circuit_open 1 while the key store's data-path circuit is open or half-open: cache misses are refused without contacting the store, quota reads serve their last store-confirmed value. Opens after LLB_AI_KEY_LOOKUP_CIRCUIT_FAILURES consecutive failures, admits one probe after LLB_AI_KEY_LOOKUP_CIRCUIT_COOLDOWN_MS, and closes on the probe's success. It stays 1 after the store recovers until a cache miss runs that probe; a steady 1 with no miss traffic is not an outage. Independent of store_reachable, which the snapshot refresher reports.
+# TYPE loxilb_ai_key_store_circuit_open gauge
+loxilb_ai_key_store_circuit_open 0
+# HELP loxilb_ai_key_store_lookup_inflight Data-path key-store round trips on the store right now, bounded by LLB_AI_KEY_LOOKUP_MAX_INFLIGHT.
+# TYPE loxilb_ai_key_store_lookup_inflight gauge
+loxilb_ai_key_store_lookup_inflight 0
+# HELP loxilb_ai_key_store_lookup_seconds Time a proxy worker spent on one key-store round trip the data path made on a cache miss, by how it ended: miss_found (a row), miss_invalid (no such key or row), timeout (the LLB_AI_KEY_LOOKUP_TIMEOUT_MS budget expired), refused_circuit (the store-health circuit was open: no store contact), refused_inflight (no slot inside the budget: LLB_AI_KEY_LOOKUP_MAX_INFLIGHT), unavailable (another store failure or not connected). Cache hits are not round trips and are not counted.
+# TYPE loxilb_ai_key_store_lookup_seconds histogram
+loxilb_ai_key_store_lookup_seconds_bucket{result="miss_found",le="0.001"} 0
+loxilb_ai_key_store_lookup_seconds_bucket{result="miss_found",le="0.005"} 1
+loxilb_ai_key_store_lookup_seconds_bucket{result="miss_found",le="0.01"} 1
+loxilb_ai_key_store_lookup_seconds_bucket{result="miss_found",le="0.025"} 1
+loxilb_ai_key_store_lookup_seconds_bucket{result="miss_found",le="0.05"} 1
+loxilb_ai_key_store_lookup_seconds_bucket{result="miss_found",le="0.1"} 1
+loxilb_ai_key_store_lookup_seconds_bucket{result="miss_found",le="0.2"} 1
+loxilb_ai_key_store_lookup_seconds_bucket{result="miss_found",le="0.3"} 1
+loxilb_ai_key_store_lookup_seconds_bucket{result="miss_found",le="0.5"} 1
+loxilb_ai_key_store_lookup_seconds_bucket{result="miss_found",le="1"} 1
+loxilb_ai_key_store_lookup_seconds_bucket{result="miss_found",le="+Inf"} 1
+loxilb_ai_key_store_lookup_seconds_sum{result="miss_found"} 0.002490444
+loxilb_ai_key_store_lookup_seconds_count{result="miss_found"} 1
+loxilb_ai_key_store_lookup_seconds_bucket{result="miss_invalid",le="0.001"} 4
+loxilb_ai_key_store_lookup_seconds_bucket{result="miss_invalid",le="0.005"} 4
+loxilb_ai_key_store_lookup_seconds_bucket{result="miss_invalid",le="0.01"} 4
+loxilb_ai_key_store_lookup_seconds_bucket{result="miss_invalid",le="0.025"} 4
+loxilb_ai_key_store_lookup_seconds_bucket{result="miss_invalid",le="0.05"} 4
+loxilb_ai_key_store_lookup_seconds_bucket{result="miss_invalid",le="0.1"} 4
+loxilb_ai_key_store_lookup_seconds_bucket{result="miss_invalid",le="0.2"} 4
+loxilb_ai_key_store_lookup_seconds_bucket{result="miss_invalid",le="0.3"} 4
+loxilb_ai_key_store_lookup_seconds_bucket{result="miss_invalid",le="0.5"} 4
+loxilb_ai_key_store_lookup_seconds_bucket{result="miss_invalid",le="1"} 4
+loxilb_ai_key_store_lookup_seconds_bucket{result="miss_invalid",le="+Inf"} 4
+loxilb_ai_key_store_lookup_seconds_sum{result="miss_invalid"} 0.002893109
+loxilb_ai_key_store_lookup_seconds_count{result="miss_invalid"} 4
+loxilb_ai_key_store_lookup_seconds_bucket{result="refused_circuit",le="0.001"} 0
+loxilb_ai_key_store_lookup_seconds_bucket{result="refused_circuit",le="0.005"} 0
+loxilb_ai_key_store_lookup_seconds_bucket{result="refused_circuit",le="0.01"} 0
+loxilb_ai_key_store_lookup_seconds_bucket{result="refused_circuit",le="0.025"} 0
+loxilb_ai_key_store_lookup_seconds_bucket{result="refused_circuit",le="0.05"} 0
+loxilb_ai_key_store_lookup_seconds_bucket{result="refused_circuit",le="0.1"} 0
+loxilb_ai_key_store_lookup_seconds_bucket{result="refused_circuit",le="0.2"} 0
+loxilb_ai_key_store_lookup_seconds_bucket{result="refused_circuit",le="0.3"} 0
+loxilb_ai_key_store_lookup_seconds_bucket{result="refused_circuit",le="0.5"} 0
+loxilb_ai_key_store_lookup_seconds_bucket{result="refused_circuit",le="1"} 0
+loxilb_ai_key_store_lookup_seconds_bucket{result="refused_circuit",le="+Inf"} 0
+loxilb_ai_key_store_lookup_seconds_sum{result="refused_circuit"} 0
+loxilb_ai_key_store_lookup_seconds_count{result="refused_circuit"} 0
+loxilb_ai_key_store_lookup_seconds_bucket{result="refused_inflight",le="0.001"} 0
+loxilb_ai_key_store_lookup_seconds_bucket{result="refused_inflight",le="0.005"} 0
+loxilb_ai_key_store_lookup_seconds_bucket{result="refused_inflight",le="0.01"} 0
+loxilb_ai_key_store_lookup_seconds_bucket{result="refused_inflight",le="0.025"} 0
+loxilb_ai_key_store_lookup_seconds_bucket{result="refused_inflight",le="0.05"} 0
+loxilb_ai_key_store_lookup_seconds_bucket{result="refused_inflight",le="0.1"} 0
+loxilb_ai_key_store_lookup_seconds_bucket{result="refused_inflight",le="0.2"} 0
+loxilb_ai_key_store_lookup_seconds_bucket{result="refused_inflight",le="0.3"} 0
+loxilb_ai_key_store_lookup_seconds_bucket{result="refused_inflight",le="0.5"} 0
+loxilb_ai_key_store_lookup_seconds_bucket{result="refused_inflight",le="1"} 0
+loxilb_ai_key_store_lookup_seconds_bucket{result="refused_inflight",le="+Inf"} 0
+loxilb_ai_key_store_lookup_seconds_sum{result="refused_inflight"} 0
+loxilb_ai_key_store_lookup_seconds_count{result="refused_inflight"} 0
+loxilb_ai_key_store_lookup_seconds_bucket{result="timeout",le="0.001"} 0
+loxilb_ai_key_store_lookup_seconds_bucket{result="timeout",le="0.005"} 0
+loxilb_ai_key_store_lookup_seconds_bucket{result="timeout",le="0.01"} 0
+loxilb_ai_key_store_lookup_seconds_bucket{result="timeout",le="0.025"} 0
+loxilb_ai_key_store_lookup_seconds_bucket{result="timeout",le="0.05"} 0
+loxilb_ai_key_store_lookup_seconds_bucket{result="timeout",le="0.1"} 0
+loxilb_ai_key_store_lookup_seconds_bucket{result="timeout",le="0.2"} 0
+loxilb_ai_key_store_lookup_seconds_bucket{result="timeout",le="0.3"} 0
+loxilb_ai_key_store_lookup_seconds_bucket{result="timeout",le="0.5"} 0
+loxilb_ai_key_store_lookup_seconds_bucket{result="timeout",le="1"} 0
+loxilb_ai_key_store_lookup_seconds_bucket{result="timeout",le="+Inf"} 0
+loxilb_ai_key_store_lookup_seconds_sum{result="timeout"} 0
+loxilb_ai_key_store_lookup_seconds_count{result="timeout"} 0
+loxilb_ai_key_store_lookup_seconds_bucket{result="unavailable",le="0.001"} 0
+loxilb_ai_key_store_lookup_seconds_bucket{result="unavailable",le="0.005"} 0
+loxilb_ai_key_store_lookup_seconds_bucket{result="unavailable",le="0.01"} 0
+loxilb_ai_key_store_lookup_seconds_bucket{result="unavailable",le="0.025"} 0
+loxilb_ai_key_store_lookup_seconds_bucket{result="unavailable",le="0.05"} 0
+loxilb_ai_key_store_lookup_seconds_bucket{result="unavailable",le="0.1"} 0
+loxilb_ai_key_store_lookup_seconds_bucket{result="unavailable",le="0.2"} 0
+loxilb_ai_key_store_lookup_seconds_bucket{result="unavailable",le="0.3"} 0
+loxilb_ai_key_store_lookup_seconds_bucket{result="unavailable",le="0.5"} 0
+loxilb_ai_key_store_lookup_seconds_bucket{result="unavailable",le="1"} 0
+loxilb_ai_key_store_lookup_seconds_bucket{result="unavailable",le="+Inf"} 0
+loxilb_ai_key_store_lookup_seconds_sum{result="unavailable"} 0
+loxilb_ai_key_store_lookup_seconds_count{result="unavailable"} 0
+# HELP loxilb_ai_key_token_quota_limit_tokens Per-API-key tokens-per-minute quota as of that key's most recent charge.
+# TYPE loxilb_ai_key_token_quota_limit_tokens gauge
+loxilb_ai_key_token_quota_limit_tokens{key_id="8b590544c367f662a61d0de67c6c9128"} 120
+# HELP loxilb_ai_key_token_quota_utilization Fraction of an API key's own per-minute token quota currently spent and not yet refilled, computed at scrape time. Keyed by key_id — the store's opaque identifier, never the key material.
+# TYPE loxilb_ai_key_token_quota_utilization gauge
+loxilb_ai_key_token_quota_utilization{key_id="8b590544c367f662a61d0de67c6c9128"} 0.925
+# HELP loxilb_ai_keyed_services Number of LB services declaring api_key_auth=required. 0 means no service expects X-Api-Key enforcement — unmetered AI traffic is then the deployment's designed posture, not an anomaly (the unmetered-traffic alert guards on this gauge).
+# TYPE loxilb_ai_keyed_services gauge
+loxilb_ai_keyed_services 1
+# HELP loxilb_ai_kv_trtllm_drain_ownership_heal_total TRT-LLM drain ownership fault clears (fresh engine cache announcement or stream re-acquire).
+# TYPE loxilb_ai_kv_trtllm_drain_ownership_heal_total counter
+loxilb_ai_kv_trtllm_drain_ownership_heal_total 0
+# HELP loxilb_ai_pd_decode_kv_fill_total Total P/D decode selections scored with LLB_PD_DECODE_KV_WEIGHT set in which at least one candidate's KV-usage reading was unknown or stale and took the neutral fill.
+# TYPE loxilb_ai_pd_decode_kv_fill_total counter
+loxilb_ai_pd_decode_kv_fill_total{model="m1"} 0
+loxilb_ai_pd_decode_kv_fill_total{model="other"} 0
+# HELP loxilb_ai_pd_decode_selected_total Total P/D decode selections by path (hint = session-pinned decode kept, score = min-load pick, score_kv = the KV-pressure term changed the min-load candidate set).
+# TYPE loxilb_ai_pd_decode_selected_total counter
+loxilb_ai_pd_decode_selected_total{model="m1",path="hint"} 0
+loxilb_ai_pd_decode_selected_total{model="m1",path="score"} 0
+loxilb_ai_pd_decode_selected_total{model="m1",path="score_kv"} 0
+loxilb_ai_pd_decode_selected_total{model="other",path="hint"} 0
+loxilb_ai_pd_decode_selected_total{model="other",path="score"} 0
+loxilb_ai_pd_decode_selected_total{model="other",path="score_kv"} 0
+# HELP loxilb_ai_pd_prefill_fallback_total P/D requests whose prefill was recomputed on the decode leg, by model and reason. The reason is the condition that forced the fallback, in verdict order: if the status alone forces it, the status is the reason (origin_5xx, origin_408, origin_429), whether or not the body was cut; if the status would have been relayed and the fallback happened only because the reply was cut, the reason is truncated (a cut 2xx; a cut 4xx is relayed with its status as prefill/rejected, with no fallback); an unreadable status is no_status; a 1xx/3xx is other.
+# TYPE loxilb_ai_pd_prefill_fallback_total counter
+loxilb_ai_pd_prefill_fallback_total{model="m1",reason="no_status"} 0
+loxilb_ai_pd_prefill_fallback_total{model="m1",reason="origin_408"} 0
+loxilb_ai_pd_prefill_fallback_total{model="m1",reason="origin_429"} 0
+loxilb_ai_pd_prefill_fallback_total{model="m1",reason="origin_5xx"} 0
+loxilb_ai_pd_prefill_fallback_total{model="m1",reason="other"} 0
+loxilb_ai_pd_prefill_fallback_total{model="m1",reason="truncated"} 0
+loxilb_ai_pd_prefill_fallback_total{model="other",reason="no_status"} 0
+loxilb_ai_pd_prefill_fallback_total{model="other",reason="origin_408"} 0
+loxilb_ai_pd_prefill_fallback_total{model="other",reason="origin_429"} 0
+loxilb_ai_pd_prefill_fallback_total{model="other",reason="origin_5xx"} 0
+loxilb_ai_pd_prefill_fallback_total{model="other",reason="other"} 0
+loxilb_ai_pd_prefill_fallback_total{model="other",reason="truncated"} 0
+# HELP loxilb_ai_pd_requests_total Total P/D disaggregation requests by model, phase, and status. phase="complete",status="success" is a decode answer the engine ended at the HTTP level (its last chunk, its Content-Length satisfied, or its EOF on an unframed answer) and the client received whole: HTTP completion, not semantic completion of the stream. The gateway does not require a finish_reason, a usage object or the SSE [DONE] event, and a stream the engine ended cleanly without them is a success here; a stream the gateway ended is decode/truncated, one the engine broke is decode/error.
+# TYPE loxilb_ai_pd_requests_total counter
+loxilb_ai_pd_requests_total{model="m1",phase="aborted",status="client"} 0
+loxilb_ai_pd_requests_total{model="m1",phase="complete",status="success"} 0
+loxilb_ai_pd_requests_total{model="m1",phase="decode",status="error"} 0
+loxilb_ai_pd_requests_total{model="m1",phase="decode",status="rejected"} 0
+loxilb_ai_pd_requests_total{model="m1",phase="decode",status="timeout"} 0
+loxilb_ai_pd_requests_total{model="m1",phase="decode",status="truncated"} 0
+loxilb_ai_pd_requests_total{model="m1",phase="decode",status="unknown"} 0
+loxilb_ai_pd_requests_total{model="m1",phase="prefill",status="error"} 0
+loxilb_ai_pd_requests_total{model="m1",phase="prefill",status="rejected"} 0
+loxilb_ai_pd_requests_total{model="m1",phase="prefill",status="timeout"} 0
+loxilb_ai_pd_requests_total{model="other",phase="aborted",status="client"} 0
+loxilb_ai_pd_requests_total{model="other",phase="complete",status="success"} 0
+loxilb_ai_pd_requests_total{model="other",phase="decode",status="error"} 0
+loxilb_ai_pd_requests_total{model="other",phase="decode",status="rejected"} 0
+loxilb_ai_pd_requests_total{model="other",phase="decode",status="timeout"} 0
+loxilb_ai_pd_requests_total{model="other",phase="decode",status="truncated"} 0
+loxilb_ai_pd_requests_total{model="other",phase="decode",status="unknown"} 0
+loxilb_ai_pd_requests_total{model="other",phase="prefill",status="error"} 0
+loxilb_ai_pd_requests_total{model="other",phase="prefill",status="rejected"} 0
+loxilb_ai_pd_requests_total{model="other",phase="prefill",status="timeout"} 0
+# HELP loxilb_ai_pd_terminator_synthesized_total P/D streams the gateway ended by writing the SSE [DONE] terminator the decode engine never sent (the graceful-[DONE] sweep, after the engine went silent). The mechanism behind part of loxilb_ai_pd_requests_total{phase="decode",status="truncated"}: the rest of that series is answers the gateway cut with an error (stream timeout, idle cap, duration cap).
+# TYPE loxilb_ai_pd_terminator_synthesized_total counter
+loxilb_ai_pd_terminator_synthesized_total 0
+# HELP loxilb_ai_policy_store_unavailable_total Total AI gateway requests refused with 503 because the service's api_key_auth policy requires a key and the API-key store is unconfigured or unreachable. Non-zero means the gateway is failing closed and legitimate traffic is being refused.
+# TYPE loxilb_ai_policy_store_unavailable_total counter
+loxilb_ai_policy_store_unavailable_total 0
+# HELP loxilb_ai_rate_limit_hits_total Total AI Gateway requests denied by rate limiting, by tenant and reason.
+# TYPE loxilb_ai_rate_limit_hits_total counter
+loxilb_ai_rate_limit_hits_total{reason="token_quota_exceeded",tenant="fixture-t"} 7
+loxilb_ai_rate_limit_hits_total{reason="token_quota_would_exceed",tenant="fixture-t"} 4
+# HELP loxilb_ai_reap_fallback_total Connections a reaper (a P/D timeout, the idle cap, the duration cap, a stalled client) ended from the health thread because the connection's owner worker could not be handed the end (no owner, or its wake failed). The request such an end frees has no request record. Expected 0; a non-zero rate means requests are missing from loxilb_ai_requests_total.
+# TYPE loxilb_ai_reap_fallback_total counter
+loxilb_ai_reap_fallback_total 0
+# HELP loxilb_ai_request_duration_seconds AI Gateway request duration in seconds, SSE activation to stream completion (monotonic clock at data plane). Completed requests only: an aborted request adds no sample.
+# TYPE loxilb_ai_request_duration_seconds histogram
+loxilb_ai_request_duration_seconds_bucket{model="m1",tenant="fixture-t",le="0.001"} 0
+loxilb_ai_request_duration_seconds_bucket{model="m1",tenant="fixture-t",le="0.005"} 2
+loxilb_ai_request_duration_seconds_bucket{model="m1",tenant="fixture-t",le="0.01"} 2
+loxilb_ai_request_duration_seconds_bucket{model="m1",tenant="fixture-t",le="0.025"} 2
+loxilb_ai_request_duration_seconds_bucket{model="m1",tenant="fixture-t",le="0.05"} 2
+loxilb_ai_request_duration_seconds_bucket{model="m1",tenant="fixture-t",le="0.1"} 2
+loxilb_ai_request_duration_seconds_bucket{model="m1",tenant="fixture-t",le="0.25"} 2
+loxilb_ai_request_duration_seconds_bucket{model="m1",tenant="fixture-t",le="0.5"} 3
+loxilb_ai_request_duration_seconds_bucket{model="m1",tenant="fixture-t",le="1"} 5
+loxilb_ai_request_duration_seconds_bucket{model="m1",tenant="fixture-t",le="2.5"} 9
+loxilb_ai_request_duration_seconds_bucket{model="m1",tenant="fixture-t",le="5"} 9
+loxilb_ai_request_duration_seconds_bucket{model="m1",tenant="fixture-t",le="10"} 9
+loxilb_ai_request_duration_seconds_bucket{model="m1",tenant="fixture-t",le="30"} 9
+loxilb_ai_request_duration_seconds_bucket{model="m1",tenant="fixture-t",le="60"} 9
+loxilb_ai_request_duration_seconds_bucket{model="m1",tenant="fixture-t",le="120"} 9
+loxilb_ai_request_duration_seconds_bucket{model="m1",tenant="fixture-t",le="300"} 9
+loxilb_ai_request_duration_seconds_bucket{model="m1",tenant="fixture-t",le="+Inf"} 9
+loxilb_ai_request_duration_seconds_sum{model="m1",tenant="fixture-t"} 10.02
+loxilb_ai_request_duration_seconds_count{model="m1",tenant="fixture-t"} 9
+# HELP loxilb_ai_requests_total Total AI Gateway requests by model, tenant, HTTP status code, outcome and cause (completed = answered whole, by a backend or by the gateway's own outage, timeout or redirect answer, with the status the client got; aborted = the client did not get a complete response, cause client (it left or stopped reading), engine (the backend died under the answer) or gateway (a cap, a reaper or the listener cut it), status none when no status was sent; denied = refused by the gateway before any backend was chosen: policy gate, capacity, routing, framing). cause is empty unless outcome is aborted.
+# TYPE loxilb_ai_requests_total counter
+loxilb_ai_requests_total{cause="",model="m1",outcome="completed",status="200",tenant="fixture-t"} 9
+loxilb_ai_requests_total{cause="",model="m1",outcome="completed",status="301",tenant="fixture-t"} 0
+loxilb_ai_requests_total{cause="",model="m1",outcome="completed",status="302",tenant="fixture-t"} 0
+loxilb_ai_requests_total{cause="",model="m1",outcome="completed",status="303",tenant="fixture-t"} 0
+loxilb_ai_requests_total{cause="",model="m1",outcome="completed",status="307",tenant="fixture-t"} 0
+loxilb_ai_requests_total{cause="",model="m1",outcome="completed",status="308",tenant="fixture-t"} 0
+loxilb_ai_requests_total{cause="",model="m1",outcome="completed",status="400",tenant="fixture-t"} 0
+loxilb_ai_requests_total{cause="",model="m1",outcome="completed",status="401",tenant="fixture-t"} 0
+loxilb_ai_requests_total{cause="",model="m1",outcome="completed",status="403",tenant="fixture-t"} 0
+loxilb_ai_requests_total{cause="",model="m1",outcome="completed",status="404",tenant="fixture-t"} 0
+loxilb_ai_requests_total{cause="",model="m1",outcome="completed",status="408",tenant="fixture-t"} 0
+loxilb_ai_requests_total{cause="",model="m1",outcome="completed",status="429",tenant="fixture-t"} 0
+loxilb_ai_requests_total{cause="",model="m1",outcome="completed",status="500",tenant="fixture-t"} 0
+loxilb_ai_requests_total{cause="",model="m1",outcome="completed",status="502",tenant="fixture-t"} 0
+loxilb_ai_requests_total{cause="",model="m1",outcome="completed",status="503",tenant="fixture-t"} 0
+loxilb_ai_requests_total{cause="",model="m1",outcome="completed",status="504",tenant="fixture-t"} 0
+loxilb_ai_requests_total{cause="",model="m1",outcome="denied",status="400",tenant="fixture-t"} 0
+loxilb_ai_requests_total{cause="",model="m1",outcome="denied",status="401",tenant="fixture-t"} 0
+loxilb_ai_requests_total{cause="",model="m1",outcome="denied",status="403",tenant="fixture-t"} 0
+loxilb_ai_requests_total{cause="",model="m1",outcome="denied",status="404",tenant="fixture-t"} 0
+loxilb_ai_requests_total{cause="",model="m1",outcome="denied",status="408",tenant="fixture-t"} 0
+loxilb_ai_requests_total{cause="",model="m1",outcome="denied",status="413",tenant="fixture-t"} 0
+loxilb_ai_requests_total{cause="",model="m1",outcome="denied",status="429",tenant="fixture-t"} 11
+loxilb_ai_requests_total{cause="",model="m1",outcome="denied",status="500",tenant="fixture-t"} 0
+loxilb_ai_requests_total{cause="",model="m1",outcome="denied",status="502",tenant="fixture-t"} 0
+loxilb_ai_requests_total{cause="",model="m1",outcome="denied",status="503",tenant="fixture-t"} 0
+loxilb_ai_requests_total{cause="",model="m1",outcome="denied",status="504",tenant="fixture-t"} 0
+loxilb_ai_requests_total{cause="client",model="m1",outcome="aborted",status="200",tenant="fixture-t"} 0
+loxilb_ai_requests_total{cause="client",model="m1",outcome="aborted",status="none",tenant="fixture-t"} 0
+loxilb_ai_requests_total{cause="engine",model="m1",outcome="aborted",status="200",tenant="fixture-t"} 0
+loxilb_ai_requests_total{cause="engine",model="m1",outcome="aborted",status="none",tenant="fixture-t"} 0
+loxilb_ai_requests_total{cause="gateway",model="m1",outcome="aborted",status="200",tenant="fixture-t"} 0
+# HELP loxilb_ai_route_host_missing_total Requests that reached dispatch with no usable Host on a listener whose pools name models. Routed to the pool of the model the request named, or refused (503 model_unavailable / no_route); never sent to another model's pool. Expected 0: a non-zero rate means a path lost the Host.
+# TYPE loxilb_ai_route_host_missing_total counter
+loxilb_ai_route_host_missing_total 0
+# HELP loxilb_ai_store_write_outcome_unknown_total Management-plane store writes whose statement was handed to the store and not answered within LLB_AI_STORE_OP_TIMEOUT_MS, by plane (aikey: the API-key store; mgmt: the management credential store). Each was answered 504 ai_key_store_outcome_unknown (management-plane result store_outcome_unknown) and may have been applied by the store after the caller gave up; the audit trail holds a result record with reason store_outcome_unknown for each, carrying the request identity to reconcile it by. Writes the store never received are not counted: they are 503 and safe to retry.
+# TYPE loxilb_ai_store_write_outcome_unknown_total counter
+loxilb_ai_store_write_outcome_unknown_total{plane="aikey"} 0
+loxilb_ai_store_write_outcome_unknown_total{plane="mgmt"} 0
+# HELP loxilb_ai_token_quota_cold_open_total Total times this node started serving token-quota traffic fail-open with cold (empty) quota state, without peer warm-up.
+# TYPE loxilb_ai_token_quota_cold_open_total counter
+loxilb_ai_token_quota_cold_open_total 1
+# HELP loxilb_ai_token_quota_denied_total Total AI Gateway requests refused by a token quota, by tenant. Union of both refusal modes: the post-hoc latch (tenant over budget) and the pre-admission reservation (this request did not fit the remaining headroom). Split them with the reason label on loxilb_ai_rate_limit_hits_total.
+# TYPE loxilb_ai_token_quota_denied_total counter
+loxilb_ai_token_quota_denied_total{tenant="fixture-t"} 11
+# HELP loxilb_ai_tokens_consumed_total Total tokens metered against completed AI Gateway responses, by model, tenant, and kind (prompt|completion).
+# TYPE loxilb_ai_tokens_consumed_total counter
+loxilb_ai_tokens_consumed_total{kind="completion",model="m1",tenant="fixture-t"} 45
+loxilb_ai_tokens_consumed_total{kind="prompt",model="m1",tenant="fixture-t"} 90
+# HELP loxilb_ai_worker_scrape_total Total vLLM worker /metrics scrape attempts by outcome (ok, unreachable, http_error, body_error, unparseable, bad_request). Anything other than ok means P/D load-aware selection is scoring on a stale or substituted signal for that endpoint.
+# TYPE loxilb_ai_worker_scrape_total counter
+loxilb_ai_worker_scrape_total{result="bad_request"} 0
+loxilb_ai_worker_scrape_total{result="body_error"} 0
+loxilb_ai_worker_scrape_total{result="http_error"} 0
+loxilb_ai_worker_scrape_total{result="ok"} 0
+loxilb_ai_worker_scrape_total{result="unknown"} 0
+loxilb_ai_worker_scrape_total{result="unparseable"} 0
+loxilb_ai_worker_scrape_total{result="unreachable"} 0
+# HELP loxilb_kv_exact_overlap_blocks Blocks of the chosen endpoint's KV inventory that overlapped the prompt per Tier-1.5 lookup (0 when no endpoint held any).
+# TYPE loxilb_kv_exact_overlap_blocks histogram
+loxilb_kv_exact_overlap_blocks_bucket{le="1"} 0
+loxilb_kv_exact_overlap_blocks_bucket{le="2"} 0
+loxilb_kv_exact_overlap_blocks_bucket{le="4"} 0
+loxilb_kv_exact_overlap_blocks_bucket{le="8"} 0
+loxilb_kv_exact_overlap_blocks_bucket{le="16"} 0
+loxilb_kv_exact_overlap_blocks_bucket{le="32"} 0
+loxilb_kv_exact_overlap_blocks_bucket{le="64"} 0
+loxilb_kv_exact_overlap_blocks_bucket{le="128"} 0
+loxilb_kv_exact_overlap_blocks_bucket{le="256"} 0
+loxilb_kv_exact_overlap_blocks_bucket{le="512"} 0
+loxilb_kv_exact_overlap_blocks_bucket{le="1024"} 0
+loxilb_kv_exact_overlap_blocks_bucket{le="2048"} 0
+loxilb_kv_exact_overlap_blocks_bucket{le="+Inf"} 0
+loxilb_kv_exact_overlap_blocks_sum 0
+loxilb_kv_exact_overlap_blocks_count 0
+# HELP loxilb_kv_exact_prompt_blocks Blocks the prompt hashed to per Tier-1.5 lookup that reached the scorer (the chain is capped at KV_MAX_TOKENS).
+# TYPE loxilb_kv_exact_prompt_blocks histogram
+loxilb_kv_exact_prompt_blocks_bucket{le="1"} 0
+loxilb_kv_exact_prompt_blocks_bucket{le="2"} 0
+loxilb_kv_exact_prompt_blocks_bucket{le="4"} 0
+loxilb_kv_exact_prompt_blocks_bucket{le="8"} 0
+loxilb_kv_exact_prompt_blocks_bucket{le="16"} 0
+loxilb_kv_exact_prompt_blocks_bucket{le="32"} 0
+loxilb_kv_exact_prompt_blocks_bucket{le="64"} 0
+loxilb_kv_exact_prompt_blocks_bucket{le="128"} 0
+loxilb_kv_exact_prompt_blocks_bucket{le="256"} 0
+loxilb_kv_exact_prompt_blocks_bucket{le="512"} 0
+loxilb_kv_exact_prompt_blocks_bucket{le="1024"} 0
+loxilb_kv_exact_prompt_blocks_bucket{le="2048"} 0
+loxilb_kv_exact_prompt_blocks_bucket{le="+Inf"} 0
+loxilb_kv_exact_prompt_blocks_sum 0
+loxilb_kv_exact_prompt_blocks_count 0
+# HELP loxilb_kv_exact_stage_seconds Tier-1.5 KV-exact routing cost per stage of pd_kv_exact_select, by outcome (hit: the exact tier chose the endpoint; miss: it fell through).
+# TYPE loxilb_kv_exact_stage_seconds histogram
+loxilb_kv_exact_stage_seconds_bucket{outcome="hit",stage="cgo",le="0.001"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="hit",stage="cgo",le="0.005"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="hit",stage="cgo",le="0.01"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="hit",stage="cgo",le="0.025"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="hit",stage="cgo",le="0.05"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="hit",stage="cgo",le="0.1"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="hit",stage="cgo",le="0.25"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="hit",stage="cgo",le="0.5"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="hit",stage="cgo",le="1"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="hit",stage="cgo",le="2.5"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="hit",stage="cgo",le="5"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="hit",stage="cgo",le="10"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="hit",stage="cgo",le="+Inf"} 0
+loxilb_kv_exact_stage_seconds_sum{outcome="hit",stage="cgo"} 0
+loxilb_kv_exact_stage_seconds_count{outcome="hit",stage="cgo"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="hit",stage="hash",le="0.001"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="hit",stage="hash",le="0.005"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="hit",stage="hash",le="0.01"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="hit",stage="hash",le="0.025"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="hit",stage="hash",le="0.05"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="hit",stage="hash",le="0.1"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="hit",stage="hash",le="0.25"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="hit",stage="hash",le="0.5"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="hit",stage="hash",le="1"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="hit",stage="hash",le="2.5"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="hit",stage="hash",le="5"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="hit",stage="hash",le="10"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="hit",stage="hash",le="+Inf"} 0
+loxilb_kv_exact_stage_seconds_sum{outcome="hit",stage="hash"} 0
+loxilb_kv_exact_stage_seconds_count{outcome="hit",stage="hash"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="hit",stage="tokenize",le="0.001"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="hit",stage="tokenize",le="0.005"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="hit",stage="tokenize",le="0.01"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="hit",stage="tokenize",le="0.025"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="hit",stage="tokenize",le="0.05"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="hit",stage="tokenize",le="0.1"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="hit",stage="tokenize",le="0.25"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="hit",stage="tokenize",le="0.5"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="hit",stage="tokenize",le="1"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="hit",stage="tokenize",le="2.5"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="hit",stage="tokenize",le="5"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="hit",stage="tokenize",le="10"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="hit",stage="tokenize",le="+Inf"} 0
+loxilb_kv_exact_stage_seconds_sum{outcome="hit",stage="tokenize"} 0
+loxilb_kv_exact_stage_seconds_count{outcome="hit",stage="tokenize"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="miss",stage="cgo",le="0.001"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="miss",stage="cgo",le="0.005"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="miss",stage="cgo",le="0.01"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="miss",stage="cgo",le="0.025"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="miss",stage="cgo",le="0.05"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="miss",stage="cgo",le="0.1"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="miss",stage="cgo",le="0.25"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="miss",stage="cgo",le="0.5"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="miss",stage="cgo",le="1"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="miss",stage="cgo",le="2.5"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="miss",stage="cgo",le="5"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="miss",stage="cgo",le="10"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="miss",stage="cgo",le="+Inf"} 0
+loxilb_kv_exact_stage_seconds_sum{outcome="miss",stage="cgo"} 0
+loxilb_kv_exact_stage_seconds_count{outcome="miss",stage="cgo"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="miss",stage="hash",le="0.001"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="miss",stage="hash",le="0.005"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="miss",stage="hash",le="0.01"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="miss",stage="hash",le="0.025"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="miss",stage="hash",le="0.05"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="miss",stage="hash",le="0.1"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="miss",stage="hash",le="0.25"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="miss",stage="hash",le="0.5"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="miss",stage="hash",le="1"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="miss",stage="hash",le="2.5"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="miss",stage="hash",le="5"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="miss",stage="hash",le="10"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="miss",stage="hash",le="+Inf"} 0
+loxilb_kv_exact_stage_seconds_sum{outcome="miss",stage="hash"} 0
+loxilb_kv_exact_stage_seconds_count{outcome="miss",stage="hash"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="miss",stage="tokenize",le="0.001"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="miss",stage="tokenize",le="0.005"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="miss",stage="tokenize",le="0.01"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="miss",stage="tokenize",le="0.025"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="miss",stage="tokenize",le="0.05"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="miss",stage="tokenize",le="0.1"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="miss",stage="tokenize",le="0.25"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="miss",stage="tokenize",le="0.5"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="miss",stage="tokenize",le="1"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="miss",stage="tokenize",le="2.5"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="miss",stage="tokenize",le="5"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="miss",stage="tokenize",le="10"} 0
+loxilb_kv_exact_stage_seconds_bucket{outcome="miss",stage="tokenize",le="+Inf"} 0
+loxilb_kv_exact_stage_seconds_sum{outcome="miss",stage="tokenize"} 0
+loxilb_kv_exact_stage_seconds_count{outcome="miss",stage="tokenize"} 0
+# HELP loxilb_pd_admission_overflow_shed_total Total requests shed (retriable 429) by the per-EP admission layer because every healthy prefill EP was at the in-flight cap AND its parked FIFO was full (overflow valve; the only reachable shed when queueing is enabled). Distinct from loxilb_pd_admission_shed_total, which counts sheds with queueing disabled.
+# TYPE loxilb_pd_admission_overflow_shed_total counter
+loxilb_pd_admission_overflow_shed_total 0
+# HELP loxilb_pd_admission_queued_total Total requests PARKED (held, not shed) on a per-EP FIFO by the per-EP admission layer (hold-don't-drop). Distinct from global total-inflight valve.
+# TYPE loxilb_pd_admission_queued_total counter
+loxilb_pd_admission_queued_total 0
+# HELP loxilb_pd_admission_shed_total Total requests shed (retriable 429) by the per-EP admission layer : every healthy prefill EP at the in-flight cap with no parked-FIFO room. Distinct from global total-inflight valve.
+# TYPE loxilb_pd_admission_shed_total counter
+loxilb_pd_admission_shed_total 0
+# HELP loxilb_proxy_http_ttfb_seconds HTTP/1.1 Time-To-First-Byte latency in seconds, of backend replies only; the gateway's own answers are not sampled.
+# TYPE loxilb_proxy_http_ttfb_seconds histogram
+loxilb_proxy_http_ttfb_seconds_bucket{le="0.001"} 0
+loxilb_proxy_http_ttfb_seconds_bucket{le="0.005"} 2
+loxilb_proxy_http_ttfb_seconds_bucket{le="0.01"} 2
+loxilb_proxy_http_ttfb_seconds_bucket{le="0.025"} 2
+loxilb_proxy_http_ttfb_seconds_bucket{le="0.05"} 2
+loxilb_proxy_http_ttfb_seconds_bucket{le="0.1"} 2
+loxilb_proxy_http_ttfb_seconds_bucket{le="0.25"} 2
+loxilb_proxy_http_ttfb_seconds_bucket{le="0.5"} 2
+loxilb_proxy_http_ttfb_seconds_bucket{le="1"} 4
+loxilb_proxy_http_ttfb_seconds_bucket{le="2.5"} 8
+loxilb_proxy_http_ttfb_seconds_bucket{le="5"} 8
+loxilb_proxy_http_ttfb_seconds_bucket{le="10"} 8
+loxilb_proxy_http_ttfb_seconds_bucket{le="+Inf"} 8
+loxilb_proxy_http_ttfb_seconds_sum 9.620899
+loxilb_proxy_http_ttfb_seconds_count 8
