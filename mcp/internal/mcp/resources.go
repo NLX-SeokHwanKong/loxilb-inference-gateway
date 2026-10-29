@@ -27,10 +27,15 @@ import (
 	"github.com/loxilb-io/loxilb-inference-gateway/mcp/internal/mcp/tools"
 )
 
-// metricsReferenceDoc is the curated metric-family reference served as
-// loxilb://docs/metrics. Keep the caveats section in sync with
-// docs/MCP-OPERATIONS.md
-const metricsReferenceDoc = `# loxilb metric family reference (curated)
+//go:generate go run ../../contract/gen-metricsdoc -root ../../.. -out zz_metrics_reference_gen.go
+
+// metricsReferenceDoc is the metric-family reference served as
+// loxilb://docs/metrics: the curated key families and caveats below, then
+// the generated table of every gateway family (metricFamilyTable). Keep the
+// caveats section in sync with docs/MCP-OPERATIONS.md
+const metricsReferenceDoc = metricsCuratedDoc + "\n" + metricFamilyTable
+
+const metricsCuratedDoc = `# loxilb metric family reference
 
 Scrape endpoint: GET /netlox/v1/metrics (Prometheus exposition text).
 Use the metrics_snapshot tool with a families glob, or promql_query when a
@@ -47,6 +52,25 @@ Prometheus server is configured.
   results feeding the NoHealthyEndpoints/UnhealthyEndpoints alerts.
 - loxilb_active_conntrack_entries / loxilb_conntrack_max_entries and the
   flow/traffic families — dataplane load and conntrack headroom.
+- loxilb_ai_admission_* (labels service, pool) — the capacity gate per model
+  pool: loxilb_ai_admission_mode (0 off, 1 observe, 2 enforce),
+  loxilb_ai_admission_inflight (role="service" is the pool-wide count),
+  loxilb_ai_admission_effective_limit (the ceiling in force, 0 unlimited),
+  loxilb_ai_admission_queue_wait_seconds. Basis of the LoxilbAIAdmission*
+  alerts; diagnose_ai_latency reads them per pool.
+- loxilb_pd_admission_shed_total / loxilb_pd_admission_overflow_shed_total —
+  P/D per-endpoint admission sheds (the overflow valve is the only shed that
+  can fire with per-endpoint queueing on).
+- loxilb_ai_epp_duration_seconds, loxilb_ai_epp_candidates_rejected_total
+  (reason), loxilb_ai_epp_pending — the Endpoint Picker's decision latency,
+  the candidates the data plane skipped and the decisions it holds.
+- loxilb_kv_subscriber_connected, loxilb_kv_inventory_fresh,
+  loxilb_kv_subscriber_last_event_timestamp_seconds (labels service, ep) —
+  KV event subscriber freshness behind KV-aware routing.
+- loxilb_ai_tokens_consumed_total (model, tenant, kind),
+  loxilb_ai_token_quota_denied_total (tenant), loxilb_ai_fc_band_total
+  (service, band, outcome) — tokens charged, token-quota refusals and the
+  capacity gate's outcomes per priority band (ai_traffic_report).
 
 ## Known caveats
 
@@ -67,6 +91,17 @@ Prometheus server is configured.
 - The bridge reaches gateways of any age. No outcome label means an older
   build whose total excludes denials, and one older still counts only
   SSE-terminated streams — cross-check with the L7 response counters.
+- loxilb_ai_token_quota_denied_total is the union of both token-quota
+  refusal modes: the tenant over budget (reason token_quota_exceeded on
+  loxilb_ai_rate_limit_hits_total) and one request that did not fit the
+  headroom (token_quota_would_exceed). Only the hits counter tells them apart.
+- loxilb_ai_admission_queue_wait_seconds has one sample per park, taken when
+  the park ends; a request drained from the queue is not sampled.
+  loxilb_ai_fc_band_total outcome="queued" counts parks, not requests.
+- loxilb_kv_inventory_fresh 0 with loxilb_kv_subscriber_connected 1 means the
+  socket is up but the inventory holds nothing from the current publisher:
+  KV-aware routing runs cold for that endpoint. An idle engine publishes no
+  events, so the last-event age alone is not a fault.
 `
 
 // registerResources adds the MCP resources.

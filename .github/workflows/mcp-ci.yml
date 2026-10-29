@@ -74,7 +74,7 @@ jobs:
         run: |
           go generate ./...
           git diff --exit-code -- . || {
-            echo '::error::zz_swagger_enums_gen.go is stale: run `go generate ./...` in mcp/ and commit the result'
+            echo '::error::a generated file is stale (zz_swagger_enums_gen.go from swagger, zz_metrics_reference_gen.go from tools/metric-manifest): run `go generate ./...` in mcp/ and commit the result'
             exit 1
           }
       - name: contract tests
