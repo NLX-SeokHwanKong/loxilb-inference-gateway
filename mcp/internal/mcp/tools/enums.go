@@ -67,34 +67,21 @@ func enumDescription(key string) string {
 
 // lbCreateInputSchema derives lb_create's input schema from lbCreateIn and
 // replaces the descriptions of the enumerated serviceArguments properties
-// with the generated swagger text (sel, mode, api_key_auth), so the model
-// reads the REST contract's own words and permitted values. The handler
-// validates the same values; the schema carries the enum for api_key_auth
-// so an invalid policy is refused before the handler runs.
+// with the generated swagger text (sel, mode, api_key_auth, fc_mode,
+// eppFailureMode, ai_default_reservation, security), so the model reads
+// the REST contract's own words and permitted values. The handler
+// validates the same values; the string arguments carry the enum so an
+// invalid value is refused before the handler runs.
 func lbCreateInputSchema() *jsonschema.Schema {
-	s, err := jsonschema.For[lbCreateIn](nil)
-	if err != nil {
-		panic(fmt.Errorf("lb_create input schema: %w", err))
-	}
-	for arg, key := range map[string]string{
-		"sel":          "serviceArguments.sel",
-		"mode":         "serviceArguments.mode",
-		"api_key_auth": "serviceArguments.api_key_auth",
-	} {
-		p, ok := s.Properties[arg]
-		if !ok {
-			panic(fmt.Errorf("lb_create input schema: no property %q", arg))
-		}
-		if doc := enumDescription(key); doc != "" {
-			p.Description = doc
-		}
-	}
-	if p, ok := s.Properties["api_key_auth"]; ok {
-		for _, v := range swaggerEnum["serviceArguments.api_key_auth"] {
-			p.Enum = append(p.Enum, v)
-		}
-	}
-	return s
+	return inputSchemaWithEnums[lbCreateIn]("lb_create", map[string]string{
+		"sel":                    "serviceArguments.sel",
+		"mode":                   "serviceArguments.mode",
+		"api_key_auth":           "serviceArguments.api_key_auth",
+		"fc_mode":                "serviceArguments.fc_mode",
+		"epp_failure_mode":       "serviceArguments.eppFailureMode",
+		"ai_default_reservation": "serviceArguments.ai_default_reservation",
+		"security":               "serviceArguments.security",
+	})
 }
 
 // inputSchemaWithEnums derives a tool's input schema from its input struct

@@ -264,7 +264,7 @@ func TestTierAlignmentPreviewShowsCurrentAndDiff(t *testing.T) {
 	}
 
 	// pii_url_patterns_set add: the proposed list is the current one plus the new pattern.
-	res, err = cs.CallTool(ctx, &sdk.CallToolParams{Name: "pii_url_patterns_set", Arguments: map[string]any{"mode": "add", "patterns": []map[string]any{{"pattern": "/v2/*", "exclude": true}}}})
+	res, err = cs.CallTool(ctx, &sdk.CallToolParams{Name: "pii_url_patterns_set", Arguments: map[string]any{"mode": "add", "patterns": []map[string]any{{"pattern": "/v2/*", "is_exclude": true}}}})
 	if err != nil || res.IsError {
 		t.Fatalf("pii preview: %v %v", err, res)
 	}

@@ -1696,8 +1696,8 @@ func (d *Deps) piiConfigure() sdk.ToolHandlerFor[piiConfigureIn, mutOut] {
 }
 
 type piiURLPatternIn struct {
-	Pattern string `json:"pattern" jsonschema:"URL pattern (e.g. /api/v1/chat*)"`
-	Exclude bool   `json:"exclude,omitempty" jsonschema:"true to exclude matching URLs from scanning"`
+	Pattern   string `json:"pattern" jsonschema:"URL pattern (e.g. /api/v1/chat*)"`
+	IsExclude bool   `json:"is_exclude,omitempty" jsonschema:"true to exclude matching URLs from scanning (PIIURLPattern.is_exclude)"`
 }
 
 type piiURLPatternsIn struct {
@@ -1734,8 +1734,8 @@ func (d *Deps) piiURLPatternsSet() sdk.ToolHandlerFor[piiURLPatternsIn, mutOut] 
 					return nil, mutOut{}, fmt.Errorf("patterns[%d].pattern is required", i)
 				}
 				pat := map[string]any{"pattern": p.Pattern}
-				if p.Exclude {
-					pat["exclude"] = true
+				if p.IsExclude {
+					pat["is_exclude"] = true
 				}
 				pats = append(pats, pat)
 			}
@@ -1764,8 +1764,8 @@ func (d *Deps) piiURLPatternsSet() sdk.ToolHandlerFor[piiURLPatternsIn, mutOut] 
 				for _, p := range cur {
 					pm := mapValue(p)
 					rp := map[string]any{"pattern": pm["pattern"]}
-					if boolValue(pm["is_exclude"]) || boolValue(pm["exclude"]) {
-						rp["exclude"] = true
+					if boolValue(pm["is_exclude"]) {
+						rp["is_exclude"] = true
 					}
 					rbPats = append(rbPats, rp)
 				}

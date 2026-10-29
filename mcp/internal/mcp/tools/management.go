@@ -604,31 +604,52 @@ type lbEndpointIn struct {
 }
 
 type lbCreateIn struct {
-	Target         string         `json:"target,omitempty" jsonschema:"target loxilb instance name; omit for default"`
-	ExternalIP     string         `json:"external_ip" jsonschema:"service VIP"`
-	Port           int            `json:"port" jsonschema:"service port"`
-	Protocol       string         `json:"protocol" jsonschema:"tcp|udp|sctp|icmp"`
-	Name           string         `json:"name,omitempty" jsonschema:"optional service name"`
-	Sel            int            `json:"sel,omitempty" jsonschema:"endpoint selection algorithm; permitted values and meanings come from the REST contract (generated description)"`
-	Mode           int            `json:"mode,omitempty" jsonschema:"NAT/proxy mode; permitted values and meanings come from the REST contract (generated description)"`
-	BGP            bool           `json:"bgp,omitempty" jsonschema:"advertise service via BGP"`
-	Monitor        bool           `json:"monitor,omitempty" jsonschema:"enable endpoint liveness monitoring"`
-	Timeout        int            `json:"timeout,omitempty" jsonschema:"session inactivity timeout seconds"`
-	Host           string         `json:"host,omitempty" jsonschema:"HTTP host match for a full-proxy AI service"`
-	PathPrefix     string         `json:"path_prefix,omitempty" jsonschema:"optional request path prefix"`
-	ModelName      string         `json:"model_name,omitempty" jsonschema:"model routing key"`
-	SSEMode        *bool          `json:"sse_mode,omitempty" jsonschema:"enable SSE handling; independent of api_key_auth"`
-	PDDisaggMode   *bool          `json:"pd_disagg_mode,omitempty" jsonschema:"enable the multi-tier prefill/decode routing ladder"`
-	PDCacheAware   *bool          `json:"pd_cache_aware_mode,omitempty" jsonschema:"enable Tier-1 prefix affinity on a P/D service"`
-	APIKeyAuth     string         `json:"api_key_auth,omitempty" jsonschema:"data-plane credential policy; permitted values come from the REST contract (generated description)"`
-	JWTAuthProfile string         `json:"jwt_auth_profile,omitempty" jsonschema:"name of a configured JWT auth profile; required when api_key_auth is jwt or apikey-or-jwt"`
-	KVExactMode    int            `json:"kv_exact_mode,omitempty" jsonschema:"KV topology: 0 off, 1 role-partitioned P/D, 3 single-pool"`
-	KVEngineType   string         `json:"kv_engine_type,omitempty" jsonschema:"KV engine contract: vllm, sglang, trtllm, or llamacpp"`
-	KVZMQPort      int            `json:"kv_zmq_port,omitempty" jsonschema:"base KV-event publisher port"`
-	KVBlockSize    int            `json:"kv_block_size,omitempty" jsonschema:"engine KV block size in tokens"`
-	Endpoints      []lbEndpointIn `json:"endpoints" jsonschema:"backend endpoints (at least one)"`
-	ServiceExtra   map[string]any `json:"service_extra,omitempty" jsonschema:"additional serviceArguments fields; every key must be a serviceArguments property of the REST contract, read-back (*_effective) and excluded keys are refused"`
-	ConfirmToken   string         `json:"confirm_token,omitempty" jsonschema:"unused for lb_create; present for schema symmetry"`
+	Target         string `json:"target,omitempty" jsonschema:"target loxilb instance name; omit for default"`
+	ExternalIP     string `json:"external_ip" jsonschema:"service VIP"`
+	Port           int    `json:"port" jsonschema:"service port"`
+	Protocol       string `json:"protocol" jsonschema:"tcp|udp|sctp|icmp"`
+	Name           string `json:"name,omitempty" jsonschema:"optional service name"`
+	Sel            int    `json:"sel,omitempty" jsonschema:"endpoint selection algorithm; permitted values and meanings come from the REST contract (generated description)"`
+	Mode           int    `json:"mode,omitempty" jsonschema:"NAT/proxy mode; permitted values and meanings come from the REST contract (generated description)"`
+	BGP            bool   `json:"bgp,omitempty" jsonschema:"advertise service via BGP"`
+	Monitor        bool   `json:"monitor,omitempty" jsonschema:"enable endpoint liveness monitoring"`
+	Timeout        int    `json:"timeout,omitempty" jsonschema:"session inactivity timeout seconds"`
+	Host           string `json:"host,omitempty" jsonschema:"HTTP host match for a full-proxy AI service"`
+	PathPrefix     string `json:"path_prefix,omitempty" jsonschema:"optional request path prefix"`
+	ModelName      string `json:"model_name,omitempty" jsonschema:"model routing key"`
+	SSEMode        *bool  `json:"sse_mode,omitempty" jsonschema:"enable SSE handling; independent of api_key_auth"`
+	PDDisaggMode   *bool  `json:"pd_disagg_mode,omitempty" jsonschema:"enable the multi-tier prefill/decode routing ladder"`
+	PDCacheAware   *bool  `json:"pd_cache_aware_mode,omitempty" jsonschema:"enable Tier-1 prefix affinity on a P/D service"`
+	APIKeyAuth     string `json:"api_key_auth,omitempty" jsonschema:"data-plane credential policy; permitted values come from the REST contract (generated description)"`
+	JWTAuthProfile string `json:"jwt_auth_profile,omitempty" jsonschema:"name of a configured JWT auth profile; required when api_key_auth is jwt or apikey-or-jwt"`
+	KVExactMode    int    `json:"kv_exact_mode,omitempty" jsonschema:"KV topology: 0 off, 1 role-partitioned P/D, 3 single-pool"`
+	KVEngineType   string `json:"kv_engine_type,omitempty" jsonschema:"KV engine contract: vllm, sglang, trtllm, or llamacpp"`
+	KVZMQPort      int    `json:"kv_zmq_port,omitempty" jsonschema:"base KV-event publisher port"`
+	KVBlockSize    int    `json:"kv_block_size,omitempty" jsonschema:"engine KV block size in tokens"`
+	// Flow control, EPP, admission reservation, listener security and
+	// identity (typed since PR-B2; the permitted values of the enumerated
+	// ones come from the generated swagger tables).
+	FCMode               string         `json:"fc_mode,omitempty" jsonschema:"flow-control mode; permitted values and meanings come from the REST contract (generated description)"`
+	FCMaxOutstanding     int            `json:"fc_max_outstanding,omitempty" jsonschema:"flow-control ceiling on in-flight requests of the service"`
+	FCMaxQueueDepth      int            `json:"fc_max_queue_depth,omitempty" jsonschema:"flow-control admission queue depth"`
+	FCMaxQueueWaitMs     int            `json:"fc_max_queue_wait_ms,omitempty" jsonschema:"longest wait in the admission queue, milliseconds"`
+	FCEpMaxInflight      int            `json:"fc_ep_max_inflight,omitempty" jsonschema:"per-endpoint in-flight ceiling"`
+	FCPrefillMaxInflight int            `json:"fc_prefill_max_inflight,omitempty" jsonschema:"in-flight ceiling of the prefill tier (P/D)"`
+	FCDecodeMaxInflight  int            `json:"fc_decode_max_inflight,omitempty" jsonschema:"in-flight ceiling of the decode tier (P/D)"`
+	FCTenantMaxSharePct  int            `json:"fc_tenant_max_share_pct,omitempty" jsonschema:"largest share of the service ceiling one tenant may hold, percent"`
+	EPPEndpoint          string         `json:"epp_endpoint,omitempty" jsonschema:"host:port of the endpoint-picker (EPP) gRPC service the rule consults"`
+	EPPFailureMode       string         `json:"epp_failure_mode,omitempty" jsonschema:"what a request does when the EPP cannot answer; permitted values come from the REST contract (generated description)"`
+	EPPTimeoutMs         int            `json:"epp_timeout_ms,omitempty" jsonschema:"EPP call timeout, milliseconds"`
+	EPPPlaintext         *bool          `json:"epp_plaintext,omitempty" jsonschema:"true to talk to the EPP without TLS"`
+	AIDefaultReservation string         `json:"ai_default_reservation,omitempty" jsonschema:"whether a request without a completion ceiling reserves ai_default_max_tokens at admission; permitted values come from the REST contract (generated description)"`
+	AIDefaultMaxTokens   int            `json:"ai_default_max_tokens,omitempty" jsonschema:"completion tokens reserved for a request without a ceiling when ai_default_reservation is on"`
+	AIObjectiveStrict    *bool          `json:"ai_objective_strict,omitempty" jsonschema:"true refuses a request naming an objective the key or tenant may not use instead of falling back"`
+	Security             int            `json:"security,omitempty" jsonschema:"listener security; permitted values and meanings come from the REST contract (generated description)"`
+	AdminStateUp         *bool          `json:"admin_state_up,omitempty" jsonschema:"false creates the rule out of service; lb_update puts it back"`
+	ID                   string         `json:"id,omitempty" jsonschema:"optional caller-chosen rule identifier (opaque id)"`
+	Endpoints            []lbEndpointIn `json:"endpoints" jsonschema:"backend endpoints (at least one)"`
+	ServiceExtra         map[string]any `json:"service_extra,omitempty" jsonschema:"additional serviceArguments fields; every key must be a serviceArguments property of the REST contract, read-back (*_effective) and excluded keys are refused"`
+	ConfirmToken         string         `json:"confirm_token,omitempty" jsonschema:"unused for lb_create; present for schema symmetry"`
 }
 
 // lbCreate is the create/replace split of POST /config/loadbalancer. The
@@ -671,6 +692,28 @@ func (d *Deps) lbCreate(role guard.Role) sdk.ToolHandlerFor[lbCreateIn, mutOut] 
 		}
 		if in.KVExactMode != 0 && in.KVExactMode != 1 && in.KVExactMode != 3 {
 			return nil, mutOut{}, fmt.Errorf("kv_exact_mode: must be 0, 1, or 3")
+		}
+		if in.FCMode != "" && !enumAllows("serviceArguments.fc_mode", in.FCMode) {
+			return nil, mutOut{}, fmt.Errorf("fc_mode: must be omitted or one of %s", enumValues("serviceArguments.fc_mode"))
+		}
+		if in.EPPFailureMode != "" && !enumAllows("serviceArguments.eppFailureMode", in.EPPFailureMode) {
+			return nil, mutOut{}, fmt.Errorf("epp_failure_mode: must be omitted or one of %s", enumValues("serviceArguments.eppFailureMode"))
+		}
+		if in.AIDefaultReservation != "" && !enumAllows("serviceArguments.ai_default_reservation", in.AIDefaultReservation) {
+			return nil, mutOut{}, fmt.Errorf("ai_default_reservation: must be omitted or one of %s", enumValues("serviceArguments.ai_default_reservation"))
+		}
+		if !intInEnum("serviceArguments.security", in.Security) {
+			return nil, mutOut{}, fmt.Errorf("security: must be one of %s", enumValues("serviceArguments.security"))
+		}
+		for _, f := range []struct {
+			name string
+			v    int
+		}{{"fc_max_outstanding", in.FCMaxOutstanding}, {"fc_max_queue_depth", in.FCMaxQueueDepth}, {"fc_max_queue_wait_ms", in.FCMaxQueueWaitMs},
+			{"fc_ep_max_inflight", in.FCEpMaxInflight}, {"fc_prefill_max_inflight", in.FCPrefillMaxInflight}, {"fc_decode_max_inflight", in.FCDecodeMaxInflight},
+			{"fc_tenant_max_share_pct", in.FCTenantMaxSharePct}, {"epp_timeout_ms", in.EPPTimeoutMs}, {"ai_default_max_tokens", in.AIDefaultMaxTokens}} {
+			if f.v < 0 {
+				return nil, mutOut{}, fmt.Errorf("%s: must be >= 0", f.name)
+			}
 		}
 		svc := map[string]any{
 			"externalIP": in.ExternalIP,
@@ -726,6 +769,43 @@ func (d *Deps) lbCreate(role guard.Role) sdk.ToolHandlerFor[lbCreateIn, mutOut] 
 		}
 		if in.KVBlockSize > 0 {
 			svc["kvBlockSize"] = in.KVBlockSize
+		}
+		if in.FCMode != "" {
+			svc["fc_mode"] = in.FCMode
+		}
+		for _, f := range []struct {
+			key string
+			v   int
+		}{{"fc_max_outstanding", in.FCMaxOutstanding}, {"fc_max_queue_depth", in.FCMaxQueueDepth}, {"fc_max_queue_wait_ms", in.FCMaxQueueWaitMs},
+			{"fc_ep_max_inflight", in.FCEpMaxInflight}, {"fc_prefill_max_inflight", in.FCPrefillMaxInflight}, {"fc_decode_max_inflight", in.FCDecodeMaxInflight},
+			{"fc_tenant_max_share_pct", in.FCTenantMaxSharePct}, {"eppTimeoutMs", in.EPPTimeoutMs}, {"ai_default_max_tokens", in.AIDefaultMaxTokens}} {
+			if f.v > 0 {
+				svc[f.key] = f.v
+			}
+		}
+		if in.EPPEndpoint != "" {
+			svc["eppEndpoint"] = in.EPPEndpoint
+		}
+		if in.EPPFailureMode != "" {
+			svc["eppFailureMode"] = in.EPPFailureMode
+		}
+		if in.EPPPlaintext != nil {
+			svc["eppPlaintext"] = *in.EPPPlaintext
+		}
+		if in.AIDefaultReservation != "" {
+			svc["ai_default_reservation"] = in.AIDefaultReservation
+		}
+		if in.AIObjectiveStrict != nil {
+			svc["ai_objective_strict"] = *in.AIObjectiveStrict
+		}
+		if in.Security != 0 {
+			svc["security"] = in.Security
+		}
+		if in.AdminStateUp != nil {
+			svc["adminStateUp"] = *in.AdminStateUp
+		}
+		if in.ID != "" {
+			svc["id"] = in.ID
 		}
 		if err := validateServiceExtra(in.ServiceExtra); err != nil {
 			return nil, mutOut{}, err
@@ -905,6 +985,27 @@ func lbRollback(existing map[string]any) *rollbackSpec {
 	copyIf("kv_engine_type", "kvEngineType")
 	copyIf("kv_zmq_port", "kvZmqPort")
 	copyIf("kv_block_size", "kvBlockSize")
+	copyIf("fc_mode", "fc_mode")
+	copyIf("fc_max_outstanding", "fc_max_outstanding")
+	copyIf("fc_max_queue_depth", "fc_max_queue_depth")
+	copyIf("fc_max_queue_wait_ms", "fc_max_queue_wait_ms")
+	copyIf("fc_ep_max_inflight", "fc_ep_max_inflight")
+	copyIf("fc_prefill_max_inflight", "fc_prefill_max_inflight")
+	copyIf("fc_decode_max_inflight", "fc_decode_max_inflight")
+	copyIf("fc_tenant_max_share_pct", "fc_tenant_max_share_pct")
+	copyIf("epp_endpoint", "eppEndpoint")
+	copyIf("epp_failure_mode", "eppFailureMode")
+	copyIf("epp_timeout_ms", "eppTimeoutMs")
+	copyIf("epp_plaintext", "eppPlaintext")
+	copyIf("ai_default_reservation", "ai_default_reservation")
+	copyIf("ai_default_max_tokens", "ai_default_max_tokens")
+	copyIf("ai_objective_strict", "ai_objective_strict")
+	copyIf("security", "security")
+	copyIf("id", "id")
+	// adminStateUp false is a declared state, not an absent one.
+	if v, ok := svc["adminStateUp"]; ok && v != nil {
+		args["admin_state_up"] = v
+	}
 	var eps []map[string]any
 	for _, e := range listValue(existing["endpoints"]) {
 		em := mapValue(e)

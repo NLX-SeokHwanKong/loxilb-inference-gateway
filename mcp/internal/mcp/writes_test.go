@@ -630,6 +630,101 @@ func TestSecrateDisableAndConfigPersistAreNeverAutopilot(t *testing.T) {
 	}
 }
 
+// ---- lb_create typed additions and the pii is_exclude wire key ----
+
+func TestLBCreateTypedAdditionsReachTheWire(t *testing.T) {
+	mock := newMockLoxilb(t)
+	b := newTestBridge(t, testConfig(mock.srv.URL))
+	cs := session(t, b, guard.RoleOperator)
+	ctx := context.Background()
+	args := map[string]any{"external_ip": "9.9.9.9", "port": 80, "protocol": "tcp", "mode": 4, "host": "m.example",
+		"endpoints": []map[string]any{{"ip": "10.0.0.5", "port": 8000}},
+		"fc_mode":   "enforce", "fc_max_outstanding": 64, "fc_max_queue_depth": 8, "fc_max_queue_wait_ms": 250,
+		"fc_ep_max_inflight": 4, "fc_prefill_max_inflight": 2, "fc_decode_max_inflight": 2, "fc_tenant_max_share_pct": 50,
+		"epp_endpoint": "10.0.0.9:9002", "epp_failure_mode": "FailOpen", "epp_timeout_ms": 300, "epp_plaintext": true,
+		"ai_default_reservation": "on", "ai_default_max_tokens": 512, "ai_objective_strict": false,
+		"security": 1, "admin_state_up": false, "id": "rule-x"}
+	res, err := cs.CallTool(ctx, &sdk.CallToolParams{Name: "lb_create", Arguments: args})
+	if err != nil || res.IsError {
+		t.Fatalf("create: %v %v", err, resultText(res))
+	}
+	svc, _ := mock.lastBody()["serviceArguments"].(map[string]any)
+	want := map[string]any{"fc_mode": "enforce", "fc_max_outstanding": float64(64), "fc_max_queue_depth": float64(8), "fc_max_queue_wait_ms": float64(250),
+		"fc_ep_max_inflight": float64(4), "fc_prefill_max_inflight": float64(2), "fc_decode_max_inflight": float64(2), "fc_tenant_max_share_pct": float64(50),
+		"eppEndpoint": "10.0.0.9:9002", "eppFailureMode": "FailOpen", "eppTimeoutMs": float64(300), "eppPlaintext": true,
+		"ai_default_reservation": "on", "ai_default_max_tokens": float64(512), "ai_objective_strict": false,
+		"security": float64(1), "adminStateUp": false, "id": "rule-x"}
+	for k, v := range want {
+		if svc[k] != v {
+			t.Errorf("serviceArguments.%s = %v, want %v", k, svc[k], v)
+		}
+	}
+	for _, tc := range []struct{ arg, val, want string }{
+		{"fc_mode", "sometimes", "fc_mode"}, {"epp_failure_mode", "Explode", "epp_failure_mode"}, {"ai_default_reservation", "maybe", "ai_default_reservation"},
+	} {
+		bad := map[string]any{"external_ip": "9.9.9.9", "port": 80, "protocol": "tcp", "endpoints": []map[string]any{{"ip": "10.0.0.5", "port": 8000}}, tc.arg: tc.val}
+		res, err := cs.CallTool(ctx, &sdk.CallToolParams{Name: "lb_create", Arguments: bad})
+		if err != nil || !res.IsError || !strings.Contains(resultText(res), tc.want) {
+			t.Errorf("%s=%s must be refused by the contract's enum: %v %v", tc.arg, tc.val, err, resultText(res))
+		}
+	}
+	bad := map[string]any{"external_ip": "9.9.9.9", "port": 80, "protocol": "tcp", "endpoints": []map[string]any{{"ip": "10.0.0.5", "port": 8000}}, "security": 7}
+	if res, err := cs.CallTool(ctx, &sdk.CallToolParams{Name: "lb_create", Arguments: bad}); err != nil || !res.IsError || !strings.Contains(resultText(res), "security") {
+		t.Errorf("security=7 must be refused: %v %v", err, resultText(res))
+	}
+	if n := mock.countRequests("POST /netlox/v1/config/loadbalancer"); n != 1 {
+		t.Errorf("want one POST, got %d", n)
+	}
+}
+
+func TestLBRollbackCarriesTheTypedAdditions(t *testing.T) {
+	mock := newMockLoxilb(t)
+	b := newTestBridge(t, testConfig(mock.srv.URL))
+	cs := session(t, b, guard.RoleAdmin)
+	// The mock rule declares id, adminStateUp false, security 1, eppEndpoint.
+	replace := map[string]any{"external_ip": "1.2.3.4", "port": 80, "protocol": "tcp", "mode": 4,
+		"host": "models.example", "path_prefix": "/v1", "model_name": "llama3",
+		"endpoints": []map[string]any{{"ip": "10.0.0.5", "port": 8000}}}
+	res, err := cs.CallTool(context.Background(), &sdk.CallToolParams{Name: "lb_create", Arguments: replace})
+	if err != nil || res.IsError {
+		t.Fatalf("preview: %v %v", err, resultText(res))
+	}
+	rb, _ := callOut(t, res)["rollback"].(map[string]any)
+	rbArgs, _ := rb["args"].(map[string]any)
+	if rbArgs["id"] != "rule-7" || rbArgs["security"] != float64(1) || rbArgs["epp_endpoint"] != "10.0.0.9:9002" || rbArgs["admin_state_up"] != false {
+		t.Errorf("rollback must carry the typed additions, adminStateUp false included: %v", rbArgs)
+	}
+}
+
+func TestPIIURLPatternsSendIsExclude(t *testing.T) {
+	mock := newMockLoxilb(t)
+	b := newTestBridge(t, testConfig(mock.srv.URL))
+	cs := session(t, b, guard.RoleAdmin)
+	ctx := context.Background()
+	args := map[string]any{"mode": "add", "patterns": []map[string]any{{"pattern": "/health*", "is_exclude": true}}}
+	res, err := cs.CallTool(ctx, &sdk.CallToolParams{Name: "pii_url_patterns_set", Arguments: args})
+	if err != nil || res.IsError {
+		t.Fatalf("preview: %v %v", err, resultText(res))
+	}
+	token, _ := callOut(t, res)["confirm_token"].(string)
+	res, err = cs.CallTool(ctx, &sdk.CallToolParams{Name: "pii_url_patterns_set", Arguments: withToken(args, token)})
+	if err != nil || res.IsError {
+		t.Fatalf("apply: %v %v", err, resultText(res))
+	}
+	pats, _ := mock.lastBody()["patterns"].([]any)
+	if len(pats) != 1 || mapValue(pats[0])["is_exclude"] != true {
+		t.Errorf("the wire key is is_exclude (swagger PIIURLPattern): %v", mock.lastBody())
+	}
+	if _, old := mapValue(pats[0])["exclude"]; old {
+		t.Errorf("the misspelt key must be gone: %v", pats[0])
+	}
+	// The old argument name is refused by the schema.
+	res, err = cs.CallTool(ctx, &sdk.CallToolParams{Name: "pii_url_patterns_set", Arguments: map[string]any{"mode": "add", "patterns": []map[string]any{{"pattern": "/x", "exclude": true}}}})
+	if err != nil || !res.IsError {
+		t.Fatalf("the old argument name must be refused: %v %v", err, resultText(res))
+	}
+}
+
 // mapValue returns v as an object, or an empty one (test-side copy of the
 // tools helper).
 func mapValue(v any) map[string]any {
