@@ -75,6 +75,41 @@ func RegisterAnalysis(s *sdk.Server, role guard.Role, pol *guard.Policy, deps *D
 			Annotations: roAnnotations("List trace catalogs"),
 		}, deps.passthrough("trace_catalog_list", "/config/trace/catalogs"))
 	})
+	reg("trace_otlp_get", func() {
+		sdk.AddTool(s, &sdk.Tool{
+			Name:        "trace_otlp_get",
+			Description: "OTLP export target: endpoint, protocol, TLS settings and recorded connection state (GET /config/trace/otlp). Header values are never returned, only their names; credentials in the endpoint are masked.",
+			Annotations: roAnnotations("Get OTLP export target"),
+		}, deps.traceOtlpGet())
+	})
+	reg("trace_parsers_list", func() {
+		sdk.AddTool(s, &sdk.Tool{
+			Name:        "trace_parsers_list",
+			Description: "List the protocol parsers registered in the tracing system: name, version, protocol, supported paths (GET /config/trace/parsers). While tracing is disabled the gateway answers 500 \"tracing not enabled\".",
+			Annotations: roAnnotations("List trace parsers"),
+		}, deps.traceParsersList())
+	})
+	reg("trace_catalog_parser_get", func() {
+		sdk.AddTool(s, &sdk.Tool{
+			Name:        "trace_catalog_parser_get",
+			Description: "The parser assigned to one trace catalog by numeric id 1-255 (GET /config/trace/catalog/{catalog_id}/parser): runtime parser name, declared parser type, catalog name. 404 when none is assigned or the registry is unavailable.",
+			Annotations: roAnnotations("Get catalog parser"),
+		}, deps.traceCatalogParserGet())
+	})
+	reg("dpu_debug_get", func() {
+		sdk.AddTool(s, &sdk.Tool{
+			Name:        "dpu_debug_get",
+			Description: "DPU offload state: enabled, plugins, offload success/failure/active counters in total and per pipe, circuit breaker (GET /config/dpu/debug). With pipe, svc or ep: filtered per-entry detail, at most 100 entries. On a host without a DPU, enabled is false and every counter is empty.",
+			Annotations: roAnnotations("Get DPU offload state"),
+		}, deps.dpuDebugGet())
+	})
+	reg("dpu_hwcounters_get", func() {
+		sdk.AddTool(s, &sdk.Tool{
+			Name:        "dpu_hwcounters_get",
+			Description: "Per-flow DPU hardware packet and byte counters from the registered providers (GET /config/dpu/hwcounters); rows are capped at 100. Empty on a host without a DPU.",
+			Annotations: roAnnotations("Get DPU hardware counters"),
+		}, deps.dpuHwcountersGet())
+	})
 	reg("nodegraph_get", func() {
 		sdk.AddTool(s, &sdk.Tool{
 			Name:        "nodegraph_get",

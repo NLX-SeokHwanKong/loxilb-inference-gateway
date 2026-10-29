@@ -189,6 +189,41 @@ func RegisterManagement(s *sdk.Server, role guard.Role, pol *guard.Policy, deps 
 			Annotations: roAnnotations("Capability verdicts"),
 		}, deps.statusCapabilities())
 	})
+	reg(ro("cert_get"), func() {
+		sdk.AddTool(s, &sdk.Tool{
+			Name:        "cert_get",
+			Description: "Metadata of one managed certificate entry (GET /config/cert/{certId}): usage, registered hostnames, and per certificate subject, issuer, validity, SANs and SHA-256 fingerprint. Parsed by the bridge; no PEM is returned and the API never returns the private key.",
+			Annotations: roAnnotations("Get certificate metadata"),
+		}, deps.certGet())
+	})
+	reg(ro("sni_cert_list"), func() {
+		sdk.AddTool(s, &sdk.Tool{
+			Name:        "sni_cert_list",
+			Description: "List the global SNI certificate store shared by all proxies: hostname and certificate directory per entry (GET /sni/certificates).",
+			Annotations: roAnnotations("List SNI certificates"),
+		}, deps.sniCertList())
+	})
+	reg(ro("l7policy_list"), func() {
+		sdk.AddTool(s, &sdk.Tool{
+			Name:        "l7policy_list",
+			Description: "List stored L7 content-routing policies with their ordered routes, match sets and actions (GET /config/l7policy). Registry read-back, not the effective data-plane policy; credential header values are masked.",
+			Annotations: roAnnotations("List L7 policies"),
+		}, deps.l7policyList())
+	})
+	reg(ro("l7policy_get"), func() {
+		sdk.AddTool(s, &sdk.Tool{
+			Name:        "l7policy_get",
+			Description: "One stored L7 content-routing policy by id (GET /config/l7policy/id/{id}); 404 when absent. Does not verify that the listener still carries it; credential header values are masked.",
+			Annotations: roAnnotations("Get an L7 policy"),
+		}, deps.l7policyGet())
+	})
+	reg(ro("opa_watcher_get"), func() {
+		sdk.AddTool(s, &sdk.Tool{
+			Name:        "opa_watcher_get",
+			Description: "OPA L4 policy watcher configuration and status: URL (credentials masked), policy path, poll interval, status, last sync, rules in cache, circuit breaker, last error (GET /config/opa/watcher). running is not a successful-sync verdict.",
+			Annotations: roAnnotations("Get OPA watcher"),
+		}, deps.opaWatcherGet())
+	})
 	reg(ro("maintenance_get"), func() {
 		sdk.AddTool(s, &sdk.Tool{
 			Name:        "maintenance_get",
