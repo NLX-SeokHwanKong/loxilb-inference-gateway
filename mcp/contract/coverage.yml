@@ -15,7 +15,7 @@
 # Budgets are ratchets: they may only go down. A raise is a warning in the CI summary.
 version: 1
 budget:
-  pending_max: 63
+  pending_max: 62
   tier_gap_max: 0
 operations:
 - op: GET /audit/policy
@@ -597,9 +597,19 @@ operations:
   impact: none
   note: "lb_get (PR-B1) is the read tool of this key. It is also the pre-read of lb_create's create/replace split (PR-A2, D13), performed through client.LBRuleByKey and presence-checked by the scanner like the other change-gate reads: a mutation's pre-read cannot be credited to a tool of another tier, and one entry carries one tier; owner-approved 2026-10-28"
 - op: PATCH /config/loadbalancer/externalipaddress/{ip_address}/port/{port}/protocol/{proto}
-  pending: P1b
+  tools:
+  - lb_update
   impact: service
-  note: PR-B2 lb_update; phase-1 fields allowlist, admin-confirm; owner-approved 2026-10-28
+  reversible: true
+  tier: admin-confirm
+  fields:
+  - adminStateUp
+  - endpoints[].weight
+  - fc_mode
+  - fc_max_outstanding
+  - fc_max_queue_depth
+  - fc_max_queue_wait_ms
+  note: "PR-B2 lb_update, phase 1 (change-gate requirement 3): the tool accepts only the fields: list above; a weight change sends the full current endpoint list with the weights swapped (the gateway replaces the list when the key is present); any other argument is refused by the schema and the description names lb_create (replace) and lb_delete. D8: a PATCH the gateway refuses (fullproxy rule, immutable field) is passed on verbatim plus one hint line. The pre-read is client.LBRuleByKey (credited to lb_get) and the read-back adds GET .../status through client.LBRuleStatus; owner-approved 2026-10-28"
 - op: GET /config/loadbalancer/externalipaddress/{ip_address}/port/{port}/protocol/{proto}/kvexactstatus
   tools:
   - lb_kvexact_status

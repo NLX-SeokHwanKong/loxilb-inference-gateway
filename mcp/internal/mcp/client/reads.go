@@ -93,6 +93,14 @@ func (c *Client) LBRuleByKey(ctx context.Context, ip string, port int, proto str
 	return out, true, nil
 }
 
+// LBRuleStatus returns the operational status of a rule key
+// (GET /config/loadbalancer/externalipaddress/{ip}/port/{port}/protocol/{proto}/status),
+// the read-back of lb_update beside the rule itself.
+func (c *Client) LBRuleStatus(ctx context.Context, ip string, port int, proto string) (map[string]any, error) {
+	return c.getObject(ctx, fmt.Sprintf("/config/loadbalancer/externalipaddress/%s/port/%d/protocol/%s/status",
+		url.PathEscape(ip), port, url.PathEscape(strings.ToLower(proto))))
+}
+
 func (c *Client) getObject(ctx context.Context, path string) (map[string]any, error) {
 	var out map[string]any
 	if err := c.Get(ctx, path, &out); err != nil {

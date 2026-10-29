@@ -97,6 +97,39 @@ func lbCreateInputSchema() *jsonschema.Schema {
 	return s
 }
 
+// inputSchemaWithEnums derives a tool's input schema from its input struct
+// and, for each argument named in enums (argument -> model.property),
+// replaces the description with the generated swagger text; a string
+// argument also carries the permitted values as an enum, so an unknown
+// value is refused before the handler runs.
+func inputSchemaWithEnums[T any](tool string, enums map[string]string) *jsonschema.Schema {
+	s, err := jsonschema.For[T](nil)
+	if err != nil {
+		panic(fmt.Errorf("%s input schema: %w", tool, err))
+	}
+	args := make([]string, 0, len(enums))
+	for arg := range enums {
+		args = append(args, arg)
+	}
+	sort.Strings(args)
+	for _, arg := range args {
+		key := enums[arg]
+		p, ok := s.Properties[arg]
+		if !ok {
+			panic(fmt.Errorf("%s input schema: no property %q", tool, arg))
+		}
+		if doc := enumDescription(key); doc != "" {
+			p.Description = doc
+		}
+		if p.Type == "string" {
+			for _, v := range swaggerEnum[key] {
+				p.Enum = append(p.Enum, v)
+			}
+		}
+	}
+	return s
+}
+
 // intInEnum reports whether an integer argument is one of the generated
 // permitted values of model.property.
 func intInEnum(key string, v int) bool {
