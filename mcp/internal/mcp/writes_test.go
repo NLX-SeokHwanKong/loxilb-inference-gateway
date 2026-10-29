@@ -514,6 +514,122 @@ func TestUserRatelimitSetAndDelete(t *testing.T) {
 	}
 }
 
+// ---- secrate_disable (D18) and config_persist (D22): admin-confirm, never autopilot ----
+
+func TestSecrateDisablePreviewsTheRollbackThenDeletes(t *testing.T) {
+	mock := newMockLoxilb(t)
+	b := newTestBridge(t, testConfig(mock.srv.URL))
+	cs := session(t, b, guard.RoleAdmin)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &sdk.CallToolParams{Name: "secrate_disable", Arguments: map[string]any{}})
+	if err != nil || res.IsError {
+		t.Fatalf("preview: %v %v", err, resultText(res))
+	}
+	out := callOut(t, res)
+	if out["action"] != "preview" || out["impact"] != "global" || mock.sawMutation("DELETE ") {
+		t.Fatalf("want a global-impact preview without a DELETE, got %v", out)
+	}
+	cur, _ := out["current"].(map[string]any)
+	prop, _ := out["proposed"].(map[string]any)
+	if cur["synEnabled"] != true || cur["connRateEnabled"] != false || prop["synEnabled"] != false {
+		t.Errorf("current must be the zero-defaulted configuration, proposed all off: %v -> %v", cur, prop)
+	}
+	if wl, _ := prop["whitelistIps"].([]any); wl == nil {
+		t.Errorf("proposed must carry an empty whitelist: %v", prop["whitelistIps"])
+	}
+	rb, _ := out["rollback"].(map[string]any)
+	rbArgs, _ := rb["args"].(map[string]any)
+	if rb["tool"] != "secrate_set" || rbArgs["syn_enabled"] != true || rbArgs["syn_threshold"] != float64(1000) || rbArgs["rate_per_sec"] != float64(500) {
+		t.Errorf("rollback must be secrate_set with the current configuration: %v", rb)
+	}
+	token, _ := out["confirm_token"].(string)
+	res, err = cs.CallTool(ctx, &sdk.CallToolParams{Name: "secrate_disable", Arguments: withToken(map[string]any{}, token)})
+	if err != nil || res.IsError {
+		t.Fatalf("apply: %v %v", err, resultText(res))
+	}
+	if !mock.sawMutation("DELETE /netlox/v1/config/securityrate") {
+		t.Fatal("apply did not DELETE")
+	}
+	if rbk, _ := callOut(t, res)["read_back"].(map[string]any); rbk == nil || rbk["synThreshold"] == nil {
+		t.Errorf("read_back must re-read the configuration keys: %v", rbk)
+	}
+
+	// Unprotected target: nothing to put back, the rollback is a note.
+	mock2 := newMockLoxilb(t)
+	mock2.securityRateJSON = `{"whitelistIps":null}`
+	b2 := newTestBridge(t, testConfig(mock2.srv.URL))
+	cs2 := session(t, b2, guard.RoleAdmin)
+	res, err = cs2.CallTool(ctx, &sdk.CallToolParams{Name: "secrate_disable", Arguments: map[string]any{}})
+	if err != nil || res.IsError {
+		t.Fatalf("preview on an unprotected target: %v %v", err, resultText(res))
+	}
+	rb, _ = callOut(t, res)["rollback"].(map[string]any)
+	if tool, _ := rb["tool"].(string); tool != "" || !strings.Contains(rb["note"].(string), "no protection") {
+		t.Errorf("rollback on an unprotected target must be a note: %v", rb)
+	}
+}
+
+func TestConfigPersistPreviewsTheSnapshotIdentity(t *testing.T) {
+	mock := newMockLoxilb(t)
+	b := newTestBridge(t, testConfig(mock.srv.URL))
+	cs := session(t, b, guard.RoleAdmin)
+	ctx := context.Background()
+
+	res, err := cs.CallTool(ctx, &sdk.CallToolParams{Name: "config_persist", Arguments: map[string]any{}})
+	if err != nil || res.IsError {
+		t.Fatalf("preview: %v %v", err, resultText(res))
+	}
+	out := callOut(t, res)
+	if out["action"] != "preview" || out["impact"] != "instance" || mock.sawMutation("POST ") {
+		t.Fatalf("want an instance-impact preview without a POST, got %v", out)
+	}
+	cur, _ := out["current"].(map[string]any)
+	if cur["schema"] != "1.12" || cur["checksum"] != "sha256:snap" {
+		t.Errorf("current must be the running snapshot's identity: %v", cur)
+	}
+	rb, _ := out["rollback"].(map[string]any)
+	if tool, _ := rb["tool"].(string); tool != "" || !strings.Contains(rb["note"].(string), "not reversible") {
+		t.Errorf("rollback must say the write is not reversible: %v", rb)
+	}
+	token, _ := out["confirm_token"].(string)
+	res, err = cs.CallTool(ctx, &sdk.CallToolParams{Name: "config_persist", Arguments: withToken(map[string]any{}, token)})
+	if err != nil || res.IsError {
+		t.Fatalf("apply: %v %v", err, resultText(res))
+	}
+	if !mock.sawMutation("POST /netlox/v1/config/persist") {
+		t.Fatal("apply did not POST /config/persist")
+	}
+	if rbk, _ := callOut(t, res)["read_back"].(map[string]any); rbk["checksum"] != "sha256:snap" {
+		t.Errorf("read_back must re-read the identity: %v", rbk)
+	}
+
+	// The snapshot gate: the 409 is the retryable verdict, nothing is written.
+	mock.snapshotBusy = true
+	res, err = cs.CallTool(ctx, &sdk.CallToolParams{Name: "config_persist", Arguments: map[string]any{}})
+	if err != nil || !res.IsError {
+		t.Fatalf("busy gate must be a tool error: %v %v", err, resultText(res))
+	}
+	if txt := resultText(res); !strings.Contains(txt, "snapshot_gate_busy") || !strings.Contains(txt, "retry_after_sec: 3") {
+		t.Errorf("verdict text: %s", txt)
+	}
+	if n := mock.countRequests("POST /netlox/v1/config/persist"); n != 1 {
+		t.Errorf("the busy preview must write nothing (POSTs: %d)", n)
+	}
+}
+
+func TestSecrateDisableAndConfigPersistAreNeverAutopilot(t *testing.T) {
+	for _, name := range []string{"secrate_disable", "config_persist"} {
+		if _, never := guard.NeverAutopilot[name]; !never {
+			t.Errorf("%s must be in NeverAutopilot", name)
+		}
+		pol := &guard.Policy{Autopilot: []string{name}}
+		if pol.AutopilotAllowed(name) {
+			t.Errorf("%s: configuration must not make it autopilot", name)
+		}
+	}
+}
+
 // mapValue returns v as an object, or an empty one (test-side copy of the
 // tools helper).
 func mapValue(v any) map[string]any {

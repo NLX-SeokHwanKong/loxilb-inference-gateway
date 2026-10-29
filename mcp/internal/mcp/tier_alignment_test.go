@@ -24,6 +24,7 @@ var adminConfirmTools = []string{
 	"secrate_set", "secrate_reset", "bgp_neigh_set", "bgp_global_set", "bgp_policy_apply",
 	"config_params_set", "gpu_mode_set", "gpu_conversations_cleanup", "llamafw_enable_set",
 	"llamafw_configure", "llamafw_scanners_set", "pii_enable_set", "pii_configure", "pii_url_patterns_set",
+	"secrate_disable", "config_persist", "lb_update",
 }
 
 func TestTierAlignmentOperatorSessionsDoNotListGlobalMutations(t *testing.T) {
@@ -463,8 +464,8 @@ func TestSecrateSetOnAnUnconfiguredTarget(t *testing.T) {
 		}
 	}
 	rb, _ := out["rollback"].(map[string]any)
-	if tool, _ := rb["tool"].(string); tool != "" {
-		t.Errorf("rollback must not promise a %s call into a state the POST refuses: %v", tool, rb)
+	if tool, _ := rb["tool"].(string); tool != "secrate_disable" {
+		t.Errorf("rollback must be secrate_disable, not a secrate_set call into a state the POST refuses: %v", rb)
 	}
 	if note, _ := rb["note"].(string); !strings.Contains(note, "DELETE /config/securityrate") {
 		t.Errorf("rollback note must name the disable path: %v", rb)

@@ -130,6 +130,7 @@ var NeverAutopilot = map[string]struct{}{
 	"bgp_policy_apply":          {},
 	"config_import":             {},
 	"config_params_set":         {},
+	"config_persist":            {},
 	"gpu_conversations_cleanup": {},
 	"gpu_mode_set":              {},
 	"llamafw_configure":         {},
@@ -138,6 +139,7 @@ var NeverAutopilot = map[string]struct{}{
 	"pii_configure":             {},
 	"pii_enable_set":            {},
 	"pii_url_patterns_set":      {},
+	"secrate_disable":           {},
 	"secrate_reset":             {},
 	"secrate_set":               {},
 	// planned tools (campaign guide, change-gate requirement 6)

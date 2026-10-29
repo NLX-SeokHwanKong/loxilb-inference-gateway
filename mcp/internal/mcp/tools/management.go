@@ -19,8 +19,10 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -304,6 +306,34 @@ func RegisterManagement(s *sdk.Server, role guard.Role, pol *guard.Policy, deps 
 				"repeat with the token to apply.",
 			Annotations: destAnnotations("Reset security rate state"),
 		}, deps.secrateReset())
+	})
+	reg(dest("secrate_disable"), func() {
+		sdk.AddTool(s, &sdk.Tool{
+			Name: "secrate_disable",
+			Description: "Disable the three security-rate protections (SYN flood, connection rate, UDP flood) and empty " +
+				"the security-rate whitelist (DELETE /config/securityrate): the only way back to the unconfigured state, " +
+				"because POST /config/securityrate refuses a body that keeps every protection off. The thresholds revert " +
+				"to the gateway's built-ins; tracking maps and counters are not cleared. Global: applies to every service. " +
+				"Two-step: the first call previews the current configuration, the proposed (all off, empty whitelist) and " +
+				"a secrate_set rollback carrying the current configuration, with a confirm_token; repeat with the token " +
+				"to apply. The executed result re-reads the configuration.",
+			Annotations: destAnnotations("Disable security rate config"),
+		}, deps.secrateDisable())
+	})
+	reg(dest("config_persist"), func() {
+		sdk.AddTool(s, &sdk.Tool{
+			Name: "config_persist",
+			Description: "Persist the running configuration to disk (POST /config/persist): the gateway writes the " +
+				"supported snapshot domains to <config-path>/snapshot.json (mode 0600) and answers the document's " +
+				"path, checksum, schema and generation with its coverage (included and excluded domains, external " +
+				"dependencies, warnings). Instance impact and not reversible: the previous file is overwritten and " +
+				"cannot be read back through the API. Two-step: the first call reads the running snapshot's identity " +
+				"(schema, checksum, generation) as current and previews the write with a confirm_token; repeat with " +
+				"the token to apply. While the gateway's auto-persist holds the snapshot gate (about 3 s after a " +
+				"config write) the read or the write answers 409; the tool returns that as the error snapshot_gate_busy " +
+				"with retry_after_sec 3 and does not retry: call again after that.",
+			Annotations: destAnnotations("Persist running config"),
+		}, deps.configPersist())
 	})
 	reg(dest("bgp_neigh_set"), func() {
 		sdk.AddTool(s, &sdk.Tool{
@@ -1547,7 +1577,7 @@ var secrateRequired = map[string]any{
 // protection or sets a positive aggregate budget. POST /config/securityrate
 // refuses a body that does neither, so a gateway that has no protection
 // enabled cannot be put back into that state through the POST; DELETE
-// /config/securityrate is the disable path (no tool yet).
+// /config/securityrate (secrate_disable) is the disable path.
 func secrateProtects(cfg map[string]any) bool {
 	for _, k := range []string{"synEnabled", "connRateEnabled", "udpEnabled"} {
 		if on, _ := cfg[k].(bool); on {
@@ -1625,7 +1655,7 @@ func (d *Deps) secrateSet() sdk.ToolHandlerFor[secrateSetIn, mutOut] {
 			}
 		}
 		if !secrateProtects(proposed) {
-			return nil, mutOut{}, fmt.Errorf("the proposed configuration enables no per-source protection and sets no aggregate budget, which POST /config/securityrate refuses; nothing was sent (DELETE /config/securityrate is the disable path and has no tool yet)")
+			return nil, mutOut{}, fmt.Errorf("the proposed configuration enables no per-source protection and sets no aggregate budget, which POST /config/securityrate refuses; nothing was sent (secrate_disable is the disable path: DELETE /config/securityrate)")
 		}
 		args := in
 		args.ConfirmToken = ""
@@ -1640,7 +1670,7 @@ func (d *Deps) secrateSet() sdk.ToolHandlerFor[secrateSetIn, mutOut] {
 			}
 			rollback := &rollbackSpec{Tool: "secrate_set", Args: rb}
 			if !secrateProtects(current) {
-				rollback = &rollbackSpec{Note: "not reversible through secrate_set: the target had no protection enabled, a configuration POST /config/securityrate refuses; DELETE /config/securityrate restores it (no tool yet)"}
+				rollback = &rollbackSpec{Tool: "secrate_disable", Args: map[string]any{}, Note: "the target had no protection enabled, a configuration POST /config/securityrate refuses; secrate_disable (DELETE /config/securityrate) restores it, with the gateway's built-in thresholds"}
 			}
 			return changePlan{
 				Current:  current,
@@ -1704,6 +1734,118 @@ func (d *Deps) secrateReset() sdk.ToolHandlerFor[secrateResetIn, mutOut] {
 		d.auditMut("secrate_reset", c.Name(), args, true, "")
 		after, _ := c.SecurityRate(ctx)
 		return nil, executed(c.Name(), res, pick(mapValue(after), secrateCounterKeys...)), nil
+	}
+}
+
+// ---- secrate_disable ----
+
+type secrateDisableIn struct {
+	Target       string `json:"target,omitempty" jsonschema:"target loxilb instance name; omit for default"`
+	ConfirmToken string `json:"confirm_token,omitempty" jsonschema:"single-use token from the preview step; omit to preview"`
+}
+
+// secrateDisable is DELETE /config/securityrate behind the change gate
+// (D18): the preview carries the current configuration as the arguments
+// of a secrate_set rollback, so an agent that switched a protection on can
+// take it off again and back.
+func (d *Deps) secrateDisable() sdk.ToolHandlerFor[secrateDisableIn, mutOut] {
+	return func(ctx context.Context, _ *sdk.CallToolRequest, in secrateDisableIn) (*sdk.CallToolResult, mutOut, error) {
+		c, err := d.Resolve(in.Target)
+		if err != nil {
+			return nil, mutOut{}, err
+		}
+		args := in
+		args.ConfirmToken = ""
+		out, stop, err := d.gateChange(ctx, "secrate_disable", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+			cur, err := c.SecurityRate(ctx)
+			if err != nil {
+				return changePlan{}, fmt.Errorf("read of the current security rate config failed, nothing was sent: %w", err)
+			}
+			current := overlay(secrateRequired, pick(mapValue(cur), secrateConfigKeys...))
+			proposed := overlay(current, map[string]any{
+				"synEnabled": false, "connRateEnabled": false, "udpEnabled": false, "whitelistIps": []string{},
+			})
+			rollback := &rollbackSpec{Note: "no protection was enabled: the delete changes the flags nothing and empties the whitelist; there is nothing to put back"}
+			if secrateProtects(current) {
+				rb := map[string]any{}
+				for _, f := range secrateFields {
+					if v, ok := current[f[1]]; ok && v != nil {
+						rb[f[0]] = v
+					}
+				}
+				rollback = &rollbackSpec{Tool: "secrate_set", Args: rb,
+					Note: "the thresholds revert to the gateway's built-ins on apply; the rollback re-sends the configuration as read now"}
+			}
+			return changePlan{Current: current, Proposed: proposed, Rollback: rollback, Impact: "global"}, nil
+		})
+		if err != nil || stop {
+			return nil, out, err
+		}
+		var res any
+		if err := c.Delete(ctx, "/config/securityrate", &res); err != nil {
+			d.auditMut("secrate_disable", c.Name(), args, false, err.Error())
+			return nil, mutOut{}, err
+		}
+		d.auditMut("secrate_disable", c.Name(), args, true, "")
+		after, _ := c.SecurityRate(ctx)
+		return nil, executed(c.Name(), res, overlay(secrateRequired, pick(mapValue(after), secrateConfigKeys...))), nil
+	}
+}
+
+// ---- config_persist ----
+
+type configPersistIn struct {
+	Target       string `json:"target,omitempty" jsonschema:"target loxilb instance name; omit for default"`
+	ConfirmToken string `json:"confirm_token,omitempty" jsonschema:"single-use token from the preview step; omit to preview"`
+}
+
+// persistGateBusy maps the gateway's 409 on the snapshot gate to the same
+// verdict config_snapshot_get gives: the words the agent retries on.
+func persistGateBusy(err error) error {
+	var se *client.StatusError
+	if errors.As(err, &se) && se.Code == http.StatusConflict {
+		return fmt.Errorf("snapshot_gate_busy: %s; retry_after_sec: %d (the gateway's auto-persist or a restore holds the snapshot gate; nothing was written, call again after that)",
+			clean(se.Result()), snapshotGateRetrySec)
+	}
+	return err
+}
+
+// configPersist is POST /config/persist behind the change gate (impact
+// instance, admin-confirm, never autopilot). The preview's current state is
+// the running snapshot's identity; nothing can restore the file the write
+// overwrites, and the rollback says so.
+func (d *Deps) configPersist() sdk.ToolHandlerFor[configPersistIn, mutOut] {
+	return func(ctx context.Context, _ *sdk.CallToolRequest, in configPersistIn) (*sdk.CallToolResult, mutOut, error) {
+		c, err := d.Resolve(in.Target)
+		if err != nil {
+			return nil, mutOut{}, err
+		}
+		args := in
+		args.ConfirmToken = ""
+		out, stop, err := d.gateChange(ctx, "config_persist", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+			id, err := c.SnapshotIdentity(ctx)
+			if err != nil {
+				return changePlan{}, fmt.Errorf("read of the running snapshot failed, nothing was written: %w", persistGateBusy(err))
+			}
+			return changePlan{
+				Current:  id,
+				Proposed: map[string]any{"action": "persist the running configuration to <config-path>/snapshot.json", "schema": id["schema"], "checksum": id["checksum"], "generation": id["generation"]},
+				Rollback: &rollbackSpec{Note: "not reversible: the previous snapshot.json is overwritten and cannot be read back through the API; keep a copy of the file on the gateway host if the previous document matters"},
+				Impact:   "instance",
+			}, nil
+		})
+		if err != nil || stop {
+			return nil, out, err
+		}
+		var res map[string]any
+		if err := c.Post(ctx, "/config/persist", nil, &res); err != nil {
+			err = persistGateBusy(err)
+			d.auditMut("config_persist", c.Name(), args, false, err.Error())
+			return nil, mutOut{}, err
+		}
+		d.auditMut("config_persist", c.Name(), args, true, "")
+		readBack, _ := c.SnapshotIdentity(ctx)
+		return nil, executed(c.Name(), res, readBack), nil
 	}
 }
 

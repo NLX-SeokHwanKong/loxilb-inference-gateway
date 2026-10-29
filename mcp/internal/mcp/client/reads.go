@@ -120,6 +120,23 @@ func (c *Client) UserRateLimit(ctx context.Context, tenantID, userID string) (ro
 	return c.getOptional(ctx, fmt.Sprintf("/config/ai/user/ratelimit/%s/%s", url.PathEscape(tenantID), url.PathEscape(userID)))
 }
 
+// SnapshotIdentity is the identity of the running snapshot document
+// (GET /config/snapshot): schema, checksum and lineage generation, without
+// the document itself. The gateway answers 409 while its auto-persist or a
+// restore holds the snapshot gate; that StatusError is returned as is for
+// the caller to map.
+func (c *Client) SnapshotIdentity(ctx context.Context) (map[string]any, error) {
+	var out struct {
+		Schema     string `json:"schema"`
+		Checksum   string `json:"checksum"`
+		Generation int64  `json:"generation"`
+	}
+	if err := c.Get(ctx, "/config/snapshot", &out); err != nil {
+		return nil, err
+	}
+	return map[string]any{"schema": out.Schema, "checksum": out.Checksum, "generation": out.Generation}, nil
+}
+
 // getOptional is getObject for an object that may not exist: a 404 is
 // (nil, false, nil), not an error.
 func (c *Client) getOptional(ctx context.Context, path string) (map[string]any, bool, error) {
