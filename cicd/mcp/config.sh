@@ -28,6 +28,14 @@ extra_opts="-p"
 
 t_since() { echo $(( $(date +%s) - $1 )); }
 
+# llb1_config is mounted as the gateway's /etc/loxilb and the gateway writes
+# into it as root (managed certificates, persisted state). One left by an
+# earlier run is booted from: its certificate is re-registered and the
+# fixture upload below then collides with it. Refuse instead of reusing it.
+if [[ -e llb1_config ]]; then
+  echo "FATAL: llb1_config is left from an earlier run; remove it (sudo ./rmconfig.sh) first"; exit 1
+fi
+
 echo "#########################################"
 echo "Spawning the management store (PostgreSQL)"
 echo "#########################################"
@@ -179,6 +187,45 @@ if [[ -z "$seed_id" ]]; then
   echo "FATAL: the seeded key was not created: $(printf '%s' "$seed" | head -c 200)"; exit 1
 fi
 echo "  seeded tenant cicd-seed, key seed-key ($seed_id)"
+
+# L7/TLS read fixtures, written over REST (never through the bridge): one
+# managed certificate (its SAN lands in the SNI store) and one L7 policy on a
+# plain proxy rule of its own VIP, so the baseline rule stays the only rule
+# at 20.20.20.1. The policy injects a credential-named header whose value the
+# bridge must mask. The key never leaves the stage directory, removed below.
+CERTSTAGE=$(mktemp -d)
+openssl req -x509 -newkey rsa:2048 -nodes -days 2 \
+  -keyout "$CERTSTAGE/c.key" -out "$CERTSTAGE/c.crt" \
+  -subj "/CN=mcp-sni.test" -addext "subjectAltName=DNS:mcp-sni.test" 2>/dev/null
+cbody=$(python3 -c 'import json,sys; print(json.dumps({"certId":"mcp-cert1","certPem":open(sys.argv[1]).read(),"keyPem":open(sys.argv[2]).read()}))' \
+  "$CERTSTAGE/c.crt" "$CERTSTAGE/c.key" 2>/dev/null)
+rm -rf "$CERTSTAGE"
+rc=$($hexec llb1 curl -s -m 10 -o /tmp/mcp-cert.json -w "%{http_code}" -X POST http://localhost:11111/netlox/v1/config/cert \
+  -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" -d "$cbody")
+if [[ "$rc" != "201" ]]; then
+  echo "FATAL: fixture certificate refused (HTTP $rc): $($hexec llb1 cat /tmp/mcp-cert.json 2>/dev/null | head -c 200)"
+  # The refusal body carries only a reference; the cause is in the gateway's
+  # log (named after the container id), printed before the bed is torn down.
+  docker exec llb1 sh -c 'grep -hiE "cert|sni" /var/log/loxilb*.log 2>/dev/null | tail -n 15' | cut -c1-300
+  exit 1
+fi
+echo "  fixture: managed certificate mcp-cert1 (SAN mcp-sni.test)"
+
+$dexec llb1 ip addr add 20.20.20.4/32 dev lo
+rc=$($hexec llb1 curl -s -m 10 -o /dev/null -w "%{http_code}" -X POST http://localhost:11111/netlox/v1/config/loadbalancer \
+  -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" \
+  -d '{"serviceArguments":{"externalIP":"20.20.20.4","port":8082,"protocol":"tcp","sel":0,"mode":4,"name":"mcp-l7-fixture","host":"20.20.20.4"},"endpoints":[{"endpointIP":"31.31.31.1","targetPort":8080,"weight":1}]}')
+[[ "$rc" == "200" ]] || { echo "FATAL: L7 fixture rule refused (HTTP $rc)"; exit 1; }
+L7_LBID=$($hexec llb1 curl -s -m 10 -H "Authorization: Bearer $TOKEN" http://localhost:11111/netlox/v1/config/loadbalancer/all \
+  | python3 -c 'import sys,json; print(next((r["serviceArguments"].get("id","") for r in json.load(sys.stdin).get("lbAttr",[]) if r["serviceArguments"].get("name")=="mcp-l7-fixture"),""))' 2>/dev/null)
+[[ -n "$L7_LBID" ]] || { echo "FATAL: no id for the L7 fixture rule"; exit 1; }
+rc=$($hexec llb1 curl -s -m 10 -o /tmp/mcp-l7.json -w "%{http_code}" -X POST http://localhost:11111/netlox/v1/config/l7policy \
+  -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" \
+  -d "{\"id\":\"mcp-l7pol1\",\"name\":\"mcp-block\",\"lbId\":\"$L7_LBID\",\"rules\":[{\"position\":1,\"matchSets\":[{\"conditions\":[{\"field\":\"PATH\",\"op\":\"STARTS_WITH\",\"value\":\"/blocked\"}]}],\"action\":{\"kind\":\"REJECT\",\"reject\":{\"statusCode\":451}},\"insertHeaders\":[{\"op\":\"SET\",\"name\":\"Authorization\",\"value\":\"Bearer mcp-fixture-secret\"},{\"op\":\"SET\",\"name\":\"X-Route\",\"value\":\"blue\"}]}]}")
+if [[ "$rc" != "200" && "$rc" != "204" ]]; then
+  echo "FATAL: fixture L7 policy refused (HTTP $rc): $($hexec llb1 cat /tmp/mcp-l7.json 2>/dev/null | head -c 200)"; exit 1
+fi
+echo "  fixture: L7 policy mcp-l7pol1 on rule $L7_LBID (20.20.20.4:8082)"
 
 # Auto-persist is a debounced write-through fired by the successful writes
 # above; /status/ready true after them is the verdict that it has settled
