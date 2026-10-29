@@ -44,6 +44,8 @@ type mockLoxilb struct {
 	// failPrefix makes every request whose "METHOD path" starts with it
 	// answer 500 (a gateway refusing a mutation, for the budget's stop).
 	failPrefix string
+	// ruleJSON overrides the rule the composite-key GET serves (mockRuleJSON).
+	ruleJSON string
 }
 
 // mockRuleJSON is the one rule the mock gateway holds (1.2.3.4:80/tcp, a
@@ -75,6 +77,10 @@ func newMockLoxilb(t *testing.T) *mockLoxilb {
 		case "/netlox/v1/config/loadbalancer/all":
 			w.Write([]byte(`{"lbAttr":[` + mockRuleJSON + `]}`))
 		case "/netlox/v1/config/loadbalancer/externalipaddress/1.2.3.4/port/80/protocol/tcp":
+			if m.ruleJSON != "" {
+				w.Write([]byte(m.ruleJSON))
+				return
+			}
 			w.Write([]byte(mockRuleJSON)) // the composite-key pre-read of lb_create
 		case "/netlox/v1/config/securityrate/all":
 			// Zero-valued fields (connRateEnabled, udpEnabled, udpBlocked) are omitted, as the gateway does.

@@ -386,7 +386,8 @@ func RegisterManagement(s *sdk.Server, role guard.Role, pol *guard.Policy, deps 
 				"is with a hint. Service impact: the change applies to the traffic of the rule. Two-step: the first " +
 				"call pre-reads the rule and previews current, proposed, diff and rollback with a confirm_token; " +
 				"repeat with identical arguments plus the token to apply. The executed result re-reads the rule and " +
-				"its status.",
+				"its status; admin_state_up beside them is the effective flag (the gateway omits a false adminStateUp " +
+				"from the rule it returns).",
 			Annotations: destAnnotations("Update LB rule"),
 			InputSchema: lbUpdateInputSchema(),
 		}, deps.lbUpdate())
@@ -645,7 +646,7 @@ type lbCreateIn struct {
 	AIDefaultMaxTokens   int            `json:"ai_default_max_tokens,omitempty" jsonschema:"completion tokens reserved for a request without a ceiling when ai_default_reservation is on"`
 	AIObjectiveStrict    *bool          `json:"ai_objective_strict,omitempty" jsonschema:"true refuses a request naming an objective the key or tenant may not use instead of falling back"`
 	Security             int            `json:"security,omitempty" jsonschema:"listener security; permitted values and meanings come from the REST contract (generated description)"`
-	AdminStateUp         *bool          `json:"admin_state_up,omitempty" jsonschema:"false creates the rule out of service; lb_update puts it back"`
+	AdminStateUp         *bool          `json:"admin_state_up,omitempty" jsonschema:"service lifecycle flag: absent or true enables selection; the REST contract says the POST drops a false value (it does not create a paused rule), so pause an existing rule with lb_update"`
 	ID                   string         `json:"id,omitempty" jsonschema:"optional caller-chosen rule identifier (opaque id)"`
 	Endpoints            []lbEndpointIn `json:"endpoints" jsonschema:"backend endpoints (at least one)"`
 	ServiceExtra         map[string]any `json:"service_extra,omitempty" jsonschema:"additional serviceArguments fields; every key must be a serviceArguments property of the REST contract, read-back (*_effective) and excluded keys are refused"`
@@ -1194,6 +1195,12 @@ func (d *Deps) lbUpdate() sdk.ToolHandlerFor[lbUpdateIn, mutOut] {
 			body["endpoints"] = eps
 		}
 		current := pick(svc, lbUpdateSvcKeys...)
+		// The gateway marshals adminStateUp with omitempty: a paused rule's
+		// GET carries no adminStateUp at all, an enabled one carries true
+		// (the create path resolves an absent flag to true before it
+		// stores the rule). Absent on a GET is therefore false, and the
+		// preview, the rollback and the read-back say so explicitly.
+		current["adminStateUp"] = boolValue(svc["adminStateUp"])
 		current["endpoints"] = curView
 		proposed := overlay(current, svcPatch)
 		proposed["endpoints"] = propView
@@ -1239,6 +1246,7 @@ func (d *Deps) lbUpdate() sdk.ToolHandlerFor[lbUpdateIn, mutOut] {
 		readBack := map[string]any{}
 		if rule, found, err := c.LBRuleByKey(ctx, in.ExternalIP, in.Port, proto); err == nil && found {
 			readBack["rule"] = rule
+			readBack["admin_state_up"] = boolValue(mapValue(rule["serviceArguments"])["adminStateUp"])
 		}
 		if st, err := c.LBRuleStatus(ctx, in.ExternalIP, in.Port, proto); err == nil {
 			readBack["status"] = st

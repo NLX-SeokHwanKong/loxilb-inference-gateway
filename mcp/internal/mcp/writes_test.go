@@ -112,11 +112,49 @@ func TestLBUpdateAdminStateDownPreviewsThenPatches(t *testing.T) {
 	if _, ok := readBack["rule"]; !ok {
 		t.Errorf("read_back must carry the rule: %v", readBack)
 	}
+	if readBack["admin_state_up"] != false {
+		t.Errorf("read_back must carry the effective admin state (the mock rule reads back false): %v", readBack)
+	}
 	if st, _ := readBack["status"].(map[string]any); st["operatingStatus"] != "ONLINE" {
 		t.Errorf("read_back must carry GET .../status: %v", readBack)
 	}
 	if !mock.sawMutation("GET " + mockLBKey + "/status") {
 		t.Error("the read-back did not GET the status")
+	}
+}
+
+// The gateway marshals adminStateUp with omitempty: a paused rule's GET
+// has no adminStateUp key. The bridge reads that as false everywhere it
+// shows the flag, so the rollback of a pause-then-change is right.
+func TestLBUpdateReadsAnAbsentAdminStateAsPaused(t *testing.T) {
+	mock := newMockLoxilb(t)
+	mock.ruleJSON = `{"serviceArguments":{"externalIP":"1.2.3.4","port":80,"protocol":"tcp","name":"web"},"endpoints":[{"endpointIP":"10.0.0.1","targetPort":8000,"weight":1}]}`
+	b := newTestBridge(t, testConfig(mock.srv.URL))
+	cs := session(t, b, guard.RoleAdmin)
+	ctx := context.Background()
+	args := withArgs(lbUpdateKey, map[string]any{"admin_state_up": true})
+	res, err := cs.CallTool(ctx, &sdk.CallToolParams{Name: "lb_update", Arguments: args})
+	if err != nil || res.IsError {
+		t.Fatalf("preview: %v %v", err, resultText(res))
+	}
+	out := callOut(t, res)
+	cur, _ := out["current"].(map[string]any)
+	if cur["adminStateUp"] != false {
+		t.Errorf("an absent adminStateUp reads as paused: %v", cur)
+	}
+	rb, _ := out["rollback"].(map[string]any)
+	rbArgs, _ := rb["args"].(map[string]any)
+	note, _ := rb["note"].(string)
+	if rbArgs["admin_state_up"] != false || strings.Contains(note, "adminStateUp") {
+		t.Errorf("the rollback must pause the rule again, not call the flag undeclared: %v", rb)
+	}
+	token, _ := out["confirm_token"].(string)
+	res, err = cs.CallTool(ctx, &sdk.CallToolParams{Name: "lb_update", Arguments: withToken(args, token)})
+	if err != nil || res.IsError {
+		t.Fatalf("apply: %v %v", err, resultText(res))
+	}
+	if rbk, _ := callOut(t, res)["read_back"].(map[string]any); rbk["admin_state_up"] != false {
+		t.Errorf("read_back.admin_state_up follows the GET (the mock still omits the flag): %v", rbk)
 	}
 }
 
