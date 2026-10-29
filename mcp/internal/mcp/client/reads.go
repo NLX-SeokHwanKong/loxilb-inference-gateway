@@ -93,6 +93,63 @@ func (c *Client) LBRuleByKey(ctx context.Context, ip string, port int, proto str
 	return out, true, nil
 }
 
+// LBRuleStatus returns the operational status of a rule key
+// (GET /config/loadbalancer/externalipaddress/{ip}/port/{port}/protocol/{proto}/status),
+// the read-back of lb_update beside the rule itself.
+func (c *Client) LBRuleStatus(ctx context.Context, ip string, port int, proto string) (map[string]any, error) {
+	return c.getObject(ctx, fmt.Sprintf("/config/loadbalancer/externalipaddress/%s/port/%d/protocol/%s/status",
+		url.PathEscape(ip), port, url.PathEscape(strings.ToLower(proto))))
+}
+
+// APIKey returns one API key's summary (GET /config/ai/apikey/{key_id}),
+// the pre-read and read-back of ai_apikey_update. Never key material.
+func (c *Client) APIKey(ctx context.Context, keyID string) (map[string]any, error) {
+	return c.getObject(ctx, "/config/ai/apikey/"+url.PathEscape(keyID))
+}
+
+// TenantRateLimit returns a tenant's rate-limit row
+// (GET /config/ai/tenant/ratelimit/{tenant_id}); found is false on 404.
+func (c *Client) TenantRateLimit(ctx context.Context, tenantID string) (row map[string]any, found bool, err error) {
+	return c.getOptional(ctx, "/config/ai/tenant/ratelimit/"+url.PathEscape(tenantID))
+}
+
+// UserRateLimit returns a user's explicit rate-limit row with its model
+// limits (GET /config/ai/user/ratelimit/{tenant_id}/{user_id}); found is
+// false on 404.
+func (c *Client) UserRateLimit(ctx context.Context, tenantID, userID string) (row map[string]any, found bool, err error) {
+	return c.getOptional(ctx, fmt.Sprintf("/config/ai/user/ratelimit/%s/%s", url.PathEscape(tenantID), url.PathEscape(userID)))
+}
+
+// SnapshotIdentity is the identity of the running snapshot document
+// (GET /config/snapshot): schema, checksum and lineage generation, without
+// the document itself. The gateway answers 409 while its auto-persist or a
+// restore holds the snapshot gate; that StatusError is returned as is for
+// the caller to map.
+func (c *Client) SnapshotIdentity(ctx context.Context) (map[string]any, error) {
+	var out struct {
+		Schema     string `json:"schema"`
+		Checksum   string `json:"checksum"`
+		Generation int64  `json:"generation"`
+	}
+	if err := c.Get(ctx, "/config/snapshot", &out); err != nil {
+		return nil, err
+	}
+	return map[string]any{"schema": out.Schema, "checksum": out.Checksum, "generation": out.Generation}, nil
+}
+
+// getOptional is getObject for an object that may not exist: a 404 is
+// (nil, false, nil), not an error.
+func (c *Client) getOptional(ctx context.Context, path string) (map[string]any, bool, error) {
+	var out map[string]any
+	if err := c.doAllow(ctx, http.MethodGet, path, nil, &out, map[int]bool{http.StatusNotFound: true}); err != nil {
+		return nil, false, err
+	}
+	if out == nil || out["code"] == float64(http.StatusNotFound) {
+		return nil, false, nil
+	}
+	return out, true, nil
+}
+
 func (c *Client) getObject(ctx context.Context, path string) (map[string]any, error) {
 	var out map[string]any
 	if err := c.Get(ctx, path, &out); err != nil {

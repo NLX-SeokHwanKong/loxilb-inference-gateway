@@ -19,12 +19,15 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/loxilb-io/loxilb-inference-gateway/mcp/internal/mcp/client"
@@ -37,6 +40,7 @@ import (
 func RegisterManagement(s *sdk.Server, role guard.Role, pol *guard.Policy, deps *Deps) {
 	reg := func(meta guard.ToolMeta, add func()) {
 		meta.Domain = domainMgmt
+		noteMeta(meta)
 		if pol.Permits(role, meta) {
 			add()
 		}
@@ -160,7 +164,10 @@ func RegisterManagement(s *sdk.Server, role guard.Role, pol *guard.Policy, deps 
 			Description: "Get one load balancer rule by its composite key external_ip + port + protocol or by its opaque id " +
 				"(GET /config/loadbalancer/externalipaddress/{ip}/port/{port}/protocol/{proto}, GET /config/loadbalancer/id/{id}), " +
 				"projected like lb_list; include: [status, stats] attaches the lifecycle status (adminStateUp, operatingStatus, lastUpdated) " +
-				"and the traffic statistics (activeConnections, bytesIn, bytesOut, totalConnections) of the rule.",
+				"and the traffic statistics (activeConnections, bytesIn, bytesOut, totalConnections) of the rule. " +
+				"admin_state_up is true, false or absent: this gateway serialises adminStateUp with omitempty, so a " +
+				"paused rule's GET (and its status) carries no flag and reads absent, while an enabled rule always " +
+				"carries an explicit true; the status operatingStatus OFFLINE also marks a paused rule.",
 			Annotations: roAnnotations("Get one LB rule"),
 		}, deps.lbGet())
 	})
@@ -303,6 +310,34 @@ func RegisterManagement(s *sdk.Server, role guard.Role, pol *guard.Policy, deps 
 			Annotations: destAnnotations("Reset security rate state"),
 		}, deps.secrateReset())
 	})
+	reg(dest("secrate_disable"), func() {
+		sdk.AddTool(s, &sdk.Tool{
+			Name: "secrate_disable",
+			Description: "Disable the three security-rate protections (SYN flood, connection rate, UDP flood) and empty " +
+				"the security-rate whitelist (DELETE /config/securityrate): the only way back to the unconfigured state, " +
+				"because POST /config/securityrate refuses a body that keeps every protection off. The thresholds revert " +
+				"to the gateway's built-ins; tracking maps and counters are not cleared. Global: applies to every service. " +
+				"Two-step: the first call previews the current configuration, the proposed (all off, empty whitelist) and " +
+				"a secrate_set rollback carrying the current configuration, with a confirm_token; repeat with the token " +
+				"to apply. The executed result re-reads the configuration.",
+			Annotations: destAnnotations("Disable security rate config"),
+		}, deps.secrateDisable())
+	})
+	reg(dest("config_persist"), func() {
+		sdk.AddTool(s, &sdk.Tool{
+			Name: "config_persist",
+			Description: "Persist the running configuration to disk (POST /config/persist): the gateway writes the " +
+				"supported snapshot domains to <config-path>/snapshot.json (mode 0600) and answers the document's " +
+				"path, checksum, schema and generation with its coverage (included and excluded domains, external " +
+				"dependencies, warnings). Instance impact and not reversible: the previous file is overwritten and " +
+				"cannot be read back through the API. Two-step: the first call reads the running snapshot's identity " +
+				"(schema, checksum, generation) as current and previews the write with a confirm_token; repeat with " +
+				"the token to apply. While the gateway's auto-persist holds the snapshot gate (about 3 s after a " +
+				"config write) the read or the write answers 409; the tool returns that as the error snapshot_gate_busy " +
+				"with retry_after_sec 3 and does not retry: call again after that.",
+			Annotations: destAnnotations("Persist running config"),
+		}, deps.configPersist())
+	})
 	reg(dest("bgp_neigh_set"), func() {
 		sdk.AddTool(s, &sdk.Tool{
 			Name: "bgp_neigh_set",
@@ -341,6 +376,27 @@ func RegisterManagement(s *sdk.Server, role guard.Role, pol *guard.Policy, deps 
 		}, deps.configParamsSet())
 	})
 
+	reg(dest("lb_update"), func() {
+		sdk.AddTool(s, &sdk.Tool{
+			Name: "lb_update",
+			Description: "Change an existing load-balancer rule in place, selected by external_ip, port and protocol " +
+				"(PATCH /config/loadbalancer/externalipaddress/{ip}/port/{port}/protocol/{proto}). It accepts " +
+				"only admin_state_up, the weight of existing endpoints (endpoint_weights; the bridge sends the full " +
+				"current endpoint list with the weights swapped) and the four flow-control fields fc_mode, " +
+				"fc_max_outstanding, fc_max_queue_depth, fc_max_queue_wait_ms; any other argument is refused by the " +
+				"schema. Everything else is a replace (lb_create on the same key, admin-confirm) or a removal " +
+				"(lb_delete). The gateway refuses the PATCH on a fullproxy (mode 4) rule; that answer is passed on as " +
+				"is with a hint. Service impact: the change applies to the traffic of the rule. Two-step: the first " +
+				"call pre-reads the rule and previews current, proposed, diff and rollback with a confirm_token; " +
+				"repeat with identical arguments plus the token to apply. The executed result re-reads the rule and " +
+				"its status. admin_state_up is reported as read: true, false or absent; this gateway serialises " +
+				"adminStateUp with omitempty, so a paused rule reads absent. Only the read-back after this call sent " +
+				"admin_state_up false resolves absent to false, and admin_state_up_note says so; a preview of an " +
+				"absent flag carries no admin_state_up in its rollback.",
+			Annotations: destAnnotations("Update LB rule"),
+			InputSchema: lbUpdateInputSchema(),
+		}, deps.lbUpdate())
+	})
 	reg(dest("lb_delete"), func() {
 		sdk.AddTool(s, &sdk.Tool{
 			Name: "lb_delete",
@@ -554,31 +610,52 @@ type lbEndpointIn struct {
 }
 
 type lbCreateIn struct {
-	Target         string         `json:"target,omitempty" jsonschema:"target loxilb instance name; omit for default"`
-	ExternalIP     string         `json:"external_ip" jsonschema:"service VIP"`
-	Port           int            `json:"port" jsonschema:"service port"`
-	Protocol       string         `json:"protocol" jsonschema:"tcp|udp|sctp|icmp"`
-	Name           string         `json:"name,omitempty" jsonschema:"optional service name"`
-	Sel            int            `json:"sel,omitempty" jsonschema:"endpoint selection algorithm; permitted values and meanings come from the REST contract (generated description)"`
-	Mode           int            `json:"mode,omitempty" jsonschema:"NAT/proxy mode; permitted values and meanings come from the REST contract (generated description)"`
-	BGP            bool           `json:"bgp,omitempty" jsonschema:"advertise service via BGP"`
-	Monitor        bool           `json:"monitor,omitempty" jsonschema:"enable endpoint liveness monitoring"`
-	Timeout        int            `json:"timeout,omitempty" jsonschema:"session inactivity timeout seconds"`
-	Host           string         `json:"host,omitempty" jsonschema:"HTTP host match for a full-proxy AI service"`
-	PathPrefix     string         `json:"path_prefix,omitempty" jsonschema:"optional request path prefix"`
-	ModelName      string         `json:"model_name,omitempty" jsonschema:"model routing key"`
-	SSEMode        *bool          `json:"sse_mode,omitempty" jsonschema:"enable SSE handling; independent of api_key_auth"`
-	PDDisaggMode   *bool          `json:"pd_disagg_mode,omitempty" jsonschema:"enable the multi-tier prefill/decode routing ladder"`
-	PDCacheAware   *bool          `json:"pd_cache_aware_mode,omitempty" jsonschema:"enable Tier-1 prefix affinity on a P/D service"`
-	APIKeyAuth     string         `json:"api_key_auth,omitempty" jsonschema:"data-plane credential policy; permitted values come from the REST contract (generated description)"`
-	JWTAuthProfile string         `json:"jwt_auth_profile,omitempty" jsonschema:"name of a configured JWT auth profile; required when api_key_auth is jwt or apikey-or-jwt"`
-	KVExactMode    int            `json:"kv_exact_mode,omitempty" jsonschema:"KV topology: 0 off, 1 role-partitioned P/D, 3 single-pool"`
-	KVEngineType   string         `json:"kv_engine_type,omitempty" jsonschema:"KV engine contract: vllm, sglang, trtllm, or llamacpp"`
-	KVZMQPort      int            `json:"kv_zmq_port,omitempty" jsonschema:"base KV-event publisher port"`
-	KVBlockSize    int            `json:"kv_block_size,omitempty" jsonschema:"engine KV block size in tokens"`
-	Endpoints      []lbEndpointIn `json:"endpoints" jsonschema:"backend endpoints (at least one)"`
-	ServiceExtra   map[string]any `json:"service_extra,omitempty" jsonschema:"additional serviceArguments fields; every key must be a serviceArguments property of the REST contract, read-back (*_effective) and excluded keys are refused"`
-	ConfirmToken   string         `json:"confirm_token,omitempty" jsonschema:"unused for lb_create; present for schema symmetry"`
+	Target         string `json:"target,omitempty" jsonschema:"target loxilb instance name; omit for default"`
+	ExternalIP     string `json:"external_ip" jsonschema:"service VIP"`
+	Port           int    `json:"port" jsonschema:"service port"`
+	Protocol       string `json:"protocol" jsonschema:"tcp|udp|sctp|icmp"`
+	Name           string `json:"name,omitempty" jsonschema:"optional service name"`
+	Sel            int    `json:"sel,omitempty" jsonschema:"endpoint selection algorithm; permitted values and meanings come from the REST contract (generated description)"`
+	Mode           int    `json:"mode,omitempty" jsonschema:"NAT/proxy mode; permitted values and meanings come from the REST contract (generated description)"`
+	BGP            bool   `json:"bgp,omitempty" jsonschema:"advertise service via BGP"`
+	Monitor        bool   `json:"monitor,omitempty" jsonschema:"enable endpoint liveness monitoring"`
+	Timeout        int    `json:"timeout,omitempty" jsonschema:"session inactivity timeout seconds"`
+	Host           string `json:"host,omitempty" jsonschema:"HTTP host match for a full-proxy AI service"`
+	PathPrefix     string `json:"path_prefix,omitempty" jsonschema:"optional request path prefix"`
+	ModelName      string `json:"model_name,omitempty" jsonschema:"model routing key"`
+	SSEMode        *bool  `json:"sse_mode,omitempty" jsonschema:"enable SSE handling; independent of api_key_auth"`
+	PDDisaggMode   *bool  `json:"pd_disagg_mode,omitempty" jsonschema:"enable the multi-tier prefill/decode routing ladder"`
+	PDCacheAware   *bool  `json:"pd_cache_aware_mode,omitempty" jsonschema:"enable Tier-1 prefix affinity on a P/D service"`
+	APIKeyAuth     string `json:"api_key_auth,omitempty" jsonschema:"data-plane credential policy; permitted values come from the REST contract (generated description)"`
+	JWTAuthProfile string `json:"jwt_auth_profile,omitempty" jsonschema:"name of a configured JWT auth profile; required when api_key_auth is jwt or apikey-or-jwt"`
+	KVExactMode    int    `json:"kv_exact_mode,omitempty" jsonschema:"KV topology: 0 off, 1 role-partitioned P/D, 3 single-pool"`
+	KVEngineType   string `json:"kv_engine_type,omitempty" jsonschema:"KV engine contract: vllm, sglang, trtllm, or llamacpp"`
+	KVZMQPort      int    `json:"kv_zmq_port,omitempty" jsonschema:"base KV-event publisher port"`
+	KVBlockSize    int    `json:"kv_block_size,omitempty" jsonschema:"engine KV block size in tokens"`
+	// Flow control, EPP, admission reservation, listener security and
+	// identity (typed since PR-B2; the permitted values of the enumerated
+	// ones come from the generated swagger tables).
+	FCMode               string         `json:"fc_mode,omitempty" jsonschema:"flow-control mode; permitted values and meanings come from the REST contract (generated description)"`
+	FCMaxOutstanding     int            `json:"fc_max_outstanding,omitempty" jsonschema:"flow-control ceiling on in-flight requests of the service"`
+	FCMaxQueueDepth      int            `json:"fc_max_queue_depth,omitempty" jsonschema:"flow-control admission queue depth"`
+	FCMaxQueueWaitMs     int            `json:"fc_max_queue_wait_ms,omitempty" jsonschema:"longest wait in the admission queue, milliseconds"`
+	FCEpMaxInflight      int            `json:"fc_ep_max_inflight,omitempty" jsonschema:"per-endpoint in-flight ceiling"`
+	FCPrefillMaxInflight int            `json:"fc_prefill_max_inflight,omitempty" jsonschema:"in-flight ceiling of the prefill tier (P/D)"`
+	FCDecodeMaxInflight  int            `json:"fc_decode_max_inflight,omitempty" jsonschema:"in-flight ceiling of the decode tier (P/D)"`
+	FCTenantMaxSharePct  int            `json:"fc_tenant_max_share_pct,omitempty" jsonschema:"largest share of the service ceiling one tenant may hold, percent"`
+	EPPEndpoint          string         `json:"epp_endpoint,omitempty" jsonschema:"host:port of the endpoint-picker (EPP) gRPC service the rule consults"`
+	EPPFailureMode       string         `json:"epp_failure_mode,omitempty" jsonschema:"what a request does when the EPP cannot answer; permitted values come from the REST contract (generated description)"`
+	EPPTimeoutMs         int            `json:"epp_timeout_ms,omitempty" jsonschema:"EPP call timeout, milliseconds"`
+	EPPPlaintext         *bool          `json:"epp_plaintext,omitempty" jsonschema:"true to talk to the EPP without TLS"`
+	AIDefaultReservation string         `json:"ai_default_reservation,omitempty" jsonschema:"whether a request without a completion ceiling reserves ai_default_max_tokens at admission; permitted values come from the REST contract (generated description)"`
+	AIDefaultMaxTokens   int            `json:"ai_default_max_tokens,omitempty" jsonschema:"completion tokens reserved for a request without a ceiling when ai_default_reservation is on"`
+	AIObjectiveStrict    *bool          `json:"ai_objective_strict,omitempty" jsonschema:"true refuses a request naming an objective the key or tenant may not use instead of falling back"`
+	Security             int            `json:"security,omitempty" jsonschema:"listener security; permitted values and meanings come from the REST contract (generated description)"`
+	AdminStateUp         *bool          `json:"admin_state_up,omitempty" jsonschema:"service lifecycle flag: absent or true enables selection; the REST contract says the POST drops a false value (it does not create a paused rule), so pause an existing rule with lb_update"`
+	ID                   string         `json:"id,omitempty" jsonschema:"optional caller-chosen rule identifier (opaque id)"`
+	Endpoints            []lbEndpointIn `json:"endpoints" jsonschema:"backend endpoints (at least one)"`
+	ServiceExtra         map[string]any `json:"service_extra,omitempty" jsonschema:"additional serviceArguments fields; every key must be a serviceArguments property of the REST contract, read-back (*_effective) and excluded keys are refused"`
+	ConfirmToken         string         `json:"confirm_token,omitempty" jsonschema:"unused for lb_create; present for schema symmetry"`
 }
 
 // lbCreate is the create/replace split of POST /config/loadbalancer. The
@@ -621,6 +698,28 @@ func (d *Deps) lbCreate(role guard.Role) sdk.ToolHandlerFor[lbCreateIn, mutOut] 
 		}
 		if in.KVExactMode != 0 && in.KVExactMode != 1 && in.KVExactMode != 3 {
 			return nil, mutOut{}, fmt.Errorf("kv_exact_mode: must be 0, 1, or 3")
+		}
+		if in.FCMode != "" && !enumAllows("serviceArguments.fc_mode", in.FCMode) {
+			return nil, mutOut{}, fmt.Errorf("fc_mode: must be omitted or one of %s", enumValues("serviceArguments.fc_mode"))
+		}
+		if in.EPPFailureMode != "" && !enumAllows("serviceArguments.eppFailureMode", in.EPPFailureMode) {
+			return nil, mutOut{}, fmt.Errorf("epp_failure_mode: must be omitted or one of %s", enumValues("serviceArguments.eppFailureMode"))
+		}
+		if in.AIDefaultReservation != "" && !enumAllows("serviceArguments.ai_default_reservation", in.AIDefaultReservation) {
+			return nil, mutOut{}, fmt.Errorf("ai_default_reservation: must be omitted or one of %s", enumValues("serviceArguments.ai_default_reservation"))
+		}
+		if !intInEnum("serviceArguments.security", in.Security) {
+			return nil, mutOut{}, fmt.Errorf("security: must be one of %s", enumValues("serviceArguments.security"))
+		}
+		for _, f := range []struct {
+			name string
+			v    int
+		}{{"fc_max_outstanding", in.FCMaxOutstanding}, {"fc_max_queue_depth", in.FCMaxQueueDepth}, {"fc_max_queue_wait_ms", in.FCMaxQueueWaitMs},
+			{"fc_ep_max_inflight", in.FCEpMaxInflight}, {"fc_prefill_max_inflight", in.FCPrefillMaxInflight}, {"fc_decode_max_inflight", in.FCDecodeMaxInflight},
+			{"fc_tenant_max_share_pct", in.FCTenantMaxSharePct}, {"epp_timeout_ms", in.EPPTimeoutMs}, {"ai_default_max_tokens", in.AIDefaultMaxTokens}} {
+			if f.v < 0 {
+				return nil, mutOut{}, fmt.Errorf("%s: must be >= 0", f.name)
+			}
 		}
 		svc := map[string]any{
 			"externalIP": in.ExternalIP,
@@ -676,6 +775,43 @@ func (d *Deps) lbCreate(role guard.Role) sdk.ToolHandlerFor[lbCreateIn, mutOut] 
 		}
 		if in.KVBlockSize > 0 {
 			svc["kvBlockSize"] = in.KVBlockSize
+		}
+		if in.FCMode != "" {
+			svc["fc_mode"] = in.FCMode
+		}
+		for _, f := range []struct {
+			key string
+			v   int
+		}{{"fc_max_outstanding", in.FCMaxOutstanding}, {"fc_max_queue_depth", in.FCMaxQueueDepth}, {"fc_max_queue_wait_ms", in.FCMaxQueueWaitMs},
+			{"fc_ep_max_inflight", in.FCEpMaxInflight}, {"fc_prefill_max_inflight", in.FCPrefillMaxInflight}, {"fc_decode_max_inflight", in.FCDecodeMaxInflight},
+			{"fc_tenant_max_share_pct", in.FCTenantMaxSharePct}, {"eppTimeoutMs", in.EPPTimeoutMs}, {"ai_default_max_tokens", in.AIDefaultMaxTokens}} {
+			if f.v > 0 {
+				svc[f.key] = f.v
+			}
+		}
+		if in.EPPEndpoint != "" {
+			svc["eppEndpoint"] = in.EPPEndpoint
+		}
+		if in.EPPFailureMode != "" {
+			svc["eppFailureMode"] = in.EPPFailureMode
+		}
+		if in.EPPPlaintext != nil {
+			svc["eppPlaintext"] = *in.EPPPlaintext
+		}
+		if in.AIDefaultReservation != "" {
+			svc["ai_default_reservation"] = in.AIDefaultReservation
+		}
+		if in.AIObjectiveStrict != nil {
+			svc["ai_objective_strict"] = *in.AIObjectiveStrict
+		}
+		if in.Security != 0 {
+			svc["security"] = in.Security
+		}
+		if in.AdminStateUp != nil {
+			svc["adminStateUp"] = *in.AdminStateUp
+		}
+		if in.ID != "" {
+			svc["id"] = in.ID
 		}
 		if err := validateServiceExtra(in.ServiceExtra); err != nil {
 			return nil, mutOut{}, err
@@ -750,7 +886,7 @@ func (d *Deps) lbCreate(role guard.Role) sdk.ToolHandlerFor[lbCreateIn, mutOut] 
 		}
 		args := in
 		args.ConfirmToken = ""
-		out, stop, err := d.gateChange("lb_create", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+		out, stop, err := d.gateChange(ctx, "lb_create", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
 			return changePlan{
 				Current:  pick(existing, "serviceArguments", "endpoints", "secondaryIPs", "allowedSources"),
 				Proposed: body,
@@ -855,6 +991,27 @@ func lbRollback(existing map[string]any) *rollbackSpec {
 	copyIf("kv_engine_type", "kvEngineType")
 	copyIf("kv_zmq_port", "kvZmqPort")
 	copyIf("kv_block_size", "kvBlockSize")
+	copyIf("fc_mode", "fc_mode")
+	copyIf("fc_max_outstanding", "fc_max_outstanding")
+	copyIf("fc_max_queue_depth", "fc_max_queue_depth")
+	copyIf("fc_max_queue_wait_ms", "fc_max_queue_wait_ms")
+	copyIf("fc_ep_max_inflight", "fc_ep_max_inflight")
+	copyIf("fc_prefill_max_inflight", "fc_prefill_max_inflight")
+	copyIf("fc_decode_max_inflight", "fc_decode_max_inflight")
+	copyIf("fc_tenant_max_share_pct", "fc_tenant_max_share_pct")
+	copyIf("epp_endpoint", "eppEndpoint")
+	copyIf("epp_failure_mode", "eppFailureMode")
+	copyIf("epp_timeout_ms", "eppTimeoutMs")
+	copyIf("epp_plaintext", "eppPlaintext")
+	copyIf("ai_default_reservation", "ai_default_reservation")
+	copyIf("ai_default_max_tokens", "ai_default_max_tokens")
+	copyIf("ai_objective_strict", "ai_objective_strict")
+	copyIf("security", "security")
+	copyIf("id", "id")
+	// adminStateUp false is a declared state, not an absent one.
+	if v, ok := svc["adminStateUp"]; ok && v != nil {
+		args["admin_state_up"] = v
+	}
 	var eps []map[string]any
 	for _, e := range listValue(existing["endpoints"]) {
 		em := mapValue(e)
@@ -882,6 +1039,238 @@ func lbRollback(existing map[string]any) *rollbackSpec {
 func listValue(v any) []any {
 	l, _ := jsonNormalize(v).([]any)
 	return l
+}
+
+// ---- lb_update ----
+
+type lbEndpointWeightIn struct {
+	IP     string `json:"ip" jsonschema:"endpoint IP address, as in the rule"`
+	Port   int    `json:"port" jsonschema:"endpoint target port, as in the rule"`
+	Weight int    `json:"weight" jsonschema:"new weight (at least 1)"`
+}
+
+type lbUpdateIn struct {
+	Target           string               `json:"target,omitempty" jsonschema:"target loxilb instance name; omit for default"`
+	ExternalIP       string               `json:"external_ip" jsonschema:"service VIP of the rule"`
+	Port             int                  `json:"port" jsonschema:"service port of the rule"`
+	Protocol         string               `json:"protocol" jsonschema:"tcp|udp|sctp|icmp"`
+	AdminStateUp     *bool                `json:"admin_state_up,omitempty" jsonschema:"false takes the rule out of service without removing it; true puts it back"`
+	EndpointWeights  []lbEndpointWeightIn `json:"endpoint_weights,omitempty" jsonschema:"new weights for endpoints the rule already has (ip and port must match an existing endpoint); the other endpoints keep their weight"`
+	FCMode           string               `json:"fc_mode,omitempty" jsonschema:"flow-control mode; permitted values and meanings come from the REST contract (generated description)"`
+	FCMaxOutstanding *int                 `json:"fc_max_outstanding,omitempty" jsonschema:"flow-control ceiling on in-flight requests of the service"`
+	FCMaxQueueDepth  *int                 `json:"fc_max_queue_depth,omitempty" jsonschema:"flow-control admission queue depth"`
+	FCMaxQueueWaitMs *int                 `json:"fc_max_queue_wait_ms,omitempty" jsonschema:"longest wait in the admission queue, milliseconds"`
+	ConfirmToken     string               `json:"confirm_token,omitempty" jsonschema:"single-use token from the preview step; omit to preview"`
+}
+
+// lbUpdateInputSchema carries the generated fc_mode values and text.
+func lbUpdateInputSchema() *jsonschema.Schema {
+	return inputSchemaWithEnums[lbUpdateIn]("lb_update", map[string]string{"fc_mode": "serviceArguments.fc_mode"})
+}
+
+// lbUpdateSvcKeys are the serviceArguments properties lb_update may change
+// (the manifest's fields: allowlist, phase 1).
+var lbUpdateSvcKeys = []string{"adminStateUp", "fc_mode", "fc_max_outstanding", "fc_max_queue_depth", "fc_max_queue_wait_ms"}
+
+// lbUpdateFields maps the tool's argument names to the REST keys.
+var lbUpdateFields = [][2]string{
+	{"admin_state_up", "adminStateUp"}, {"fc_mode", "fc_mode"}, {"fc_max_outstanding", "fc_max_outstanding"},
+	{"fc_max_queue_depth", "fc_max_queue_depth"}, {"fc_max_queue_wait_ms", "fc_max_queue_wait_ms"},
+}
+
+// lbUpdate is the phase-1 PATCH of a rule: an allowlisted overlay on the
+// rule's serviceArguments and a weight swap on its endpoint list, behind
+// the change gate (admin-confirm, impact service). The gateway's PATCH is a
+// restricted overlay: it applies the fields it is given and replaces the
+// endpoint list when one is present, so a weight change sends the whole
+// current list with the weights swapped.
+func (d *Deps) lbUpdate() sdk.ToolHandlerFor[lbUpdateIn, mutOut] {
+	return func(ctx context.Context, _ *sdk.CallToolRequest, in lbUpdateIn) (*sdk.CallToolResult, mutOut, error) {
+		c, err := d.Resolve(in.Target)
+		if err != nil {
+			return nil, mutOut{}, err
+		}
+		if err := validIP(in.ExternalIP, "external_ip"); err != nil {
+			return nil, mutOut{}, err
+		}
+		if err := validPort(in.Port, "port"); err != nil {
+			return nil, mutOut{}, err
+		}
+		if err := validL4Proto(in.Protocol); err != nil {
+			return nil, mutOut{}, err
+		}
+		proto := strings.ToLower(in.Protocol)
+		svcPatch := map[string]any{}
+		if in.AdminStateUp != nil {
+			svcPatch["adminStateUp"] = *in.AdminStateUp
+		}
+		if in.FCMode != "" {
+			if !enumAllows("serviceArguments.fc_mode", in.FCMode) {
+				return nil, mutOut{}, fmt.Errorf("fc_mode: must be one of %s", enumValues("serviceArguments.fc_mode"))
+			}
+			svcPatch["fc_mode"] = in.FCMode
+		}
+		for _, f := range []struct {
+			name string
+			v    *int
+		}{{"fc_max_outstanding", in.FCMaxOutstanding}, {"fc_max_queue_depth", in.FCMaxQueueDepth}, {"fc_max_queue_wait_ms", in.FCMaxQueueWaitMs}} {
+			if f.v == nil {
+				continue
+			}
+			if *f.v < 0 {
+				return nil, mutOut{}, fmt.Errorf("%s: must be >= 0", f.name)
+			}
+			svcPatch[f.name] = *f.v
+		}
+		weights := map[string]int{}
+		for i, w := range in.EndpointWeights {
+			if err := validIP(w.IP, fmt.Sprintf("endpoint_weights[%d].ip", i)); err != nil {
+				return nil, mutOut{}, err
+			}
+			if err := validPort(w.Port, fmt.Sprintf("endpoint_weights[%d].port", i)); err != nil {
+				return nil, mutOut{}, err
+			}
+			if w.Weight < 1 {
+				return nil, mutOut{}, fmt.Errorf("endpoint_weights[%d].weight: must be at least 1", i)
+			}
+			key := fmt.Sprintf("%s:%d", w.IP, w.Port)
+			if _, dup := weights[key]; dup {
+				return nil, mutOut{}, fmt.Errorf("endpoint_weights: %s named twice", key)
+			}
+			weights[key] = w.Weight
+		}
+		if len(svcPatch) == 0 && len(weights) == 0 {
+			return nil, mutOut{}, fmt.Errorf("nothing to change: name at least one of admin_state_up, endpoint_weights, fc_mode, fc_max_outstanding, fc_max_queue_depth, fc_max_queue_wait_ms (anything else is lb_create or lb_delete)")
+		}
+
+		// Pre-read: the PATCH changes an existing rule and the preview
+		// shows it; a missing key is refused before any request is built.
+		existing, found, err := c.LBRuleByKey(ctx, in.ExternalIP, in.Port, proto)
+		if err != nil {
+			return nil, mutOut{}, fmt.Errorf("pre-read of the rule failed, nothing was sent: %w", err)
+		}
+		if !found {
+			return nil, mutOut{}, fmt.Errorf("no rule at %s:%d/%s: lb_update changes an existing rule and creates none; lb_create creates one", in.ExternalIP, in.Port, proto)
+		}
+		svc := mapValue(existing["serviceArguments"])
+		curEps := listValue(existing["endpoints"])
+		seen := map[string]bool{}
+		eps := make([]map[string]any, 0, len(curEps))
+		curView := make([]map[string]any, 0, len(curEps))
+		propView := make([]map[string]any, 0, len(curEps))
+		rbWeights := []map[string]any{}
+		for _, e := range curEps {
+			em := mapValue(e)
+			ip, port := stringValue(em["endpointIP"]), intValue(em["targetPort"])
+			key := fmt.Sprintf("%s:%d", ip, port)
+			seen[key] = true
+			w := intValue(em["weight"])
+			if w <= 0 {
+				w = 1
+			}
+			curView = append(curView, map[string]any{"endpointIP": ip, "targetPort": port, "weight": w})
+			nw := w
+			if want, ok := weights[key]; ok {
+				nw = want
+				rbWeights = append(rbWeights, map[string]any{"ip": ip, "port": port, "weight": w})
+			}
+			propView = append(propView, map[string]any{"endpointIP": ip, "targetPort": port, "weight": nw})
+			item := map[string]any{"endpointIP": ip, "targetPort": port, "weight": nw}
+			if r := intValue(em["ep_role"]); r != 0 {
+				item["ep_role"] = r
+			}
+			if n := intValue(em["nixl_port"]); n != 0 {
+				item["nixl_port"] = n
+			}
+			eps = append(eps, item)
+		}
+		for key := range weights {
+			if !seen[key] {
+				return nil, mutOut{}, fmt.Errorf("endpoint_weights: %s is not an endpoint of the rule; adding or removing endpoints is a replace (lb_create on the same key)", key)
+			}
+		}
+		// The body: the identifying tuple (immutable, sent unchanged), the
+		// overlay, and the endpoint list only when a weight changes.
+		bodySvc := map[string]any{"externalIP": in.ExternalIP, "port": in.Port, "protocol": proto}
+		for k, v := range svcPatch {
+			bodySvc[k] = v
+		}
+		body := map[string]any{"serviceArguments": bodySvc}
+		if len(weights) > 0 {
+			body["endpoints"] = eps
+		}
+		current := pick(svc, lbUpdateSvcKeys...)
+		// The gateway marshals adminStateUp with omitempty, so a paused
+		// rule's GET carries no adminStateUp. The preview shows the flag as
+		// read (true, false or absent); the rollback states no value for an
+		// absent flag.
+		current["adminStateUp"] = adminStateView(svc["adminStateUp"])
+		current["endpoints"] = curView
+		proposed := overlay(current, svcPatch)
+		proposed["endpoints"] = propView
+
+		args := in
+		args.ConfirmToken = ""
+		out, stop, err := d.gateChange(ctx, "lb_update", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+			rb := map[string]any{"external_ip": in.ExternalIP, "port": in.Port, "protocol": proto}
+			var undeclared []string
+			var notes []string
+			for _, f := range lbUpdateFields {
+				if _, changed := svcPatch[f[1]]; !changed {
+					continue
+				}
+				if f[1] == "adminStateUp" && current[f[1]] == adminStateAbsent {
+					notes = append(notes, "the rule's GET carried no adminStateUp (absent; on this gateway the form a paused rule reads as, since the flag is serialised with omitempty), so the rollback states no admin_state_up: read lb_get after the change and pass the value to restore explicitly")
+					continue
+				}
+				if v, ok := current[f[1]]; ok {
+					rb[f[0]] = v
+				} else {
+					undeclared = append(undeclared, f[1])
+				}
+			}
+			if len(rbWeights) > 0 {
+				rb["endpoint_weights"] = rbWeights
+			}
+			rollback := &rollbackSpec{Tool: "lb_update", Args: rb}
+			if len(undeclared) > 0 {
+				notes = append(notes, fmt.Sprintf("the rule did not declare %s before; the PATCH overlays and cannot un-declare a field, so the rollback leaves it declared (lb_create on the same key re-creates the rule without it)", strings.Join(undeclared, ", ")))
+			}
+			rollback.Note = strings.Join(notes, "; ")
+			return changePlan{Current: current, Proposed: proposed, Rollback: rollback, Impact: "service"}, nil
+		})
+		if err != nil || stop {
+			return nil, out, err
+		}
+		var res any
+		path := fmt.Sprintf("/config/loadbalancer/externalipaddress/%s/port/%d/protocol/%s",
+			url.PathEscape(in.ExternalIP), in.Port, url.PathEscape(proto))
+		if err := c.Patch(ctx, path, body, &res); err != nil {
+			d.auditMut("lb_update", c.Name(), args, false, err.Error())
+			// D8: the gateway's answer as is (a fullproxy rule, an immutable
+			// field, no change detected), plus the one path that changes
+			// what the PATCH will not.
+			return nil, mutOut{}, fmt.Errorf("%w; a change the PATCH refuses is made by replacing the rule: lb_create on the same key previews the replace (admin-confirm), lb_delete removes it", err)
+		}
+		d.auditMut("lb_update", c.Name(), args, true, "")
+		readBack := map[string]any{}
+		if rule, found, err := c.LBRuleByKey(ctx, in.ExternalIP, in.Port, proto); err == nil && found {
+			readBack["rule"] = rule
+			state := adminStateView(mapValue(rule["serviceArguments"])["adminStateUp"])
+			if state == adminStateAbsent && in.AdminStateUp != nil && !*in.AdminStateUp {
+				// The one place absent resolves to false: this call just
+				// sent false, the gateway drops a false flag from the GET
+				// (omitempty), and an enabled rule always reads true.
+				state = false
+				readBack["admin_state_up_note"] = "the GET after sending admin_state_up false carries no adminStateUp; this gateway omits a false flag (omitempty) and an enabled rule always reads an explicit true, so absent here is read as false"
+			}
+			readBack["admin_state_up"] = state
+		}
+		if st, err := c.LBRuleStatus(ctx, in.ExternalIP, in.Port, proto); err == nil {
+			readBack["status"] = st
+		}
+		return nil, executed(c.Name(), res, readBack), nil
+	}
 }
 
 // ---- lb_delete ----
@@ -1315,7 +1704,7 @@ var secrateRequired = map[string]any{
 // protection or sets a positive aggregate budget. POST /config/securityrate
 // refuses a body that does neither, so a gateway that has no protection
 // enabled cannot be put back into that state through the POST; DELETE
-// /config/securityrate is the disable path (no tool yet).
+// /config/securityrate (secrate_disable) is the disable path.
 func secrateProtects(cfg map[string]any) bool {
 	for _, k := range []string{"synEnabled", "connRateEnabled", "udpEnabled"} {
 		if on, _ := cfg[k].(bool); on {
@@ -1393,11 +1782,11 @@ func (d *Deps) secrateSet() sdk.ToolHandlerFor[secrateSetIn, mutOut] {
 			}
 		}
 		if !secrateProtects(proposed) {
-			return nil, mutOut{}, fmt.Errorf("the proposed configuration enables no per-source protection and sets no aggregate budget, which POST /config/securityrate refuses; nothing was sent (DELETE /config/securityrate is the disable path and has no tool yet)")
+			return nil, mutOut{}, fmt.Errorf("the proposed configuration enables no per-source protection and sets no aggregate budget, which POST /config/securityrate refuses; nothing was sent (secrate_disable is the disable path: DELETE /config/securityrate)")
 		}
 		args := in
 		args.ConfirmToken = ""
-		out, stop, err := d.gateChange("secrate_set", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+		out, stop, err := d.gateChange(ctx, "secrate_set", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
 			rb := map[string]any{}
 			for _, f := range secrateFields {
 				if _, changed := patch[f[1]]; changed {
@@ -1408,7 +1797,7 @@ func (d *Deps) secrateSet() sdk.ToolHandlerFor[secrateSetIn, mutOut] {
 			}
 			rollback := &rollbackSpec{Tool: "secrate_set", Args: rb}
 			if !secrateProtects(current) {
-				rollback = &rollbackSpec{Note: "not reversible through secrate_set: the target had no protection enabled, a configuration POST /config/securityrate refuses; DELETE /config/securityrate restores it (no tool yet)"}
+				rollback = &rollbackSpec{Tool: "secrate_disable", Args: map[string]any{}, Note: "the target had no protection enabled, a configuration POST /config/securityrate refuses; secrate_disable (DELETE /config/securityrate) restores it, with the gateway's built-in thresholds"}
 			}
 			return changePlan{
 				Current:  current,
@@ -1444,7 +1833,7 @@ func (d *Deps) secrateReset() sdk.ToolHandlerFor[secrateResetIn, mutOut] {
 		}
 		args := in
 		args.ConfirmToken = ""
-		out, stop, err := d.gateChange("secrate_reset", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+		out, stop, err := d.gateChange(ctx, "secrate_reset", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
 			cur, err := c.SecurityRate(ctx)
 			if err != nil {
 				return changePlan{}, fmt.Errorf("read of the current security rate counters failed, nothing was sent: %w", err)
@@ -1472,6 +1861,118 @@ func (d *Deps) secrateReset() sdk.ToolHandlerFor[secrateResetIn, mutOut] {
 		d.auditMut("secrate_reset", c.Name(), args, true, "")
 		after, _ := c.SecurityRate(ctx)
 		return nil, executed(c.Name(), res, pick(mapValue(after), secrateCounterKeys...)), nil
+	}
+}
+
+// ---- secrate_disable ----
+
+type secrateDisableIn struct {
+	Target       string `json:"target,omitempty" jsonschema:"target loxilb instance name; omit for default"`
+	ConfirmToken string `json:"confirm_token,omitempty" jsonschema:"single-use token from the preview step; omit to preview"`
+}
+
+// secrateDisable is DELETE /config/securityrate behind the change gate
+// (D18): the preview carries the current configuration as the arguments
+// of a secrate_set rollback, so an agent that switched a protection on can
+// take it off again and back.
+func (d *Deps) secrateDisable() sdk.ToolHandlerFor[secrateDisableIn, mutOut] {
+	return func(ctx context.Context, _ *sdk.CallToolRequest, in secrateDisableIn) (*sdk.CallToolResult, mutOut, error) {
+		c, err := d.Resolve(in.Target)
+		if err != nil {
+			return nil, mutOut{}, err
+		}
+		args := in
+		args.ConfirmToken = ""
+		out, stop, err := d.gateChange(ctx, "secrate_disable", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+			cur, err := c.SecurityRate(ctx)
+			if err != nil {
+				return changePlan{}, fmt.Errorf("read of the current security rate config failed, nothing was sent: %w", err)
+			}
+			current := overlay(secrateRequired, pick(mapValue(cur), secrateConfigKeys...))
+			proposed := overlay(current, map[string]any{
+				"synEnabled": false, "connRateEnabled": false, "udpEnabled": false, "whitelistIps": []string{},
+			})
+			rollback := &rollbackSpec{Note: "no protection was enabled: the delete changes the flags nothing and empties the whitelist; there is nothing to put back"}
+			if secrateProtects(current) {
+				rb := map[string]any{}
+				for _, f := range secrateFields {
+					if v, ok := current[f[1]]; ok && v != nil {
+						rb[f[0]] = v
+					}
+				}
+				rollback = &rollbackSpec{Tool: "secrate_set", Args: rb,
+					Note: "the thresholds revert to the gateway's built-ins on apply; the rollback re-sends the configuration as read now"}
+			}
+			return changePlan{Current: current, Proposed: proposed, Rollback: rollback, Impact: "global"}, nil
+		})
+		if err != nil || stop {
+			return nil, out, err
+		}
+		var res any
+		if err := c.Delete(ctx, "/config/securityrate", &res); err != nil {
+			d.auditMut("secrate_disable", c.Name(), args, false, err.Error())
+			return nil, mutOut{}, err
+		}
+		d.auditMut("secrate_disable", c.Name(), args, true, "")
+		after, _ := c.SecurityRate(ctx)
+		return nil, executed(c.Name(), res, overlay(secrateRequired, pick(mapValue(after), secrateConfigKeys...))), nil
+	}
+}
+
+// ---- config_persist ----
+
+type configPersistIn struct {
+	Target       string `json:"target,omitempty" jsonschema:"target loxilb instance name; omit for default"`
+	ConfirmToken string `json:"confirm_token,omitempty" jsonschema:"single-use token from the preview step; omit to preview"`
+}
+
+// persistGateBusy maps the gateway's 409 on the snapshot gate to the same
+// verdict config_snapshot_get gives: the words the agent retries on.
+func persistGateBusy(err error) error {
+	var se *client.StatusError
+	if errors.As(err, &se) && se.Code == http.StatusConflict {
+		return fmt.Errorf("snapshot_gate_busy: %s; retry_after_sec: %d (the gateway's auto-persist or a restore holds the snapshot gate; nothing was written, call again after that)",
+			clean(se.Result()), snapshotGateRetrySec)
+	}
+	return err
+}
+
+// configPersist is POST /config/persist behind the change gate (impact
+// instance, admin-confirm, never autopilot). The preview's current state is
+// the running snapshot's identity; nothing can restore the file the write
+// overwrites, and the rollback says so.
+func (d *Deps) configPersist() sdk.ToolHandlerFor[configPersistIn, mutOut] {
+	return func(ctx context.Context, _ *sdk.CallToolRequest, in configPersistIn) (*sdk.CallToolResult, mutOut, error) {
+		c, err := d.Resolve(in.Target)
+		if err != nil {
+			return nil, mutOut{}, err
+		}
+		args := in
+		args.ConfirmToken = ""
+		out, stop, err := d.gateChange(ctx, "config_persist", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+			id, err := c.SnapshotIdentity(ctx)
+			if err != nil {
+				return changePlan{}, fmt.Errorf("read of the running snapshot failed, nothing was written: %w", persistGateBusy(err))
+			}
+			return changePlan{
+				Current:  id,
+				Proposed: map[string]any{"action": "persist the running configuration to <config-path>/snapshot.json", "schema": id["schema"], "checksum": id["checksum"], "generation": id["generation"]},
+				Rollback: &rollbackSpec{Note: "not reversible: the previous snapshot.json is overwritten and cannot be read back through the API; keep a copy of the file on the gateway host if the previous document matters"},
+				Impact:   "instance",
+			}, nil
+		})
+		if err != nil || stop {
+			return nil, out, err
+		}
+		var res map[string]any
+		if err := c.Post(ctx, "/config/persist", nil, &res); err != nil {
+			err = persistGateBusy(err)
+			d.auditMut("config_persist", c.Name(), args, false, err.Error())
+			return nil, mutOut{}, err
+		}
+		d.auditMut("config_persist", c.Name(), args, true, "")
+		readBack, _ := c.SnapshotIdentity(ctx)
+		return nil, executed(c.Name(), res, readBack), nil
 	}
 }
 
@@ -1586,7 +2087,7 @@ func (d *Deps) bgpNeighSet() sdk.ToolHandlerFor[bgpNeighSetIn, mutOut] {
 		}
 		args := in
 		args.ConfirmToken = ""
-		out, stop, err := d.gateChange("bgp_neigh_set", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+		out, stop, err := d.gateChange(ctx, "bgp_neigh_set", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
 			cur := neighbor()
 			rb := &rollbackSpec{Note: "new neighbor: the bridge has no bgp_neigh_delete tool yet (manifest P4); remove it with the REST DELETE or loxicmd"}
 			if cur != nil {
@@ -1664,7 +2165,7 @@ func (d *Deps) bgpGlobalSet() sdk.ToolHandlerFor[bgpGlobalSetIn, mutOut] {
 		}
 		args := in
 		args.ConfirmToken = ""
-		out, stop, err := d.gateChange("bgp_global_set", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+		out, stop, err := d.gateChange(ctx, "bgp_global_set", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
 			return changePlan{Current: nil, Proposed: body, Rollback: &rollbackSpec{Note: noReadNote}, Impact: "global"}, nil
 		})
 		if err != nil || stop {
@@ -1711,7 +2212,7 @@ func (d *Deps) bgpPolicyApply() sdk.ToolHandlerFor[bgpPolicyApplyIn, mutOut] {
 		}
 		args := in
 		args.ConfirmToken = ""
-		out, stop, err := d.gateChange("bgp_policy_apply", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+		out, stop, err := d.gateChange(ctx, "bgp_policy_apply", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
 			return changePlan{Current: nil, Proposed: body, Rollback: &rollbackSpec{Note: noReadNote}, Impact: "global"}, nil
 		})
 		if err != nil || stop {
@@ -1753,7 +2254,7 @@ func (d *Deps) configParamsSet() sdk.ToolHandlerFor[paramsSetIn, mutOut] {
 		body := map[string]any{"logLevel": lvl}
 		args := in
 		args.ConfirmToken = ""
-		out, stop, err := d.gateChange("config_params_set", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+		out, stop, err := d.gateChange(ctx, "config_params_set", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
 			cur, err := c.OperParams(ctx)
 			if err != nil {
 				return changePlan{}, fmt.Errorf("read of the current parameters failed, nothing was sent: %w", err)

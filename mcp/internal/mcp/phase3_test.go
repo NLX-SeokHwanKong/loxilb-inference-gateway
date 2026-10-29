@@ -77,6 +77,12 @@ func newAIMock(t *testing.T) *mockLoxilb {
 	mux.HandleFunc("/netlox/v1/", func(w http.ResponseWriter, r *http.Request) {
 		m.mu.Lock()
 		m.requests = append(m.requests, r.Method+" "+r.URL.Path)
+		if r.Method == http.MethodPost || r.Method == http.MethodPatch {
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
+				m.bodies = append(m.bodies, body)
+			}
+		}
 		m.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		switch {
@@ -162,7 +168,7 @@ func TestPhase3RoleVisibility(t *testing.T) {
 
 	operator, _ := listNames(t, b, guard.RoleOperator)
 	for _, want := range []string{"ai_apikey_create", "ai_apikey_update", "ai_ratelimit_set",
-		"llamafw_health_check"} {
+		"ai_user_ratelimit_set", "ai_user_ratelimit_delete", "llamafw_health_check"} {
 		if !operator[want] {
 			t.Errorf("operator: mutating tool %s missing", want)
 		}
@@ -214,7 +220,7 @@ func TestPhase3ApikeyCreateSecretsToFile(t *testing.T) {
 	b := aiTestBridge(t, mock)
 	cs := session(t, b, guard.RoleOperator)
 
-	res := callTool(t, cs, "ai_apikey_create", map[string]any{"tenant_id": "t1", "name": "ci"})
+	res := callTool(t, cs, "ai_apikey_create", map[string]any{"tenant_id": "t1", "name": "ci", "apply": true})
 	if res.IsError {
 		t.Fatalf("create errored: %v", res.Content)
 	}
@@ -223,7 +229,11 @@ func TestPhase3ApikeyCreateSecretsToFile(t *testing.T) {
 		t.Fatal("T5 violation: raw key material present in the default create response")
 	}
 	out := callOut(t, res)
-	keyFile, _ := out["key_file"].(string)
+	if out["action"] != "executed" {
+		t.Fatalf("apply=true must execute, got %v", out["action"])
+	}
+	result, _ := out["result"].(map[string]any)
+	keyFile, _ := result["key_file"].(string)
 	if keyFile == "" {
 		t.Fatal("key_file missing from response")
 	}
@@ -250,13 +260,13 @@ func TestPhase3ApikeyCreateSecretsToFile(t *testing.T) {
 	// reveal=true returns the key inline (explicit opt-in). The mock returns
 	// the same key_id, so the file already exists — reveal must not touch it.
 	res = callTool(t, cs, "ai_apikey_create", map[string]any{
-		"tenant_id": "t1", "reveal": true,
+		"tenant_id": "t1", "reveal": true, "apply": true,
 	})
 	if res.IsError {
 		t.Fatalf("reveal create errored: %v", res.Content)
 	}
-	out = callOut(t, res)
-	if out["raw_key"] != testRawKey {
+	result, _ = callOut(t, res)["result"].(map[string]any)
+	if result["raw_key"] != testRawKey {
 		t.Error("reveal=true did not return the raw key")
 	}
 
@@ -264,7 +274,7 @@ func TestPhase3ApikeyCreateSecretsToFile(t *testing.T) {
 	noDir := testConfig(mock.srv.URL)
 	b2 := newTestBridge(t, noDir)
 	cs2 := session(t, b2, guard.RoleOperator)
-	res = callTool(t, cs2, "ai_apikey_create", map[string]any{"tenant_id": "t1"})
+	res = callTool(t, cs2, "ai_apikey_create", map[string]any{"tenant_id": "t1", "apply": true})
 	if !res.IsError {
 		t.Fatal("create without secrets_dir and without reveal must fail")
 	}

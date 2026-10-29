@@ -17,11 +17,13 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"reflect"
 	"sort"
 
+	"github.com/loxilb-io/loxilb-inference-gateway/mcp/internal/mcp/client"
 	"github.com/loxilb-io/loxilb-inference-gateway/mcp/internal/mcp/guard"
 )
 
@@ -56,7 +58,7 @@ type changePlan struct {
 // plan is invoked only when a preview is due; it performs the reads. It
 // returns (previewOut, true, nil) when the call must stop at the preview and
 // (zero, false, nil) when the caller may apply the change.
-func (d *Deps) gateChange(tool, target, confirmToken string, args any, plan func() (changePlan, error)) (mutOut, bool, error) {
+func (d *Deps) gateChange(ctx context.Context, tool, target, confirmToken string, args any, plan func() (changePlan, error)) (mutOut, bool, error) {
 	if d.Confirm == nil {
 		return mutOut{}, false, nil // --no-confirm
 	}
@@ -68,6 +70,12 @@ func (d *Deps) gateChange(tool, target, confirmToken string, args any, plan func
 		return mutOut{}, false, err
 	}
 	if confirmToken != "" {
+		// The budget is checked before the token is redeemed: a refused
+		// apply leaves the preview's token usable once the brake lifts.
+		if err := d.Budget.Check(client.BudgetKey(ctx)); err != nil {
+			d.auditMut(tool, target, args, false, err.Error())
+			return mutOut{}, false, err
+		}
 		if err := d.Confirm.Redeem(confirmToken, binding); err != nil {
 			d.auditMut(tool, target, args, false, "confirm: "+err.Error())
 			return mutOut{}, false, err

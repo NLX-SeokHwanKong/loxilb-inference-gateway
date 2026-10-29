@@ -35,7 +35,7 @@ const maxListItems = 100
 // RegisterAnalysis adds the analysis read tools.
 func RegisterAnalysis(s *sdk.Server, role guard.Role, pol *guard.Policy, deps *Deps) {
 	reg := func(name string, add func()) {
-		if pol.Permits(role, guard.ToolMeta{Name: name, Domain: domainAnalysis}) {
+		if permit(pol, role, guard.ToolMeta{Name: name, Domain: domainAnalysis}) {
 			add()
 		}
 	}

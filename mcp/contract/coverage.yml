@@ -15,7 +15,7 @@
 # Budgets are ratchets: they may only go down. A raise is a warning in the CI summary.
 version: 1
 budget:
-  pending_max: 63
+  pending_max: 58
   tier_gap_max: 0
 operations:
 - op: GET /audit/policy
@@ -177,18 +177,24 @@ operations:
   - ai_ratelimit_get
   impact: none
 - op: POST /config/ai/user/ratelimit
-  pending: P1b
+  tools:
+  - ai_user_ratelimit_set
   impact: tenant
-  note: PR-B2 ai_user_ratelimit_set; operator with preview; owner-approved 2026-10-28
+  reversible: true
+  tier: operator
+  note: "PR-B2 ai_user_ratelimit_set: operator with preview (apply: true skips it); the pre-read is client.UserRateLimit (credited to ai_user_ratelimit_get); an all-zero entry is refused before any request, the model rows are replaced as a set; owner-approved 2026-10-28"
 - op: GET /config/ai/user/ratelimit/{tenant_id}
   tools:
   - ai_user_ratelimit_list
   impact: none
   note: read; PR-B1 mapped; owner-approved 2026-10-28
 - op: DELETE /config/ai/user/ratelimit/{tenant_id}/{user_id}
-  pending: P1b
+  tools:
+  - ai_user_ratelimit_delete
   impact: tenant
-  note: PR-B2 ai_user_ratelimit_delete; re-creatable from the preview, operator; owner-approved 2026-10-28
+  reversible: true
+  tier: operator
+  note: "PR-B2 ai_user_ratelimit_delete: re-creatable, so operator; the preview carries the row (with its model limits) as the arguments of an ai_user_ratelimit_set rollback and the delete applies only with the token (no apply shortcut on a removal); owner-approved 2026-10-28"
 - op: GET /config/ai/user/ratelimit/{tenant_id}/{user_id}
   tools:
   - ai_user_ratelimit_get
@@ -597,9 +603,19 @@ operations:
   impact: none
   note: "lb_get (PR-B1) is the read tool of this key. It is also the pre-read of lb_create's create/replace split (PR-A2, D13), performed through client.LBRuleByKey and presence-checked by the scanner like the other change-gate reads: a mutation's pre-read cannot be credited to a tool of another tier, and one entry carries one tier; owner-approved 2026-10-28"
 - op: PATCH /config/loadbalancer/externalipaddress/{ip_address}/port/{port}/protocol/{proto}
-  pending: P1b
+  tools:
+  - lb_update
   impact: service
-  note: PR-B2 lb_update; phase-1 fields allowlist, admin-confirm; owner-approved 2026-10-28
+  reversible: true
+  tier: admin-confirm
+  fields:
+  - adminStateUp
+  - endpoints[].weight
+  - fc_mode
+  - fc_max_outstanding
+  - fc_max_queue_depth
+  - fc_max_queue_wait_ms
+  note: "PR-B2 lb_update, phase 1 (change-gate requirement 3): the tool accepts only the fields: list above; a weight change sends the full current endpoint list with the weights swapped (the gateway replaces the list when the key is present); any other argument is refused by the schema and the description names lb_create (replace) and lb_delete. D8: a PATCH the gateway refuses (fullproxy rule, immutable field) is passed on verbatim plus one hint line. The pre-read is client.LBRuleByKey (credited to lb_get) and the read-back adds GET .../status through client.LBRuleStatus; owner-approved 2026-10-28"
 - op: GET /config/loadbalancer/externalipaddress/{ip_address}/port/{port}/protocol/{proto}/kvexactstatus
   tools:
   - lb_kvexact_status
@@ -689,9 +705,12 @@ operations:
   reversible: true
   tier: admin-confirm
 - op: POST /config/persist
-  pending: P1b
+  tools:
+  - config_persist
   impact: instance
-  note: PR-B2 config_persist; operator; owner-approved 2026-10-28
+  reversible: false
+  tier: admin-confirm
+  note: "PR-B2 config_persist (D22): the §5 row and the earlier note said operator, but impact instance derives admin-confirm and never autopilot (§3.1), and the overwritten snapshot.json cannot be read back, so reversible is false; the preview's current is the running snapshot's identity (client.SnapshotIdentity on GET /config/snapshot, credited to config_snapshot_get), a 409 on the gate is the snapshot_gate_busy verdict; owner-approved 2026-10-28, tier raised 2026-10-29"
 - op: POST /config/pii/configure
   tools:
   - pii_configure
@@ -751,9 +770,12 @@ operations:
   reversible: true
   tier: admin-confirm
 - op: DELETE /config/securityrate
-  pending: P1b
+  tools:
+  - secrate_disable
   impact: global
-  note: 'PR-B2 secrate_disable (D18, 2026-10-28): POST /config/securityrate refuses an all-off body, so this DELETE is the only way back to the unconfigured state and an agent that enabled protection through secrate_set has no rollback inside the bridge until it exists; own tool, impact global, admin-confirm, NeverAutopilot; the preview carries the current configuration as the rollback arguments (rollback = secrate_set with that body); replaces the earlier fold-into-secrate_set(enabled=false) plan; owner-approved 2026-10-28'
+  reversible: true
+  tier: admin-confirm
+  note: "PR-B2 secrate_disable (D18, 2026-10-28): POST /config/securityrate refuses an all-off body, so this DELETE is the only way back to the unconfigured state; own tool, impact global, admin-confirm, NeverAutopilot; the preview carries the current configuration as the arguments of a secrate_set rollback, and secrate_set's rollback on an unprotected target now names this tool; owner-approved 2026-10-28"
 - op: POST /config/securityrate
   tools:
   - secrate_set

@@ -52,7 +52,7 @@ var legacyMetricPaths = map[string]string{
 // file is loadable.
 func RegisterMonitoring(s *sdk.Server, role guard.Role, pol *guard.Policy, deps *Deps) {
 	permits := func(name string) bool {
-		return pol.Permits(role, guard.ToolMeta{Name: name, Domain: domainMonitoring})
+		return permit(pol, role, guard.ToolMeta{Name: name, Domain: domainMonitoring})
 	}
 
 	if permits("metrics_config_get") {

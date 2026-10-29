@@ -27,6 +27,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/loxilb-io/loxilb-inference-gateway/mcp/internal/mcp/client"
@@ -69,6 +70,7 @@ const trafficReportCaveat = "accounting caveat: read loxilb_ai_requests_total by
 func RegisterAI(s *sdk.Server, role guard.Role, pol *guard.Policy, deps *Deps) {
 	reg := func(meta guard.ToolMeta, add func()) {
 		meta.Domain = domainAI
+		noteMeta(meta)
 		if pol.Permits(role, meta) {
 			add()
 		}
@@ -225,25 +227,68 @@ func RegisterAI(s *sdk.Server, role guard.Role, pol *guard.Policy, deps *Deps) {
 		sdk.AddTool(s, &sdk.Tool{
 			Name: "ai_apikey_create",
 			Description: "Create a tenant API key (POST /config/ai/apikey): allowed models, rps/burst/tokens-per-min " +
-				"quotas, optional expiry. The raw key exists only once: by default it is written to a mode-0600 file " +
-				"on the bridge host and only the file path is returned; pass reveal=true to return it inline instead (discouraged).",
+				"quotas, optional expiry, enabled flag, idempotency handle, priority class and objectives. There is no " +
+				"key import: the gateway mints the key. The raw key exists only once: by default it is written to a " +
+				"mode-0600 file on the bridge host and only the file path is returned; pass reveal=true to return it " +
+				"inline instead (discouraged). Tenant impact. The first call previews the key to be created with a " +
+				"confirm_token; repeat with the token, or call once with apply=true, to create it. The executed " +
+				"result carries key_id and key_file (or raw_key on reveal); the rollback is ai_apikey_delete with that key_id.",
 			Annotations: mutAnnotations("Create AI API key", false),
+			InputSchema: apikeyCreateInputSchema(),
 		}, deps.aiApikeyCreate())
 	})
 	reg(mut("ai_apikey_update"), func() {
 		sdk.AddTool(s, &sdk.Tool{
-			Name:        "ai_apikey_update",
-			Description: "Update an API key's allowed-model list and/or enabled flag (PATCH /config/ai/apikey/{key_id}). Disabling a key is reversible; deleting is not.",
+			Name: "ai_apikey_update",
+			Description: "Update an API key in place (PATCH /config/ai/apikey/{key_id}): allowed_models (an empty list " +
+				"clears the restriction), enabled, rate_limit_rps, burst_size, tokens_per_min, priority_class (an " +
+				"empty string clears it), default_objective (an empty string clears it), allowed_objectives (an empty " +
+				"list clears it). Only the named fields are sent; at least one is required. Object impact. The first call " +
+				"pre-reads the key and previews current, proposed, diff and a rollback with the current values plus a " +
+				"confirm_token; repeat with the token, or call once with apply=true, to apply. The executed result " +
+				"re-reads the key. Disabling a key is reversible; deleting (ai_apikey_delete) is not.",
 			Annotations: mutAnnotations("Update AI API key", true),
+			InputSchema: apikeyUpdateInputSchema(),
 		}, deps.aiApikeyUpdate())
 	})
 	reg(mut("ai_ratelimit_set"), func() {
 		sdk.AddTool(s, &sdk.Tool{
 			Name: "ai_ratelimit_set",
-			Description: "Create or update a tenant's AI rate limit (POST /config/ai/tenant/ratelimit): requests/s and " +
-				"LLM tokens/min. There is no delete endpoint; to lift a limit set the quotas to 0 (unlimited).",
+			Description: "Create or replace a tenant's AI rate limit (POST /config/ai/tenant/ratelimit): requests/s, " +
+				"LLM tokens/min, burst_pct (sent on every call: the row is an upsert), per-model token quotas " +
+				"(model_limits; a model with tokens_per_min 0 loses its quota, other models keep theirs), and the " +
+				"tenant's priority_class, default_objective and allowed_objectives (sent only when named; an empty " +
+				"string or list clears). There is no delete endpoint; quotas of 0 are unlimited. Tenant impact. " +
+				"The first call pre-reads the row and previews current, proposed, diff and a rollback plus a " +
+				"confirm_token; repeat with the token, or call once with apply=true, to apply. The executed result re-reads the row.",
 			Annotations: mutAnnotations("Set tenant AI rate limit", true),
 		}, deps.aiRatelimitSet())
+	})
+	reg(mut("ai_user_ratelimit_set"), func() {
+		sdk.AddTool(s, &sdk.Tool{
+			Name: "ai_user_ratelimit_set",
+			Description: "Create or replace one user's explicit rate-limit row inside a tenant (POST /config/ai/user/ratelimit; " +
+				"QoS ladder level 1): rps, burst_size (0 defaults to rps), tokens_per_min and per-model token quotas. " +
+				"A zero field constrains nothing and falls through to the defaults; an entry whose limits are all zero " +
+				"is refused before any request (the API rejects it; ai_user_ratelimit_delete removes limits). The " +
+				"model rows are replaced as a set: a call without model_limits clears them. Tenant impact. The first " +
+				"call pre-reads the row and previews current, proposed, diff and a rollback (the current row, or " +
+				"ai_user_ratelimit_delete when none exists) plus a confirm_token; repeat with the token, or call once " +
+				"with apply=true, to apply. The executed result re-reads the row.",
+			Annotations: mutAnnotations("Set a user rate limit", true),
+		}, deps.aiUserRatelimitSet())
+	})
+	reg(mut("ai_user_ratelimit_delete"), func() {
+		sdk.AddTool(s, &sdk.Tool{
+			Name: "ai_user_ratelimit_delete",
+			Description: "Remove one user's explicit rate-limit row and its model rows " +
+				"(DELETE /config/ai/user/ratelimit/{tenant_id}/{user_id}); the user falls back to the defaults, then to " +
+				"unlimited. Re-creatable: the preview carries the row as the arguments of an ai_user_ratelimit_set " +
+				"rollback. Tenant impact. Two-step: the first call pre-reads the row (a missing row is refused) and " +
+				"previews it with a confirm_token; repeat with the token to delete. The executed result re-reads the key " +
+				"({exists: false} when the row is gone).",
+			Annotations: mutAnnotations("Delete a user rate limit", true),
+		}, deps.aiUserRatelimitDelete())
 	})
 	reg(mut("llamafw_health_check"), func() {
 		sdk.AddTool(s, &sdk.Tool{
@@ -435,38 +480,47 @@ func (d *Deps) aiApikeyGet() sdk.ToolHandlerFor[apikeyGetIn, map[string]any] {
 // ---- ai_apikey_create ----
 
 type apikeyCreateIn struct {
-	Target        string   `json:"target,omitempty" jsonschema:"target loxilb instance name; omit for default"`
-	TenantID      string   `json:"tenant_id" jsonschema:"tenant that owns the key"`
-	Name          string   `json:"name,omitempty" jsonschema:"human-readable key label"`
-	AllowedModels []string `json:"allowed_models,omitempty" jsonschema:"model identifiers this key may access; empty allows all"`
-	RateLimitRPS  int      `json:"rate_limit_rps,omitempty" jsonschema:"max requests per second for this key"`
-	BurstSize     int      `json:"burst_size,omitempty" jsonschema:"total request-bucket capacity, not additional capacity above rate_limit_rps; zero uses the per-key RPS; a nonpositive RPS skips this limiter"`
-	TokensPerMin  int      `json:"tokens_per_min,omitempty" jsonschema:"max LLM tokens per minute for this key"`
-	ExpiresAt     string   `json:"expires_at,omitempty" jsonschema:"optional expiry timestamp (RFC3339)"`
-	Reveal        bool     `json:"reveal,omitempty" jsonschema:"true to return the raw key inline instead of writing it to a file on the bridge host (discouraged: the key then enters model context)"`
+	Target            string   `json:"target,omitempty" jsonschema:"target loxilb instance name; omit for default"`
+	TenantID          string   `json:"tenant_id" jsonschema:"tenant that owns the key"`
+	Name              string   `json:"name,omitempty" jsonschema:"human-readable key label"`
+	AllowedModels     []string `json:"allowed_models,omitempty" jsonschema:"model identifiers this key may access; empty allows all"`
+	RateLimitRPS      int      `json:"rate_limit_rps,omitempty" jsonschema:"max requests per second for this key"`
+	BurstSize         int      `json:"burst_size,omitempty" jsonschema:"total request-bucket capacity, not additional capacity above rate_limit_rps; zero uses the per-key RPS; a nonpositive RPS skips this limiter"`
+	TokensPerMin      int      `json:"tokens_per_min,omitempty" jsonschema:"max LLM tokens per minute for this key"`
+	ExpiresAt         string   `json:"expires_at,omitempty" jsonschema:"optional expiry timestamp (RFC3339)"`
+	Enabled           *bool    `json:"enabled,omitempty" jsonschema:"whether the key is active; omitted means enabled"`
+	ClientOpID        string   `json:"client_op_id,omitempty" jsonschema:"optional idempotency handle (at most 128 printable non-space ASCII characters, unique per tenant); a retry carrying the same value converges on the row the first create made"`
+	PriorityClass     string   `json:"priority_class,omitempty" jsonschema:"the highest priority class a request with this key may have; permitted values come from the REST contract (generated description)"`
+	DefaultObjective  string   `json:"default_objective,omitempty" jsonschema:"the objective a request with this key gets when it names none, or one it may not use; counts only when the tenant's allowed_objectives hold it"`
+	AllowedObjectives []string `json:"allowed_objectives,omitempty" jsonschema:"the objectives a request with this key may ask for by header, and the body tiers (tier:priority, tier:fast, tier:flex) by service_tier, out of the ones its tenant allows; at most 64"`
+	Reveal            bool     `json:"reveal,omitempty" jsonschema:"true to return the raw key inline instead of writing it to a file on the bridge host (discouraged: the key then enters model context)"`
+	Apply             bool     `json:"apply,omitempty" jsonschema:"operator convenience: create without the preview step"`
+	ConfirmToken      string   `json:"confirm_token,omitempty" jsonschema:"single-use token from the preview step; omit to preview"`
 }
 
-type apikeyCreateOut struct {
-	Target  string `json:"target"`
-	KeyID   string `json:"key_id"`
-	KeyFile string `json:"key_file,omitempty"`
-	// RawKey is set only when reveal=true was requested explicitly.
-	RawKey string `json:"raw_key,omitempty"`
-	Note   string `json:"note"`
+// apikeyCreateInputSchema carries the generated priority_class values.
+func apikeyCreateInputSchema() *jsonschema.Schema {
+	return inputSchemaWithEnums[apikeyCreateIn]("ai_apikey_create", map[string]string{"priority_class": "ApiKeyCreateRequest.priority_class"})
 }
 
-func (d *Deps) aiApikeyCreate() sdk.ToolHandlerFor[apikeyCreateIn, apikeyCreateOut] {
-	return func(ctx context.Context, _ *sdk.CallToolRequest, in apikeyCreateIn) (*sdk.CallToolResult, apikeyCreateOut, error) {
+func (d *Deps) aiApikeyCreate() sdk.ToolHandlerFor[apikeyCreateIn, mutOut] {
+	return func(ctx context.Context, _ *sdk.CallToolRequest, in apikeyCreateIn) (*sdk.CallToolResult, mutOut, error) {
 		c, err := d.Resolve(in.Target)
 		if err != nil {
-			return nil, apikeyCreateOut{}, err
+			return nil, mutOut{}, err
 		}
 		if strings.TrimSpace(in.TenantID) == "" {
-			return nil, apikeyCreateOut{}, fmt.Errorf("tenant_id is required")
+			return nil, mutOut{}, fmt.Errorf("tenant_id is required")
 		}
 		if !in.Reveal && d.SecretsDir == "" {
-			return nil, apikeyCreateOut{}, fmt.Errorf("no secrets_dir configured on the bridge; " +
+			return nil, mutOut{}, fmt.Errorf("no secrets_dir configured on the bridge; " +
 				"configure one or pass reveal=true to accept the key in the response")
+		}
+		if in.PriorityClass != "" && !enumAllows("ApiKeyCreateRequest.priority_class", in.PriorityClass) {
+			return nil, mutOut{}, fmt.Errorf("priority_class: must be omitted or one of %s", enumValues("ApiKeyCreateRequest.priority_class"))
+		}
+		if len(in.AllowedObjectives) > 64 {
+			return nil, mutOut{}, fmt.Errorf("allowed_objectives: %d exceeds the maximum of 64", len(in.AllowedObjectives))
 		}
 		body := map[string]any{"tenant_id": in.TenantID}
 		if in.Name != "" {
@@ -487,29 +541,65 @@ func (d *Deps) aiApikeyCreate() sdk.ToolHandlerFor[apikeyCreateIn, apikeyCreateO
 		if in.ExpiresAt != "" {
 			body["expires_at"] = in.ExpiresAt
 		}
+		if in.Enabled != nil {
+			body["enabled"] = *in.Enabled
+		}
+		if in.ClientOpID != "" {
+			body["client_op_id"] = in.ClientOpID
+		}
+		if in.PriorityClass != "" {
+			body["priority_class"] = in.PriorityClass
+		}
+		if in.DefaultObjective != "" {
+			body["default_objective"] = in.DefaultObjective
+		}
+		if len(in.AllowedObjectives) > 0 {
+			body["allowed_objectives"] = in.AllowedObjectives
+		}
+		args := in
+		args.ConfirmToken = ""
+		if !in.Apply || in.ConfirmToken != "" {
+			out, stop, err := d.gateChange(ctx, "ai_apikey_create", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+				return changePlan{
+					Current:  nil,
+					Proposed: body,
+					Rollback: &rollbackSpec{Note: "the key does not exist yet: ai_apikey_delete with the key_id the executed result returns removes it (irreversible); ai_apikey_update enabled=false disables it instead"},
+					Impact:   "tenant",
+				}, nil
+			})
+			if err != nil || stop {
+				return nil, out, err
+			}
+		}
 		var res struct {
 			RawKey string `json:"raw_key"`
 			KeyID  string `json:"key_id"`
 		}
 		if err := c.Post(ctx, "/config/ai/apikey", body, &res); err != nil {
-			d.auditMut("ai_apikey_create", c.Name(), in, false, err.Error())
-			return nil, apikeyCreateOut{}, err
+			d.auditMut("ai_apikey_create", c.Name(), args, false, err.Error())
+			return nil, mutOut{}, err
 		}
-		out := apikeyCreateOut{Target: c.Name(), KeyID: clean(res.KeyID)}
+		result := map[string]any{"key_id": clean(res.KeyID)}
 		if in.Reveal {
-			out.RawKey = res.RawKey
-			out.Note = "raw key returned inline on explicit request; it is shown ONCE and cannot be retrieved again"
+			result["raw_key"] = res.RawKey
+			result["note"] = "raw key returned inline on explicit request; it is shown ONCE and cannot be retrieved again"
 		} else {
 			path, werr := writeSecretFile(d.SecretsDir, "apikey-"+sanitizeFileToken(res.KeyID), res.RawKey)
 			if werr != nil {
-				d.auditMut("ai_apikey_create", c.Name(), in, false, "secret file: "+werr.Error())
-				return nil, apikeyCreateOut{}, fmt.Errorf("key %s created but writing the secret file failed: %w; "+
+				d.auditMut("ai_apikey_create", c.Name(), args, false, "secret file: "+werr.Error())
+				return nil, mutOut{}, fmt.Errorf("key %s created but writing the secret file failed: %w; "+
 					"delete and re-create the key (the raw key is not recoverable)", clean(res.KeyID), werr)
 			}
-			out.KeyFile = path
-			out.Note = "raw key written to key_file (mode 0600) on the bridge host; it is stored NOWHERE else and cannot be retrieved again"
+			result["key_file"] = path
+			result["note"] = "raw key written to key_file (mode 0600) on the bridge host; it is stored NOWHERE else and cannot be retrieved again"
 		}
-		d.auditMut("ai_apikey_create", c.Name(), in, true, "")
+		d.auditMut("ai_apikey_create", c.Name(), args, true, "")
+		out := mutOut{Target: c.Name(), Action: "executed", Result: result}
+		if res.KeyID != "" {
+			if key, err := c.APIKey(ctx, res.KeyID); err == nil {
+				out.ReadBack = stripKeyMaterial(sanitizeAny(key, 0))
+			}
+		}
 		return nil, out, nil
 	}
 }
@@ -555,11 +645,27 @@ func writeSecretFile(dir, name, content string) (string, error) {
 // ---- ai_apikey_update ----
 
 type apikeyUpdateIn struct {
-	Target        string   `json:"target,omitempty" jsonschema:"target loxilb instance name; omit for default"`
-	KeyID         string   `json:"key_id" jsonschema:"API key identifier"`
-	AllowedModels []string `json:"allowed_models,omitempty" jsonschema:"replacement list of models the key may access"`
-	Enabled       *bool    `json:"enabled,omitempty" jsonschema:"enable or disable the key"`
+	Target            string   `json:"target,omitempty" jsonschema:"target loxilb instance name; omit for default"`
+	KeyID             string   `json:"key_id" jsonschema:"API key identifier"`
+	AllowedModels     []string `json:"allowed_models,omitempty" jsonschema:"replacement list of models the key may access; an empty list clears the restriction (all models)"`
+	Enabled           *bool    `json:"enabled,omitempty" jsonschema:"enable or disable the key"`
+	RateLimitRPS      *int     `json:"rate_limit_rps,omitempty" jsonschema:"max requests per second for this key; 0 skips the limiter"`
+	BurstSize         *int     `json:"burst_size,omitempty" jsonschema:"total request-bucket capacity; 0 uses the per-key RPS"`
+	TokensPerMin      *int     `json:"tokens_per_min,omitempty" jsonschema:"max LLM tokens per minute for this key; 0 leaves the dimension unlimited"`
+	PriorityClass     *string  `json:"priority_class,omitempty" jsonschema:"the highest priority class a request with this key may have; permitted values come from the REST contract (generated description); an empty string clears the cap"`
+	DefaultObjective  *string  `json:"default_objective,omitempty" jsonschema:"the objective a request with this key gets when it names none; an empty string clears it"`
+	AllowedObjectives []string `json:"allowed_objectives,omitempty" jsonschema:"the objectives and body tiers a request with this key may ask for; an empty list clears the list"`
+	Apply             bool     `json:"apply,omitempty" jsonschema:"operator convenience: apply without the preview step"`
+	ConfirmToken      string   `json:"confirm_token,omitempty" jsonschema:"single-use token from the preview step; omit to preview"`
 }
+
+// apikeyUpdateInputSchema carries the generated priority_class values.
+func apikeyUpdateInputSchema() *jsonschema.Schema {
+	return inputSchemaWithEnums[apikeyUpdateIn]("ai_apikey_update", map[string]string{"priority_class": "ApiKeyCreateRequest.priority_class"})
+}
+
+// apikeyPatchKeys are the eight patchable fields of PATCH /config/ai/apikey/{key_id}.
+var apikeyPatchKeys = []string{"allowed_models", "enabled", "rate_limit_rps", "burst_size", "tokens_per_min", "priority_class", "default_objective", "allowed_objectives"}
 
 func (d *Deps) aiApikeyUpdate() sdk.ToolHandlerFor[apikeyUpdateIn, mutOut] {
 	return func(ctx context.Context, _ *sdk.CallToolRequest, in apikeyUpdateIn) (*sdk.CallToolResult, mutOut, error) {
@@ -570,23 +676,91 @@ func (d *Deps) aiApikeyUpdate() sdk.ToolHandlerFor[apikeyUpdateIn, mutOut] {
 		if err := validatePathSegment(in.KeyID); err != nil {
 			return nil, mutOut{}, fmt.Errorf("key_id: %w", err)
 		}
-		body := map[string]any{}
+		patch := map[string]any{}
 		if in.AllowedModels != nil {
-			body["allowed_models"] = in.AllowedModels
+			patch["allowed_models"] = in.AllowedModels
 		}
 		if in.Enabled != nil {
-			body["enabled"] = *in.Enabled
+			patch["enabled"] = *in.Enabled
 		}
-		if len(body) == 0 {
-			return nil, mutOut{}, fmt.Errorf("no fields to update (allowed_models and/or enabled)")
+		for _, f := range []struct {
+			name string
+			v    *int
+		}{{"rate_limit_rps", in.RateLimitRPS}, {"burst_size", in.BurstSize}, {"tokens_per_min", in.TokensPerMin}} {
+			if f.v == nil {
+				continue
+			}
+			if *f.v < 0 {
+				return nil, mutOut{}, fmt.Errorf("%s: must be >= 0", f.name)
+			}
+			patch[f.name] = *f.v
+		}
+		if in.PriorityClass != nil {
+			if *in.PriorityClass != "" && !enumAllows("ApiKeyCreateRequest.priority_class", *in.PriorityClass) {
+				return nil, mutOut{}, fmt.Errorf("priority_class: must be empty (clears) or one of %s", enumValues("ApiKeyCreateRequest.priority_class"))
+			}
+			patch["priority_class"] = *in.PriorityClass
+		}
+		if in.DefaultObjective != nil {
+			patch["default_objective"] = *in.DefaultObjective
+		}
+		if in.AllowedObjectives != nil {
+			if len(in.AllowedObjectives) > 64 {
+				return nil, mutOut{}, fmt.Errorf("allowed_objectives: %d exceeds the maximum of 64", len(in.AllowedObjectives))
+			}
+			patch["allowed_objectives"] = in.AllowedObjectives
+		}
+		if len(patch) == 0 {
+			return nil, mutOut{}, fmt.Errorf("no fields to update: name at least one of %s", strings.Join(apikeyPatchKeys, ", "))
+		}
+		args := in
+		args.ConfirmToken = ""
+		if !in.Apply || in.ConfirmToken != "" {
+			out, stop, err := d.gateChange(ctx, "ai_apikey_update", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+				key, err := c.APIKey(ctx, in.KeyID)
+				if err != nil {
+					return changePlan{}, fmt.Errorf("read of the key failed, nothing was sent: %w", err)
+				}
+				current := pick(mapValue(stripKeyMaterial(key)), apikeyPatchKeys...)
+				rb := map[string]any{"key_id": in.KeyID}
+				for k := range patch {
+					if v, ok := current[k]; ok {
+						rb[k] = v
+						continue
+					}
+					// A field the summary does not carry is at its zero
+					// value: enabled absent means enabled, a list or
+					// string absent means cleared, a quota absent means 0.
+					switch k {
+					case "enabled":
+						rb[k] = true
+					case "allowed_models", "allowed_objectives":
+						rb[k] = []string{}
+					case "priority_class", "default_objective":
+						rb[k] = ""
+					default:
+						rb[k] = 0
+					}
+				}
+				return changePlan{
+					Current:  current,
+					Proposed: overlay(current, patch),
+					Rollback: &rollbackSpec{Tool: "ai_apikey_update", Args: rb},
+					Impact:   "object",
+				}, nil
+			})
+			if err != nil || stop {
+				return nil, out, err
+			}
 		}
 		var res any
-		if err := c.Patch(ctx, "/config/ai/apikey/"+url.PathEscape(in.KeyID), body, &res); err != nil {
-			d.auditMut("ai_apikey_update", c.Name(), in, false, err.Error())
+		if err := c.Patch(ctx, "/config/ai/apikey/"+url.PathEscape(in.KeyID), patch, &res); err != nil {
+			d.auditMut("ai_apikey_update", c.Name(), args, false, err.Error())
 			return nil, mutOut{}, err
 		}
-		d.auditMut("ai_apikey_update", c.Name(), in, true, "")
-		return nil, mutOut{Target: c.Name(), Action: "executed", Result: sanitizeAny(res, 0)}, nil
+		d.auditMut("ai_apikey_update", c.Name(), args, true, "")
+		after, _ := c.APIKey(ctx, in.KeyID)
+		return nil, executed(c.Name(), res, stripKeyMaterial(sanitizeAny(after, 0))), nil
 	}
 }
 
@@ -665,13 +839,54 @@ func (d *Deps) aiRatelimitGet() sdk.ToolHandlerFor[ratelimitGetIn, map[string]an
 	}
 }
 
-type ratelimitSetIn struct {
-	Target       string `json:"target,omitempty" jsonschema:"target loxilb instance name; omit for default"`
-	TenantID     string `json:"tenant_id" jsonschema:"tenant identifier"`
-	RPS          int    `json:"rps" jsonschema:"max requests per second (0 = unlimited)"`
-	TokensPerMin int    `json:"tokens_per_min" jsonschema:"max LLM tokens per minute (0 = unlimited)"`
-	BurstPct     int    `json:"burst_pct,omitempty" jsonschema:"token bucket capacity as a percent of tokens_per_min (0 = server default)"`
+// modelLimitIn is one per-model token quota (TenantModelRateLimit,
+// UserModelRateLimit on the wire: model, tokens_per_min).
+type modelLimitIn struct {
+	Model        string `json:"model" jsonschema:"model name the quota applies to"`
+	TokensPerMin int    `json:"tokens_per_min" jsonschema:"max LLM tokens per minute for this model; 0 removes the model quota"`
 }
+
+func modelLimitsBody(in []modelLimitIn) ([]map[string]any, error) {
+	out := make([]map[string]any, 0, len(in))
+	for i, ml := range in {
+		if strings.TrimSpace(ml.Model) == "" {
+			return nil, fmt.Errorf("model_limits[%d].model is required", i)
+		}
+		if ml.TokensPerMin < 0 {
+			return nil, fmt.Errorf("model_limits[%d].tokens_per_min must be >= 0", i)
+		}
+		out = append(out, map[string]any{"model": ml.Model, "tokens_per_min": ml.TokensPerMin})
+	}
+	return out, nil
+}
+
+// modelLimitsView projects a row's model_limits list for a preview or a
+// rollback: [{model, tokens_per_min}].
+func modelLimitsView(v any) []map[string]any {
+	out := []map[string]any{}
+	for _, item := range listValue(v) {
+		m := mapValue(item)
+		out = append(out, map[string]any{"model": stringValue(m["model"]), "tokens_per_min": intValue(m["tokens_per_min"])})
+	}
+	return out
+}
+
+type ratelimitSetIn struct {
+	Target            string         `json:"target,omitempty" jsonschema:"target loxilb instance name; omit for default"`
+	TenantID          string         `json:"tenant_id" jsonschema:"tenant identifier"`
+	RPS               int            `json:"rps" jsonschema:"max requests per second (0 = unlimited)"`
+	TokensPerMin      int            `json:"tokens_per_min" jsonschema:"max LLM tokens per minute (0 = unlimited)"`
+	BurstPct          int            `json:"burst_pct,omitempty" jsonschema:"token bucket capacity as a percent of tokens_per_min (0 = server default)"`
+	ModelLimits       []modelLimitIn `json:"model_limits,omitempty" jsonschema:"per-model token quotas; a model with tokens_per_min 0 loses its quota, models not named keep theirs"`
+	PriorityClass     *string        `json:"priority_class,omitempty" jsonschema:"the highest priority class a request of this tenant may have: standard, critical or sheddable (the REST contract's words); omitted leaves the stored value, an empty string clears it"`
+	DefaultObjective  *string        `json:"default_objective,omitempty" jsonschema:"the objective a request of this tenant gets when it names none; omitted leaves the stored value, an empty string clears it"`
+	AllowedObjectives []string       `json:"allowed_objectives,omitempty" jsonschema:"the objectives and body tiers (tier:priority, tier:fast, tier:flex) a request of this tenant may raise itself to; at most 64; omitted leaves the stored list, an empty list clears it"`
+	Apply             bool           `json:"apply,omitempty" jsonschema:"operator convenience: apply without the preview step"`
+	ConfirmToken      string         `json:"confirm_token,omitempty" jsonschema:"single-use token from the preview step; omit to preview"`
+}
+
+// tenantRatelimitKeys are the row's fields the preview and the rollback carry.
+var tenantRatelimitKeys = []string{"tenant_id", "rps", "tokens_per_min", "burst_pct", "model_limits", "priority_class", "default_objective", "allowed_objectives"}
 
 func (d *Deps) aiRatelimitSet() sdk.ToolHandlerFor[ratelimitSetIn, mutOut] {
 	return func(ctx context.Context, _ *sdk.CallToolRequest, in ratelimitSetIn) (*sdk.CallToolResult, mutOut, error) {
@@ -682,29 +897,268 @@ func (d *Deps) aiRatelimitSet() sdk.ToolHandlerFor[ratelimitSetIn, mutOut] {
 		if strings.TrimSpace(in.TenantID) == "" {
 			return nil, mutOut{}, fmt.Errorf("tenant_id is required")
 		}
+		if err := validatePathSegment(in.TenantID); err != nil {
+			return nil, mutOut{}, fmt.Errorf("tenant_id: %w", err)
+		}
 		if in.RPS < 0 || in.TokensPerMin < 0 {
 			return nil, mutOut{}, fmt.Errorf("rps and tokens_per_min must be >= 0")
 		}
 		if in.BurstPct < 0 {
 			return nil, mutOut{}, fmt.Errorf("burst_pct must be >= 0 (0 = server default)")
 		}
+		if len(in.AllowedObjectives) > 64 {
+			return nil, mutOut{}, fmt.Errorf("allowed_objectives: %d exceeds the maximum of 64", len(in.AllowedObjectives))
+		}
 		// The endpoint is a full upsert of the tenant's rate-limit row, so
-		// every field is sent on every call: omitting burst_pct would not
-		// preserve a previously configured value, it would just leave the
-		// server to write the same zero this sends explicitly.
+		// the three quotas are sent on every call: omitting burst_pct would
+		// not preserve a previously configured value, it would just leave
+		// the server to write the same zero this sends explicitly. The
+		// class and objective fields keep the stored value when omitted.
 		body := map[string]any{
 			"tenant_id":      in.TenantID,
 			"rps":            in.RPS,
 			"tokens_per_min": in.TokensPerMin,
 			"burst_pct":      in.BurstPct,
 		}
+		if in.ModelLimits != nil {
+			mls, err := modelLimitsBody(in.ModelLimits)
+			if err != nil {
+				return nil, mutOut{}, err
+			}
+			body["model_limits"] = mls
+		}
+		if in.PriorityClass != nil {
+			body["priority_class"] = *in.PriorityClass
+		}
+		if in.DefaultObjective != nil {
+			body["default_objective"] = *in.DefaultObjective
+		}
+		if in.AllowedObjectives != nil {
+			body["allowed_objectives"] = in.AllowedObjectives
+		}
+		args := in
+		args.ConfirmToken = ""
+		if !in.Apply || in.ConfirmToken != "" {
+			out, stop, err := d.gateChange(ctx, "ai_ratelimit_set", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+				row, found, err := c.TenantRateLimit(ctx, in.TenantID)
+				if err != nil {
+					return changePlan{}, fmt.Errorf("read of the tenant's rate limit failed, nothing was sent: %w", err)
+				}
+				var current any // nil when no row exists (not an empty object)
+				curMap := map[string]any{}
+				rb := map[string]any{"tenant_id": in.TenantID, "rps": 0, "tokens_per_min": 0, "burst_pct": 0}
+				rollback := &rollbackSpec{Tool: "ai_ratelimit_set", Args: rb}
+				curModels := map[string]bool{}
+				if found {
+					curMap = pick(row, tenantRatelimitKeys...)
+					curMap["model_limits"] = modelLimitsView(row["model_limits"])
+					current = curMap
+					for _, k := range []string{"rps", "tokens_per_min", "burst_pct"} {
+						rb[k] = intValue(row[k])
+					}
+					for _, ml := range modelLimitsView(row["model_limits"]) {
+						curModels[stringValue(ml["model"])] = true
+					}
+					rb["model_limits"] = modelLimitsView(row["model_limits"])
+					for _, k := range []string{"priority_class", "default_objective", "allowed_objectives"} {
+						if _, changed := body[k]; !changed {
+							continue
+						}
+						if v, ok := row[k]; ok && v != nil {
+							rb[k] = v
+						} else if k == "allowed_objectives" {
+							rb[k] = []string{}
+						} else {
+							rb[k] = ""
+						}
+					}
+				} else {
+					rollback.Note = "no row existed and the API has no delete: the rollback leaves the row with quotas of 0 (unlimited) and removes the model quotas this call sets"
+					rb["model_limits"] = []map[string]any{}
+					for _, k := range []string{"priority_class", "default_objective"} {
+						if _, changed := body[k]; changed {
+							rb[k] = ""
+						}
+					}
+					if _, changed := body["allowed_objectives"]; changed {
+						rb["allowed_objectives"] = []string{}
+					}
+				}
+				// A model quota this call sets on a model the row did not
+				// have is removed by a quota of 0 (the tenant surface
+				// upserts per model; 0 deletes that model's row).
+				mls, _ := rb["model_limits"].([]map[string]any)
+				for _, ml := range in.ModelLimits {
+					if !curModels[ml.Model] && ml.TokensPerMin > 0 {
+						mls = append(mls, map[string]any{"model": ml.Model, "tokens_per_min": 0})
+					}
+				}
+				rb["model_limits"] = mls
+				proposed := overlay(curMap, body)
+				if in.ModelLimits == nil {
+					proposed["model_limits"] = curMap["model_limits"]
+				}
+				return changePlan{Current: current, Proposed: proposed, Rollback: rollback, Impact: "tenant"}, nil
+			})
+			if err != nil || stop {
+				return nil, out, err
+			}
+		}
 		var res any
 		if err := c.Post(ctx, "/config/ai/tenant/ratelimit", body, &res); err != nil {
-			d.auditMut("ai_ratelimit_set", c.Name(), in, false, err.Error())
+			d.auditMut("ai_ratelimit_set", c.Name(), args, false, err.Error())
 			return nil, mutOut{}, err
 		}
-		d.auditMut("ai_ratelimit_set", c.Name(), in, true, "")
-		return nil, mutOut{Target: c.Name(), Action: "executed", Result: sanitizeAny(res, 0)}, nil
+		d.auditMut("ai_ratelimit_set", c.Name(), args, true, "")
+		after, _, _ := c.TenantRateLimit(ctx, in.TenantID)
+		return nil, executed(c.Name(), res, after), nil
+	}
+}
+
+// ---- ai_user_ratelimit_set / ai_user_ratelimit_delete ----
+
+type userRatelimitSetIn struct {
+	Target       string         `json:"target,omitempty" jsonschema:"target loxilb instance name; omit for default"`
+	TenantID     string         `json:"tenant_id" jsonschema:"tenant of the user"`
+	UserID       string         `json:"user_id" jsonschema:"user identifier (the verified identity's subject)"`
+	RPS          int            `json:"rps,omitempty" jsonschema:"max requests per second for the user (0 falls through to the defaults)"`
+	BurstSize    int            `json:"burst_size,omitempty" jsonschema:"request burst size; 0 defaults to rps"`
+	TokensPerMin int            `json:"tokens_per_min,omitempty" jsonschema:"max LLM tokens per minute for the user (0 falls through to the defaults)"`
+	ModelLimits  []modelLimitIn `json:"model_limits,omitempty" jsonschema:"per-model token quotas for the user; REPLACED as a set (omitted clears them)"`
+	Apply        bool           `json:"apply,omitempty" jsonschema:"operator convenience: apply without the preview step"`
+	ConfirmToken string         `json:"confirm_token,omitempty" jsonschema:"single-use token from the preview step; omit to preview"`
+}
+
+// userRatelimitKeys are the row's fields the preview and the rollback carry.
+var userRatelimitKeys = []string{"tenant_id", "user_id", "rps", "burst_size", "tokens_per_min", "model_limits"}
+
+// userRatelimitRollback rebuilds ai_user_ratelimit_set arguments from a row.
+func userRatelimitRollback(row map[string]any) map[string]any {
+	return map[string]any{
+		"tenant_id": row["tenant_id"], "user_id": row["user_id"],
+		"rps": intValue(row["rps"]), "burst_size": intValue(row["burst_size"]), "tokens_per_min": intValue(row["tokens_per_min"]),
+		"model_limits": modelLimitsView(row["model_limits"]),
+	}
+}
+
+func (d *Deps) aiUserRatelimitSet() sdk.ToolHandlerFor[userRatelimitSetIn, mutOut] {
+	return func(ctx context.Context, _ *sdk.CallToolRequest, in userRatelimitSetIn) (*sdk.CallToolResult, mutOut, error) {
+		c, err := d.Resolve(in.Target)
+		if err != nil {
+			return nil, mutOut{}, err
+		}
+		if err := validatePathSegment(in.TenantID); err != nil {
+			return nil, mutOut{}, fmt.Errorf("tenant_id: %w", err)
+		}
+		if err := validatePathSegment(in.UserID); err != nil {
+			return nil, mutOut{}, fmt.Errorf("user_id: %w", err)
+		}
+		if in.RPS < 0 || in.BurstSize < 0 || in.TokensPerMin < 0 {
+			return nil, mutOut{}, fmt.Errorf("rps, burst_size and tokens_per_min must be >= 0")
+		}
+		mls, err := modelLimitsBody(in.ModelLimits)
+		if err != nil {
+			return nil, mutOut{}, err
+		}
+		decides := in.RPS > 0 || in.TokensPerMin > 0
+		for _, ml := range in.ModelLimits {
+			if ml.TokensPerMin > 0 {
+				decides = true
+			}
+		}
+		if !decides {
+			return nil, mutOut{}, fmt.Errorf("an entry whose limits are all zero constrains nothing and the API rejects it; nothing was sent. Set rps, tokens_per_min or a model quota above 0, or remove the user's limits with ai_user_ratelimit_delete")
+		}
+		body := map[string]any{
+			"tenant_id": in.TenantID, "user_id": in.UserID,
+			"rps": in.RPS, "burst_size": in.BurstSize, "tokens_per_min": in.TokensPerMin,
+			"model_limits": mls,
+		}
+		args := in
+		args.ConfirmToken = ""
+		if !in.Apply || in.ConfirmToken != "" {
+			out, stop, err := d.gateChange(ctx, "ai_user_ratelimit_set", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+				row, found, err := c.UserRateLimit(ctx, in.TenantID, in.UserID)
+				if err != nil {
+					return changePlan{}, fmt.Errorf("read of the user's rate limit failed, nothing was sent: %w", err)
+				}
+				var current any // nil when no row exists (not an empty object)
+				rollback := &rollbackSpec{Tool: "ai_user_ratelimit_delete", Args: map[string]any{"tenant_id": in.TenantID, "user_id": in.UserID}}
+				if found {
+					cur := pick(row, userRatelimitKeys...)
+					cur["model_limits"] = modelLimitsView(row["model_limits"])
+					current = cur
+					rollback = &rollbackSpec{Tool: "ai_user_ratelimit_set", Args: userRatelimitRollback(row)}
+				}
+				return changePlan{Current: current, Proposed: body, Rollback: rollback, Impact: "tenant"}, nil
+			})
+			if err != nil || stop {
+				return nil, out, err
+			}
+		}
+		var res any
+		if err := c.Post(ctx, "/config/ai/user/ratelimit", body, &res); err != nil {
+			d.auditMut("ai_user_ratelimit_set", c.Name(), args, false, err.Error())
+			return nil, mutOut{}, err
+		}
+		d.auditMut("ai_user_ratelimit_set", c.Name(), args, true, "")
+		after, _, _ := c.UserRateLimit(ctx, in.TenantID, in.UserID)
+		return nil, executed(c.Name(), res, after), nil
+	}
+}
+
+type userRatelimitDeleteIn struct {
+	Target       string `json:"target,omitempty" jsonschema:"target loxilb instance name; omit for default"`
+	TenantID     string `json:"tenant_id" jsonschema:"tenant of the user"`
+	UserID       string `json:"user_id" jsonschema:"user whose explicit rate-limit row to remove"`
+	ConfirmToken string `json:"confirm_token,omitempty" jsonschema:"single-use token from the preview step; omit to preview"`
+}
+
+func (d *Deps) aiUserRatelimitDelete() sdk.ToolHandlerFor[userRatelimitDeleteIn, mutOut] {
+	return func(ctx context.Context, _ *sdk.CallToolRequest, in userRatelimitDeleteIn) (*sdk.CallToolResult, mutOut, error) {
+		c, err := d.Resolve(in.Target)
+		if err != nil {
+			return nil, mutOut{}, err
+		}
+		if err := validatePathSegment(in.TenantID); err != nil {
+			return nil, mutOut{}, fmt.Errorf("tenant_id: %w", err)
+		}
+		if err := validatePathSegment(in.UserID); err != nil {
+			return nil, mutOut{}, fmt.Errorf("user_id: %w", err)
+		}
+		args := in
+		args.ConfirmToken = ""
+		out, stop, err := d.gateChange(ctx, "ai_user_ratelimit_delete", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+			row, found, err := c.UserRateLimit(ctx, in.TenantID, in.UserID)
+			if err != nil {
+				return changePlan{}, fmt.Errorf("read of the user's rate limit failed, nothing was sent: %w", err)
+			}
+			if !found {
+				return changePlan{}, fmt.Errorf("no explicit rate-limit row for %s/%s: nothing to delete (the user already follows the defaults)", in.TenantID, in.UserID)
+			}
+			current := pick(row, userRatelimitKeys...)
+			current["model_limits"] = modelLimitsView(row["model_limits"])
+			return changePlan{
+				Current:  current,
+				Proposed: map[string]any{"exists": false},
+				Rollback: &rollbackSpec{Tool: "ai_user_ratelimit_set", Args: userRatelimitRollback(row)},
+				Impact:   "tenant",
+			}, nil
+		})
+		if err != nil || stop {
+			return nil, out, err
+		}
+		var res any
+		if err := c.Delete(ctx, fmt.Sprintf("/config/ai/user/ratelimit/%s/%s", url.PathEscape(in.TenantID), url.PathEscape(in.UserID)), &res); err != nil {
+			d.auditMut("ai_user_ratelimit_delete", c.Name(), args, false, err.Error())
+			return nil, mutOut{}, err
+		}
+		d.auditMut("ai_user_ratelimit_delete", c.Name(), args, true, "")
+		readBack := map[string]any{"exists": false}
+		if row, found, err := c.UserRateLimit(ctx, in.TenantID, in.UserID); err == nil && found {
+			readBack = map[string]any{"exists": true, "user_ratelimit": row}
+		}
+		return nil, executed(c.Name(), res, readBack), nil
 	}
 }
 
@@ -802,7 +1256,7 @@ func (d *Deps) gpuModeSet() sdk.ToolHandlerFor[gpuModeIn, mutOut] {
 		}
 		args := in
 		args.ConfirmToken = ""
-		out, stop, err := d.gateChange("gpu_mode_set", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+		out, stop, err := d.gateChange(ctx, "gpu_mode_set", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
 			st, err := c.GPUStatus(ctx)
 			if err != nil {
 				return changePlan{}, fmt.Errorf("read of the GPU status failed, nothing was sent: %w", err)
@@ -849,7 +1303,7 @@ func (d *Deps) gpuConversationsCleanup() sdk.ToolHandlerFor[gpuCleanupIn, mutOut
 		}
 		args := in
 		args.ConfirmToken = ""
-		out, stop, err := d.gateChange("gpu_conversations_cleanup", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+		out, stop, err := d.gateChange(ctx, "gpu_conversations_cleanup", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
 			st, err := c.GPUStatus(ctx)
 			if err != nil {
 				return changePlan{}, fmt.Errorf("read of the GPU status failed, nothing was sent: %w", err)
@@ -899,7 +1353,7 @@ func (d *Deps) enableFlagTool(tool, path string, read statusReader, impact strin
 		}
 		args := in
 		args.ConfirmToken = ""
-		out, stop, err := d.gateChange(tool, c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+		out, stop, err := d.gateChange(ctx, tool, c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
 			st, err := read(ctx, c)
 			if err != nil {
 				return changePlan{}, fmt.Errorf("read of the current state failed, nothing was sent: %w", err)
@@ -944,7 +1398,7 @@ func (d *Deps) postSimple(tool, path string, read statusReader, keys ...string) 
 		args := in
 		args.ConfirmToken = ""
 		if !in.Apply || in.ConfirmToken != "" {
-			out, stop, err := d.gateChange(tool, c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+			out, stop, err := d.gateChange(ctx, tool, c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
 				st, err := read(ctx, c)
 				if err != nil {
 					return changePlan{}, fmt.Errorf("read of the current state failed, nothing was sent: %w", err)
@@ -1035,7 +1489,7 @@ func (d *Deps) llamafwConfigure() sdk.ToolHandlerFor[llamafwConfigureIn, mutOut]
 		}
 		args := in
 		args.ConfirmToken = ""
-		out, stop, err := d.gateChange("llamafw_configure", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+		out, stop, err := d.gateChange(ctx, "llamafw_configure", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
 			st, err := c.LlamaFirewallStatus(ctx)
 			if err != nil {
 				return changePlan{}, fmt.Errorf("read of the LlamaFirewall status failed, nothing was sent: %w", err)
@@ -1109,7 +1563,7 @@ func (d *Deps) llamafwScannersSet() sdk.ToolHandlerFor[llamafwScannersIn, mutOut
 		}
 		args := in
 		args.ConfirmToken = ""
-		out, stop, err := d.gateChange("llamafw_scanners_set", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+		out, stop, err := d.gateChange(ctx, "llamafw_scanners_set", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
 			st, err := c.LlamaFirewallStatus(ctx)
 			if err != nil {
 				return changePlan{}, fmt.Errorf("read of the LlamaFirewall status failed, nothing was sent: %w", err)
@@ -1214,7 +1668,7 @@ func (d *Deps) piiConfigure() sdk.ToolHandlerFor[piiConfigureIn, mutOut] {
 		}
 		args := in
 		args.ConfirmToken = ""
-		out, stop, err := d.gateChange("pii_configure", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+		out, stop, err := d.gateChange(ctx, "pii_configure", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
 			st, err := c.PIIStatus(ctx)
 			if err != nil {
 				return changePlan{}, fmt.Errorf("read of the PII status failed, nothing was sent: %w", err)
@@ -1242,8 +1696,8 @@ func (d *Deps) piiConfigure() sdk.ToolHandlerFor[piiConfigureIn, mutOut] {
 }
 
 type piiURLPatternIn struct {
-	Pattern string `json:"pattern" jsonschema:"URL pattern (e.g. /api/v1/chat*)"`
-	Exclude bool   `json:"exclude,omitempty" jsonschema:"true to exclude matching URLs from scanning"`
+	Pattern   string `json:"pattern" jsonschema:"URL pattern (e.g. /api/v1/chat*)"`
+	IsExclude bool   `json:"is_exclude,omitempty" jsonschema:"true to exclude matching URLs from scanning (PIIURLPattern.is_exclude)"`
 }
 
 type piiURLPatternsIn struct {
@@ -1280,8 +1734,8 @@ func (d *Deps) piiURLPatternsSet() sdk.ToolHandlerFor[piiURLPatternsIn, mutOut] 
 					return nil, mutOut{}, fmt.Errorf("patterns[%d].pattern is required", i)
 				}
 				pat := map[string]any{"pattern": p.Pattern}
-				if p.Exclude {
-					pat["exclude"] = true
+				if p.IsExclude {
+					pat["is_exclude"] = true
 				}
 				pats = append(pats, pat)
 			}
@@ -1289,7 +1743,7 @@ func (d *Deps) piiURLPatternsSet() sdk.ToolHandlerFor[piiURLPatternsIn, mutOut] 
 		}
 		args := in
 		args.ConfirmToken = ""
-		out, stop, err := d.gateChange("pii_url_patterns_set", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+		out, stop, err := d.gateChange(ctx, "pii_url_patterns_set", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
 			st, err := c.PIIStatus(ctx)
 			if err != nil {
 				return changePlan{}, fmt.Errorf("read of the PII status failed, nothing was sent: %w", err)
@@ -1310,8 +1764,8 @@ func (d *Deps) piiURLPatternsSet() sdk.ToolHandlerFor[piiURLPatternsIn, mutOut] 
 				for _, p := range cur {
 					pm := mapValue(p)
 					rp := map[string]any{"pattern": pm["pattern"]}
-					if boolValue(pm["is_exclude"]) || boolValue(pm["exclude"]) {
-						rp["exclude"] = true
+					if boolValue(pm["is_exclude"]) {
+						rp["is_exclude"] = true
 					}
 					rbPats = append(rbPats, rp)
 				}

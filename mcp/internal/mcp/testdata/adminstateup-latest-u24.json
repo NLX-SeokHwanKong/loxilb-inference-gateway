@@ -1,0 +1,71 @@
+{
+  "captured": "2026-10-29T01:20Z, llbigw-1 cicd/mcp topology, gateway image ghcr.io/loxilb-io/loxilb-inference-gateway:latest-u24 sha256:0e0abffa98dd74136370736b2d0eb7dd9410a4097ae2e34d82c62b05927e9e56",
+  "procedure": "POST a plain rule 20.20.20.1:2099/tcp, GET /config/loadbalancer/all and .../status (enabled), PATCH serviceArguments.adminStateUp false, GET both again (paused), DELETE the rule; bodies verbatim",
+  "key": {
+    "external_ip": "20.20.20.1",
+    "port": 2099,
+    "protocol": "tcp"
+  },
+  "enabled": {
+    "rule": {
+      "allowedSources": null,
+      "endpoints": [
+        {
+          "backup": false,
+          "counter": "0:0",
+          "endpointIP": "31.31.31.1",
+          "state": "active",
+          "targetPort": 8080,
+          "weight": 1
+        }
+      ],
+      "secondaryIPs": null,
+      "secondaryVIPs": null,
+      "serviceArguments": {
+        "adminStateUp": true,
+        "alpn_protocols": null,
+        "externalIP": "20.20.20.1",
+        "id": "2a1c6c77-011b-4beb-90f3-042edb60ed08",
+        "inactiveTimeOut": 240,
+        "port": 2099,
+        "protocol": "tcp",
+        "tls_versions": null
+      }
+    },
+    "status": {
+      "adminStateUp": true,
+      "lastUpdated": "2026-10-29T01:20:04.064Z",
+      "operatingStatus": "NO_MONITOR"
+    }
+  },
+  "paused": {
+    "rule": {
+      "allowedSources": null,
+      "endpoints": [
+        {
+          "backup": false,
+          "counter": "0:0",
+          "endpointIP": "31.31.31.1",
+          "state": "active",
+          "targetPort": 8080,
+          "weight": 1
+        }
+      ],
+      "secondaryIPs": null,
+      "secondaryVIPs": null,
+      "serviceArguments": {
+        "alpn_protocols": null,
+        "externalIP": "20.20.20.1",
+        "id": "2a1c6c77-011b-4beb-90f3-042edb60ed08",
+        "inactiveTimeOut": 240,
+        "port": 2099,
+        "protocol": "tcp",
+        "tls_versions": null
+      }
+    },
+    "status": {
+      "lastUpdated": "2026-10-29T01:20:05.186Z",
+      "operatingStatus": "OFFLINE"
+    }
+  }
+}

@@ -36,7 +36,7 @@ import (
 // approves any mutation via the confirm-token flow.
 func RegisterDiagnose(s *sdk.Server, role guard.Role, pol *guard.Policy, deps *Deps) {
 	reg := func(name string, add func()) {
-		if pol.Permits(role, guard.ToolMeta{Name: name, Domain: domainAnalysis}) {
+		if permit(pol, role, guard.ToolMeta{Name: name, Domain: domainAnalysis}) {
 			add()
 		}
 	}

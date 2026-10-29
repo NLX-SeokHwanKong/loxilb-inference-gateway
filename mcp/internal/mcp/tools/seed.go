@@ -65,6 +65,43 @@ type Deps struct {
 	// ResolveAll returns every configured target client, sorted by name
 	// (multi-target fan-out).
 	ResolveAll func() []*client.Client
+	// Budget meters executed mutations per caller (change-gate requirement
+	// 4). The REST clients enforce it; the change gate consults it before it
+	// redeems a token so a refused apply does not burn the preview. nil
+	// meters nothing.
+	Budget *guard.ChangeBudget
+}
+
+// toolMeta records the policy metadata of every tool a Register* function
+// has seen, permitted or not, so the bridge can tell a read tool from a
+// mutation by name (the budget's consecutive-failure stop is lifted by a
+// successful read tool call, not by the reads a mutation performs itself).
+var (
+	toolMetaMu sync.RWMutex
+	toolMeta   = map[string]guard.ToolMeta{}
+)
+
+func noteMeta(meta guard.ToolMeta) {
+	toolMetaMu.Lock()
+	toolMeta[meta.Name] = meta
+	toolMetaMu.Unlock()
+}
+
+// permit notes a tool's metadata and asks the policy whether the role may
+// use it; every registration goes through it (or a reg closure that calls
+// noteMeta) so IsMutating knows every tool, listed for this role or not.
+func permit(pol *guard.Policy, role guard.Role, meta guard.ToolMeta) bool {
+	noteMeta(meta)
+	return pol.Permits(role, meta)
+}
+
+// IsMutating reports whether the named tool changes the gateway. An
+// unknown name counts as mutating (the safe reading for the budget).
+func IsMutating(name string) bool {
+	toolMetaMu.RLock()
+	defer toolMetaMu.RUnlock()
+	m, ok := toolMeta[name]
+	return !ok || m.Mutating
 }
 
 const (
@@ -76,14 +113,19 @@ const (
 
 func boolPtr(b bool) *bool { return &b }
 
-// boolPtrValue returns a pointer to v when it is a JSON boolean and nil
-// otherwise, so an absent read-back field stays absent in the projection.
-func boolPtrValue(v any) *bool {
-	b, ok := v.(bool)
-	if !ok {
-		return nil
+// adminStateAbsent is what a read reports for a rule whose GET carries no
+// adminStateUp key.
+const adminStateAbsent = "absent"
+
+// adminStateView reports adminStateUp as the GET carries it: the boolean
+// when the key holds one, adminStateAbsent otherwise. The gateway marshals
+// the flag with omitempty, so a paused rule reads absent; only lb_update's
+// read-back after it sent false may resolve that to false.
+func adminStateView(v any) any {
+	if b, ok := v.(bool); ok {
+		return b
 	}
-	return &b
+	return adminStateAbsent
 }
 
 // cleanStrings applies clean to every element; nil stays nil.
@@ -183,22 +225,24 @@ func targetDesc(targets []string) string {
 func RegisterSeed(s *sdk.Server, role guard.Role, pol *guard.Policy, deps *Deps) {
 	tdesc := targetDesc(deps.Targets)
 
-	if pol.Permits(role, guard.ToolMeta{Name: "version_get", Domain: domainAnalysis}) {
+	if permit(pol, role, guard.ToolMeta{Name: "version_get", Domain: domainAnalysis}) {
 		sdk.AddTool(s, &sdk.Tool{
 			Name:        "version_get",
 			Description: "Get the loxilb software version and build info of a target instance.",
 			Annotations: roAnnotations("Get loxilb version"),
 		}, deps.versionGet(tdesc))
 	}
-	if pol.Permits(role, guard.ToolMeta{Name: "lb_list", Domain: domainMgmt}) {
+	if permit(pol, role, guard.ToolMeta{Name: "lb_list", Domain: domainMgmt}) {
 		sdk.AddTool(s, &sdk.Tool{
 			Name: "lb_list",
 			Description: "List load-balancer rules (service VIP:port/protocol, mode, endpoint count " +
-				"and states). Supports substring filtering and limiting; reports total_count when truncated.",
+				"and states). Supports substring filtering and limiting; reports total_count when truncated. " +
+				"admin_state_up is true, false or absent: this gateway serialises adminStateUp with omitempty, so a " +
+				"paused rule's GET carries no flag and reads absent, while an enabled rule always carries an explicit true.",
 			Annotations: roAnnotations("List load-balancer rules"),
 		}, deps.lbList(tdesc))
 	}
-	if pol.Permits(role, guard.ToolMeta{Name: "ct_list", Domain: domainAnalysis}) {
+	if permit(pol, role, guard.ToolMeta{Name: "ct_list", Domain: domainAnalysis}) {
 		sdk.AddTool(s, &sdk.Tool{
 			Name: "ct_list",
 			Description: "Summarize live connection-tracking entries: aggregate counts by state and " +
@@ -206,7 +250,7 @@ func RegisterSeed(s *sdk.Server, role guard.Role, pol *guard.Policy, deps *Deps)
 			Annotations: roAnnotations("Summarize conntrack table"),
 		}, deps.ctList(tdesc))
 	}
-	if pol.Permits(role, guard.ToolMeta{Name: "metrics_snapshot", Domain: domainMonitoring}) {
+	if permit(pol, role, guard.ToolMeta{Name: "metrics_snapshot", Domain: domainMonitoring}) {
 		sdk.AddTool(s, &sdk.Tool{
 			Name: "metrics_snapshot",
 			Description: "Scrape the loxilb Prometheus endpoint and return parsed metric families. " +
@@ -214,7 +258,7 @@ func RegisterSeed(s *sdk.Server, role guard.Role, pol *guard.Policy, deps *Deps)
 			Annotations: roAnnotations("Snapshot Prometheus metrics"),
 		}, deps.metricsSnapshot(tdesc))
 	}
-	if pol.Permits(role, guard.ToolMeta{Name: "health_overview", Domain: domainAnalysis}) {
+	if permit(pol, role, guard.ToolMeta{Name: "health_overview", Domain: domainAnalysis}) {
 		sdk.AddTool(s, &sdk.Tool{
 			Name: "health_overview",
 			Description: "Start-here health check of a loxilb instance: reachability, version, " +
@@ -301,7 +345,7 @@ type lbRule struct {
 	KVExactMode      int    `json:"kv_exact_mode,omitempty"`
 	KVEngineType     string `json:"kv_engine_type,omitempty"`
 	ID               string `json:"id,omitempty" jsonschema:"rule identifier assigned by the gateway"`
-	AdminStateUp     *bool  `json:"admin_state_up,omitempty" jsonschema:"administrative state; false pauses the rule without deleting it"`
+	AdminStateUp     any    `json:"admin_state_up" jsonschema:"administrative state as the GET carries it: true, false or the string absent. This gateway serialises adminStateUp with omitempty, so a paused rule's GET has no adminStateUp at all and reads absent here, while an enabled rule always carries an explicit true; false appears only from a gateway that writes it"`
 	Security         any    `json:"security,omitempty" jsonschema:"TLS security mode of the listener as returned by the gateway"`
 	JWTAuthProfile   string `json:"jwt_auth_profile,omitempty" jsonschema:"JWT auth profile the Bearer arm of api_key_auth validates against"`
 	EPPEndpoint      string `json:"epp_endpoint,omitempty" jsonschema:"Endpoint Picker (EPP) address consulted by the data plane"`
@@ -398,7 +442,7 @@ func projectLBRule(entry map[string]any) (lbRule, bool) {
 		KVExactMode:      intValue(svc["kvExactMode"]),
 		KVEngineType:     clean(stringValue(svc["kvEngineType"])),
 		ID:               clean(stringValue(svc["id"])),
-		AdminStateUp:     boolPtrValue(svc["adminStateUp"]),
+		AdminStateUp:     adminStateView(svc["adminStateUp"]),
 		Security:         sanitizeAny(svc["security"], 0),
 		JWTAuthProfile:   clean(stringValue(svc["jwt_auth_profile"])),
 		EPPEndpoint:      clean(stringValue(svc["eppEndpoint"])),
