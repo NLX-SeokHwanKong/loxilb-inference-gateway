@@ -15,7 +15,7 @@
 # Budgets are ratchets: they may only go down. A raise is a warning in the CI summary.
 version: 1
 budget:
-  pending_max: 58
+  pending_max: 48
   tier_gap_max: 0
 operations:
 - op: GET /audit/policy
@@ -270,8 +270,10 @@ operations:
   impact: service
   note: cert_delete; admin-confirm; PR-C; owner-approved 2026-10-28
 - op: GET /config/cert/{certId}
-  pending: P2
-  note: read; PR-C; owner-approved 2026-10-28
+  tools:
+  - cert_get
+  impact: none
+  note: read; PR-C1 mapped; owner-approved 2026-10-28
 - op: PUT /config/cert/{certId}
   pending: P2
   impact: service
@@ -300,15 +302,19 @@ operations:
   excluded: K8s metadata machine protocol; D3
   note: owner-approved 2026-10-28
 - op: GET /config/dpu/debug
-  pending: P2
-  note: read; PR-C; owner-approved 2026-10-28
+  tools:
+  - dpu_debug_get
+  impact: none
+  note: read; PR-C1 mapped; owner-approved 2026-10-28
 - op: POST /config/dpu/debug
   pending: P2
   impact: instance
   note: write not in the PR-C list; needs an owner use-case (§7.15); PR-C; owner-approved 2026-10-28
 - op: GET /config/dpu/hwcounters
-  pending: P2
-  note: read; PR-C; owner-approved 2026-10-28
+  tools:
+  - dpu_hwcounters_get
+  impact: none
+  note: read; PR-C1 mapped; owner-approved 2026-10-28
 - op: POST /config/endpoint
   pending: P4
   impact: object
@@ -522,8 +528,10 @@ operations:
   - l4trace_status_get
   impact: none
 - op: GET /config/l7policy
-  pending: P2
-  note: read; PR-C; owner-approved 2026-10-28
+  tools:
+  - l7policy_list
+  impact: none
+  note: read; PR-C1 mapped; owner-approved 2026-10-28
 - op: POST /config/l7policy
   pending: P2
   impact: service
@@ -533,8 +541,10 @@ operations:
   impact: service
   note: l7policy_delete; admin-confirm; PR-C; owner-approved 2026-10-28
 - op: GET /config/l7policy/id/{id}
-  pending: P2
-  note: read; PR-C; owner-approved 2026-10-28
+  tools:
+  - l7policy_get
+  impact: none
+  note: read; PR-C1 mapped; owner-approved 2026-10-28
 - op: POST /config/llamafirewall/configure
   tools:
   - llamafw_configure
@@ -689,8 +699,10 @@ operations:
   excluded: points the gateway at an agent-chosen URL; excluded until the bridge config gains a destination allowlist; D10
   note: owner-approved 2026-10-28
 - op: GET /config/opa/watcher
-  pending: P2
-  note: read; PR-C; owner-approved 2026-10-28
+  tools:
+  - opa_watcher_get
+  impact: none
+  note: read; PR-C1 mapped; owner-approved 2026-10-28
 - op: POST /config/opa/watcher
   excluded: points the gateway at an agent-chosen URL; excluded until the bridge config gains a destination allowlist; D10
   note: owner-approved 2026-10-28
@@ -823,8 +835,10 @@ operations:
   impact: global
   note: trace_catalog_parser_delete; PR-C; owner-approved 2026-10-28
 - op: GET /config/trace/catalog/{catalog_id}/parser
-  pending: P2
-  note: read; PR-C; owner-approved 2026-10-28
+  tools:
+  - trace_catalog_parser_get
+  impact: none
+  note: read; PR-C1 mapped; owner-approved 2026-10-28
 - op: PUT /config/trace/catalog/{catalog_id}/parser
   pending: P2
   impact: global
@@ -842,14 +856,18 @@ operations:
   impact: global
   note: trace_enable_set; operator with preview; PR-C; owner-approved 2026-10-28
 - op: GET /config/trace/otlp
-  pending: P2
-  note: read; PR-C; owner-approved 2026-10-28
+  tools:
+  - trace_otlp_get
+  impact: none
+  note: read; PR-C1 mapped; owner-approved 2026-10-28
 - op: POST /config/trace/otlp
   excluded: points the gateway at an agent-chosen URL; excluded until the bridge config gains a destination allowlist; D10
   note: owner-approved 2026-10-28
 - op: GET /config/trace/parsers
-  pending: P2
-  note: read; PR-C; owner-approved 2026-10-28
+  tools:
+  - trace_parsers_list
+  impact: none
+  note: read; PR-C1 mapped; owner-approved 2026-10-28
 - op: GET /config/trace/status
   tools:
   - trace_status_get
@@ -1008,8 +1026,10 @@ operations:
   impact: service
   note: sni_cert_delete; admin-confirm; PR-C; owner-approved 2026-10-28
 - op: GET /sni/certificates
-  pending: P2
-  note: read; PR-C; owner-approved 2026-10-28
+  tools:
+  - sni_cert_list
+  impact: none
+  note: read; PR-C1 mapped; owner-approved 2026-10-28
 - op: POST /sni/certificates
   pending: P2
   impact: service

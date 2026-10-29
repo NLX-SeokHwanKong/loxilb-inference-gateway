@@ -197,3 +197,38 @@ func mustJSON(t *testing.T, v any) string {
 	}
 	return string(b)
 }
+
+func TestMaskURLCredentials(t *testing.T) {
+	cases := map[string]string{
+		"":                                   "",
+		"otel.example:4317":                  "otel.example:4317",
+		"user:pw@otel.example:4317":          "[REDACTED]@otel.example:4317",
+		"https://svc:pw@opa.example:8181/v1": "https://[REDACTED]@opa.example:8181/v1",
+		"https://opa.example/v1?token=abc":   "https://opa.example/v1?token=[REDACTED]",
+		"http://opa.example:8181":            "http://opa.example:8181",
+	}
+	for in, want := range cases {
+		if got := maskURLCredentials(in); got != want {
+			t.Errorf("maskURLCredentials(%q) = %q, want %q", in, got, want)
+		}
+	}
+	for _, in := range []string{"user:pw@otel.example:4317", "https://svc:pw@opa.example:8181/v1", "https://opa.example/v1?token=abc"} {
+		got := maskURLCredentials(in)
+		if strings.Contains(got, "pw") || strings.Contains(got, "abc") {
+			t.Errorf("maskURLCredentials(%q) kept a credential: %q", in, got)
+		}
+	}
+}
+
+func TestSensitiveHeaderNames(t *testing.T) {
+	for _, n := range []string{"Authorization", "Proxy-Authorization", "Cookie", "X-Api-Key", "X-Auth-Token", "x-client-secret"} {
+		if !sensitiveHeader(n) {
+			t.Errorf("%s should be masked", n)
+		}
+	}
+	for _, n := range []string{"X-Route", "Host", "X-Forwarded-For"} {
+		if sensitiveHeader(n) {
+			t.Errorf("%s should not be masked", n)
+		}
+	}
+}

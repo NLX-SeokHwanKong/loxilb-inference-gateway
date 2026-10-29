@@ -455,7 +455,7 @@ read_leg() {
 read_leg lb_get '{"external_ip":"20.20.20.1","port":2020,"protocol":"tcp","include":["status","stats"]}' \
     'r["rule"]["external_ip"]=="20.20.20.1" and "operatingStatus" in r["status"] and "totalConnections" in r["stats"]' \
     "lb_get by composite key attaches status and stats"
-rid=$(jfield "$(mcp_call "$VTOKEN" lb_list)" 'r["rules"][0].get("id","")')
+rid=$(jfield "$(mcp_call "$VTOKEN" lb_list)" 'next((x.get("id","") for x in r["rules"] if x["external_ip"]=="20.20.20.1"),"")')
 if [[ -n "$rid" ]]; then
     read_leg lb_get "{\"id\":\"$rid\"}" 'r["rule"]["external_ip"]=="20.20.20.1"' "lb_get by opaque id ($rid)"
 else
@@ -497,6 +497,82 @@ read_leg ai_model_profile_list '{}' '"profiles" in r' "ai_model_profile_list rep
 res=$(mcp_call "$VTOKEN" ai_ratelimit_defaults_get '{"scope":"tenant"}')
 echo "$res" | grep -q '"isError":true' && echo "$res" | grep -q 'not global or rule' \
     && pass "ai_ratelimit_defaults_get refuses an unknown scope before any request" || fail "scope refusal: $res"
+
+# ---------- PR-C1: L7, TLS and tracing reads (viewer) ----------
+# Fixtures from config.sh, written over REST: certificate mcp-cert1 (SAN
+# mcp-sni.test) and L7 policy mcp-l7pol1 on the plain rule 20.20.20.4:8082,
+# whose Authorization insert header carries "mcp-fixture-secret".
+echo "### l7/tls/tracing reads"
+res=$(mcp_rpc "$VTOKEN" tools/list)
+missing=""
+for t in cert_get sni_cert_list l7policy_list l7policy_get trace_otlp_get trace_parsers_list trace_catalog_parser_get opa_watcher_get dpu_debug_get dpu_hwcounters_get; do
+    echo "$res" | grep -q "\"name\":\"$t\"" || missing="$missing $t"
+done
+[[ -z "$missing" ]] && pass "viewer lists the 10 L7/TLS/tracing reads" || fail "viewer misses:$missing"
+
+# The oracle for the fingerprint is the gateway's own certificate, hashed
+# here from a raw REST read; the bridge result must carry it and no PEM.
+FP=$(curl -s --max-time 10 -H "Authorization: Bearer $JWT" "$REST/config/cert/mcp-cert1" | python3 -c '
+import sys,json,ssl,hashlib
+print(hashlib.sha256(ssl.PEM_cert_to_DER_cert(json.load(sys.stdin)["certPem"])).hexdigest())' 2>/dev/null)
+read_leg cert_get '{"cert_id":"mcp-cert1"}' \
+    "r['usage']=='server' and 'mcp-sni.test' in r['hostnames'] and len(r['certificates'])==1 and r['certificates'][0]['sha256_fingerprint']=='$FP' and r['certificates'][0]['dns_names']==['mcp-sni.test'] and r['certificates'][0]['expired']==False and 'BEGIN' not in json.dumps(r) and 'Pem' not in json.dumps(r)" \
+    "cert_get reports the metadata of mcp-cert1 (fingerprint = the gateway's certificate, no PEM)"
+res=$(mcp_call "$VTOKEN" cert_get '{"cert_id":"mcp-nope"}')
+echo "$res" | grep -q '"isError":true' && echo "$res" | grep -q 'HTTP 404' \
+    && pass "cert_get passes the gateway's 404 on an unknown certId" || fail "cert_get unknown: $res"
+read_leg sni_cert_list '{}' "any(c.get('hostname')=='mcp-sni.test' for c in r['certificates'])" \
+    "sni_cert_list shows the SAN of mcp-cert1 in the global SNI store"
+read_leg l7policy_list '{}' "any(p.get('id')=='mcp-l7pol1' for p in r['policies']) and 'mcp-fixture-secret' not in json.dumps(r) and '\"blue\"' in json.dumps(r)" \
+    "l7policy_list shows mcp-l7pol1 with the Authorization insert header masked"
+read_leg l7policy_get '{"id":"mcp-l7pol1"}' "r['policy']['rules'][0]['action']['kind']=='REJECT' and 'mcp-fixture-secret' not in json.dumps(r) and '[REDACTED]' in json.dumps(r)" \
+    "l7policy_get reads mcp-l7pol1 by id, credential value masked"
+res=$(mcp_call "$VTOKEN" l7policy_get '{"id":"mcp-nope"}')
+echo "$res" | grep -q '"isError":true' && echo "$res" | grep -q 'HTTP 404' \
+    && pass "l7policy_get passes the gateway's 404 on an unknown id" || fail "l7policy_get unknown: $res"
+read_leg trace_otlp_get '{}' "'endpoint' in r and 'protocol' in r and isinstance(r['headers'],dict) and all(v=='[REDACTED]' or v.startswith('missing') for v in r['headers'].values())" \
+    "trace_otlp_get reports the export target, header values never returned"
+# The topology runs with tracing disabled; the gateway's verdict for the
+# parser list is then a 500 "tracing not enabled", passed through as is.
+res=$(mcp_call "$VTOKEN" trace_parsers_list)
+if echo "$res" | grep -q '"isError":true'; then
+    echo "$res" | grep -q 'HTTP 500: .*tracing not enabled' \
+        && pass "trace_parsers_list passes the gateway's verdict while tracing is disabled (HTTP 500 tracing not enabled)" || fail "trace_parsers_list: $res"
+else
+    [[ "$(jfield "$res" "isinstance(r['count'],int) and r['count']==len(r['parsers'])")" == "True" ]] \
+        && pass "trace_parsers_list reports $(jfield "$res" 'r["count"]') parsers" || fail "trace_parsers_list: $res"
+fi
+# No REST read lists the numeric catalog ids; id 1 either carries a mapping
+# or the gateway's own 404 verdict, passed through.
+res=$(mcp_call "$VTOKEN" trace_catalog_parser_get '{"catalog_id":1}')
+if echo "$res" | grep -q '"isError":true'; then
+    echo "$res" | grep -q 'HTTP 404' && pass "trace_catalog_parser_get passes the gateway's 404 for catalog 1 ($(echo "$res" | grep -oE 'No parser assigned to catalog [0-9]+' | head -1))" || fail "trace_catalog_parser_get: $res"
+else
+    [[ "$(jfield "$res" '"parser_name" in r["mapping"]')" == "True" ]] && pass "trace_catalog_parser_get reads the mapping of catalog 1" || fail "trace_catalog_parser_get: $res"
+fi
+res=$(mcp_call "$VTOKEN" trace_catalog_parser_get '{"catalog_id":256}')
+echo "$res" | grep -q '"isError":true' && echo "$res" | grep -q 'out of range 1-255' \
+    && pass "trace_catalog_parser_get refuses an id outside 1-255 before any request" || fail "catalog id bound: $res"
+read_leg opa_watcher_get '{}' "r['status'] in ('not_configured','running','stopped') and 'note' in r" \
+    "opa_watcher_get reports the watcher status ($(jfield "$(mcp_call "$VTOKEN" opa_watcher_get)" 'r.get("status","?")'))"
+# The docker topology has no DPU: the gateway answers the disabled shape
+# with 200, which is a verdict, not a skip.
+res=$(mcp_call "$VTOKEN" dpu_debug_get)
+if [[ "$(jfield "$res" 'r.get("enabled")')" == "False" ]]; then
+    [[ "$(jfield "$res" 'r["filtered"]==False and "no DPU provider" in r["note"]')" == "True" ]] \
+        && pass "dpu_debug_get reports enabled false on a host without a DPU" || fail "dpu_debug_get: $res"
+    echo "  [NOTE] dpu_debug_get: no DPU provider on this host; counters are empty by construction"
+else
+    read_leg dpu_debug_get '{}' "'enabled' in r and 'plugins' in r" "dpu_debug_get reports the offload state"
+fi
+res=$(mcp_call "$VTOKEN" dpu_debug_get '{"limit":5}')
+echo "$res" | grep -q '"isError":true' && echo "$res" | grep -q 'filtered mode only' \
+    && pass "dpu_debug_get refuses a limit without a filter before any request" || fail "dpu_debug_get limit: $res"
+res=$(mcp_call "$VTOKEN" dpu_debug_get '{"pipe":"no-such-pipe"}')
+echo "$res" | grep -q '"isError":true' && echo "$res" | grep -q 'HTTP 400' \
+    && pass "dpu_debug_get passes the gateway's 400 on an unknown pipe" || fail "dpu_debug_get pipe: $res"
+read_leg dpu_hwcounters_get '{}' "r['total_flows']==len([f for f in r['flows'] if isinstance(f,dict)])" \
+    "dpu_hwcounters_get reports $(jfield "$(mcp_call "$VTOKEN" dpu_hwcounters_get)" 'r.get("total_flows","?")') hardware rows"
 SESSION=$ADMIN_SESSION
 
 echo "### ai ops"

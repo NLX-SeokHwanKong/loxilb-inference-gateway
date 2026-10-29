@@ -12,7 +12,10 @@ delete_docker_host l3ep1
 # The store runs with --rm; rm -f stops it and the daemon removes it.
 docker rm -f pg-mcp >/dev/null 2>&1
 
-rm -rf loxilb-mcp loxilb-mcp-ci.yaml .mcp-audit llb1_config
+rm -rf loxilb-mcp loxilb-mcp-ci.yaml .mcp-audit llb1_config 2>/dev/null
+# The gateway writes into llb1_config as root (the managed certificate of the
+# L7/TLS fixture); a non-root caller removes that part with sudo.
+[[ -e llb1_config ]] && sudo -n rm -rf llb1_config
 
 echo "#########################################"
 echo "Deleted testbed"
