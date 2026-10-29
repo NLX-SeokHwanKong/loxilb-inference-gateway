@@ -215,7 +215,9 @@ func RegisterAI(s *sdk.Server, role guard.Role, pol *guard.Policy, deps *Deps) {
 			Name: "ai_traffic_report",
 			Description: "Composite AI-gateway traffic report from the loxilb_ai_* metric families: per-model/tenant " +
 				"request counts by status, error ratio, rate-limit drops, active streams, latency quantiles " +
-				"(request duration, L7 TTFB, PD TTFT) and KV-cache session-affinity counters. Values are " +
+				"(request duration, L7 TTFB, PD TTFT), KV-cache session-affinity counters, tokens metered per " +
+				"model/tenant/kind, token-quota refusals per tenant and the capacity gate's outcomes per priority " +
+				"band. Values are " +
 				"cumulative counters since process start; use promql_query rate() for rates.",
 			Annotations: roAnnotations("AI traffic report"),
 		}, deps.aiTrafficReport())
@@ -1853,7 +1855,19 @@ type trafficReportOut struct {
 	KVParamsMissing             float64          `json:"kv_params_missing"`
 	PDSessionHits               float64          `json:"pd_session_hits"`
 	NormalSessionHits           float64          `json:"normal_session_hits"`
-	Caveats                     []string         `json:"caveats"`
+	// Tokens metered from completed responses, as the tenant quota was
+	// charged, by model/tenant/kind; the totals split prompt and completion.
+	TokensConsumed           []map[string]any `json:"tokens_consumed,omitempty"`
+	TokensConsumedPrompt     float64          `json:"tokens_consumed_prompt"`
+	TokensConsumedCompletion float64          `json:"tokens_consumed_completion"`
+	// Requests a token quota refused, per tenant: the union of both refusal
+	// modes (see tokenQuotaCaveat).
+	TokenQuotaDenied      []map[string]any `json:"quota_denied,omitempty"`
+	TokenQuotaDeniedTotal float64          `json:"quota_denied_total"`
+	// How the capacity gate's requests ended per service, priority band and
+	// outcome; zero rows are left out.
+	FCBand  []map[string]any `json:"fc_band,omitempty"`
+	Caveats []string         `json:"caveats"`
 }
 
 func (d *Deps) aiTrafficReport() sdk.ToolHandlerFor[trafficReportIn, trafficReportOut] {
@@ -1883,6 +1897,10 @@ func (d *Deps) aiTrafficReport() sdk.ToolHandlerFor[trafficReportIn, trafficRepo
 			Caveats: []string{
 				trafficReportCaveat,
 				"all values are cumulative since loxilb start; for rates use promql_query with rate()",
+				tokenQuotaCaveat,
+				"fc_band: queued counts parks (once per park), not requests; admitted, shed, expired and cancelled " +
+					"are terminal, one per request. A request refused for another reason (queue full, tenant share, " +
+					"no healthy capacity, a drain) is in loxilb_ai_admission_decisions_total only",
 			},
 		}
 		if f, ok := byName["loxilb_ai_requests_total"]; ok {
@@ -1972,6 +1990,39 @@ func (d *Deps) aiTrafficReport() sdk.ToolHandlerFor[trafficReportIn, trafficRepo
 		out.KVParamsMissing = sumFamily(byName["loxilb_ai_pd_kv_params_missing_total"])
 		out.PDSessionHits = sumFamily(byName["loxilb_ai_pd_session_hits_total"])
 		out.NormalSessionHits = sumFamily(byName["loxilb_ai_normal_session_hits_total"])
+		if f, ok := byName["loxilb_ai_tokens_consumed_total"]; ok {
+			for _, s := range f.Samples {
+				switch s.Labels["kind"] {
+				case "prompt":
+					out.TokensConsumedPrompt += s.Value
+				case "completion":
+					out.TokensConsumedCompletion += s.Value
+				}
+				out.TokensConsumed = append(out.TokensConsumed, map[string]any{
+					"model": clean(s.Labels["model"]), "tenant": clean(s.Labels["tenant"]),
+					"kind": clean(s.Labels["kind"]), "tokens": s.Value,
+				})
+			}
+		}
+		if f, ok := byName["loxilb_ai_token_quota_denied_total"]; ok {
+			for _, s := range f.Samples {
+				out.TokenQuotaDeniedTotal += s.Value
+				out.TokenQuotaDenied = append(out.TokenQuotaDenied, map[string]any{
+					"tenant": clean(s.Labels["tenant"]), "count": s.Value,
+				})
+			}
+		}
+		if f, ok := byName["loxilb_ai_fc_band_total"]; ok {
+			for _, s := range f.Samples {
+				if s.Value == 0 {
+					continue
+				}
+				out.FCBand = append(out.FCBand, map[string]any{
+					"service": clean(s.Labels["service"]), "band": clean(s.Labels["band"]),
+					"outcome": clean(s.Labels["outcome"]), "count": s.Value,
+				})
+			}
+		}
 
 		d.audit("ai_traffic_report", c.Name(), true, "")
 		return nil, out, nil

@@ -60,14 +60,25 @@ func metricFamilies(t *testing.T) map[string]string {
 }
 
 // bridgeMetricLiterals collects every loxilb_* literal under mcp/internal
-// and mcp/deploy, with one file:line each.
+// and mcp/deploy, with one file:line each. testdata holds expositions
+// captured from a gateway: every family in one is on the scrape, not
+// referenced by the bridge.
 func bridgeMetricLiterals(t *testing.T) map[string]string {
 	t.Helper()
 	out := map[string]string{}
 	for _, dir := range []string{"../internal", "../deploy"} {
 		err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
-			if err != nil || d.IsDir() || strings.HasSuffix(path, "_test.go") || strings.HasSuffix(path, "_gen.go") {
+			if err != nil {
 				return err
+			}
+			if d.IsDir() {
+				if d.Name() == "testdata" {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if strings.HasSuffix(path, "_test.go") || strings.HasSuffix(path, "_gen.go") {
+				return nil
 			}
 			raw, err := os.ReadFile(path)
 			if err != nil {

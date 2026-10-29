@@ -238,17 +238,12 @@ func TestLBUpdatePassesTheGatewayRefusalWithAHint(t *testing.T) {
 	b := newTestBridge(t, testConfig(mock.srv.URL))
 	cs := session(t, b, guard.RoleAdmin)
 	ctx := context.Background()
-	args := withArgs(lbUpdateKey, map[string]any{"fc_mode": "enforce", "fc_max_outstanding": 32})
+	args := withArgs(lbUpdateKey, map[string]any{"admin_state_up": true})
 	res, err := cs.CallTool(ctx, &sdk.CallToolParams{Name: "lb_update", Arguments: args})
 	if err != nil || res.IsError {
 		t.Fatalf("preview: %v %v", err, resultText(res))
 	}
-	out := callOut(t, res)
-	rb, _ := out["rollback"].(map[string]any)
-	if note, _ := rb["note"].(string); !strings.Contains(note, "fc_mode") || !strings.Contains(note, "fc_max_outstanding") {
-		t.Errorf("fields the rule did not declare must be named in the rollback note: %v", rb)
-	}
-	token, _ := out["confirm_token"].(string)
+	token, _ := callOut(t, res)["confirm_token"].(string)
 	mock.setFailing("PATCH " + mockLBKey)
 	res, err = cs.CallTool(ctx, &sdk.CallToolParams{Name: "lb_update", Arguments: withToken(args, token)})
 	if err != nil {
@@ -258,9 +253,77 @@ func TestLBUpdatePassesTheGatewayRefusalWithAHint(t *testing.T) {
 	if !res.IsError || !strings.Contains(txt, "injected failure") || !strings.Contains(txt, "lb_create on the same key") {
 		t.Fatalf("the gateway's answer must be passed on with the replace hint: %s", txt)
 	}
+}
+
+// mockL4RuleJSON is the mock's rule as a plain L4 (mode 0) rule: the PATCH
+// reaches it, but no capacity gate runs on it.
+const mockL4RuleJSON = `{"serviceArguments":{"externalIP":"1.2.3.4","port":80,"protocol":"tcp","name":"web","mode":0,"adminStateUp":true},"endpoints":[{"endpointIP":"10.0.0.1","targetPort":8000,"weight":1,"state":"active"}]}`
+
+// D26: every rule with an admission gate is fullproxy, and the gateway does
+// not PATCH one, so fc_* on a fullproxy rule is refused from the pre-read,
+// before any PATCH, naming the replace.
+func TestLBUpdateRefusesFcOnAFullproxyRule(t *testing.T) {
+	mock := newMockLoxilb(t) // mockRuleJSON is mode 4
+	b := newTestBridge(t, testConfig(mock.srv.URL))
+	cs := session(t, b, guard.RoleAdmin)
+	for _, extra := range []map[string]any{
+		{"fc_mode": "observe"},
+		{"fc_max_outstanding": 8},
+		{"fc_max_queue_depth": 4, "fc_max_queue_wait_ms": 2000},
+		{"admin_state_up": true, "fc_mode": "enforce"},
+	} {
+		res, err := cs.CallTool(context.Background(), &sdk.CallToolParams{Name: "lb_update", Arguments: withArgs(lbUpdateKey, extra)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		txt := resultText(res)
+		if !res.IsError || !strings.Contains(txt, "fullproxy") || !strings.Contains(txt, "lb_create on the same key") ||
+			!strings.Contains(txt, "nothing was sent") {
+			t.Fatalf("%v: want the bridge's fullproxy refusal naming the replace, got %s", extra, txt)
+		}
+	}
+	if mock.sawMutation("PATCH ") {
+		t.Fatal("a refused fc_* change sent a PATCH")
+	}
+	if !mock.sawMutation("GET " + mockLBKey) {
+		t.Fatal("the refusal must come from the pre-read")
+	}
+}
+
+// On an L4 rule the PATCH carries fc_*, and the preview and the read-back
+// say that no gate runs there.
+func TestLBUpdateNotesFcOnAnL4Rule(t *testing.T) {
+	mock := newMockLoxilb(t)
+	mock.ruleJSON = mockL4RuleJSON
+	b := newTestBridge(t, testConfig(mock.srv.URL))
+	cs := session(t, b, guard.RoleAdmin)
+	ctx := context.Background()
+	args := withArgs(lbUpdateKey, map[string]any{"fc_mode": "enforce", "fc_max_outstanding": 32})
+	res, err := cs.CallTool(ctx, &sdk.CallToolParams{Name: "lb_update", Arguments: args})
+	if err != nil || res.IsError {
+		t.Fatalf("preview: %v %v", err, resultText(res))
+	}
+	out := callOut(t, res)
+	rb, _ := out["rollback"].(map[string]any)
+	note, _ := rb["note"].(string)
+	if !strings.Contains(note, "did not declare fc_mode, fc_max_outstanding") {
+		t.Errorf("fields the rule did not declare must be named in the rollback note: %v", rb)
+	}
+	if !strings.Contains(note, "capacity gate runs only on AI-gateway (fullproxy) rules") {
+		t.Errorf("the preview must say no gate runs on a mode 0 rule: %v", rb)
+	}
+	token, _ := out["confirm_token"].(string)
+	res, err = cs.CallTool(ctx, &sdk.CallToolParams{Name: "lb_update", Arguments: withToken(args, token)})
+	if err != nil || res.IsError {
+		t.Fatalf("apply: %v %v", err, resultText(res))
+	}
 	svc, _ := mock.lastBody()["serviceArguments"].(map[string]any)
 	if svc["fc_mode"] != "enforce" || svc["fc_max_outstanding"] != float64(32) {
 		t.Errorf("PATCH body must carry the flow-control fields: %v", svc)
+	}
+	readBack, _ := callOut(t, res)["read_back"].(map[string]any)
+	if fn, _ := readBack["fc_note"].(string); !strings.Contains(fn, "capacity gate runs only") {
+		t.Errorf("read_back must carry the fc note: %v", readBack)
 	}
 }
 

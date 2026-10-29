@@ -1,0 +1,22 @@
+# Captured 2026-10-29 12:39 KST from the live gateway image ghcr.io/loxilb-io/loxilb-inference-gateway:latest-u24
+# (sha256:81a77e31a6879785f62d7a8e3bc2d7952bd3650efef0d0e404d54d854b6b6d64) on the GPU fleet (vLLM v0.31.0, Qwen/Qwen2.5-7B-Instruct, P/D, one KV-exact rule).
+# GET /netlox/v1/metrics after 30 chat requests (all 200) at ~1/s alternating a KV-exact and an RR rule;
+# filtered to loxilb_kv_subscriber_* and loxilb_kv_inventory_fresh; lines verbatim (no addresses: the labels are service id and endpoint index).
+# HELP loxilb_kv_inventory_fresh 1 while the per-endpoint KV inventory holds blocks from the current publisher incarnation; 0 after any inventory clear (publisher restart, lossy gap, AllBlocksCleared) until the next stored block.
+# TYPE loxilb_kv_inventory_fresh gauge
+loxilb_kv_inventory_fresh{ep="0",service="2"} 0
+loxilb_kv_inventory_fresh{ep="1",service="2"} 0
+loxilb_kv_inventory_fresh{ep="2",service="2"} 0
+loxilb_kv_inventory_fresh{ep="4",service="2"} 0
+# HELP loxilb_kv_subscriber_connected ZMQ KV subscriber connection state per endpoint (1=connected, 0=disconnected/rebuilding).
+# TYPE loxilb_kv_subscriber_connected gauge
+loxilb_kv_subscriber_connected{ep="0",service="2"} 1
+loxilb_kv_subscriber_connected{ep="1",service="2"} 1
+loxilb_kv_subscriber_connected{ep="2",service="2"} 1
+loxilb_kv_subscriber_connected{ep="4",service="2"} 1
+# HELP loxilb_kv_subscriber_wire_reject_total Total KV event payloads rejected by the stream's wire binding (schema_mismatch | decode_error | rank_mismatch).
+# TYPE loxilb_kv_subscriber_wire_reject_total counter
+loxilb_kv_subscriber_wire_reject_total{ep="0",reason="schema_mismatch",service="2"} 8
+loxilb_kv_subscriber_wire_reject_total{ep="1",reason="schema_mismatch",service="2"} 8
+loxilb_kv_subscriber_wire_reject_total{ep="2",reason="schema_mismatch",service="2"} 8
+loxilb_kv_subscriber_wire_reject_total{ep="4",reason="schema_mismatch",service="2"} 6

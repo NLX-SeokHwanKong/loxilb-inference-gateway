@@ -11,6 +11,7 @@
 #     TARGET=http://1.2.3.4:11111 ./live-e2e.sh     # any live target
 #     ./live-e2e.sh --mutate                        # + control-plane round-trip
 #     TARGET_USER=admin TARGET_PASSWORD=... ./live-e2e.sh   # --userservice target
+#     KV_RULE=10.0.0.12:9003 DIAG_OUT=diag.json ./live-e2e.sh  # Stage 2 (GPU fleet)
 #
 # Read-only mode (default) mutates NOTHING on the target. --mutate additionally
 # runs an isolated lb_create -> lb_list -> lb_update (admin_state_up down and
@@ -251,6 +252,32 @@ if kv_rule:
     (ok if st.get("operatingStatus") else bad)(f"lb_get {kv_rule} include=status -> adminStateUp={st.get('adminStateUp')} operatingStatus={st.get('operatingStatus')}")
 else:
     print("  [SKIP] KV-exact status arm (set KV_RULE=<vip>:<port> to a KV-exact rule on the target)")
+
+# ---------------- AI diagnostics (PR-D) ----------------
+# Read-only. The sections come from one scrape; a section the target emits
+# nothing for is left out, so the leg names the ones it got. DIAG_OUT=<file>
+# keeps the diagnose_ai_latency result (Stage 2 attaches it to the PR).
+e, v, _ = s.call("diagnose_ai_latency")
+ev = v.get("evidence", {}) if isinstance(v, dict) else {}
+sections = [k for k in ("admission", "pd_admission_sheds", "epp", "kv_freshness", "quota_denied") if k in ev]
+(ok if ev and "metrics" not in (v.get("errors") or {}) else bad)(
+    f"diagnose_ai_latency reads the scrape; sections: {', '.join(sections) or 'none'}; suggested: {[a.get('tool') for a in v.get('suggested_actions', [])] if isinstance(v, dict) else '?'}")
+if os.environ.get("DIAG_OUT"):
+    with open(os.environ["DIAG_OUT"], "w") as f:
+        json.dump(v, f, indent=1, sort_keys=True)
+for p in ev.get("admission", []):
+    print(f"  [NOTE] admission {p.get('service')} pool {p.get('pool')}: mode {p.get('mode')}, inflight {p.get('inflight')} of {p.get('effective_limit')}, queue_wait count {(p.get('queue_wait') or {}).get('count', 0)}")
+if kv_rule:
+    # The series' service label is the gateway's numeric service id, which no
+    # REST read maps to the rule: with a KV-exact rule on the target there
+    # must be subscriber rows, and each must carry its connection state.
+    rows = ev.get("kv_freshness", [])
+    (ok if rows and all("connected" in r for r in rows) else bad)(
+        f"kv_freshness with {kv_rule} on the target: {len(rows)} endpoint(s); " +
+        "; ".join(f"service {r.get('service')} ep {r.get('ep')} connected={r.get('connected')} fresh={r.get('inventory_fresh')} age={round(r['last_event_age_seconds'], 1) if 'last_event_age_seconds' in r else '-'}{' ' + r['problem'] if r.get('problem') else ''}{' no_event_accepted' if r.get('no_event_accepted') else ''}" for r in rows))
+e, v, _ = s.call("ai_traffic_report")
+(ok if isinstance(v, dict) and "tokens_consumed_prompt" in v and "quota_denied_total" in v else bad)(
+    f"ai_traffic_report tokens prompt={v.get('tokens_consumed_prompt') if isinstance(v, dict) else '?'} completion={v.get('tokens_consumed_completion') if isinstance(v, dict) else '?'}, quota_denied_total={v.get('quota_denied_total') if isinstance(v, dict) else '?'}, fc_band rows={len(v.get('fc_band') or []) if isinstance(v, dict) else '?'}")
 
 # ---------------- security guardrails ----------------
 print("### security guardrails")

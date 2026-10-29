@@ -70,13 +70,34 @@ jobs:
           cache-dependency-path: |
             mcp/go.sum
             go.sum
-      - name: generated tables are current
+      # The swagger enum table gates: a stale one means the bridge's enums
+      # disagree with the REST contract it is checked against.
+      - name: swagger enum table is current
         run: |
-          go generate ./...
-          git diff --exit-code -- . || {
-            echo '::error::zz_swagger_enums_gen.go is stale: run `go generate ./...` in mcp/ and commit the result'
+          go generate ./internal/mcp/tools/
+          git diff --exit-code -- internal/mcp/tools/zz_swagger_enums_gen.go || {
+            echo '::error::zz_swagger_enums_gen.go is stale against api/swagger.yml: run `go generate ./...` in mcp/ and commit the result'
             exit 1
           }
+      # The metric reference only warns: a gateway PR that adds a family
+      # (outside this workflow's paths) makes it stale, and that must not fail
+      # the next mcp PR. The regenerate command goes to the step summary.
+      - name: metric reference is current (warning only)
+        run: |
+          go generate ./internal/mcp/
+          git diff --quiet -- internal/mcp/zz_metrics_reference_gen.go && exit 0
+          echo '::warning::zz_metrics_reference_gen.go is stale against tools/metric-manifest (a gateway change added or changed a family)'
+          {
+            echo '### Metric reference is stale (warning)'
+            echo
+            echo 'The generated family table of `loxilb://docs/metrics` no longer matches the gateway source. Regenerate and commit:'
+            echo
+            echo '```'
+            echo 'cd mcp && go generate ./internal/mcp/ && git add internal/mcp/zz_metrics_reference_gen.go'
+            echo '```'
+            echo
+            git diff --stat -- internal/mcp/zz_metrics_reference_gen.go
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: contract tests
         run: go test -count=1 -v ./contract/...
 

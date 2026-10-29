@@ -386,7 +386,9 @@ func RegisterManagement(s *sdk.Server, role guard.Role, pol *guard.Policy, deps 
 				"fc_max_outstanding, fc_max_queue_depth, fc_max_queue_wait_ms; any other argument is refused by the " +
 				"schema. Everything else is a replace (lb_create on the same key, admin-confirm) or a removal " +
 				"(lb_delete). The gateway refuses the PATCH on a fullproxy (mode 4) rule; that answer is passed on as " +
-				"is with a hint. Service impact: the change applies to the traffic of the rule. Two-step: the first " +
+				"is with a hint. The capacity gate runs only on AI-gateway rules, which are all fullproxy, so fc_* on a " +
+				"fullproxy rule is refused by the bridge before any request (an lb_create replace changes it), and fc_* " +
+				"on any other mode is stored but drives no gate (the preview and the read-back say so). Service impact: the change applies to the traffic of the rule. Two-step: the first " +
 				"call pre-reads the rule and previews current, proposed, diff and rollback with a confirm_token; " +
 				"repeat with identical arguments plus the token to apply. The executed result re-reads the rule and " +
 				"its status. admin_state_up is reported as read: true, false or absent; this gateway serialises " +
@@ -1153,6 +1155,24 @@ func (d *Deps) lbUpdate() sdk.ToolHandlerFor[lbUpdateIn, mutOut] {
 			return nil, mutOut{}, fmt.Errorf("no rule at %s:%d/%s: lb_update changes an existing rule and creates none; lb_create creates one", in.ExternalIP, in.Port, proto)
 		}
 		svc := mapValue(existing["serviceArguments"])
+		// D26: the gateway does not PATCH a fullproxy rule, and every rule
+		// with an admission gate is one; on any other mode an fc_* key is
+		// stored but no gate runs on it.
+		var fcAsked []string
+		for _, k := range []string{"fc_mode", "fc_max_outstanding", "fc_max_queue_depth", "fc_max_queue_wait_ms"} {
+			if _, ok := svcPatch[k]; ok {
+				fcAsked = append(fcAsked, k)
+			}
+		}
+		fcNote := ""
+		if len(fcAsked) > 0 {
+			if intValue(svc["mode"]) == lbModeFullProxy {
+				return nil, mutOut{}, fmt.Errorf("%s: %s:%d/%s is a fullproxy (mode 4) rule and the gateway refuses a PATCH of one; nothing was sent. "+
+					"A capacity-gate change is a replace: lb_create on the same key with the fc_* values previews it (admin-confirm), "+
+					"and lb_get reads the gate in force back in fc_effective", strings.Join(fcAsked, ", "), in.ExternalIP, in.Port, proto)
+			}
+			fcNote = fmt.Sprintf("%s on a mode %d rule: the gateway stores it, but the capacity gate runs only on AI-gateway (fullproxy) rules, so nothing is admitted or refused by it here", strings.Join(fcAsked, ", "), intValue(svc["mode"]))
+		}
 		curEps := listValue(existing["endpoints"])
 		seen := map[string]bool{}
 		eps := make([]map[string]any, 0, len(curEps))
@@ -1236,6 +1256,9 @@ func (d *Deps) lbUpdate() sdk.ToolHandlerFor[lbUpdateIn, mutOut] {
 			if len(undeclared) > 0 {
 				notes = append(notes, fmt.Sprintf("the rule did not declare %s before; the PATCH overlays and cannot un-declare a field, so the rollback leaves it declared (lb_create on the same key re-creates the rule without it)", strings.Join(undeclared, ", ")))
 			}
+			if fcNote != "" {
+				notes = append(notes, fcNote)
+			}
 			rollback.Note = strings.Join(notes, "; ")
 			return changePlan{Current: current, Proposed: proposed, Rollback: rollback, Impact: "service"}, nil
 		})
@@ -1269,9 +1292,15 @@ func (d *Deps) lbUpdate() sdk.ToolHandlerFor[lbUpdateIn, mutOut] {
 		if st, err := c.LBRuleStatus(ctx, in.ExternalIP, in.Port, proto); err == nil {
 			readBack["status"] = st
 		}
+		if fcNote != "" {
+			readBack["fc_note"] = fcNote
+		}
 		return nil, executed(c.Name(), res, readBack), nil
 	}
 }
+
+// lbModeFullProxy is serviceArguments.mode for a fullproxy (L7) rule.
+const lbModeFullProxy = 4
 
 // ---- lb_delete ----
 

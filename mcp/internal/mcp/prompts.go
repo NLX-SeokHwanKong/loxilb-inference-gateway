@@ -70,6 +70,19 @@ Follow this playbook and stop between phases to report findings:
 2. GATHER evidence with the matching composite tool:
    - LoxilbL4ErrorBurst / 5xx-ratio alerts  -> diagnose_l4_errors
    - LoxilbHighTTFB / LoxilbAIErrorRatio / LoxilbAIRateLimitSpike -> diagnose_ai_latency and ai_traffic_report
+   - LoxilbAIAdmission* (shedding, queue timeouts, queue near depth, adaptive
+     frozen, anomaly) -> diagnose_ai_latency (its admission section), then
+     lb_get on the service for fc_effective; a ceiling or queue change is an
+     lb_create replace on the same key with the fc_* values (admin-confirm:
+     call it without a token for the preview only). lb_update cannot change
+     fc_* on these rules: the gateway does not PATCH a fullproxy rule
+   - LoxilbHalfCloseHold* -> halfclose_get (allow, the idle bound capSeconds,
+     the default mode) and lb_get on the service for half_close_effective;
+     the alert expression names the counter that moved. Releasing held clients is POST /config/halfclose/release,
+     which is not a bridge tool (pending until a use-case is stated); propose it
+     to the operator as an admin action for approval, never as something to run
+   - KvExact* -> lb_kvexact_status on the affected rule, then
+     diagnose_ai_latency (its kv_freshness section)
    - endpoint alerts (NoHealthyEndpoints / UnhealthyEndpoints) -> endpoint_list, then diagnose_endpoint per bad host
    - capacity alerts (conntrack / CPU / mem / disk) -> capacity_report
    - anything else -> health_overview first, then the closest tool above

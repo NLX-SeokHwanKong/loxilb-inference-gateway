@@ -22,6 +22,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -53,9 +54,12 @@ func RegisterDiagnose(s *sdk.Server, role guard.Role, pol *guard.Policy, deps *D
 	reg("diagnose_ai_latency", func() {
 		sdk.AddTool(s, &sdk.Tool{
 			Name: "diagnose_ai_latency",
-			Description: "Correlated evidence bundle for AI latency triage (LoxilbHighTTFB): request-duration/TTFB/TTFT " +
-				"histogram quantiles, KV-cache parameter hit counters, session-affinity hits, endpoint probe states, " +
-				"and GPU-aware routing status. Returns suggested_actions[] for follow-up.",
+			Description: "Correlated evidence bundle for AI latency triage (LoxilbHighTTFB, LoxilbAIAdmission*): " +
+				"request-duration/TTFB/TTFT histogram quantiles, KV-cache parameter hit counters, session-affinity hits, " +
+				"the capacity gate per pool (mode, units held, ceiling in force, queue wait), P/D admission sheds, the " +
+				"Endpoint Picker (decision latency, rejected candidates, pending decisions), KV subscriber freshness per " +
+				"endpoint, token-quota refusals per tenant, endpoint probe states and GPU-aware routing status. " +
+				"Returns suggested_actions[] for follow-up.",
 			Annotations: roAnnotations("Diagnose AI latency"),
 		}, deps.diagnoseAILatency())
 	})
@@ -349,12 +353,15 @@ func (d *Deps) diagnoseAILatency() sdk.ToolHandlerFor[targetIn, diagnoseOut] {
 
 		// 1. Latency histograms + KV/session counters from one scrape.
 		var kvFound, kvMissing float64
+		var pools []admissionPool
+		var kvRows []kvFreshnessRow
+		var quota []tokenQuotaRow
 		if text, err := c.MetricsText(ctx); err != nil {
 			out.fail("metrics", err)
-		} else if fams, perr := client.ParseFamilies(text, []string{
+		} else if fams, perr := client.ParseFamilies(text, append([]string{
 			"loxilb_ai_request_duration_seconds", "loxilb_proxy_http_ttfb_seconds",
 			"loxilb_ai_pd_*", "loxilb_ai_active_streams", "loxilb_ai_normal_session_hits_total",
-		}, 2000); perr != nil {
+		}, diagnoseAIFamilies...), 2000); perr != nil {
 			out.fail("metrics", perr)
 		} else {
 			byName := map[string]client.Family{}
@@ -386,6 +393,24 @@ func (d *Deps) diagnoseAILatency() sdk.ToolHandlerFor[targetIn, diagnoseOut] {
 			out.Evidence["pd_session_hits"] = sumFamily(byName["loxilb_ai_pd_session_hits_total"])
 			out.Evidence["normal_session_hits"] = sumFamily(byName["loxilb_ai_normal_session_hits_total"])
 			out.Evidence["active_streams"] = sumFamily(byName["loxilb_ai_active_streams"])
+
+			// Capacity gate, P/D sheds, Endpoint Picker, KV subscriber and
+			// token quotas: a section the gateway emits nothing for is left out.
+			if pools = admissionSection(byName); len(pools) > 0 {
+				out.Evidence["admission"] = pools
+			}
+			if pd := pdAdmissionSection(byName); pd != nil {
+				out.Evidence["pd_admission_sheds"] = pd
+			}
+			if epp := eppSection(byName); epp != nil {
+				out.Evidence["epp"] = epp
+			}
+			if kvRows = kvFreshnessSection(byName, time.Now()); len(kvRows) > 0 {
+				out.Evidence["kv_freshness"] = kvRows
+			}
+			if quota = tokenQuotaSection(byName); quota != nil {
+				out.Evidence["quota_denied"] = quota
+			}
 		}
 
 		// 2. Endpoint probe states (a drained/failed vLLM backend concentrates
@@ -418,6 +443,7 @@ func (d *Deps) diagnoseAILatency() sdk.ToolHandlerFor[targetIn, diagnoseOut] {
 				Risk:      "none",
 			})
 		}
+		out.SuggestedActions = append(out.SuggestedActions, aiSectionActions(in.Target, pools, kvRows, quota)...)
 		for _, ep := range unhealthy {
 			out.SuggestedActions = append(out.SuggestedActions, suggestedAction{
 				Tool:      "diagnose_endpoint",
@@ -443,6 +469,9 @@ func (d *Deps) diagnoseAILatency() sdk.ToolHandlerFor[targetIn, diagnoseOut] {
 		out.Caveats = []string{
 			"histogram quantiles are estimated from cumulative lifetime buckets, not a recent window",
 			trafficReportCaveat,
+			admissionCaveat,
+			tokenQuotaCaveat,
+			"kv_freshness: service is the label the gateway exports, on current builds the numeric service id that ai_kv_inventory_get takes (no REST read maps it to a rule); last_event_age_seconds is measured against the bridge's clock and an idle engine publishes no KV events, so a large age alone is not a fault; no_event_accepted means a connected subscriber has accepted no event batch since it started",
 		}
 		d.finishDiagnose(&out)
 		d.audit("diagnose_ai_latency", c.Name(), true, "")

@@ -153,7 +153,13 @@ It accepts only `admin_state_up`, the weight of existing endpoints
 is present, so the bridge sends the full current list with the weights
 swapped) and `fc_mode`, `fc_max_outstanding`, `fc_max_queue_depth`,
 `fc_max_queue_wait_ms`; the schema refuses any other argument and the
-description names `lb_create` (replace) and `lb_delete`. The call
+description names `lb_create` (replace) and `lb_delete`. The capacity gate
+runs only on AI-gateway rules, and every one is fullproxy, which the
+gateway does not PATCH: `fc_*` on a fullproxy (mode 4) rule is refused by
+the bridge from its pre-read, before any request, naming the `lb_create`
+replace (read the gate in force back with `lb_get`, `fc_effective`); `fc_*`
+on any other mode is sent, and the preview's rollback note and the
+read-back's `fc_note` say that no gate runs there. The call
 pre-reads the rule (a missing key is refused naming `lb_create`), previews
 `current`, `proposed`, `diff` and an `lb_update` rollback with the current
 values (a note names fields the rule had not declared, which the PATCH
@@ -350,7 +356,29 @@ bundle (sections degrade independently into `errors`) plus machine-readable
 identity, uptime, `ready` and its reasons, maintenance state, eBPF
 attachments, map utilization, dependency checks), so a finding is read
 against the gateway's own verdict; a build without the endpoint shows
-`errors.diagnostics`. The tool gathers, the
+`errors.diagnostics`. `diagnose_ai_latency` also reads, from the same
+scrape: `admission` per pool (mode, the `role="service"` units held, the
+ceiling in force, `queue_wait`, `at_ceiling` under enforce),
+`pd_admission_sheds`, `epp` (decision latency, rejected candidates by
+reason, pending decisions), `kv_freshness` per endpoint (connected,
+inventory fresh, the last event's age against the bridge's clock; a
+`problem` of `disconnected` or `inventory_not_fresh`) and `quota_denied`
+per tenant (the token-quota refusals, split into `exhausted` and
+`would_exceed` by the reason on `loxilb_ai_rate_limit_hits_total`). A
+section the gateway emits nothing for is left out. The KV series' `service`
+label is the gateway's numeric service id on current builds (the id
+`ai_kv_inventory_get` takes; no REST read maps it to a rule), and a
+connected subscriber with no last-event series reads `no_event_accepted`.
+It suggests `lb_get` for a pool at its ceiling, `ai_kv_inventory_get` (or
+`lb_kvexact_status` where the label is a VIP:port) for a cold or
+disconnected subscriber, and `ai_ratelimit_get` for a tenant refused by a
+token quota.
+`ai_traffic_report` adds `tokens_consumed` (model, tenant, kind) with
+prompt and completion totals, `quota_denied` per tenant and the non-zero
+`fc_band` rows (service, band, outcome; `queued` counts parks).
+`tokens_consumed` comes from the token-quota charge path, so it counts only
+requests charged to a credential: a rule without `api_key_auth` never charges
+a quota and its traffic leaves it at 0. The tool gathers, the
 model concludes, a human approves mutations — the confirm-token flow is the
 approval gate; nothing in `suggested_actions` auto-executes.
 
@@ -359,12 +387,18 @@ approval gate; nothing in `suggested_actions` auto-executes.
 Guided playbooks:
 `triage-alert(alert[, target])`, `rca-l4-errors`, `rca-ai-latency`,
 `capacity-report`, `safe-lb-change(change[, target])` — the last walks a
-baseline → preflight → apply → verify → rollback LB change.
+baseline → preflight → apply → verify → rollback LB change. `triage-alert`
+maps `LoxilbAIAdmission*` to `diagnose_ai_latency`, `lb_get` and, for a
+ceiling or queue change, an `lb_create` replace preview; `LoxilbHalfCloseHold*`
+to `halfclose_get` and `lb_get` (the release endpoint is not a bridge tool and
+is only proposed to the operator); `KvExact*` to `lb_kvexact_status`.
 
 ## Resources
 
 `loxilb://docs/alerts` (rendered alert-rules catalog),
-`loxilb://docs/metrics` (metric family reference incl. caveats),
+`loxilb://docs/metrics` (metric family reference: curated key families and
+caveats, then one row per `loxilb_*` family generated from
+`tools/metric-manifest` by `go generate` in `mcp/`),
 `loxilb://spec/openapi` (swagger spec).
 
 ## Audit log
@@ -468,6 +502,10 @@ single-use, and per process. Exit code 0 means every check passed.
 
 **Added** — the AI control-plane writes of tenant and object scope (PR-B2): `lb_update` (admin-confirm, impact service: `admin_state_up`, endpoint weights, `fc_mode`, `fc_max_outstanding`, `fc_max_queue_depth`, `fc_max_queue_wait_ms`; everything else is `lb_create`/`lb_delete`; a PATCH the gateway refuses is passed on with the replace hint), `ai_user_ratelimit_set` and `ai_user_ratelimit_delete` (operator; an all-zero entry is refused before any request, the delete's preview carries the row as the rollback), `secrate_disable` (admin-confirm, global, never autopilot: `DELETE /config/securityrate`, the preview carries the configuration as a `secrate_set` rollback), `config_persist` (admin-confirm, instance, never autopilot: the preview's `current` is the snapshot identity, 409 on the gate is `snapshot_gate_busy`). The mutation budget: `change_budget: {mutations_per_minute, max_consecutive_failures}` and a per-client `mutations_per_minute`, defaults 6 and 3, floors of 1, refusals as readable tool errors, the stop lifted by a successful read-only call. Tool counts: viewer 68, operator 77 → 79, admin 95 → 100 (101 with `--allow-import`).
 
+**Added** — diagnostics modernisation (PR-D, read-only): `diagnose_ai_latency` sections `admission`, `pd_admission_sheds`, `epp`, `kv_freshness`, `quota_denied` with read-only suggestions (`lb_get`, `ai_kv_inventory_get` or `lb_kvexact_status`, `ai_ratelimit_get`); `ai_traffic_report` fields `tokens_consumed`, `tokens_consumed_prompt`, `tokens_consumed_completion`, `quota_denied`, `quota_denied_total`, `fc_band`; the generated family table of `loxilb://docs/metrics`; `triage-alert` mappings for `LoxilbAIAdmission*`, `LoxilbHalfCloseHold*`, `KvExact*`.
+
+**Changed** — `lb_update` refuses `fc_*` on a fullproxy rule before any request and names the `lb_create` replace; on any other mode the preview and the read-back (`fc_note`) say that no capacity gate runs there (PR-D, D26).
+
 **Changed** — the operator writes `ai_apikey_create`, `ai_apikey_update` and `ai_ratelimit_set` preview by default (`current`, `proposed`, `diff`, `rollback`, `impact`, `confirm_token`) and apply with the token or with `apply: true`; executed results carry `read_back`. `ai_apikey_create` answers the common mutation shape: `key_id`, `key_file` (or `raw_key` on reveal) and `note` moved under `result`; it gains `enabled`, `client_op_id`, `priority_class` (generated enum), `default_objective`, `allowed_objectives`. `ai_apikey_update` covers the full PATCH surface (`rate_limit_rps`, `burst_size`, `tokens_per_min`, `priority_class`, `default_objective`, `allowed_objectives` beside `allowed_models` and `enabled`; an empty string or list clears). `ai_ratelimit_set` gains `model_limits`, `priority_class`, `default_objective`, `allowed_objectives`. `lb_create` types `fc_mode`, `fc_max_outstanding`, `fc_max_queue_depth`, `fc_max_queue_wait_ms`, `fc_ep_max_inflight`, `fc_prefill_max_inflight`, `fc_decode_max_inflight`, `fc_tenant_max_share_pct`, `epp_endpoint`, `epp_failure_mode`, `epp_timeout_ms`, `epp_plaintext`, `ai_default_reservation`, `ai_default_max_tokens`, `ai_objective_strict`, `security`, `admin_state_up`, `id` (the enumerated ones validated against the generated swagger tables); the replace preview's rollback carries them. `pii_url_patterns_set` sends `is_exclude`, the key swagger spells (the bridge sent `exclude`, which the gateway ignored), and its argument is renamed the same way. `secrate_set`'s rollback on a target with no protection on is `secrate_disable`. `lb_list` and `lb_get` report `admin_state_up` as `true`, `false` or `"absent"` (it was a boolean omitted when the GET carried no flag); `lb_update`'s preview reports an absent flag as `"absent"` and only its read-back after sending `false` resolves absent to `false`, with `admin_state_up_note`.
 
 **Added** — 17 control-plane reads, all viewer tier: `lb_get` (composite key or opaque id; `include: [status, stats]`), `lb_kvexact_status`, `ai_objective_list`, `ai_netidentity_list`, `ai_jwtprofile_list`, `ai_user_ratelimit_list`, `ai_user_ratelimit_get`, `ai_ratelimit_defaults_get`, `ai_model_profile_list`, `ai_model_profile_get`, `status_capabilities`, `maintenance_get`, `halfclose_get`, `audit_status`, `audit_policy_get`, `audit_sink_get`, `config_snapshot_get` (size-capped). Tool counts: viewer 51 → 68, operator 60 → 77, admin 78 → 95 (96 with `--allow-import`).
@@ -528,6 +566,12 @@ job of `mcp-ci.yml` runs on every change to `mcp/**`, `api/swagger.yml`,
 - `go generate ./...` changes `internal/mcp/tools/zz_swagger_enums_gen.go`:
   the swagger property lists, enum values and enum descriptions the tools
   package compiles in are generated, never copied.
+
+`internal/mcp/zz_metrics_reference_gen.go` (the family table of
+`loxilb://docs/metrics`) is regenerated in the same job but only warns: a
+gateway change that adds a family is outside this workflow's paths, so the
+table can go stale without an mcp change. The warning puts the regenerate
+command (`go generate ./internal/mcp/` in `mcp/`) in the step summary.
 
 The job's step summary lists the pending operations by phase, the mapped
 mutations by impact and tier, the recorded tier gaps, and the gateway metric
