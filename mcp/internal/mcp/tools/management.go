@@ -380,7 +380,7 @@ func RegisterManagement(s *sdk.Server, role guard.Role, pol *guard.Policy, deps 
 		sdk.AddTool(s, &sdk.Tool{
 			Name: "lb_update",
 			Description: "Change an existing load-balancer rule in place, selected by external_ip, port and protocol " +
-				"(PATCH /config/loadbalancer/externalipaddress/{ip}/port/{port}/protocol/{proto}). Phase 1 accepts " +
+				"(PATCH /config/loadbalancer/externalipaddress/{ip}/port/{port}/protocol/{proto}). It accepts " +
 				"only admin_state_up, the weight of existing endpoints (endpoint_weights; the bridge sends the full " +
 				"current endpoint list with the weights swapped) and the four flow-control fields fc_mode, " +
 				"fc_max_outstanding, fc_max_queue_depth, fc_max_queue_wait_ms; any other argument is refused by the " +

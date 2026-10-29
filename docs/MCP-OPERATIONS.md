@@ -148,7 +148,7 @@ replays a session's worth of changes in a minute sizes its client up
 
 **`lb_update`** (admin-confirm, impact service) changes a rule in place
 through `PATCH /config/loadbalancer/externalipaddress/{ip}/port/{port}/protocol/{proto}`.
-Phase 1 accepts only `admin_state_up`, the weight of existing endpoints
+It accepts only `admin_state_up`, the weight of existing endpoints
 (`endpoint_weights`; the gateway replaces the endpoint list when the key
 is present, so the bridge sends the full current list with the weights
 swapped) and `fc_mode`, `fc_max_outstanding`, `fc_max_queue_depth`,
