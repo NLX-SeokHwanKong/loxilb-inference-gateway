@@ -66,9 +66,9 @@ only accepted `target` values in tool calls — URLs are rejected (anti-SSRF).
 
 | Role | May call | Tool count (base) |
 |---|---|---|
-| viewer | read-only tools only | 68 |
-| operator | + object- and tenant-scope mutations (preview by default, `apply: true` as the shortcut) | 79 |
-| admin | + admin-confirm tools (every delete and every global-, service- or instance-scope change, confirm-token gated) | 100 (101 with `--allow-import`) |
+| viewer | read-only tools only | 78 |
+| operator | + object- and tenant-scope mutations (preview by default, `apply: true` as the shortcut) | 89 |
+| admin | + admin-confirm tools (every delete and every global-, service- or instance-scope change, confirm-token gated) | 110 (111 with `--allow-import`) |
 
 The tier of a tool is derived from the impact of its REST operation
 (`mcp/contract/coverage.yml`, checked in CI): a read is viewer; a reversible
@@ -269,7 +269,15 @@ reported as a verdict, not an error; a build without the endpoint shows
 per-target error sections).
 
 **Analysis (read)** — `meta_get`, `cluster_state_get`, `trace_status_get`,
-`l4trace_status_get`, `trace_catalog_list`, `nodegraph_get` (backend 501 in
+`l4trace_status_get`, `trace_catalog_list`, `trace_otlp_get` (export target;
+header values never returned, endpoint credentials masked), `trace_parsers_list`
+(500 "tracing not enabled" while tracing is off), `trace_catalog_parser_get` (by
+numeric catalog id 1-255, which no REST read lists; 404 when none is assigned),
+`dpu_debug_get` (aggregate offload counters, or filtered detail with `pipe`/`svc`/`ep`
+and at most 100 entries; the bulk `flows=1` enumeration is not offered because it
+blocks the REST endpoint for seconds on a loaded DPU; `enabled: false` on a host
+without a DPU), `dpu_hwcounters_get` (per-flow hardware counters, 100 rows),
+`nodegraph_get` (backend 501 in
 this fork), `status_get`, `logs_tail`, `log_archives_list`, `log_archive_get`,
 `ipsec_status_get`.
 
@@ -277,7 +285,7 @@ this fork), `status_get`, `logs_tail`, `log_archives_list`, `log_archive_get`,
 `promql_query` / `promql_range` (needs `prometheus_url`), `alerts_active`
 (needs `alertmanager_url`), `alerts_catalog` (needs `alert_rules_path`).
 
-**Management** — read: `lb_get` (one rule by composite key or opaque id, `include: [status, stats]`), `lb_kvexact_status` (the resolved KV-exact composition status of a key, the one read that says whether KV-aware routing is in force), `status_capabilities`, `maintenance_get`, `halfclose_get`, `audit_status`, `audit_policy_get`, `audit_sink_get` (primary sink, or a secondary by name), `config_snapshot_get` (size-capped, secret-shaped fields masked; the gateway's 409 while its auto-persist holds the snapshot gate, about 3 s after a config write, comes back as the retryable error `{error: snapshot_gate_busy, retry_after_sec: 3, detail}` and is not retried by the tool), `endpoint_list`, `fw_list`, `ipfilter_list`,
+**Management** — read: `cert_get` (metadata of one managed certificate entry: usage, hostnames, per certificate subject, issuer, validity, SANs, SHA-256 fingerprint; parsed by the bridge, no PEM returned, the API never returns the key), `sni_cert_list` (the global SNI store: hostname and certificate directory), `l7policy_list` and `l7policy_get` (stored L7 content-routing policies, not the effective data-plane state; `insertHeaders` values whose name carries a credential are masked), `opa_watcher_get` (configuration and status; URL credentials masked; `running` is not a sync verdict), `lb_get` (one rule by composite key or opaque id, `include: [status, stats]`), `lb_kvexact_status` (the resolved KV-exact composition status of a key, the one read that says whether KV-aware routing is in force), `status_capabilities`, `maintenance_get`, `halfclose_get`, `audit_status`, `audit_policy_get`, `audit_sink_get` (primary sink, or a secondary by name), `config_snapshot_get` (size-capped, secret-shaped fields masked; the gateway's 409 while its auto-persist holds the snapshot gate, about 3 s after a config write, comes back as the retryable error `{error: snapshot_gate_busy, retry_after_sec: 3, detail}` and is not retried by the tool), `endpoint_list`, `fw_list`, `ipfilter_list`,
 `secrate_get`, `net_route_list`, `net_vlan_list`, `net_vxlan_list`,
 `net_neighbor_list`, `net_ip_list`, `net_port_list`, `bgp_neigh_list`,
 `bgp_policy_list`, `session_list`, `session_ulcl_list`, `config_params_get`,
@@ -499,6 +507,8 @@ single-use, and per process. Exit code 0 means every check passed.
 ### Release notes
 
 #### mcp/v0.2.0 (unreleased)
+
+**Added** — L7, TLS and tracing reads (PR-C1), all viewer tier: `cert_get`, `sni_cert_list`, `l7policy_list`, `l7policy_get`, `trace_otlp_get`, `trace_parsers_list`, `trace_catalog_parser_get`, `opa_watcher_get`, `dpu_debug_get`, `dpu_hwcounters_get`. No certificate material or credential reaches the transcript: `cert_get` parses the public PEM and returns metadata only, OTLP header values are always masked by the bridge (not only by the gateway), and credentials in the OTLP endpoint, the OPA URL and credential-named `insertHeaders` of an L7 policy are masked. `sni_cert_list` reads the handler's `sniAttr` (swagger documents `certificates`) and reports the handler's 200 `Error:` result as an error. Tool counts: viewer 68 → 78, operator 79 → 89, admin 100 → 110 (111 with `--allow-import`). Manifest: pending 58 → 48.
 
 **Added** — the AI control-plane writes of tenant and object scope (PR-B2): `lb_update` (admin-confirm, impact service: `admin_state_up`, endpoint weights, `fc_mode`, `fc_max_outstanding`, `fc_max_queue_depth`, `fc_max_queue_wait_ms`; everything else is `lb_create`/`lb_delete`; a PATCH the gateway refuses is passed on with the replace hint), `ai_user_ratelimit_set` and `ai_user_ratelimit_delete` (operator; an all-zero entry is refused before any request, the delete's preview carries the row as the rollback), `secrate_disable` (admin-confirm, global, never autopilot: `DELETE /config/securityrate`, the preview carries the configuration as a `secrate_set` rollback), `config_persist` (admin-confirm, instance, never autopilot: the preview's `current` is the snapshot identity, 409 on the gate is `snapshot_gate_busy`). The mutation budget: `change_budget: {mutations_per_minute, max_consecutive_failures}` and a per-client `mutations_per_minute`, defaults 6 and 3, floors of 1, refusals as readable tool errors, the stop lifted by a successful read-only call. Tool counts: viewer 68, operator 77 → 79, admin 95 → 100 (101 with `--allow-import`).
 
