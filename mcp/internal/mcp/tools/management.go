@@ -37,6 +37,7 @@ import (
 func RegisterManagement(s *sdk.Server, role guard.Role, pol *guard.Policy, deps *Deps) {
 	reg := func(meta guard.ToolMeta, add func()) {
 		meta.Domain = domainMgmt
+		noteMeta(meta)
 		if pol.Permits(role, meta) {
 			add()
 		}
@@ -750,7 +751,7 @@ func (d *Deps) lbCreate(role guard.Role) sdk.ToolHandlerFor[lbCreateIn, mutOut] 
 		}
 		args := in
 		args.ConfirmToken = ""
-		out, stop, err := d.gateChange("lb_create", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+		out, stop, err := d.gateChange(ctx, "lb_create", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
 			return changePlan{
 				Current:  pick(existing, "serviceArguments", "endpoints", "secondaryIPs", "allowedSources"),
 				Proposed: body,
@@ -1397,7 +1398,7 @@ func (d *Deps) secrateSet() sdk.ToolHandlerFor[secrateSetIn, mutOut] {
 		}
 		args := in
 		args.ConfirmToken = ""
-		out, stop, err := d.gateChange("secrate_set", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+		out, stop, err := d.gateChange(ctx, "secrate_set", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
 			rb := map[string]any{}
 			for _, f := range secrateFields {
 				if _, changed := patch[f[1]]; changed {
@@ -1444,7 +1445,7 @@ func (d *Deps) secrateReset() sdk.ToolHandlerFor[secrateResetIn, mutOut] {
 		}
 		args := in
 		args.ConfirmToken = ""
-		out, stop, err := d.gateChange("secrate_reset", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+		out, stop, err := d.gateChange(ctx, "secrate_reset", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
 			cur, err := c.SecurityRate(ctx)
 			if err != nil {
 				return changePlan{}, fmt.Errorf("read of the current security rate counters failed, nothing was sent: %w", err)
@@ -1586,7 +1587,7 @@ func (d *Deps) bgpNeighSet() sdk.ToolHandlerFor[bgpNeighSetIn, mutOut] {
 		}
 		args := in
 		args.ConfirmToken = ""
-		out, stop, err := d.gateChange("bgp_neigh_set", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+		out, stop, err := d.gateChange(ctx, "bgp_neigh_set", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
 			cur := neighbor()
 			rb := &rollbackSpec{Note: "new neighbor: the bridge has no bgp_neigh_delete tool yet (manifest P4); remove it with the REST DELETE or loxicmd"}
 			if cur != nil {
@@ -1664,7 +1665,7 @@ func (d *Deps) bgpGlobalSet() sdk.ToolHandlerFor[bgpGlobalSetIn, mutOut] {
 		}
 		args := in
 		args.ConfirmToken = ""
-		out, stop, err := d.gateChange("bgp_global_set", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+		out, stop, err := d.gateChange(ctx, "bgp_global_set", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
 			return changePlan{Current: nil, Proposed: body, Rollback: &rollbackSpec{Note: noReadNote}, Impact: "global"}, nil
 		})
 		if err != nil || stop {
@@ -1711,7 +1712,7 @@ func (d *Deps) bgpPolicyApply() sdk.ToolHandlerFor[bgpPolicyApplyIn, mutOut] {
 		}
 		args := in
 		args.ConfirmToken = ""
-		out, stop, err := d.gateChange("bgp_policy_apply", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+		out, stop, err := d.gateChange(ctx, "bgp_policy_apply", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
 			return changePlan{Current: nil, Proposed: body, Rollback: &rollbackSpec{Note: noReadNote}, Impact: "global"}, nil
 		})
 		if err != nil || stop {
@@ -1753,7 +1754,7 @@ func (d *Deps) configParamsSet() sdk.ToolHandlerFor[paramsSetIn, mutOut] {
 		body := map[string]any{"logLevel": lvl}
 		args := in
 		args.ConfirmToken = ""
-		out, stop, err := d.gateChange("config_params_set", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+		out, stop, err := d.gateChange(ctx, "config_params_set", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
 			cur, err := c.OperParams(ctx)
 			if err != nil {
 				return changePlan{}, fmt.Errorf("read of the current parameters failed, nothing was sent: %w", err)

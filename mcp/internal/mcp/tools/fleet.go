@@ -31,7 +31,7 @@ func RegisterFleet(s *sdk.Server, role guard.Role, pol *guard.Policy, deps *Deps
 	if deps.ResolveAll == nil {
 		return
 	}
-	if pol.Permits(role, guard.ToolMeta{Name: "targets_list", Domain: domainAnalysis}) {
+	if permit(pol, role, guard.ToolMeta{Name: "targets_list", Domain: domainAnalysis}) {
 		sdk.AddTool(s, &sdk.Tool{
 			Name: "targets_list",
 			Description: "List the loxilb targets this bridge is configured for " +
@@ -39,7 +39,7 @@ func RegisterFleet(s *sdk.Server, role guard.Role, pol *guard.Policy, deps *Deps
 			Annotations: roAnnotations("List configured targets"),
 		}, deps.targetsList())
 	}
-	if pol.Permits(role, guard.ToolMeta{Name: "fleet_overview", Domain: domainAnalysis}) {
+	if permit(pol, role, guard.ToolMeta{Name: "fleet_overview", Domain: domainAnalysis}) {
 		sdk.AddTool(s, &sdk.Tool{
 			Name: "fleet_overview",
 			Description: "Run the health_overview probe against EVERY configured target " +

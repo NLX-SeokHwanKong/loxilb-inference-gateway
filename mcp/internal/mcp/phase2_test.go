@@ -41,6 +41,9 @@ type mockLoxilb struct {
 	// snapshotBusy makes GET /config/snapshot answer the gateway's 409
 	// (auto-persist or a restore holds the snapshot gate).
 	snapshotBusy bool
+	// failPrefix makes every request whose "METHOD path" starts with it
+	// answer 500 (a gateway refusing a mutation, for the budget's stop).
+	failPrefix string
 }
 
 // mockRuleJSON is the one rule the mock gateway holds (1.2.3.4:80/tcp, a
@@ -54,14 +57,20 @@ func newMockLoxilb(t *testing.T) *mockLoxilb {
 	mux.HandleFunc("/netlox/v1/", func(w http.ResponseWriter, r *http.Request) {
 		m.mu.Lock()
 		m.requests = append(m.requests, r.Method+" "+r.URL.Path)
-		if r.Method == http.MethodPost {
+		if r.Method == http.MethodPost || r.Method == http.MethodPatch {
 			var body map[string]any
 			if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
 				m.bodies = append(m.bodies, body)
 			}
 		}
+		failing := m.failPrefix != "" && strings.HasPrefix(r.Method+" "+r.URL.Path, m.failPrefix)
 		m.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
+		if failing {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"code":500,"message":"Internal service error","result":"injected failure"}`))
+			return
+		}
 		switch r.URL.Path {
 		case "/netlox/v1/config/loadbalancer/all":
 			w.Write([]byte(`{"lbAttr":[` + mockRuleJSON + `]}`))
@@ -164,14 +173,27 @@ func (m *mockLoxilb) lastBody() map[string]any {
 }
 
 func (m *mockLoxilb) sawMutation(prefix string) bool {
+	return m.countRequests(prefix) > 0
+}
+
+// countRequests counts the requests whose "METHOD path" starts with prefix.
+func (m *mockLoxilb) countRequests(prefix string) int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	n := 0
 	for _, r := range m.requests {
 		if strings.HasPrefix(r, prefix) {
-			return true
+			n++
 		}
 	}
-	return false
+	return n
+}
+
+// setFailing makes requests matching prefix answer 500; "" clears it.
+func (m *mockLoxilb) setFailing(prefix string) {
+	m.mu.Lock()
+	m.failPrefix = prefix
+	m.mu.Unlock()
 }
 
 // session connects an in-memory MCP client to a per-role server.

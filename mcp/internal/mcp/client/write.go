@@ -90,7 +90,13 @@ func (c *Client) GetText(ctx context.Context, path string, maxBytes int64) (stri
 
 // PostMultipartFile POSTs content as a multipart file field (the shape
 // POST /config/import expects: formData file "configuration").
-func (c *Client) PostMultipartFile(ctx context.Context, path, field, filename string, content []byte, out any) error {
+func (c *Client) PostMultipartFile(ctx context.Context, path, field, filename string, content []byte, out any) (err error) {
+	if c.budget != nil {
+		if berr := c.budget.Check(BudgetKey(ctx)); berr != nil {
+			return berr
+		}
+		defer func() { c.budget.Record(BudgetKey(ctx), err == nil) }()
+	}
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 	fw, err := mw.CreateFormFile(field, filename)

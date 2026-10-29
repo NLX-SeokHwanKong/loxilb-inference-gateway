@@ -69,6 +69,7 @@ const trafficReportCaveat = "accounting caveat: read loxilb_ai_requests_total by
 func RegisterAI(s *sdk.Server, role guard.Role, pol *guard.Policy, deps *Deps) {
 	reg := func(meta guard.ToolMeta, add func()) {
 		meta.Domain = domainAI
+		noteMeta(meta)
 		if pol.Permits(role, meta) {
 			add()
 		}
@@ -802,7 +803,7 @@ func (d *Deps) gpuModeSet() sdk.ToolHandlerFor[gpuModeIn, mutOut] {
 		}
 		args := in
 		args.ConfirmToken = ""
-		out, stop, err := d.gateChange("gpu_mode_set", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+		out, stop, err := d.gateChange(ctx, "gpu_mode_set", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
 			st, err := c.GPUStatus(ctx)
 			if err != nil {
 				return changePlan{}, fmt.Errorf("read of the GPU status failed, nothing was sent: %w", err)
@@ -849,7 +850,7 @@ func (d *Deps) gpuConversationsCleanup() sdk.ToolHandlerFor[gpuCleanupIn, mutOut
 		}
 		args := in
 		args.ConfirmToken = ""
-		out, stop, err := d.gateChange("gpu_conversations_cleanup", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+		out, stop, err := d.gateChange(ctx, "gpu_conversations_cleanup", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
 			st, err := c.GPUStatus(ctx)
 			if err != nil {
 				return changePlan{}, fmt.Errorf("read of the GPU status failed, nothing was sent: %w", err)
@@ -899,7 +900,7 @@ func (d *Deps) enableFlagTool(tool, path string, read statusReader, impact strin
 		}
 		args := in
 		args.ConfirmToken = ""
-		out, stop, err := d.gateChange(tool, c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+		out, stop, err := d.gateChange(ctx, tool, c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
 			st, err := read(ctx, c)
 			if err != nil {
 				return changePlan{}, fmt.Errorf("read of the current state failed, nothing was sent: %w", err)
@@ -944,7 +945,7 @@ func (d *Deps) postSimple(tool, path string, read statusReader, keys ...string) 
 		args := in
 		args.ConfirmToken = ""
 		if !in.Apply || in.ConfirmToken != "" {
-			out, stop, err := d.gateChange(tool, c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+			out, stop, err := d.gateChange(ctx, tool, c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
 				st, err := read(ctx, c)
 				if err != nil {
 					return changePlan{}, fmt.Errorf("read of the current state failed, nothing was sent: %w", err)
@@ -1035,7 +1036,7 @@ func (d *Deps) llamafwConfigure() sdk.ToolHandlerFor[llamafwConfigureIn, mutOut]
 		}
 		args := in
 		args.ConfirmToken = ""
-		out, stop, err := d.gateChange("llamafw_configure", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+		out, stop, err := d.gateChange(ctx, "llamafw_configure", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
 			st, err := c.LlamaFirewallStatus(ctx)
 			if err != nil {
 				return changePlan{}, fmt.Errorf("read of the LlamaFirewall status failed, nothing was sent: %w", err)
@@ -1109,7 +1110,7 @@ func (d *Deps) llamafwScannersSet() sdk.ToolHandlerFor[llamafwScannersIn, mutOut
 		}
 		args := in
 		args.ConfirmToken = ""
-		out, stop, err := d.gateChange("llamafw_scanners_set", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+		out, stop, err := d.gateChange(ctx, "llamafw_scanners_set", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
 			st, err := c.LlamaFirewallStatus(ctx)
 			if err != nil {
 				return changePlan{}, fmt.Errorf("read of the LlamaFirewall status failed, nothing was sent: %w", err)
@@ -1214,7 +1215,7 @@ func (d *Deps) piiConfigure() sdk.ToolHandlerFor[piiConfigureIn, mutOut] {
 		}
 		args := in
 		args.ConfirmToken = ""
-		out, stop, err := d.gateChange("pii_configure", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+		out, stop, err := d.gateChange(ctx, "pii_configure", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
 			st, err := c.PIIStatus(ctx)
 			if err != nil {
 				return changePlan{}, fmt.Errorf("read of the PII status failed, nothing was sent: %w", err)
@@ -1289,7 +1290,7 @@ func (d *Deps) piiURLPatternsSet() sdk.ToolHandlerFor[piiURLPatternsIn, mutOut] 
 		}
 		args := in
 		args.ConfirmToken = ""
-		out, stop, err := d.gateChange("pii_url_patterns_set", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
+		out, stop, err := d.gateChange(ctx, "pii_url_patterns_set", c.Name(), in.ConfirmToken, args, func() (changePlan, error) {
 			st, err := c.PIIStatus(ctx)
 			if err != nil {
 				return changePlan{}, fmt.Errorf("read of the PII status failed, nothing was sent: %w", err)

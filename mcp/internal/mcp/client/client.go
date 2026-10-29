@@ -54,6 +54,14 @@ type Options struct {
 	Timeout            time.Duration
 }
 
+// Budget is the mutation budget the bridge installs on every client
+// (guard.ChangeBudget): Check before a mutation is sent, Record once it was,
+// both keyed by the caller the context names. A nil Budget meters nothing.
+type Budget interface {
+	Check(key string) error
+	Record(key string, ok bool)
+}
+
 // Client talks to a single loxilb instance.
 type Client struct {
 	name string
@@ -62,8 +70,23 @@ type Client struct {
 	user string
 	pass string
 
+	budget Budget
+
 	mu    sync.Mutex
 	token string
+}
+
+// SetBudget installs the mutation budget every non-GET request is metered
+// by (the bridge shares one budget across its targets).
+func (c *Client) SetBudget(b Budget) { c.budget = b }
+
+// BudgetKey names the caller a budget meters: the originator the context
+// carries (the HTTP client, or the stdio session), or "local" when none.
+func BudgetKey(ctx context.Context) string {
+	if o := OriginatorFrom(ctx); o != "" {
+		return o
+	}
+	return "local"
 }
 
 // New builds a client; it performs no I/O (auth happens lazily on 401).
@@ -203,7 +226,16 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 // doAllow is do with a set of non-2xx statuses whose body is decoded into
 // out instead of being reported as an error (GET /status/ready answers 503
 // with the same ReadyStatus body it serves on 200).
-func (c *Client) doAllow(ctx context.Context, method, path string, in, out any, allow map[int]bool) error {
+func (c *Client) doAllow(ctx context.Context, method, path string, in, out any, allow map[int]bool) (err error) {
+	// A mutation is metered by the budget: refused before it is built when
+	// the caller's brake is on, counted (with its outcome) once it was sent.
+	mutating := method != http.MethodGet && c.budget != nil
+	if mutating {
+		if berr := c.budget.Check(BudgetKey(ctx)); berr != nil {
+			return berr
+		}
+		defer func() { c.budget.Record(BudgetKey(ctx), err == nil) }()
+	}
 	run := func() (*http.Response, error) {
 		var body io.Reader
 		if in != nil {

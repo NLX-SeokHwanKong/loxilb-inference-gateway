@@ -56,6 +56,7 @@ type Bridge struct {
 	clients    map[string]*client.Client
 	tokens     []guard.Client
 	limiter    *rateLimiter
+	budget     *guard.ChangeBudget
 	prom       *client.PromClient
 	am         *client.AlertmanagerClient
 	alertRules []tools.AlertRule
@@ -80,6 +81,7 @@ func NewBridge(cfg *Config, pol *guard.Policy, aud *guard.Auditor) (*Bridge, err
 		aud:     aud,
 		clients: make(map[string]*client.Client, len(cfg.Targets)),
 		limiter: newRateLimiter(defaultClientRPS, defaultClientBurst),
+		budget:  guard.NewChangeBudget(cfg.ChangeBudget.MutationsPerMinute, cfg.ChangeBudget.MaxConsecutiveFailures),
 		confirm: guard.NewConfirmer(0),
 	}
 	for name, t := range cfg.Targets {
@@ -103,6 +105,7 @@ func NewBridge(cfg *Config, pol *guard.Policy, aud *guard.Auditor) (*Bridge, err
 		if err != nil {
 			return nil, err
 		}
+		c.SetBudget(b.budget)
 		b.clients[name] = c
 	}
 	toks, err := cfg.GuardClients()
@@ -113,6 +116,9 @@ func NewBridge(cfg *Config, pol *guard.Policy, aud *guard.Auditor) (*Bridge, err
 	for _, cl := range cfg.Clients {
 		if cl.RPS > 0 || cl.Burst > 0 {
 			b.limiter.setClient(cl.Name, cl.RPS, cl.Burst)
+		}
+		if cl.MutationsPerMinute > 0 {
+			b.budget.SetCaller(httpOriginator(guard.Client{Name: cl.Name}), cl.MutationsPerMinute)
 		}
 	}
 
@@ -184,7 +190,9 @@ func (b *Bridge) BuildServer(role guard.Role) *sdk.Server {
 		SecretsDir:   b.cfg.SecretsDir,
 		Autopilot:    b.pol.AutopilotAllowed,
 		ResolveAll:   b.resolveAll,
+		Budget:       b.budget,
 	}
+	s.AddReceivingMiddleware(b.liftBudgetStopOnRead)
 	tools.RegisterSeed(s, role, b.pol, deps)
 	tools.RegisterAnalysis(s, role, b.pol, deps)
 	tools.RegisterMonitoring(s, role, b.pol, deps)
@@ -195,6 +203,32 @@ func (b *Bridge) BuildServer(role guard.Role) *sdk.Server {
 	b.registerResources(s)
 	b.registerPrompts(s)
 	return s
+}
+
+// liftBudgetStopOnRead is the receiving middleware that lifts a caller's
+// consecutive-failure stop (change-gate requirement 4): a tools/call of a
+// read-only tool that returned without error is the look at the gateway
+// the budget asks for before the next mutation. A mutation's own pre-read
+// does not count; the agent has to call a read tool.
+func (b *Bridge) liftBudgetStopOnRead(next sdk.MethodHandler) sdk.MethodHandler {
+	return func(ctx context.Context, method string, req sdk.Request) (sdk.Result, error) {
+		res, err := next(ctx, method, req)
+		if err != nil || method != "tools/call" || b.budget == nil {
+			return res, err
+		}
+		call, ok := req.(*sdk.CallToolRequest)
+		if !ok || call.Params == nil {
+			return res, err
+		}
+		out, ok := res.(*sdk.CallToolResult)
+		if !ok || out == nil || out.IsError {
+			return res, err
+		}
+		if !tools.IsMutating(call.Params.Name) {
+			b.budget.ReadSucceeded(client.BudgetKey(ctx))
+		}
+		return res, err
+	}
 }
 
 // RunStdio serves a single MCP session over stdin/stdout with the given role

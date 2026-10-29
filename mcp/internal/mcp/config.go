@@ -54,6 +54,20 @@ type ClientToken struct {
 	TokenEnv string  `yaml:"token_env"`
 	RPS      float64 `yaml:"rps"`
 	Burst    float64 `yaml:"burst"`
+	// MutationsPerMinute is this client's own mutation budget (change-gate
+	// requirement 4); zero keeps change_budget.mutations_per_minute. It
+	// cannot go below one per minute.
+	MutationsPerMinute int `yaml:"mutations_per_minute"`
+}
+
+// ChangeBudgetConfig sets the mutation budget every caller is metered by
+// (guard.ChangeBudget): at most mutations_per_minute mutations SENT in any
+// sliding minute, and a stop after max_consecutive_failures mutations in a
+// row were refused by the gateway, lifted by the next successful read-only
+// tool call. Zero keeps the default (6 and 3); neither can go below 1.
+type ChangeBudgetConfig struct {
+	MutationsPerMinute     int `yaml:"mutations_per_minute"`
+	MaxConsecutiveFailures int `yaml:"max_consecutive_failures"`
 }
 
 // Config is the bridge configuration file (YAML, mode 0600 recommended).
@@ -82,6 +96,8 @@ type Config struct {
 	// the confirm-token step (exact names, §3.7). Default empty: every
 	// destructive tool requires preview→confirm.
 	AutopilotTools []string `yaml:"autopilot_tools"`
+	// ChangeBudget is the mutation budget (§3.6 item 4, D12).
+	ChangeBudget ChangeBudgetConfig `yaml:"change_budget"`
 }
 
 // LoadConfig reads and validates a YAML config file. Unknown fields error.
@@ -156,6 +172,15 @@ func (c *Config) validate() error {
 		if cl.Burst < 0 || (cl.Burst > 0 && cl.Burst < 1) {
 			return fmt.Errorf("client %q: burst must be 0 (default) or at least 1", cl.Name)
 		}
+		if cl.MutationsPerMinute < 0 || (cl.MutationsPerMinute > 0 && cl.MutationsPerMinute < guard.MinMutationsPerMinute) {
+			return fmt.Errorf("client %q: mutations_per_minute must be 0 (default) or at least %d", cl.Name, guard.MinMutationsPerMinute)
+		}
+	}
+	if n := c.ChangeBudget.MutationsPerMinute; n < 0 || (n > 0 && n < guard.MinMutationsPerMinute) {
+		return fmt.Errorf("change_budget.mutations_per_minute must be 0 (default %d) or at least %d", guard.DefaultMutationsPerMinute, guard.MinMutationsPerMinute)
+	}
+	if n := c.ChangeBudget.MaxConsecutiveFailures; n < 0 || (n > 0 && n < guard.MinMaxConsecutiveFail) {
+		return fmt.Errorf("change_budget.max_consecutive_failures must be 0 (default %d) or at least %d", guard.DefaultMaxConsecutiveFail, guard.MinMaxConsecutiveFail)
 	}
 	return nil
 }
