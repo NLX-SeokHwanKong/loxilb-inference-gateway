@@ -882,6 +882,36 @@ AIV=20.20.20.3; AIP=2097
 AIKEY="\"external_ip\":\"$AIV\",\"port\":$AIP,\"protocol\":\"tcp\""
 AIRULE="$AIKEY,\"mode\":4,\"sse_mode\":true,\"api_key_auth\":\"disabled\",\"fc_max_outstanding\":1,\"fc_max_queue_depth\":4,\"fc_max_queue_wait_ms\":3000,\"endpoints\":[{\"ip\":\"31.31.31.1\",\"port\":8090}]"
 fc_mode_in_force() { jfield "$(mcp_call "$ATOKEN" lb_get "{$AIKEY}")" 'r["rule"]["fc_effective"]["mode"]'; }
+# The admission and band families are published on the sockproxy metrics
+# cycle (PrometheusDefaultPeriod, 10 s) and /metrics serves that cache, so a
+# read at a fixed delay sees no row or a mid-burst snapshot. admission_settle
+# polls the raw scrape until the service has an admission row and its
+# decisions, queue_wait count and band values are the same on two scrapes
+# taken at least 10 s apart; RAW then holds the settled scrape. Past 30 s the
+# scenario stops.
+rawsum() { grep "^$1{" <<< "$RAW" | grep "service=\"$AIV:$AIP\"" | grep -- "${2:-}" | awk '{s+=$NF} END{printf "%g", s+0}'; }
+admission_settle() {
+    local start=$SECONDS prev="" prev_t=0 cur
+    while true; do
+        RAW=$(curl -s --max-time 5 -H "Authorization: Bearer $JWT" "$REST/metrics")
+        cur=$(grep -E '^loxilb_ai_(admission_decisions_total|admission_queue_wait_seconds_count|fc_band_total)\{' <<< "$RAW" \
+            | grep "service=\"$AIV:$AIP\"" | sort)
+        if grep -q '^loxilb_ai_admission_' <<< "$cur"; then
+            if [[ -n "$prev" && $((SECONDS - prev_t)) -ge 10 && "$cur" == "$prev" ]]; then
+                echo "  [NOTE] admission counters for $AIV:$AIP settled after $((SECONDS - start)) s ($1)"
+                return 0
+            fi
+            prev=$cur; prev_t=$SECONDS
+            (( SECONDS - start + 10 > 30 )) && break
+            sleep 10
+        else
+            (( SECONDS - start >= 30 )) && break
+            sleep 1
+        fi
+    done
+    fail "admission counters for $AIV:$AIP did not settle within 30 s ($1): last scrape ${cur:-has no row}"
+    echo "SCENARIO-mcp [FAILED]"; exit 1
+}
 $hexec l3ep1 bash -c "nohup python3 ../ai-admission/mock_backend.py 8090 > /tmp/mcp-ai-mock.log 2>&1 &"
 for i in $(seq 1 20); do $hexec l3ep1 curl -s -m 1 localhost:8090/health >/dev/null && break; sleep 0.5; done
 res=$(mcp_call "$ATOKEN" lb_create "{$AIRULE,\"fc_mode\":\"enforce\"}")
@@ -893,6 +923,10 @@ aichat() { $hexec l3h1 curl -s -o /dev/null -w '%{http_code}' -m 10 "http://$AIV
 # The listener may take a moment after the create: one request must answer
 # 200 before the burst (it is admitted too, so the burst's oracle is >= 4).
 for i in $(seq 1 15); do [[ "$(aichat)" == "200" ]] && break; sleep 1; done
+# Settled counts before the burst, so the burst's own counts are a delta.
+admission_settle "before the burst"
+B_ADM=$(rawsum loxilb_ai_admission_decisions_total 'reason="admitted"'); B_QUE=$(rawsum loxilb_ai_admission_decisions_total 'reason="queued"')
+B_QW=$(rawsum loxilb_ai_admission_queue_wait_seconds_count)
 # wait on the four curls only: a bare wait also waits for tcp_server.js.
 CPIDS=(); CODES=$(mktemp)
 for i in 1 2 3 4; do
@@ -902,15 +936,9 @@ done
 wait "${CPIDS[@]}"
 [[ "$(grep -c '^200$' "$CODES")" == 4 ]] && pass "four concurrent requests answered 200 through the gate" || fail "burst status codes: $(tr '\n' ' ' < "$CODES")"
 rm -f "$CODES"
-sleep 2
-# The gateway's own counts of this burst are not stable run to run (a woken
-# request is served but not always counted: the per-pool stat rows are
-# deduplicated by label, first row wins), so the oracle is the bridge's
-# fidelity: what the tools
-# report equals a raw scrape taken in the same second. The counts are
-# printed as notes.
-RAW=$(curl -s --max-time 10 -H "Authorization: Bearer $JWT" "$REST/metrics")
-rawsum() { grep "^$1{" <<< "$RAW" | grep "service=\"$AIV:$AIP\"" | grep -- "${2:-}" | awk '{s+=$NF} END{printf "%g", s+0}'; }
+# The oracle is the bridge's fidelity: what the tools report equals the
+# settled raw scrape. The gateway's counts of the burst are printed as notes.
+admission_settle "after the burst"
 res=$(mcp_call "$ATOKEN" diagnose_ai_latency)
 AP="[p for p in r['evidence'].get('admission',[]) if p['service']=='$AIV:$AIP']"
 QW=$(jfield "$res" "'%g' % (($AP or [{}])[0].get('queue_wait') or {}).get('count', 0)")
@@ -918,7 +946,7 @@ QW=$(jfield "$res" "'%g' % (($AP or [{}])[0].get('queue_wait') or {}).get('count
    && "$(jfield "$res" "($AP or [{}])[0].get('effective_limit') == 1")" == "True" \
    && "$QW" == "$(rawsum loxilb_ai_admission_queue_wait_seconds_count)" ]] \
     && pass "diagnose_ai_latency admission section: enforce, ceiling 1, queue_wait count $QW as the scrape has it" || fail "admission section: $(jfield "$res" "$AP") vs scrape queue_wait count $(rawsum loxilb_ai_admission_queue_wait_seconds_count)"
-echo "  [NOTE] gateway counts for the burst of four: admitted decisions $(rawsum loxilb_ai_admission_decisions_total 'reason="admitted"'), queued $(rawsum loxilb_ai_admission_decisions_total 'reason="queued"'), queue_wait samples $QW"
+echo "  [NOTE] gateway counts for the burst of four (settled delta): admitted decisions $(( $(rawsum loxilb_ai_admission_decisions_total 'reason="admitted"') - B_ADM )), queued $(( $(rawsum loxilb_ai_admission_decisions_total 'reason="queued"') - B_QUE )), queue_wait samples $(( QW - B_QW ))"
 [[ "$(jfield "$res" "sorted(r['evidence']['pd_admission_sheds'])")" == *"loxilb_pd_admission_overflow_shed_total"* \
    && "$(jfield "$res" "'pending' in r['evidence']['epp']")" == "True" ]] \
     && pass "diagnose_ai_latency carries the P/D admission sheds and the EPP section" || fail "pd/epp sections: $res"
@@ -938,12 +966,14 @@ tok=$(jfield "$res" 'r["confirm_token"]'); RB=$(jfield "$res" 'json.dumps(r["rol
 res=$(mcp_call "$ATOKEN" lb_create "{$AIRULE,\"fc_mode\":\"observe\",\"confirm_token\":\"$tok\"}")
 [[ "$(jfield "$res" 'r["action"]')" == "executed" ]] && pass "replace applied with the token" || fail "replace apply: $res"
 sleep 3
+admission_settle "after the replace"
 [[ "$(fc_mode_in_force)" == "observe" ]] && pass "fc_effective.mode reads observe after the replace (D25 live proof)" || fail "fc_effective after replace: $(mcp_call "$ATOKEN" lb_get "{$AIKEY}")"
 res=$(mcp_call "$ATOKEN" lb_create "$RB")
 tok=$(jfield "$res" 'r["confirm_token"]')
 res=$(mcp_call "$ATOKEN" lb_create "$(python3 -c 'import json,sys; a=json.loads(sys.argv[1]); a["confirm_token"]=sys.argv[2]; print(json.dumps(a))' "$RB" "$tok")")
 [[ "$(jfield "$res" 'r["action"]')" == "executed" ]] && pass "rollback args from the preview applied" || fail "rollback apply: $res"
 sleep 3
+admission_settle "after the rollback"
 [[ "$(fc_mode_in_force)" == "enforce" ]] && pass "fc_effective.mode reads enforce again after the rollback" || fail "fc_effective after rollback: $(mcp_call "$ATOKEN" lb_get "{$AIKEY}")"
 res=$(mcp_call "$ATOKEN" lb_delete "{$AIKEY}")
 tok=$(jfield "$res" 'r["confirm_token"]')
