@@ -227,6 +227,34 @@ if [[ "$rc" != "200" && "$rc" != "204" ]]; then
 fi
 echo "  fixture: L7 policy mcp-l7pol1 on rule $L7_LBID (20.20.20.4:8082)"
 
+# IPsec read fixtures, written over REST: a PSK tunnel (responder, auto=add,
+# so nothing is initiated; peer reachability is irrelevant) whose generated
+# peer configuration carries the key the bridge must mask, one CA
+# certificate and one certificate with its key. Not fatal: an image whose
+# IPsec handler refuses them makes the IPsec legs skip with the answer as
+# the reason. The keys never leave the stage directory, removed below.
+ipsec_post() {
+  $hexec llb1 curl -s -m 10 -o /tmp/mcp-ipsec.json -w "%{http_code}" -X POST "http://localhost:11111/netlox/v1/config/ipsec/$1" \
+    -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" -d "$2"
+}
+rc=$(ipsec_post tunnels '{"name":"mcp-tun1","localIp":"31.31.31.254","remoteIp":"31.31.31.253","authMode":"psk","psk":"mcp-ipsec-fixture-psk","localId":"mcp-a","remoteId":"mcp-b","ikeVersion":"ikev2","tunnelMode":"tunnel","auto":"add"}')
+echo "  fixture: IPsec PSK tunnel mcp-tun1 (HTTP $rc$([[ "$rc" == 20? ]] || echo ": $($hexec llb1 cat /tmp/mcp-ipsec.json 2>/dev/null | head -c 160)"))"
+CERTSTAGE=$(mktemp -d)
+openssl req -x509 -newkey rsa:2048 -nodes -days 2 -keyout "$CERTSTAGE/ca.key" -out "$CERTSTAGE/ca.crt" \
+  -subj "/CN=mcp-ipsec-ca" -addext "basicConstraints=critical,CA:TRUE" 2>/dev/null
+openssl req -newkey rsa:2048 -nodes -keyout "$CERTSTAGE/gw.key" -out "$CERTSTAGE/gw.csr" -subj "/CN=mcp-ipsec-gw" 2>/dev/null
+printf 'subjectAltName=DNS:mcp-ipsec-gw.test\n' > "$CERTSTAGE/ext"
+openssl x509 -req -in "$CERTSTAGE/gw.csr" -CA "$CERTSTAGE/ca.crt" -CAkey "$CERTSTAGE/ca.key" -CAcreateserial -days 2 \
+  -extfile "$CERTSTAGE/ext" -out "$CERTSTAGE/gw.crt" 2>/dev/null
+cabody=$(python3 -c 'import json,sys; print(json.dumps({"name":"mcp-ca1","certificate":open(sys.argv[1]).read()}))' "$CERTSTAGE/ca.crt" 2>/dev/null)
+gwbody=$(python3 -c 'import json,sys; print(json.dumps({"name":"mcp-ipcert1","certificate":open(sys.argv[1]).read(),"privateKey":open(sys.argv[2]).read()}))' \
+  "$CERTSTAGE/gw.crt" "$CERTSTAGE/gw.key" 2>/dev/null)
+rm -rf "$CERTSTAGE"
+rc=$(ipsec_post ca-certificates "$cabody")
+echo "  fixture: IPsec CA certificate mcp-ca1 (HTTP $rc$([[ "$rc" == 20? ]] || echo ": $($hexec llb1 cat /tmp/mcp-ipsec.json 2>/dev/null | head -c 160)"))"
+rc=$(ipsec_post certificates "$gwbody")
+echo "  fixture: IPsec certificate mcp-ipcert1 (HTTP $rc$([[ "$rc" == 20? ]] || echo ": $($hexec llb1 cat /tmp/mcp-ipsec.json 2>/dev/null | head -c 160)"))"
+
 # Auto-persist is a debounced write-through fired by the successful writes
 # above; /status/ready true after them is the verdict that it has settled
 # (cicd/ai-apikey, F-P0-3). Cap: 80 s.
