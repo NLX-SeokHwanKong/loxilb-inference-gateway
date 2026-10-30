@@ -66,9 +66,9 @@ only accepted `target` values in tool calls — URLs are rejected (anti-SSRF).
 
 | Role | May call | Tool count (base) |
 |---|---|---|
-| viewer | read-only tools only | 78 |
-| operator | + object- and tenant-scope mutations (preview by default, `apply: true` as the shortcut) | 89 |
-| admin | + admin-confirm tools (every delete and every global-, service- or instance-scope change, confirm-token gated) | 110 (111 with `--allow-import`) |
+| viewer | read-only tools only | 85 |
+| operator | + object- and tenant-scope mutations (preview by default, `apply: true` as the shortcut) | 96 |
+| admin | + admin-confirm tools (every delete and every global-, service- or instance-scope change, confirm-token gated) | 117 (118 with `--allow-import`) |
 
 The tier of a tool is derived from the impact of its REST operation
 (`mcp/contract/coverage.yml`, checked in CI): a read is viewer; a reversible
@@ -82,7 +82,7 @@ replace it, and that path is admin-confirm inside the tool (below).
 configured. A configured `prometheus_url` (`promql_query`, `promql_range`),
 `alertmanager_url` (`alerts_active`), and `alert_rules_path` (`alerts_catalog`)
 each register additional read-only tools that are visible to every role — up to
-four more, so a fully-wired admin sees 104 (105 with `--allow-import`). `--read-only`,
+four more, so a fully-wired admin sees 121 (122 with `--allow-import`). `--read-only`,
 `--enable-domains`, and `--allow-tools`/`--deny-tools` reduce the set further.
 
 Stdio sessions take the role from `--role` (default admin — stdio inherits
@@ -279,7 +279,16 @@ blocks the REST endpoint for seconds on a loaded DPU; `enabled: false` on a host
 without a DPU), `dpu_hwcounters_get` (per-flow hardware counters, 100 rows),
 `nodegraph_get` (backend 501 in
 this fork), `status_get`, `logs_tail`, `log_archives_list`, `log_archive_get`,
-`ipsec_status_get`.
+`ipsec_status_get` (global configuration, stats, SAs and tunnels, each section
+degrading on its own), `ipsec_config_get` (fast path, hardware offload, anti-replay,
+SA lifetime warning, MTU, supported algorithms), `ipsec_tunnel_get` (one tunnel by
+name: endpoints, identities, proposals, selector, DPD, state, counters),
+`ipsec_tunnel_peerconfig_get` (the strongSwan conn block the gateway generates for the
+remote peer, and its `ipsec.secrets` entry with the pre-shared key masked by the
+bridge: selectors and secret type only), `ipsec_cert_list` / `ipsec_cert_get` and
+`ipsec_ca_cert_list` / `ipsec_ca_cert_get` (certificate metadata only, never PEM or a
+key; validity and install dates appear only when the gateway reports a real date,
+which current handlers do not).
 
 **Monitoring (read)** — `metrics_config_get`, `metrics_legacy_get`,
 `promql_query` / `promql_range` (needs `prometheus_url`), `alerts_active`
@@ -391,6 +400,52 @@ requests charged to a credential: a rule without `api_key_auth` never charges
 a quota and its traffic leaves it at 0. The tool gathers, the
 model concludes, a human approves mutations — the confirm-token flow is the
 approval gate; nothing in `suggested_actions` auto-executes.
+
+## What the bridge does not expose, and how to reopen it
+
+`mcp/contract/coverage.yml` is the record. Every REST operation is in it
+exactly once: mapped to a tool, `pending` with a phase, or `excluded` with
+its reason, and the contract gate fails on any operation without an entry.
+At the close of the sync campaign: 138 mapped, 3 pending, 103 excluded.
+
+Excluded, by reason:
+
+| reason | operations |
+|---|---|
+| no stated use-case as of 2026-10-29; reopen on request | 38 |
+| L2-4 write CRUD (addresses, routes, VLANs, FDB, BFD, mirror, policy, IPsec writes) | 38 |
+| management auth and user administration, and the bridge's own login | 10 |
+| the audited must not configure the auditor (audit policy, sinks, rotation) | 5 |
+| machine protocols and HA internals (K8s metadata, cluster state, worker push, delete-all) | 6 |
+| points the gateway at an agent-chosen URL, until the bridge config has a destination allowlist | 3 |
+| instance-scope and irreversible from an agent, or removed from the plan | 3 |
+
+The 38 "no stated use-case" entries keep their earlier note, so the tool
+name and tier each would open with stay readable in the manifest.
+
+Pending, with the use-case that opens them:
+
+- `POST /config/halfclose/release` — alert remediation: releasing held
+  connections when `LoxilbHalfCloseHold*` fires. Admin-confirm, never
+  autopilot.
+- `PUT /maintenance` — draining a gateway for an upgrade (`maintenance_set`).
+  Admin-confirm for enter and leave, never autopilot.
+- `PUT /config/cert/{certId}` — certificate rotation by file reference
+  (`cert_rotate`), once the gateway no longer removes a live certificate's
+  directory on a POST of an existing server certId.
+
+To reopen an operation:
+
+1. State the use-case: who calls it through an agent, when, and what goes
+   wrong without it. A tool is not opened without one.
+2. The owner records the decision in the entry's `note:`. An `excluded`
+   entry becomes `pending` with that use-case, and `budget.pending_max` is
+   raised in the same change. The budget is a ratchet: a raise shows as a
+   warning in the CI summary.
+3. A PR adds the tool and maps the entry. The tier comes from `impact` and
+   `reversible` (see "Contract gate"), every mutation previews before it
+   sends anything, and an object's write never lands in the same PR as its
+   first read.
 
 ## Prompts
 
@@ -509,6 +564,10 @@ single-use, and per process. Exit code 0 means every check passed.
 ### Release notes
 
 #### mcp/v0.2.0 (unreleased)
+
+**Added** — IPsec reads (PR-C2), all viewer tier: `ipsec_config_get`, `ipsec_tunnel_get`, `ipsec_tunnel_peerconfig_get`, `ipsec_cert_list`, `ipsec_cert_get`, `ipsec_ca_cert_list`, `ipsec_ca_cert_get`; `ipsec_status_get` also returns the global configuration. The peer configuration's pre-shared key is masked by the bridge, and certificate reads decode named metadata members only. Tool counts: viewer 78 → 85, operator 89 → 96, admin 110 → 117 (118 with `--allow-import`).
+
+**Changed** — the operation manifest is closed (D29): every operation is mapped or carries a recorded reason, except three kept `pending` with their use-case (see "What the bridge does not expose"). Manifest: mapped 138, pending 48 → 3, excluded 103.
 
 **Added** — L7, TLS and tracing reads (PR-C1), all viewer tier: `cert_get`, `sni_cert_list`, `l7policy_list`, `l7policy_get`, `trace_otlp_get`, `trace_parsers_list`, `trace_catalog_parser_get`, `opa_watcher_get`, `dpu_debug_get`, `dpu_hwcounters_get`. No certificate material or credential reaches the transcript: `cert_get` parses the public PEM and returns metadata only, OTLP header values are always masked by the bridge (not only by the gateway), and credentials in the OTLP endpoint, the OPA URL and credential-named `insertHeaders` of an L7 policy are masked. `sni_cert_list` reads the handler's `sniAttr` (swagger documents `certificates`) and reports the handler's 200 `Error:` result as an error. Tool counts: viewer 68 → 78, operator 79 → 89, admin 100 → 110 (111 with `--allow-import`). Manifest: pending 58 → 48.
 
