@@ -102,6 +102,9 @@ Prometheus server is configured.
 - loxilb_ai_admission_queue_wait_seconds has one sample per park, taken when
   the park ends; a request drained from the queue is not sampled.
   loxilb_ai_fc_band_total outcome="queued" counts parks, not requests.
+- The admission and band families (loxilb_ai_admission_*,
+  loxilb_ai_fc_band_total) are published on the 10 s sockproxy collection
+  cycle: read twice at least 10 s apart before trusting a value.
 - loxilb_kv_inventory_fresh 0 with loxilb_kv_subscriber_connected 1 means the
   socket is up but the inventory holds nothing from the current publisher:
   KV-aware routing runs cold for that endpoint. An idle engine publishes no

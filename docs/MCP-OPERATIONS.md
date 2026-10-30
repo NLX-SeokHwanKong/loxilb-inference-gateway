@@ -384,6 +384,8 @@ token quota.
 `ai_traffic_report` adds `tokens_consumed` (model, tenant, kind) with
 prompt and completion totals, `quota_denied` per tenant and the non-zero
 `fc_band` rows (service, band, outcome; `queued` counts parks).
+The admission and band families publish on the 10 s sockproxy collection
+cycle: read twice at least 10 s apart before trusting a value.
 `tokens_consumed` comes from the token-quota charge path, so it counts only
 requests charged to a credential: a rule without `api_key_auth` never charges
 a quota and its traffic leaves it at 0. The tool gathers, the
