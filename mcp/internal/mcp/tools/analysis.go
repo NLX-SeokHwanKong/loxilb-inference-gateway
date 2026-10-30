@@ -148,9 +148,58 @@ func RegisterAnalysis(s *sdk.Server, role guard.Role, pol *guard.Policy, deps *D
 	reg("ipsec_status_get", func() {
 		sdk.AddTool(s, &sdk.Tool{
 			Name:        "ipsec_status_get",
-			Description: "Get IPsec overview: stats, SAs, and tunnels; sections degrade independently.",
+			Description: "Get IPsec overview: global configuration, stats, SAs, and tunnels; sections degrade independently.",
 			Annotations: roAnnotations("Get IPsec status"),
 		}, deps.ipsecStatus())
+	})
+	reg("ipsec_config_get", func() {
+		sdk.AddTool(s, &sdk.Tool{
+			Name:        "ipsec_config_get",
+			Description: "IPsec global configuration: fast path, hardware offload and its type, anti-replay, SA lifetime warning, sequence overflow action, MTU, supported algorithms (GET /config/ipsec).",
+			Annotations: roAnnotations("Get IPsec configuration"),
+		}, deps.ipsecConfigGet())
+	})
+	reg("ipsec_tunnel_get", func() {
+		sdk.AddTool(s, &sdk.Tool{
+			Name:        "ipsec_tunnel_get",
+			Description: "One IPsec tunnel by name (GET /config/ipsec/tunnels/{name}): endpoints, identities, authentication mode, IKE/ESP proposals, selector, DPD, state, byte and packet counters, SAs installed. 404 when absent.",
+			Annotations: roAnnotations("Get an IPsec tunnel"),
+		}, deps.ipsecTunnelGet())
+	})
+	reg("ipsec_tunnel_peerconfig_get", func() {
+		sdk.AddTool(s, &sdk.Tool{
+			Name:        "ipsec_tunnel_peerconfig_get",
+			Description: "The strongSwan configuration the gateway generates for the remote peer of a tunnel (GET /config/ipsec/tunnels/{name}/peerconfig): the ipsec.conf conn block and the ipsec.secrets entry. The pre-shared key is masked by the bridge; the entry shows its selectors and type only.",
+			Annotations: roAnnotations("Get IPsec peer configuration"),
+		}, deps.ipsecTunnelPeerconfigGet())
+	})
+	reg("ipsec_cert_list", func() {
+		sdk.AddTool(s, &sdk.Tool{
+			Name:        "ipsec_cert_list",
+			Description: "List the installed IPsec certificates: name, subject, issuer, serial, SANs, key usage, description (GET /config/ipsec/certificates/all). Metadata only; no PEM and no private key.",
+			Annotations: roAnnotations("List IPsec certificates"),
+		}, deps.ipsecCertList())
+	})
+	reg("ipsec_cert_get", func() {
+		sdk.AddTool(s, &sdk.Tool{
+			Name:        "ipsec_cert_get",
+			Description: "One installed IPsec certificate by name (GET /config/ipsec/certificates/{name}): the metadata ipsec_cert_list reports. No PEM and no private key. 404 when absent.",
+			Annotations: roAnnotations("Get an IPsec certificate"),
+		}, deps.ipsecCertGet())
+	})
+	reg("ipsec_ca_cert_list", func() {
+		sdk.AddTool(s, &sdk.Tool{
+			Name:        "ipsec_ca_cert_list",
+			Description: "List the CA certificates of the IPsec trust store: name, subject, issuer, serial, description (GET /config/ipsec/ca-certificates/all). Metadata only; no PEM.",
+			Annotations: roAnnotations("List IPsec CA certificates"),
+		}, deps.ipsecCACertList())
+	})
+	reg("ipsec_ca_cert_get", func() {
+		sdk.AddTool(s, &sdk.Tool{
+			Name:        "ipsec_ca_cert_get",
+			Description: "One CA certificate of the IPsec trust store by name (GET /config/ipsec/ca-certificates/{name}): the metadata ipsec_ca_cert_list reports. No PEM. 404 when absent.",
+			Annotations: roAnnotations("Get an IPsec CA certificate"),
+		}, deps.ipsecCACertGet())
 	})
 }
 
@@ -402,6 +451,7 @@ func (d *Deps) logArchiveGet() sdk.ToolHandlerFor[logArchiveIn, logArchiveOut] {
 
 type ipsecOut struct {
 	Target  string            `json:"target"`
+	Config  any               `json:"config,omitempty" jsonschema:"IPsec global configuration, as ipsec_config_get reports it"`
 	Stats   any               `json:"stats,omitempty" jsonschema:"IPsec statistics as returned by loxilb (arbitrary JSON)"`
 	Sas     any               `json:"sas,omitempty" jsonschema:"IPsec security associations (arbitrary JSON)"`
 	Tunnels any               `json:"tunnels,omitempty" jsonschema:"IPsec tunnel entries (arbitrary JSON)"`
@@ -421,8 +471,9 @@ func (d *Deps) ipsecStatus() sdk.ToolHandlerFor[targetIn, ipsecOut] {
 				out.Errors[section] = clean(err.Error())
 				return
 			}
-			*dst = sanitizeAny(raw, 0)
+			*dst = maskIPsecSecrets(sanitizeAny(raw, 0))
 		}
+		fetch("config", "/config/ipsec", &out.Config)
 		fetch("stats", "/config/ipsec/stats", &out.Stats)
 		fetch("sas", "/config/ipsec/sas/all", &out.Sas)
 		fetch("tunnels", "/config/ipsec/tunnels/all", &out.Tunnels)

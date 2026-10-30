@@ -15,7 +15,7 @@
 # Budgets are ratchets: they may only go down. A raise is a warning in the CI summary.
 version: 1
 budget:
-  pending_max: 48
+  pending_max: 41
   tier_gap_max: 0
 operations:
 - op: GET /audit/policy
@@ -422,8 +422,11 @@ operations:
   - ipfilter_list
   impact: none
 - op: GET /config/ipsec
-  pending: P2
-  note: read; PR-C; owner-approved 2026-10-28
+  tools:
+  - ipsec_config_get
+  - ipsec_status_get
+  impact: none
+  note: read; PR-C2 mapped; owner-approved 2026-10-28
 - op: POST /config/ipsec
   excluded: IPsec write; L2-4 write CRUD is excluded by policy; D1
   note: owner-approved 2026-10-28
@@ -431,20 +434,26 @@ operations:
   excluded: IPsec write; L2-4 write CRUD is excluded by policy; D1
   note: owner-approved 2026-10-28
 - op: GET /config/ipsec/ca-certificates/all
-  pending: P2
-  note: read; PR-C; owner-approved 2026-10-28
+  tools:
+  - ipsec_ca_cert_list
+  impact: none
+  note: read; PR-C2 mapped; owner-approved 2026-10-28
 - op: DELETE /config/ipsec/ca-certificates/{name}
   excluded: IPsec write; L2-4 write CRUD is excluded by policy; D1
   note: owner-approved 2026-10-28
 - op: GET /config/ipsec/ca-certificates/{name}
-  pending: P2
-  note: read; PR-C; owner-approved 2026-10-28
+  tools:
+  - ipsec_ca_cert_get
+  impact: none
+  note: read; PR-C2 mapped; owner-approved 2026-10-28
 - op: POST /config/ipsec/certificates
   excluded: IPsec write; L2-4 write CRUD is excluded by policy; D1
   note: owner-approved 2026-10-28
 - op: GET /config/ipsec/certificates/all
-  pending: P2
-  note: read; PR-C; owner-approved 2026-10-28
+  tools:
+  - ipsec_cert_list
+  impact: none
+  note: read; PR-C2 mapped; owner-approved 2026-10-28
 - op: POST /config/ipsec/certificates/validate
   excluded: takes certificate material inline, which §7.14 forbids as a tool argument; IPsec write; D1
   note: owner-approved 2026-10-28
@@ -452,8 +461,10 @@ operations:
   excluded: IPsec write; L2-4 write CRUD is excluded by policy; D1
   note: owner-approved 2026-10-28
 - op: GET /config/ipsec/certificates/{name}
-  pending: P2
-  note: read; PR-C; owner-approved 2026-10-28
+  tools:
+  - ipsec_cert_get
+  impact: none
+  note: read; PR-C2 mapped; owner-approved 2026-10-28
 - op: GET /config/ipsec/sas/all
   tools:
   - ipsec_status_get
@@ -476,8 +487,10 @@ operations:
   excluded: IPsec write; L2-4 write CRUD is excluded by policy; D1
   note: owner-approved 2026-10-28
 - op: GET /config/ipsec/tunnels/{name}
-  pending: P2
-  note: read; PR-C; owner-approved 2026-10-28
+  tools:
+  - ipsec_tunnel_get
+  impact: none
+  note: read; PR-C2 mapped; owner-approved 2026-10-28
 - op: PUT /config/ipsec/tunnels/{name}
   excluded: IPsec write; L2-4 write CRUD is excluded by policy; D1
   note: owner-approved 2026-10-28
@@ -485,8 +498,10 @@ operations:
   excluded: IPsec write; L2-4 write CRUD is excluded by policy; D1
   note: owner-approved 2026-10-28
 - op: GET /config/ipsec/tunnels/{name}/peerconfig
-  pending: P2
-  note: read; PR-C; owner-approved 2026-10-28
+  tools:
+  - ipsec_tunnel_peerconfig_get
+  impact: none
+  note: read; PR-C2 mapped; owner-approved 2026-10-28
 - op: POST /config/ipv4address
   excluded: L2-4 write CRUD is excluded by policy; D1
   note: owner-approved 2026-10-28
