@@ -176,7 +176,7 @@ func RegisterAnalysis(s *sdk.Server, role guard.Role, pol *guard.Policy, deps *D
 	reg("ipsec_cert_list", func() {
 		sdk.AddTool(s, &sdk.Tool{
 			Name:        "ipsec_cert_list",
-			Description: "List the installed IPsec certificates: name, subject, issuer, serial, SANs, key usage, description (GET /config/ipsec/certificates/all). Metadata only; no PEM and no private key.",
+			Description: "List the installed IPsec certificates: name, subject, issuer, description, and serial, SANs and key usage where the gateway fills them (GET /config/ipsec/certificates/all). Metadata only; no PEM and no private key.",
 			Annotations: roAnnotations("List IPsec certificates"),
 		}, deps.ipsecCertList())
 	})
@@ -190,7 +190,7 @@ func RegisterAnalysis(s *sdk.Server, role guard.Role, pol *guard.Policy, deps *D
 	reg("ipsec_ca_cert_list", func() {
 		sdk.AddTool(s, &sdk.Tool{
 			Name:        "ipsec_ca_cert_list",
-			Description: "List the CA certificates of the IPsec trust store: name, subject, issuer, serial, description (GET /config/ipsec/ca-certificates/all). Metadata only; no PEM.",
+			Description: "List the CA certificates of the IPsec trust store: name, subject, issuer, description, and serial where the gateway fills it (GET /config/ipsec/ca-certificates/all). Metadata only; no PEM.",
 			Annotations: roAnnotations("List IPsec CA certificates"),
 		}, deps.ipsecCACertList())
 	})

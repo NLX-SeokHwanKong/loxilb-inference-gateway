@@ -614,10 +614,14 @@ else
     echo "  [SKIP] ipsec_ca_cert_list / ipsec_ca_cert_get: fixture mcp-ca1 absent (GET answered HTTP $(ipsec_raw ca-certificates/mcp-ca1); see config.sh)"
 fi
 if [[ "$(ipsec_raw certificates/mcp-ipcert1)" == "200" ]]; then
+    # The oracle is the gateway's own read of the entry: the handler fills
+    # subject and issuer, and leaves serial, SANs and key usage empty.
+    CSUBJ=$(curl -s --max-time 10 -H "Authorization: Bearer $JWT" "$REST/config/ipsec/certificates/mcp-ipcert1" | python3 -c 'import sys,json; c=json.load(sys.stdin); print(c.get("subject","")+"|"+c.get("issuer",""))' 2>/dev/null)
     read_leg ipsec_cert_list '{}' "any(c['name']=='mcp-ipcert1' for c in r['certificates']) and 'BEGIN' not in json.dumps(r) and 'PRIVATE' not in json.dumps(r)" \
         "ipsec_cert_list shows mcp-ipcert1, no PEM, no key"
-    read_leg ipsec_cert_get '{"name":"mcp-ipcert1"}' "r['certificate']['name']=='mcp-ipcert1' and 'mcp-ipsec-gw.test' in r['certificate'].get('san',[]) and 'BEGIN' not in json.dumps(r)" \
-        "ipsec_cert_get reads mcp-ipcert1 (SAN mcp-ipsec-gw.test), metadata only"
+    read_leg ipsec_cert_get '{"name":"mcp-ipcert1"}' "r['certificate']['name']=='mcp-ipcert1' and r['certificate']['subject']+'|'+r['certificate']['issuer']=='$CSUBJ' and 'mcp-ipsec-gw' in r['certificate']['subject'] and 'BEGIN' not in json.dumps(r)" \
+        "ipsec_cert_get reads mcp-ipcert1: subject and issuer as the gateway has them ($CSUBJ), metadata only"
+    echo "  [NOTE] the gateway's IPsec certificate reads carry no serial, SANs, key usage or dates on this build (handler TODOs); the bridge reports what it is given"
 else
     echo "  [SKIP] ipsec_cert_list / ipsec_cert_get: fixture mcp-ipcert1 absent (GET answered HTTP $(ipsec_raw certificates/mcp-ipcert1); see config.sh)"
 fi

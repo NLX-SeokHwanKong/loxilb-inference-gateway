@@ -287,8 +287,9 @@ name: endpoints, identities, proposals, selector, DPD, state, counters),
 remote peer, and its `ipsec.secrets` entry with the pre-shared key masked by the
 bridge: selectors and secret type only), `ipsec_cert_list` / `ipsec_cert_get` and
 `ipsec_ca_cert_list` / `ipsec_ca_cert_get` (certificate metadata only, never PEM or a
-key; validity and install dates appear only when the gateway reports a real date,
-which current handlers do not).
+key; the gateway currently fills subject and issuer only, so serial, SANs and key
+usage are empty, and validity and install dates appear only when it reports a real
+date).
 
 **Monitoring (read)** — `metrics_config_get`, `metrics_legacy_get`,
 `promql_query` / `promql_range` (needs `prometheus_url`), `alerts_active`

@@ -239,10 +239,10 @@ type ipsecCertMeta struct {
 	Description string   `json:"description,omitempty"`
 }
 
-// ipsecCertNote says why validity can be absent: the gateway's handlers
-// fill neither validity date nor installedAt, and the zero value they
-// serialize is not a date.
-const ipsecCertNote = "metadata only, no PEM; not_before, not_after and installed_at appear only when the gateway reports a real date (current handlers leave them unset)"
+// ipsecCertNote says why fields can be empty: the gateway's install path
+// extracts subject and issuer only, and its handlers fill neither validity
+// date nor installedAt (the zero value they serialize is not a date).
+const ipsecCertNote = "metadata only, no PEM; the gateway currently fills subject and issuer only: serial, SANs and key usage are empty, and not_before, not_after and installed_at appear only when it reports a real date"
 
 // ipsecDate returns an RFC 3339 date, or "" for an absent, unparsable or
 // zero value (year 1 or the Unix epoch, which the gateway sends unset).
