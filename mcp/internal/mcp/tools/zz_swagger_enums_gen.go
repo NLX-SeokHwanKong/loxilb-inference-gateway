@@ -79,9 +79,12 @@ var swaggerEnumDoc = map[string]string{
 // swaggerExcludedField lists the properties fields.yml marks excluded-field, keyed model.property, with the reason.
 var swaggerExcludedField = map[string]string{
 	"ApiKeyCreateRequest.api_key": "credential import; §7.14 secrets policy, removed from the plan by Rev 1.1",
+	"endpoints.backup":            "not typed: no stated use-case as of 2026-10-29 (D11); reopen on request (D29)",
 	"endpoints.domainName":        "swagger: not wired into monitoring",
 	"endpoints.expectedCodes":     "swagger: not wired into monitoring",
 	"endpoints.httpMethod":        "swagger: not wired into monitoring",
 	"endpoints.httpVersion":       "swagger: not wired into monitoring",
+	"endpoints.monitorAddress":    "not typed: no stated use-case as of 2026-10-29 (D11); reopen on request (D29)",
+	"endpoints.subnetId":          "not typed: no stated use-case as of 2026-10-29 (D11); reopen on request (D29)",
 	"endpoints.urlPath":           "swagger: not wired into monitoring",
 }

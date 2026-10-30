@@ -573,6 +573,58 @@ echo "$res" | grep -q '"isError":true' && echo "$res" | grep -q 'HTTP 400' \
     && pass "dpu_debug_get passes the gateway's 400 on an unknown pipe" || fail "dpu_debug_get pipe: $res"
 read_leg dpu_hwcounters_get '{}' "r['total_flows']==len([f for f in r['flows'] if isinstance(f,dict)])" \
     "dpu_hwcounters_get reports $(jfield "$(mcp_call "$VTOKEN" dpu_hwcounters_get)" 'r.get("total_flows","?")') hardware rows"
+
+# ---------- PR-C2: IPsec reads (viewer) ----------
+# Fixtures from config.sh, written over REST: PSK tunnel mcp-tun1 (key
+# "mcp-ipsec-fixture-psk"), CA certificate mcp-ca1, certificate mcp-ipcert1
+# (SAN mcp-ipsec-gw.test). A fixture the image refused makes its legs skip
+# with the reason; the raw REST read is the oracle that the gateway itself
+# sends the key the bridge must mask.
+echo "### ipsec reads"
+res=$(mcp_rpc "$VTOKEN" tools/list)
+missing=""
+for t in ipsec_config_get ipsec_tunnel_get ipsec_tunnel_peerconfig_get ipsec_cert_list ipsec_cert_get ipsec_ca_cert_list ipsec_ca_cert_get; do
+    echo "$res" | grep -q "\"name\":\"$t\"" || missing="$missing $t"
+done
+[[ -z "$missing" ]] && pass "viewer lists the 7 IPsec reads" || fail "viewer misses:$missing"
+ipsec_raw() { curl -s --max-time 10 -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $JWT" "$REST/config/ipsec/$1"; }
+read_leg ipsec_config_get '{}' "isinstance(r['config'],dict) and 'supportedAlgorithms' in r['config']" \
+    "ipsec_config_get reports the global IPsec configuration"
+read_leg ipsec_status_get '{}' "isinstance(r.get('config'),dict) and 'config' not in (r.get('errors') or {})" \
+    "ipsec_status_get carries the configuration section beside stats, SAs and tunnels"
+if [[ "$(ipsec_raw tunnels/mcp-tun1)" == "200" ]]; then
+    read_leg ipsec_tunnel_get '{"name":"mcp-tun1"}' "r['tunnel']['authMode']=='psk' and r['tunnel']['remoteIp']=='31.31.31.253' and 'mcp-ipsec-fixture-psk' not in json.dumps(r)" \
+        "ipsec_tunnel_get reads mcp-tun1 (psk, remote 31.31.31.253), no key"
+    curl -s --max-time 10 -H "Authorization: Bearer $JWT" "$REST/config/ipsec/tunnels/mcp-tun1/peerconfig" | grep -q 'mcp-ipsec-fixture-psk' \
+        && pass "the gateway's own peer configuration carries the fixture key (the masking oracle)" || fail "raw peerconfig does not carry the fixture key"
+    read_leg ipsec_tunnel_peerconfig_get '{"name":"mcp-tun1"}' "'mcp-ipsec-fixture-psk' not in json.dumps(r) and len(r['auth_entries'])==1 and r['auth_entries'][0].endswith(': PSK [REDACTED]') and 'conn mcp-tun1' in r['ipsec_conf']" \
+        "ipsec_tunnel_peerconfig_get returns the conn block and the auth entry with the key masked"
+else
+    echo "  [SKIP] ipsec_tunnel_get / ipsec_tunnel_peerconfig_get: fixture tunnel mcp-tun1 absent (GET answered HTTP $(ipsec_raw tunnels/mcp-tun1); see config.sh)"
+fi
+res=$(mcp_call "$VTOKEN" ipsec_tunnel_get '{"name":"mcp-nope"}')
+echo "$res" | grep -q '"isError":true' && echo "$res" | grep -q 'HTTP 404' \
+    && pass "ipsec_tunnel_get passes the gateway's 404 on an unknown tunnel" || fail "ipsec_tunnel_get unknown: $res"
+if [[ "$(ipsec_raw ca-certificates/mcp-ca1)" == "200" ]]; then
+    read_leg ipsec_ca_cert_list '{}' "any(c['name']=='mcp-ca1' and 'mcp-ipsec-ca' in c['subject'] for c in r['certificates']) and 'BEGIN' not in json.dumps(r)" \
+        "ipsec_ca_cert_list shows mcp-ca1, no PEM"
+    read_leg ipsec_ca_cert_get '{"name":"mcp-ca1"}' "r['certificate']['name']=='mcp-ca1' and 'BEGIN' not in json.dumps(r)" \
+        "ipsec_ca_cert_get reads mcp-ca1, metadata only"
+else
+    echo "  [SKIP] ipsec_ca_cert_list / ipsec_ca_cert_get: fixture mcp-ca1 absent (GET answered HTTP $(ipsec_raw ca-certificates/mcp-ca1); see config.sh)"
+fi
+if [[ "$(ipsec_raw certificates/mcp-ipcert1)" == "200" ]]; then
+    # The oracle is the gateway's own read of the entry: the handler fills
+    # subject and issuer, and leaves serial, SANs and key usage empty.
+    CSUBJ=$(curl -s --max-time 10 -H "Authorization: Bearer $JWT" "$REST/config/ipsec/certificates/mcp-ipcert1" | python3 -c 'import sys,json; c=json.load(sys.stdin); print(c.get("subject","")+"|"+c.get("issuer",""))' 2>/dev/null)
+    read_leg ipsec_cert_list '{}' "any(c['name']=='mcp-ipcert1' for c in r['certificates']) and 'BEGIN' not in json.dumps(r) and 'PRIVATE' not in json.dumps(r)" \
+        "ipsec_cert_list shows mcp-ipcert1, no PEM, no key"
+    read_leg ipsec_cert_get '{"name":"mcp-ipcert1"}' "r['certificate']['name']=='mcp-ipcert1' and r['certificate']['subject']+'|'+r['certificate']['issuer']=='$CSUBJ' and 'mcp-ipsec-gw' in r['certificate']['subject'] and 'BEGIN' not in json.dumps(r)" \
+        "ipsec_cert_get reads mcp-ipcert1: subject and issuer as the gateway has them ($CSUBJ), metadata only"
+    echo "  [NOTE] the gateway's IPsec certificate reads carry no serial, SANs, key usage or dates on this build (handler TODOs); the bridge reports what it is given"
+else
+    echo "  [SKIP] ipsec_cert_list / ipsec_cert_get: fixture mcp-ipcert1 absent (GET answered HTTP $(ipsec_raw certificates/mcp-ipcert1); see config.sh)"
+fi
 SESSION=$ADMIN_SESSION
 
 echo "### ai ops"

@@ -232,3 +232,29 @@ func TestSensitiveHeaderNames(t *testing.T) {
 		}
 	}
 }
+
+func TestMaskAuthEntries(t *testing.T) {
+	cases := map[string][]string{
+		"":                      {},
+		`a b : PSK "x y"`:       {"a b : PSK [REDACTED]"},
+		`%any : PSK "q\"uoted"`: {"%any : PSK [REDACTED]"},
+		"a : PSK bare-secret\n# comment\nb : RSA k": {"a : PSK [REDACTED]", "b : RSA [REDACTED]"},
+		`a b : PSK "x:y : z"`:                       {"a b : PSK [REDACTED]"},
+		`fd00::1 fd00::2 : PSK "v6"`:                {"fd00::1 fd00::2 : PSK [REDACTED]"},
+		`: PSK "anonymous"`:                         {": PSK [REDACTED]"},
+		"no-colon-secret-line":                      {"[REDACTED]"},
+	}
+	for in, want := range cases {
+		got := maskAuthEntries(in)
+		if strings.Join(got, "|") != strings.Join(want, "|") {
+			t.Errorf("maskAuthEntries(%q) = %q, want %q", in, got, want)
+		}
+		for _, g := range got {
+			for _, bad := range []string{"x y", "uoted", "bare-secret", "no-colon", "x:y", "z\"", "v6\"", "anonymous"} {
+				if strings.Contains(g, bad) {
+					t.Errorf("maskAuthEntries(%q) kept %q", in, bad)
+				}
+			}
+		}
+	}
+}
