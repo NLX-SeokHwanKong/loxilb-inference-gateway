@@ -15,7 +15,7 @@
 # Budgets are ratchets: they may only go down. A raise is a warning in the CI summary.
 version: 1
 budget:
-  pending_max: 41
+  pending_max: 3
   tier_gap_max: 0
 operations:
 - op: GET /audit/policy
@@ -106,13 +106,11 @@ operations:
   impact: none
   note: read; PR-B1 mapped; owner-approved 2026-10-28
 - op: POST /config/ai/jwtauthprofile
-  pending: P1b
-  impact: global
-  note: 'D11: opens on a stated use-case; admin-confirm, never autopilot; owner-approved 2026-10-28'
+  excluded: "no stated use-case as of 2026-10-29 (D11); reopen on request"
+  note: 'was pending P1b: D11: opens on a stated use-case; admin-confirm, never autopilot; excluded by D29, owner-decided 2026-10-30'
 - op: DELETE /config/ai/jwtauthprofile/{name}
-  pending: P1b
-  impact: global
-  note: 'D11: opens on a stated use-case; admin-confirm, never autopilot; owner-approved 2026-10-28'
+  excluded: "no stated use-case as of 2026-10-29 (D11); reopen on request"
+  note: 'was pending P1b: D11: opens on a stated use-case; admin-confirm, never autopilot; excluded by D29, owner-decided 2026-10-30'
 - op: GET /config/ai/kv/inventory
   tools:
   - ai_kv_inventory_get
@@ -133,34 +131,28 @@ operations:
   impact: none
   note: read; PR-B1 mapped; owner-approved 2026-10-28
 - op: POST /config/ai/netidentity
-  pending: P1b
-  impact: global
-  note: 'D11: opens on a stated use-case; admin-confirm, never autopilot; owner-approved 2026-10-28'
+  excluded: "no stated use-case as of 2026-10-29 (D11); reopen on request"
+  note: 'was pending P1b: D11: opens on a stated use-case; admin-confirm, never autopilot; excluded by D29, owner-decided 2026-10-30'
 - op: DELETE /config/ai/netidentity/{name}
-  pending: P1b
-  impact: global
-  note: 'D11: opens on a stated use-case; admin-confirm, never autopilot; owner-approved 2026-10-28'
+  excluded: "no stated use-case as of 2026-10-29 (D11); reopen on request"
+  note: 'was pending P1b: D11: opens on a stated use-case; admin-confirm, never autopilot; excluded by D29, owner-decided 2026-10-30'
 - op: GET /config/ai/objective
   tools:
   - ai_objective_list
   impact: none
   note: read; PR-B1 mapped; owner-approved 2026-10-28
 - op: POST /config/ai/objective
-  pending: P1b
-  impact: global
-  note: 'D11: opens on a stated use-case; admin-confirm, never autopilot; owner-approved 2026-10-28'
+  excluded: "no stated use-case as of 2026-10-29 (D11); reopen on request"
+  note: 'was pending P1b: D11: opens on a stated use-case; admin-confirm, never autopilot; excluded by D29, owner-decided 2026-10-30'
 - op: DELETE /config/ai/objective/{name}
-  pending: P1b
-  impact: global
-  note: 'D11: opens on a stated use-case; admin-confirm, never autopilot; owner-approved 2026-10-28'
+  excluded: "no stated use-case as of 2026-10-29 (D11); reopen on request"
+  note: 'was pending P1b: D11: opens on a stated use-case; admin-confirm, never autopilot; excluded by D29, owner-decided 2026-10-30'
 - op: POST /config/ai/ratelimit/defaults
-  pending: P1b
-  impact: global
-  note: 'D11: opens on a stated use-case; admin-confirm, never autopilot; owner-approved 2026-10-28'
+  excluded: "no stated use-case as of 2026-10-29 (D11); reopen on request"
+  note: 'was pending P1b: D11: opens on a stated use-case; admin-confirm, never autopilot; excluded by D29, owner-decided 2026-10-30'
 - op: DELETE /config/ai/ratelimit/defaults/{scope}
-  pending: P1b
-  impact: global
-  note: 'D11: opens on a stated use-case; admin-confirm, never autopilot; owner-approved 2026-10-28'
+  excluded: "no stated use-case as of 2026-10-29 (D11); reopen on request"
+  note: 'was pending P1b: D11: opens on a stated use-case; admin-confirm, never autopilot; excluded by D29, owner-decided 2026-10-30'
 - op: GET /config/ai/ratelimit/defaults/{scope}
   tools:
   - ai_ratelimit_defaults_get
@@ -204,8 +196,8 @@ operations:
   excluded: L2-4 write CRUD is excluded by policy; D1
   note: owner-approved 2026-10-28
 - op: GET /config/bfd/all
-  pending: P4
-  note: L2-4 read; no owner use-case yet; owner-approved 2026-10-28
+  excluded: "no stated use-case as of 2026-10-29 (D11); reopen on request"
+  note: 'was pending P4: L2-4 read; no owner use-case yet; excluded by D29, owner-decided 2026-10-30'
 - op: DELETE /config/bfd/remoteIP/{remote_ip}
   excluded: L2-4 write CRUD is excluded by policy; D1
   note: owner-approved 2026-10-28
@@ -226,9 +218,8 @@ operations:
   - bgp_neigh_list
   impact: none
 - op: DELETE /config/bgp/neigh/{ip_address}
-  pending: P4
-  impact: global
-  note: D1 keep-list; impact global, admin-confirm if ever opened; owner-approved 2026-10-28
+  excluded: "no stated use-case as of 2026-10-29 (D11); reopen on request"
+  note: 'was pending P4: D1 keep-list; impact global, admin-confirm if ever opened; excluded by D29, owner-decided 2026-10-30'
 - op: DELETE /config/bgp/policy/apply
   excluded: not in the D1 keep-list (inverse of bgp_policy_apply); L2-4 write CRUD is excluded by policy; D1
   note: owner-approved 2026-10-28
@@ -239,36 +230,30 @@ operations:
   reversible: true
   tier: admin-confirm
 - op: POST /config/bgp/policy/definedsets/{defineset_type}
-  pending: P4
-  impact: global
-  note: D1 keep-list; impact global, admin-confirm if ever opened; owner-approved 2026-10-28
+  excluded: "no stated use-case as of 2026-10-29 (D11); reopen on request"
+  note: 'was pending P4: D1 keep-list; impact global, admin-confirm if ever opened; excluded by D29, owner-decided 2026-10-30'
 - op: DELETE /config/bgp/policy/definedsets/{defineset_type}/{type_name}
-  pending: P4
-  impact: global
-  note: D1 keep-list; impact global, admin-confirm if ever opened; owner-approved 2026-10-28
+  excluded: "no stated use-case as of 2026-10-29 (D11); reopen on request"
+  note: 'was pending P4: D1 keep-list; impact global, admin-confirm if ever opened; excluded by D29, owner-decided 2026-10-30'
 - op: GET /config/bgp/policy/definedsets/{defineset_type}/{type_name}
-  pending: P4
-  note: read; opens with the network-ai-synergy track; owner-approved 2026-10-28
+  excluded: "no stated use-case as of 2026-10-29 (D11); reopen on request"
+  note: 'was pending P4: read; opens with the network-ai-synergy track; excluded by D29, owner-decided 2026-10-30'
 - op: POST /config/bgp/policy/definitions
-  pending: P4
-  impact: global
-  note: D1 keep-list; impact global, admin-confirm if ever opened; owner-approved 2026-10-28
+  excluded: "no stated use-case as of 2026-10-29 (D11); reopen on request"
+  note: 'was pending P4: D1 keep-list; impact global, admin-confirm if ever opened; excluded by D29, owner-decided 2026-10-30'
 - op: GET /config/bgp/policy/definitions/all
   tools:
   - bgp_policy_list
   impact: none
 - op: DELETE /config/bgp/policy/definitions/{policy_name}
-  pending: P4
-  impact: global
-  note: D1 keep-list; impact global, admin-confirm if ever opened; owner-approved 2026-10-28
+  excluded: "no stated use-case as of 2026-10-29 (D11); reopen on request"
+  note: 'was pending P4: D1 keep-list; impact global, admin-confirm if ever opened; excluded by D29, owner-decided 2026-10-30'
 - op: POST /config/cert
-  pending: P2
-  impact: service
-  note: cert_create by cert_file/key_file under SecretsDir; admin-confirm; PR-C; owner-approved 2026-10-28
+  excluded: "no stated use-case as of 2026-10-29 (D11); reopen on request"
+  note: 'was pending P2: cert_create by cert_file/key_file under SecretsDir; admin-confirm; PR-C; excluded by D29, owner-decided 2026-10-30'
 - op: DELETE /config/cert/{certId}
-  pending: P2
-  impact: service
-  note: cert_delete; admin-confirm; PR-C; owner-approved 2026-10-28
+  excluded: "no stated use-case as of 2026-10-29 (D11); reopen on request"
+  note: 'was pending P2: cert_delete; admin-confirm; PR-C; excluded by D29, owner-decided 2026-10-30'
 - op: GET /config/cert/{certId}
   tools:
   - cert_get
@@ -277,7 +262,7 @@ operations:
 - op: PUT /config/cert/{certId}
   pending: P2
   impact: service
-  note: cert_rotate by file reference; admin-confirm; PR-C; owner-approved 2026-10-28
+  note: 'use-case (D29): rotation by file reference, after the gateway fix for a POST of an existing server certId; cert_rotate, admin-confirm; owner-decided 2026-10-30'
 - op: POST /config/cistate
   excluded: HA-internal cluster-state report; D3
   note: owner-approved 2026-10-28
@@ -307,27 +292,24 @@ operations:
   impact: none
   note: read; PR-C1 mapped; owner-approved 2026-10-28
 - op: POST /config/dpu/debug
-  pending: P2
-  impact: instance
-  note: write not in the PR-C list; needs an owner use-case (§7.15); PR-C; owner-approved 2026-10-28
+  excluded: "no stated use-case as of 2026-10-29 (D11); reopen on request"
+  note: 'was pending P2: write not in the PR-C list; needs an owner use-case (§7.15); PR-C; excluded by D29, owner-decided 2026-10-30'
 - op: GET /config/dpu/hwcounters
   tools:
   - dpu_hwcounters_get
   impact: none
   note: read; PR-C1 mapped; owner-approved 2026-10-28
 - op: POST /config/endpoint
-  pending: P4
-  impact: object
-  note: endpoint-monitor add; not named by D1 or any §5 row, owner to place; owner-approved 2026-10-28
+  excluded: "no stated use-case as of 2026-10-29 (D11); reopen on request"
+  note: 'was pending P4: endpoint-monitor add; not named by D1 or any §5 row, owner to place; excluded by D29, owner-decided 2026-10-30'
 - op: GET /config/endpoint/all
   tools:
   - endpoint_list
   - diagnose_endpoint
   impact: none
 - op: DELETE /config/endpoint/epipaddress/{ip_address}
-  pending: P4
-  impact: object
-  note: endpoint-monitor delete; not named by D1 or any §5 row, owner to place; owner-approved 2026-10-28
+  excluded: "no stated use-case as of 2026-10-29 (D11); reopen on request"
+  note: 'was pending P4: endpoint-monitor delete; not named by D1 or any §5 row, owner to place; excluded by D29, owner-decided 2026-10-30'
 - op: POST /config/endpointhoststate
   tools:
   - endpoint_host_state_set
@@ -342,8 +324,8 @@ operations:
   excluded: L2-4 write CRUD is excluded by policy; D1
   note: owner-approved 2026-10-28
 - op: GET /config/fdb/all
-  pending: P4
-  note: L2-4 read; no owner use-case yet; owner-approved 2026-10-28
+  excluded: "no stated use-case as of 2026-10-29 (D11); reopen on request"
+  note: 'was pending P4: L2-4 read; no owner use-case yet; excluded by D29, owner-decided 2026-10-30'
 - op: DELETE /config/fdb/{mac_address}/dev/{if_name}
   excluded: L2-4 write CRUD is excluded by policy; D1
   note: owner-approved 2026-10-28
@@ -392,13 +374,12 @@ operations:
   impact: none
   note: read; PR-B1 mapped; owner-approved 2026-10-28
 - op: POST /config/halfclose
-  pending: P1b
-  impact: global
-  note: 'D11: opens on a stated use-case; admin-confirm, never autopilot; owner-approved 2026-10-28'
+  excluded: "no stated use-case as of 2026-10-29 (D11); reopen on request"
+  note: 'was pending P1b: D11: opens on a stated use-case; admin-confirm, never autopilot; excluded by D29, owner-decided 2026-10-30'
 - op: POST /config/halfclose/release
   pending: P1b
   impact: global
-  note: 'D11: opens on a stated use-case; admin-confirm, never autopilot; owner-approved 2026-10-28'
+  note: 'use-case (D29): alert remediation, releasing held connections when LoxilbHalfCloseHold* fires; admin-confirm, never autopilot (D11); owner-decided 2026-10-30'
 - op: POST /config/import
   tools:
   - config_import
@@ -523,21 +504,17 @@ operations:
   excluded: L2-4 write CRUD is excluded by policy; D1
   note: owner-approved 2026-10-28
 - op: POST /config/l4trace/disable
-  pending: P2
-  impact: global
-  note: l4trace_enable_set; operator with preview; PR-C; owner-approved 2026-10-28
+  excluded: "no stated use-case as of 2026-10-29 (D11); reopen on request"
+  note: 'was pending P2: l4trace_enable_set; operator with preview; PR-C; excluded by D29, owner-decided 2026-10-30'
 - op: POST /config/l4trace/enable
-  pending: P2
-  impact: global
-  note: l4trace_enable_set; operator with preview; PR-C; owner-approved 2026-10-28
+  excluded: "no stated use-case as of 2026-10-29 (D11); reopen on request"
+  note: 'was pending P2: l4trace_enable_set; operator with preview; PR-C; excluded by D29, owner-decided 2026-10-30'
 - op: PUT /config/l4trace/sampling
-  pending: P2
-  impact: global
-  note: l4trace_sampling_set; upper bound from config; PR-C; owner-approved 2026-10-28
+  excluded: "no stated use-case as of 2026-10-29 (D11); reopen on request"
+  note: 'was pending P2: l4trace_sampling_set; upper bound from config; PR-C; excluded by D29, owner-decided 2026-10-30'
 - op: POST /config/l4trace/stats/reset
-  pending: P2
-  impact: global
-  note: l4trace_stats_reset; PR-C; owner-approved 2026-10-28
+  excluded: "no stated use-case as of 2026-10-29 (D11); reopen on request"
+  note: 'was pending P2: l4trace_stats_reset; PR-C; excluded by D29, owner-decided 2026-10-30'
 - op: GET /config/l4trace/status
   tools:
   - l4trace_status_get
@@ -548,13 +525,11 @@ operations:
   impact: none
   note: read; PR-C1 mapped; owner-approved 2026-10-28
 - op: POST /config/l7policy
-  pending: P2
-  impact: service
-  note: l7policy_create; admin-confirm; PR-C; owner-approved 2026-10-28
+  excluded: "no stated use-case as of 2026-10-29 (D11); reopen on request"
+  note: 'was pending P2: l7policy_create; admin-confirm; PR-C; excluded by D29, owner-decided 2026-10-30'
 - op: DELETE /config/l7policy/id/{id}
-  pending: P2
-  impact: service
-  note: l7policy_delete; admin-confirm; PR-C; owner-approved 2026-10-28
+  excluded: "no stated use-case as of 2026-10-29 (D11); reopen on request"
+  note: 'was pending P2: l7policy_delete; admin-confirm; PR-C; excluded by D29, owner-decided 2026-10-30'
 - op: GET /config/l7policy/id/{id}
   tools:
   - l7policy_get
@@ -647,9 +622,8 @@ operations:
   impact: none
   note: read; PR-B1 mapped; owner-approved 2026-10-28
 - op: POST /config/loadbalancer/externalipaddress/{ip_address}/port/{port}/protocol/{proto}/sockmapreset
-  pending: P1b
-  impact: service
-  note: 'D11: opens on a stated use-case; admin-confirm, never autopilot; owner-approved 2026-10-28'
+  excluded: "no stated use-case as of 2026-10-29 (D11); reopen on request"
+  note: 'was pending P1b: D11: opens on a stated use-case; admin-confirm, never autopilot; excluded by D29, owner-decided 2026-10-30'
 - op: GET /config/loadbalancer/externalipaddress/{ip_address}/port/{port}/protocol/{proto}/stats
   tools:
   - lb_get
@@ -661,9 +635,8 @@ operations:
   impact: none
   note: read; PR-B1 mapped; owner-approved 2026-10-28
 - op: DELETE /config/loadbalancer/hosturl/{hosturl}/externalipaddress/{ip_address}/port/{port}/portmax/{portmax}/protocol/{proto}
-  pending: P1b
-  impact: service
-  note: 'PR-B2: lb_delete gains the hosturl+portmax variant; owner-approved 2026-10-28'
+  excluded: "no stated use-case as of 2026-10-29 (D11); reopen on request"
+  note: 'was pending P1b: PR-B2: lb_delete gains the hosturl+portmax variant; excluded by D29, owner-decided 2026-10-30'
 - op: DELETE /config/loadbalancer/hosturl/{hosturl}/externalipaddress/{ip_address}/port/{port}/protocol/{proto}
   tools:
   - lb_delete
@@ -695,8 +668,8 @@ operations:
   excluded: L2-4 write CRUD is excluded by policy; D1
   note: owner-approved 2026-10-28
 - op: GET /config/mirror/all
-  pending: P4
-  note: L2-4 read; no owner use-case yet; owner-approved 2026-10-28
+  excluded: "no stated use-case as of 2026-10-29 (D11); reopen on request"
+  note: 'was pending P4: L2-4 read; no owner use-case yet; excluded by D29, owner-decided 2026-10-30'
 - op: DELETE /config/mirror/ident/{ident}
   excluded: L2-4 write CRUD is excluded by policy; D1
   note: owner-approved 2026-10-28
@@ -768,8 +741,8 @@ operations:
   excluded: L2-4 write CRUD is excluded by policy; D1
   note: owner-approved 2026-10-28
 - op: GET /config/policy/all
-  pending: P4
-  note: L2-4 read; no owner use-case yet; owner-approved 2026-10-28
+  excluded: "no stated use-case as of 2026-10-29 (D11); reopen on request"
+  note: 'was pending P4: L2-4 read; no owner use-case yet; excluded by D29, owner-decided 2026-10-30'
 - op: DELETE /config/policy/ident/{ident}
   excluded: L2-4 write CRUD is excluded by policy; D1
   note: owner-approved 2026-10-28
@@ -846,30 +819,26 @@ operations:
   impact: none
   note: read; PR-B1 mapped; owner-approved 2026-10-28
 - op: DELETE /config/trace/catalog/{catalog_id}/parser
-  pending: P2
-  impact: global
-  note: trace_catalog_parser_delete; PR-C; owner-approved 2026-10-28
+  excluded: "no stated use-case as of 2026-10-29 (D11); reopen on request"
+  note: 'was pending P2: trace_catalog_parser_delete; PR-C; excluded by D29, owner-decided 2026-10-30'
 - op: GET /config/trace/catalog/{catalog_id}/parser
   tools:
   - trace_catalog_parser_get
   impact: none
   note: read; PR-C1 mapped; owner-approved 2026-10-28
 - op: PUT /config/trace/catalog/{catalog_id}/parser
-  pending: P2
-  impact: global
-  note: trace_catalog_parser_set; PR-C; owner-approved 2026-10-28
+  excluded: "no stated use-case as of 2026-10-29 (D11); reopen on request"
+  note: 'was pending P2: trace_catalog_parser_set; PR-C; excluded by D29, owner-decided 2026-10-30'
 - op: GET /config/trace/catalogs
   tools:
   - trace_catalog_list
   impact: none
 - op: POST /config/trace/disable
-  pending: P2
-  impact: global
-  note: trace_enable_set; operator with preview; PR-C; owner-approved 2026-10-28
+  excluded: "no stated use-case as of 2026-10-29 (D11); reopen on request"
+  note: 'was pending P2: trace_enable_set; operator with preview; PR-C; excluded by D29, owner-decided 2026-10-30'
 - op: POST /config/trace/enable
-  pending: P2
-  impact: global
-  note: trace_enable_set; operator with preview; PR-C; owner-approved 2026-10-28
+  excluded: "no stated use-case as of 2026-10-29 (D11); reopen on request"
+  note: 'was pending P2: trace_enable_set; operator with preview; PR-C; excluded by D29, owner-decided 2026-10-30'
 - op: GET /config/trace/otlp
   tools:
   - trace_otlp_get
@@ -956,7 +925,7 @@ operations:
 - op: PUT /maintenance
   pending: P1b
   impact: instance
-  note: 'PR-B3 maintenance_set; D5: admin-confirm for enter and leave, never autopilot; owner-approved 2026-10-28'
+  note: 'use-case (D29): upgrade drain; maintenance_set, admin-confirm for enter and leave, never autopilot (D5); owner-decided 2026-10-30'
 - op: GET /meta
   tools:
   - meta_get
@@ -1037,18 +1006,16 @@ operations:
   excluded: management auth / user administration is not an agent task; D2
   note: owner-approved 2026-10-28
 - op: DELETE /sni/certificates
-  pending: P2
-  impact: service
-  note: sni_cert_delete; admin-confirm; PR-C; owner-approved 2026-10-28
+  excluded: "no stated use-case as of 2026-10-29 (D11); reopen on request"
+  note: 'was pending P2: sni_cert_delete; admin-confirm; PR-C; excluded by D29, owner-decided 2026-10-30'
 - op: GET /sni/certificates
   tools:
   - sni_cert_list
   impact: none
   note: read; PR-C1 mapped; owner-approved 2026-10-28
 - op: POST /sni/certificates
-  pending: P2
-  impact: service
-  note: sni_cert_set by certId; admin-confirm; PR-C; owner-approved 2026-10-28
+  excluded: "no stated use-case as of 2026-10-29 (D11); reopen on request"
+  note: 'was pending P2: sni_cert_set by certId; admin-confirm; PR-C; excluded by D29, owner-decided 2026-10-30'
 - op: GET /status/capabilities
   tools:
   - status_capabilities

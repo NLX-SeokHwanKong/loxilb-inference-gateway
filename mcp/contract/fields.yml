@@ -417,16 +417,16 @@ models:
         arg: nixl_port
         desc_sha256: 982ca1464d97beeb306044454ed094e217be2fd622e1b3fdb36227d1a3ab9d2a
       backup:
-        label: pending
-        phase: P1b
+        label: excluded-field
+        reason: 'not typed: no stated use-case as of 2026-10-29 (D11); reopen on request (D29)'
         desc_sha256: 92cda6d2a3e8f33e76da1a78081683f19da580a3433bf93d1186e88a63ac0448
       subnetId:
-        label: pending
-        phase: P1b
+        label: excluded-field
+        reason: 'not typed: no stated use-case as of 2026-10-29 (D11); reopen on request (D29)'
         desc_sha256: b76cceb8481c482e0020a6b78b9cabadf41ddc54db4db78a6986830763d9acea
       monitorAddress:
-        label: pending
-        phase: P1b
+        label: excluded-field
+        reason: 'not typed: no stated use-case as of 2026-10-29 (D11); reopen on request (D29)'
         desc_sha256: 4e23c74c9d75e924133ae61eafe8101b67033d8ab1145973d4e72c6012f9e53c
       httpMethod:
         label: excluded-field
